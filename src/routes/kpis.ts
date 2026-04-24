@@ -1,21 +1,21 @@
 /**
  * GET /api/kpis — dashboard top-level KPIs computed from D1.
  *
- * Matches the shape currently produced by jobber_sync.py and written to
- * Google Sheets cell KPI_Sync!B2:G2, so the new dashboard can be validated
- * against the old one with a simple side-by-side comparison.
+ * Powers the 7 KPI tiles on the main dashboard:
+ *   jobs_in_progress          → 🔨 Jobs In Progress
+ *   weekly_collections        → 💵 Revenue This Week
+ *   unpaid_invoices_total     → 📄 Unpaid Invoices
+ *   payments_scheduled_total  → 📅 Pymt Scheduled
+ *   monthly_collections       → 📈 Monthly Revenue (collections-based)
+ *   ytd_profit / margin_pct   → 💰 YTD Profit — dual-stat tile
+ *   pipeline_dollars          → 🎯 Pipeline $ (new 7th tile)
  *
- *   ytd_revenue_collections → B2 (YTD Revenue — collections if any, else gross)
- *   monthly_collections      → C2 (Monthly Revenue)
- *   weekly_collections       → D2 (Weekly Collections)
- *   ytd_profit               → E2 (YTD gross revenue − line-item cost − expenses)
- *   monthly_profit           → F2 (Monthly collections − line-item cost − expenses)
- *   ytd_jobs                 → G2 (Job Count)
+ * Plus supporting numbers used by the Business Pulse section:
+ *   ytd_revenue_gross, ytd_revenue_collections, monthly_profit, ytd_jobs
  *
- * Expenses are sourced from Jobber's top-level expenses connection and
- * totaled by expense date (incurred_at), matching Jobber's Expense Report.
- * This captures business-wide categories (Overhead, Vehicle, Office, etc.)
- * that aren't linked to a specific job.
+ * Expenses are totaled by incurred_at (matches Jobber's Expense Report).
+ * Profit = revenue − line-item cost − expenses, scoped by the relevant
+ * date range (year/month).
  */
 
 import type { Env } from "../env.js";
@@ -37,8 +37,8 @@ function computeRanges(now = new Date()): {
   const monthStart = new Date(Date.UTC(y, m, 1));
   const monthEnd = new Date(Date.UTC(y, m + 1, 1));
 
-  // Weeks run Sunday → Saturday, matching the WC KBPI sheet convention.
-  const dayOfWeek = now.getUTCDay(); // Sun=0 … Sat=6
+  // Weeks run Sunday → Saturday, matching the KBPI sheet convention.
+  const dayOfWeek = now.getUTCDay();
   const weekStart = new Date(Date.UTC(y, m, d - dayOfWeek));
   const weekEnd = new Date(Date.UTC(y, m, d - dayOfWeek + 7));
 
@@ -51,18 +51,22 @@ function computeRanges(now = new Date()): {
 
 interface KpiResponse {
   as_of: string;
-  ranges: {
-    year: DateRange;
-    month: DateRange;
-    week: DateRange;
-  };
-  ytd_revenue_collections: number;
-  ytd_revenue_gross: number;
-  monthly_collections: number;
+  ranges: { year: DateRange; month: DateRange; week: DateRange };
+  jobs_in_progress: number;
   weekly_collections: number;
-  ytd_profit: number;
+  unpaid_invoices_total: number;
+  unpaid_invoices_count: number;
+  payments_scheduled_total: number;
+  payments_scheduled_count: number;
+  monthly_collections: number;
   monthly_profit: number;
+  ytd_revenue_gross: number;
+  ytd_revenue_collections: number;
+  ytd_profit: number;
+  ytd_profit_margin_pct: number;
   ytd_jobs: number;
+  pipeline_dollars: number;
+  pipeline_count: number;
   last_sync: {
     started_at: string | null;
     finished_at: string | null;
@@ -72,8 +76,45 @@ interface KpiResponse {
   } | null;
 }
 
+// Jobber status values we treat as "open / in-progress" for the KPI tile.
+// "archived" is closed/complete in Jobber's model. Everything else that
+// isn't archived is still active work.
+const OPEN_JOB_STATUSES = [
+  "late",
+  "action_required",
+  "requires_invoicing",
+  "upcoming",
+  "on_the_way",
+  "active",
+  "in_progress",
+];
+
+// Pipeline = quotes that have been issued but aren't yet jobs or dead.
+const PIPELINE_QUOTE_STATUSES = [
+  "awaiting_response",
+  "changes_requested",
+  "approved",
+];
+
+// "paid" case-insensitive — Jobber returns lowercase on the API.
+const PAID_EXPR = `UPPER(status) = 'PAID'`;
+
+// For collections, we trust `total` on paid invoices (Jobber's own
+// paymentsTotal under-reports) and `payments_total` on everything else.
+const COLLECTED_EXPR = `(CASE WHEN ${PAID_EXPR} THEN COALESCE(total, 0) ELSE COALESCE(payments_total, 0) END)`;
+
 export async function handleKpis(env: Env): Promise<KpiResponse> {
   const ranges = computeRanges();
+
+  // ── Count-style KPIs ───────────────────────────────────────────────
+
+  const jobsInProgressPlaceholders = OPEN_JOB_STATUSES.map(() => "?").join(",");
+  const jobsInProgress = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM jobs
+     WHERE LOWER(COALESCE(status,'')) IN (${jobsInProgressPlaceholders})`,
+  )
+    .bind(...OPEN_JOB_STATUSES)
+    .first<{ n: number }>();
 
   const ytdJobs = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM jobs WHERE created_at >= ? AND created_at < ?`,
@@ -81,14 +122,14 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.year.start, ranges.year.end)
     .first<{ n: number }>();
 
+  // ── Revenue + profit ───────────────────────────────────────────────
+
   const ytdRevenueGross = await env.DB.prepare(
     `SELECT COALESCE(SUM(total), 0) AS v FROM jobs WHERE created_at >= ? AND created_at < ?`,
   )
     .bind(ranges.year.start, ranges.year.end)
     .first<{ v: number }>();
 
-  // Cost = line-item cost (labor/subcontract) + expenses (materials,
-  // receipts, misc). Matches what the Python sync was computing.
   const ytdLineItemCost = await env.DB.prepare(
     `SELECT COALESCE(SUM(li.quantity * li.unit_cost), 0) AS v
      FROM line_items li
@@ -98,10 +139,7 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.year.start, ranges.year.end)
     .first<{ v: number }>();
 
-  // Expenses are filtered by incurred_at (the expense `date` field) rather
-  // than joining through jobs, because many expenses (Overhead, Vehicle,
-  // Office, Apparel, Tools) are not tied to a specific job. This matches
-  // Jobber's own Expense Report, which totals by expense date.
+  // Expenses filter by incurred_at (matches Jobber's Expense Report).
   const ytdExpenseCost = await env.DB.prepare(
     `SELECT COALESCE(SUM(amount), 0) AS v
      FROM expenses
@@ -110,15 +148,10 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.year.start.slice(0, 10), ranges.year.end.slice(0, 10))
     .first<{ v: number }>();
 
-  // Collections formula: for PAID invoices, use `total` (Jobber's UI treats
-  // "paid" as fully collected, and its own `paymentsTotal` under-reports
-  // when deposits/refunds aren't re-summed — caused a $13k YTD gap against
-  // Jobber's own dashboard). For everything else, use `payments_total` so
-  // partial collections on past-due / awaiting-payment still count.
-  const collectedExpr = `(CASE WHEN UPPER(status) = 'PAID' THEN COALESCE(total, 0) ELSE COALESCE(payments_total, 0) END)`;
+  // ── Collections by date range ──────────────────────────────────────
 
   const ytdCollections = await env.DB.prepare(
-    `SELECT COALESCE(SUM(${collectedExpr}), 0) AS v
+    `SELECT COALESCE(SUM(${COLLECTED_EXPR}), 0) AS v
      FROM invoices
      WHERE issued_date >= ? AND issued_date < ?`,
   )
@@ -126,7 +159,7 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .first<{ v: number }>();
 
   const monthlyCollections = await env.DB.prepare(
-    `SELECT COALESCE(SUM(${collectedExpr}), 0) AS v
+    `SELECT COALESCE(SUM(${COLLECTED_EXPR}), 0) AS v
      FROM invoices
      WHERE issued_date >= ? AND issued_date < ?`,
   )
@@ -134,28 +167,26 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .first<{ v: number }>();
 
   const weeklyCollections = await env.DB.prepare(
-    `SELECT COALESCE(SUM(${collectedExpr}), 0) AS v
+    `SELECT COALESCE(SUM(${COLLECTED_EXPR}), 0) AS v
      FROM invoices
      WHERE issued_date >= ? AND issued_date < ?`,
   )
     .bind(ranges.week.start.slice(0, 10), ranges.week.end.slice(0, 10))
     .first<{ v: number }>();
 
-  // Monthly cost — same inputs as YTD cost but scoped to jobs whose
-  // PAID invoice was issued this month (mirrors Python's monthly_cost logic).
+  // ── Monthly cost (for monthly profit) ──────────────────────────────
+
   const monthlyLineItemCost = await env.DB.prepare(
     `SELECT COALESCE(SUM(li.quantity * li.unit_cost), 0) AS v
      FROM line_items li
      JOIN jobs j ON j.id = li.job_id
      JOIN invoices inv ON inv.job_id = j.id
-     WHERE UPPER(inv.status) = 'PAID'
+     WHERE ${PAID_EXPR.replace(/status/g, "inv.status")}
        AND inv.issued_date >= ? AND inv.issued_date < ?`,
   )
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();
 
-  // Monthly expenses = incurred this month, matching Jobber's Expense Report
-  // convention. Business-wide costs (overhead, vehicle, etc.) count too.
   const monthlyExpenseCost = await env.DB.prepare(
     `SELECT COALESCE(SUM(amount), 0) AS v
      FROM expenses
@@ -164,10 +195,62 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();
 
+  // ── Unpaid + Payments Scheduled ────────────────────────────────────
+
+  // Outstanding balance expression — never go negative (over-payments
+  // exist in Jobber data for a handful of edge cases).
+  const balanceExpr = `CASE
+    WHEN COALESCE(total,0) > COALESCE(payments_total,0)
+    THEN COALESCE(total,0) - COALESCE(payments_total,0)
+    ELSE 0 END`;
+
+  // Unpaid = any invoice not fully paid (past due, pending, etc.).
+  const unpaid = await env.DB.prepare(
+    `SELECT
+       COALESCE(SUM(${balanceExpr}), 0) AS v,
+       COUNT(*) AS n
+     FROM invoices
+     WHERE UPPER(COALESCE(status,'')) <> 'PAID'
+       AND COALESCE(total, 0) > COALESCE(payments_total, 0)`,
+  ).first<{ v: number; n: number }>();
+
+  // Payments Scheduled = unpaid invoices whose due_date is in the future
+  // (approximates "coming up / scheduled" in the old dashboard).
+  const today = new Date().toISOString().slice(0, 10);
+  const scheduled = await env.DB.prepare(
+    `SELECT
+       COALESCE(SUM(${balanceExpr}), 0) AS v,
+       COUNT(*) AS n
+     FROM invoices
+     WHERE UPPER(COALESCE(status,'')) <> 'PAID'
+       AND due_date IS NOT NULL
+       AND due_date >= ?`,
+  )
+    .bind(today)
+    .first<{ v: number; n: number }>();
+
+  // ── Pipeline $ (open quotes) ───────────────────────────────────────
+
+  const pipelinePlaceholders = PIPELINE_QUOTE_STATUSES.map(() => "?").join(",");
+  const pipeline = await env.DB.prepare(
+    `SELECT
+       COALESCE(SUM(COALESCE(subtotal, 0)), 0) AS v,
+       COUNT(*) AS n
+     FROM quotes
+     WHERE LOWER(COALESCE(status,'')) IN (${pipelinePlaceholders})`,
+  )
+    .bind(...PIPELINE_QUOTE_STATUSES)
+    .first<{ v: number; n: number }>();
+
+  // ── Derived + formatting ───────────────────────────────────────────
+
   const ytdCollectionsV = ytdCollections?.v ?? 0;
   const ytdRevenueGrossV = ytdRevenueGross?.v ?? 0;
   const ytdCostV = (ytdLineItemCost?.v ?? 0) + (ytdExpenseCost?.v ?? 0);
   const ytdProfit = ytdRevenueGrossV - ytdCostV;
+  const ytdProfitMarginPct =
+    ytdRevenueGrossV > 0 ? (ytdProfit / ytdRevenueGrossV) * 100 : 0;
+
   const monthlyCollectionsV = monthlyCollections?.v ?? 0;
   const monthlyCostV =
     (monthlyLineItemCost?.v ?? 0) + (monthlyExpenseCost?.v ?? 0);
@@ -190,17 +273,28 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   return {
     as_of: new Date().toISOString(),
     ranges,
-    ytd_revenue_collections: round2(ytdCollectionsV || ytdRevenueGrossV),
-    ytd_revenue_gross: round2(ytdRevenueGrossV),
-    monthly_collections: round2(monthlyCollectionsV),
+    jobs_in_progress: jobsInProgress?.n ?? 0,
     weekly_collections: round2(weeklyCollections?.v ?? 0),
-    ytd_profit: round2(ytdProfit),
+    unpaid_invoices_total: round2(unpaid?.v ?? 0),
+    unpaid_invoices_count: unpaid?.n ?? 0,
+    payments_scheduled_total: round2(scheduled?.v ?? 0),
+    payments_scheduled_count: scheduled?.n ?? 0,
+    monthly_collections: round2(monthlyCollectionsV),
     monthly_profit: round2(monthlyProfit),
+    ytd_revenue_gross: round2(ytdRevenueGrossV),
+    ytd_revenue_collections: round2(ytdCollectionsV),
+    ytd_profit: round2(ytdProfit),
+    ytd_profit_margin_pct: round1(ytdProfitMarginPct),
     ytd_jobs: ytdJobs?.n ?? 0,
+    pipeline_dollars: round2(pipeline?.v ?? 0),
+    pipeline_count: pipeline?.n ?? 0,
     last_sync: lastSyncRow ?? null,
   };
 }
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
 }

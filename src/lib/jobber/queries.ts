@@ -33,6 +33,34 @@ export const EXPENSES_PAGE_QUERY = /* GraphQL */ `
 `;
 
 /**
+ * Standalone quotes pull. The per-job pass only gives us quotes that
+ * successfully converted to jobs. To compute Pipeline $ (open quotes
+ * awaiting response / changes requested / approved-but-not-yet-job),
+ * we need every quote, including those never linked to a job.
+ */
+export const QUOTES_PAGE_QUERY = /* GraphQL */ `
+  query QuotesPage($first: Int!, $after: String) {
+    quotes(first: $first, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        quoteNumber
+        quoteStatus
+        amounts { subtotal }
+        createdAt
+        transitionedAt
+        jobs(first: 1) {
+          nodes { id }
+        }
+      }
+    }
+  }
+`;
+
+/**
  * Standalone invoices pull. We run this *after* the per-job pass so that
  * every invoice is captured, not just the "primary" one attached to each
  * job. Jobber's per-job `invoices(first: 1)` misses change orders, re-issued

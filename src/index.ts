@@ -44,6 +44,19 @@ export default {
       return jsonResponse({ error: "not_found", path: url.pathname }, { status: 404 });
     }
 
+    // Hostname-based routing:
+    //   dash.homesolutionsar.com  → /dashboard/* (Access-protected in CF dashboard)
+    //   anything else (docs.*, workers.dev root) → /* (current docs site)
+    // The dash.* host rewrites the URL so that "/" maps to "/dashboard/index.html",
+    // which lets the dashboard act as its own origin without exposing the
+    // /dashboard/ prefix to the browser.
+    const host = url.hostname;
+    if (host.startsWith("dash.") && !url.pathname.startsWith("/dashboard")) {
+      const rewritten = new URL(request.url);
+      rewritten.pathname = "/dashboard" + (url.pathname === "/" ? "/" : url.pathname);
+      return env.ASSETS.fetch(new Request(rewritten.toString(), request));
+    }
+
     return env.ASSETS.fetch(request);
   },
 

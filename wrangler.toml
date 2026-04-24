@@ -13,6 +13,8 @@ name = "chs-hub"
 main = "src/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = true
 
 # ─── Static assets ─────────────────────────────────────────────────────
 # `directory = "./"` serves everything in the repo that isn't listed in
@@ -23,6 +25,20 @@ compatibility_flags = ["nodejs_compat"]
 [assets]
 directory = "./"
 binding = "ASSETS"
+# Worker code runs FIRST so we can route by hostname (dash.* vs docs.*)
+# before assets are served. Without this, Cloudflare would serve /index.html
+# directly for dash.* and bypass the dashboard rewrite entirely.
+run_worker_first = true
+
+# ─── Custom domains ────────────────────────────────────────────────────
+# docs.homesolutionsar.com is already configured in the Cloudflare dashboard
+# as a Pages/Worker custom domain. We add dash.* here so the dashboard has
+# its own hostname (also makes Cloudflare Access policy easy to target).
+# The Worker's fetch handler rewrites dash.*/ → /dashboard/ internally.
+
+[[routes]]
+pattern = "dash.homesolutionsar.com"
+custom_domain = true
 
 # ─── D1 database ───────────────────────────────────────────────────────
 # Created via: wrangler d1 create chs-hub-db

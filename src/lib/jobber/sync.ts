@@ -17,10 +17,12 @@ import {
   EXPENSES_PAGE_QUERY,
   INVOICES_PAGE_QUERY,
   JOBS_PAGE_QUERY,
+  QUOTES_PAGE_QUERY,
 } from "./queries.js";
 
 const JOBS_PAGE_SIZE = 25;
 const INVOICES_PAGE_SIZE = 50;
+const QUOTES_PAGE_SIZE = 50;
 const EXPENSES_PAGE_SIZE = 50;
 const MAX_PAGES = 200; // 200 × 25 = 5000 jobs ceiling; safety stop for runaway loops
 
@@ -150,6 +152,8 @@ export interface SyncStats {
   jobs_written: number;
   clients_written: number;
   quotes_written: number;
+  quote_pages: number;
+  quotes_seen: number;
   line_items_written: number;
   invoices_written: number;
   invoice_pages: number;
@@ -174,6 +178,8 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
     jobs_written: 0,
     clients_written: 0,
     quotes_written: 0,
+    quote_pages: 0,
+    quotes_seen: 0,
     line_items_written: 0,
     invoices_written: 0,
     invoice_pages: 0,
@@ -218,6 +224,11 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
       if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
       cursor = pageInfo.endCursor;
     }
+
+    // Standalone quotes pass — captures pipeline quotes (awaiting_response,
+    // changes_requested, approved-not-yet-job) that the per-job pass never
+    // sees because they haven't converted to jobs.
+    await syncAllQuotes(env, accessToken, stats);
 
     // Standalone invoices pass — captures invoices the per-job loop missed
     // (change orders, re-issues, invoices whose parent job ordering buried
@@ -425,6 +436,106 @@ async function upsertJob(env: Env, job: JobberJob, stats: SyncStats): Promise<vo
   }
 
   await env.DB.batch(stmts);
+}
+
+// ─── Standalone quotes sync ────────────────────────────────────────
+
+interface QuotesPageResult {
+  quotes: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: StandaloneQuote[];
+  };
+}
+
+interface StandaloneQuote {
+  id: string;
+  quoteNumber?: number | null;
+  quoteStatus?: string | null;
+  amounts?: { subtotal?: number | null } | null;
+  createdAt?: string | null;
+  transitionedAt?: string | null;
+  jobs?: { nodes: Array<{ id: string }> } | null;
+}
+
+async function syncAllQuotes(
+  env: Env,
+  accessToken: string,
+  stats: SyncStats,
+): Promise<void> {
+  let cursor: string | null = null;
+
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const result: QuotesPageResult = await jobberQuery<QuotesPageResult>(
+      accessToken,
+      QUOTES_PAGE_QUERY,
+      { variables: { first: QUOTES_PAGE_SIZE, after: cursor } },
+    );
+
+    const nodes: StandaloneQuote[] = result.quotes?.nodes ?? [];
+    stats.quote_pages = page;
+    stats.quotes_seen += nodes.length;
+
+    const syncedAt = new Date().toISOString();
+
+    for (const q of nodes) {
+      const linkedJobId = q.jobs?.nodes?.[0]?.id ?? null;
+      try {
+        // Upsert: if the quote already exists (e.g. from the jobs pass),
+        // keep its job_id unless we have a newer one from this standalone
+        // query. Otherwise insert with whatever job link we have.
+        await env.DB.prepare(
+          `INSERT INTO quotes (id, job_id, quote_number, status, subtotal, created_at, transitioned_at, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             job_id = COALESCE(excluded.job_id, quotes.job_id),
+             quote_number = excluded.quote_number,
+             status = excluded.status,
+             subtotal = excluded.subtotal,
+             created_at = excluded.created_at,
+             transitioned_at = excluded.transitioned_at,
+             synced_at = excluded.synced_at`,
+        )
+          .bind(
+            q.id,
+            linkedJobId,
+            q.quoteNumber ?? null,
+            q.quoteStatus ?? null,
+            q.amounts?.subtotal ?? null,
+            q.createdAt ?? null,
+            q.transitionedAt ?? null,
+            syncedAt,
+          )
+          .run();
+        stats.quotes_written++;
+      } catch (err) {
+        // FK failure if linkedJobId points to a job we don't have — retry
+        // with NULL so the quote still lands in our pipeline count.
+        try {
+          await env.DB.prepare(
+            `INSERT OR REPLACE INTO quotes (id, job_id, quote_number, status, subtotal, created_at, transitioned_at, synced_at)
+             VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+          )
+            .bind(
+              q.id,
+              q.quoteNumber ?? null,
+              q.quoteStatus ?? null,
+              q.amounts?.subtotal ?? null,
+              q.createdAt ?? null,
+              q.transitionedAt ?? null,
+              syncedAt,
+            )
+            .run();
+          stats.quotes_written++;
+        } catch (err2) {
+          stats.errors.push(`Quote ${q.id}: ${(err2 as Error).message}`);
+        }
+      }
+    }
+
+    const pageInfo = result.quotes?.pageInfo;
+    if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
+    cursor = pageInfo.endCursor;
+  }
 }
 
 // ─── Standalone invoices sync ──────────────────────────────────────

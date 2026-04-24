@@ -95,26 +95,33 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.year.start, ranges.year.end)
     .first<{ v: number }>();
 
+  // Collections formula: for PAID invoices, use `total` (Jobber's UI treats
+  // "paid" as fully collected, and its own `paymentsTotal` under-reports
+  // when deposits/refunds aren't re-summed — caused a $13k YTD gap against
+  // Jobber's own dashboard). For everything else, use `payments_total` so
+  // partial collections on past-due / awaiting-payment still count.
+  const collectedExpr = `(CASE WHEN UPPER(status) = 'PAID' THEN COALESCE(total, 0) ELSE COALESCE(payments_total, 0) END)`;
+
   const ytdCollections = await env.DB.prepare(
-    `SELECT COALESCE(SUM(payments_total), 0) AS v
+    `SELECT COALESCE(SUM(${collectedExpr}), 0) AS v
      FROM invoices
-     WHERE payments_total > 0 AND issued_date >= ? AND issued_date < ?`,
+     WHERE issued_date >= ? AND issued_date < ?`,
   )
     .bind(ranges.year.start.slice(0, 10), ranges.year.end.slice(0, 10))
     .first<{ v: number }>();
 
   const monthlyCollections = await env.DB.prepare(
-    `SELECT COALESCE(SUM(payments_total), 0) AS v
+    `SELECT COALESCE(SUM(${collectedExpr}), 0) AS v
      FROM invoices
-     WHERE payments_total > 0 AND issued_date >= ? AND issued_date < ?`,
+     WHERE issued_date >= ? AND issued_date < ?`,
   )
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();
 
   const weeklyCollections = await env.DB.prepare(
-    `SELECT COALESCE(SUM(payments_total), 0) AS v
+    `SELECT COALESCE(SUM(${collectedExpr}), 0) AS v
      FROM invoices
-     WHERE payments_total > 0 AND issued_date >= ? AND issued_date < ?`,
+     WHERE issued_date >= ? AND issued_date < ?`,
   )
     .bind(ranges.week.start.slice(0, 10), ranges.week.end.slice(0, 10))
     .first<{ v: number }>();

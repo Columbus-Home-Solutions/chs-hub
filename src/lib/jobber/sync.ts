@@ -13,9 +13,10 @@
 import type { Env } from "../../env.js";
 import { getAccessToken } from "./auth.js";
 import { jobberQuery } from "./client.js";
-import { JOBS_PAGE_QUERY } from "./queries.js";
+import { INVOICES_PAGE_QUERY, JOBS_PAGE_QUERY } from "./queries.js";
 
 const JOBS_PAGE_SIZE = 25;
+const INVOICES_PAGE_SIZE = 50;
 const MAX_PAGES = 200; // 200 × 25 = 5000 jobs ceiling; safety stop for runaway loops
 
 // ─── GraphQL response shapes ────────────────────────────────────────
@@ -97,6 +98,27 @@ interface JobberInvoice {
   amounts?: { depositAmount?: number | null } | null;
 }
 
+// ─── Standalone invoices pass ──────────────────────────────────────
+
+interface InvoicesPageResult {
+  invoices: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: StandaloneInvoice[];
+  };
+}
+
+interface StandaloneInvoice {
+  id: string;
+  invoiceStatus?: string | null;
+  total?: number | null;
+  paymentsTotal?: number | null;
+  issuedDate?: string | null;
+  dueDate?: string | null;
+  amounts?: { depositAmount?: number | null } | null;
+  jobs?: { nodes: Array<{ id: string }> } | null;
+  paymentRecords?: { nodes: JobberPayment[] } | null;
+}
+
 // ─── Sync result type ──────────────────────────────────────────────
 
 export interface SyncStats {
@@ -107,6 +129,8 @@ export interface SyncStats {
   quotes_written: number;
   line_items_written: number;
   invoices_written: number;
+  invoice_pages: number;
+  invoices_seen: number;
   payments_written: number;
   started_at: string;
   finished_at: string;
@@ -126,6 +150,8 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
     quotes_written: 0,
     line_items_written: 0,
     invoices_written: 0,
+    invoice_pages: 0,
+    invoices_seen: 0,
     payments_written: 0,
     started_at: startedAt.toISOString(),
     finished_at: "",
@@ -163,6 +189,11 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
       if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
       cursor = pageInfo.endCursor;
     }
+
+    // Standalone invoices pass — captures invoices the per-job loop missed
+    // (change orders, re-issues, invoices whose parent job ordering buried
+    // them behind the `first: 1` limit on jobs.invoices).
+    await syncAllInvoices(env, accessToken, stats);
 
     const finishedAt = new Date();
     stats.finished_at = finishedAt.toISOString();
@@ -357,6 +388,104 @@ async function upsertJob(env: Env, job: JobberJob, stats: SyncStats): Promise<vo
       ).bind(p.id, job.id, invoiceId, p.amount ?? null, collectedAt, syncedAt),
     );
     stats.payments_written++;
+  }
+
+  await env.DB.batch(stmts);
+}
+
+// ─── Standalone invoices sync ──────────────────────────────────────
+
+async function syncAllInvoices(
+  env: Env,
+  accessToken: string,
+  stats: SyncStats,
+): Promise<void> {
+  let cursor: string | null = null;
+
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const result: InvoicesPageResult = await jobberQuery<InvoicesPageResult>(
+      accessToken,
+      INVOICES_PAGE_QUERY,
+      { variables: { first: INVOICES_PAGE_SIZE, after: cursor } },
+    );
+
+    const nodes: StandaloneInvoice[] = result.invoices?.nodes ?? [];
+    stats.invoice_pages = page;
+    stats.invoices_seen += nodes.length;
+
+    for (const inv of nodes) {
+      try {
+        await upsertStandaloneInvoice(env, inv, stats);
+      } catch (err) {
+        stats.errors.push(`Invoice ${inv.id}: ${(err as Error).message}`);
+      }
+    }
+
+    const pageInfo = result.invoices?.pageInfo;
+    if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
+    cursor = pageInfo.endCursor;
+  }
+}
+
+async function upsertStandaloneInvoice(
+  env: Env,
+  invoice: StandaloneInvoice,
+  stats: SyncStats,
+): Promise<void> {
+  const syncedAt = new Date().toISOString();
+  const jobId = invoice.jobs?.nodes?.[0]?.id ?? null;
+  const stmts: D1PreparedStatement[] = [];
+
+  stmts.push(
+    env.DB.prepare(
+      `INSERT INTO invoices (id, job_id, status, total, payments_total, issued_date, due_date, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         job_id = excluded.job_id,
+         status = excluded.status,
+         total = excluded.total,
+         payments_total = excluded.payments_total,
+         issued_date = excluded.issued_date,
+         due_date = excluded.due_date,
+         synced_at = excluded.synced_at`,
+    ).bind(
+      invoice.id,
+      jobId,
+      invoice.invoiceStatus ?? null,
+      invoice.total ?? null,
+      invoice.paymentsTotal ?? null,
+      invoice.issuedDate ?? null,
+      invoice.dueDate ?? null,
+      syncedAt,
+    ),
+  );
+  stats.invoices_written++;
+
+  // Re-sync payments for this invoice. We wipe by invoice_id (not job_id)
+  // because the jobs-pass already handled job-bound payments; here we cover
+  // payments whose invoice lives under a different job than what we keyed
+  // off, or has no job at all.
+  const payments = invoice.paymentRecords?.nodes ?? [];
+  if (payments.length > 0) {
+    stmts.push(
+      env.DB.prepare("DELETE FROM payments WHERE invoice_id = ?").bind(invoice.id),
+    );
+    const collectedAt = invoice.issuedDate ?? null;
+    for (const p of payments) {
+      stmts.push(
+        env.DB.prepare(
+          `INSERT INTO payments (id, job_id, invoice_id, amount, collected_at, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             job_id = excluded.job_id,
+             invoice_id = excluded.invoice_id,
+             amount = excluded.amount,
+             collected_at = excluded.collected_at,
+             synced_at = excluded.synced_at`,
+        ).bind(p.id, jobId, invoice.id, p.amount ?? null, collectedAt, syncedAt),
+      );
+      stats.payments_written++;
+    }
   }
 
   await env.DB.batch(stmts);

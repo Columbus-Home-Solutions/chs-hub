@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0f172a" />
+<title>CHS Hub — Docs</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%A0%3C/text%3E%3C/svg%3E" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/sql.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/typescript.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, sans-serif; }
+  .prose { color: #e2e8f0; max-width: none; }
+  .prose h1 { color: #f8fafc; font-size: 2.25rem; font-weight: 700; margin-top: 0; margin-bottom: 1rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }
+  .prose h2 { color: #f1f5f9; font-size: 1.5rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; }
+  .prose h3 { color: #e2e8f0; font-size: 1.2rem; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+  .prose h4 { color: #cbd5e1; font-size: 1.05rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: 0.5rem; }
+  .prose p { margin-bottom: 1rem; line-height: 1.7; }
+  .prose ul, .prose ol { margin: 0.75rem 0 1rem 1.5rem; line-height: 1.7; }
+  .prose ul { list-style: disc; }
+  .prose ol { list-style: decimal; }
+  .prose li { margin-bottom: 0.25rem; }
+  .prose li > ul, .prose li > ol { margin-top: 0.25rem; margin-bottom: 0.25rem; }
+  .prose a { color: #60a5fa; text-decoration: underline; }
+  .prose a:hover { color: #93c5fd; }
+  .prose code { background: #1e293b; color: #fbbf24; padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-size: 0.9em; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .prose pre { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+  .prose pre code { background: transparent; color: #e2e8f0; padding: 0; font-size: 0.875rem; }
+  .prose blockquote { border-left: 4px solid #475569; padding-left: 1rem; color: #94a3b8; font-style: italic; margin: 1rem 0; }
+  .prose table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  .prose th, .prose td { border: 1px solid #334155; padding: 0.5rem 0.75rem; text-align: left; }
+  .prose th { background: #1e293b; color: #f1f5f9; font-weight: 600; }
+  .prose tr:nth-child(even) { background: rgba(30, 41, 59, 0.3); }
+  .prose hr { border: 0; border-top: 1px solid #334155; margin: 2rem 0; }
+  .prose strong { color: #f1f5f9; }
+
+  /* Sidebar nav item */
+  .nav-item { display: block; padding: 0.5rem 0.75rem; border-radius: 0.375rem; color: #94a3b8; transition: all 0.15s; border: 1px solid transparent; }
+  .nav-item:hover { background: #1e293b; color: #f1f5f9; }
+  .nav-item.active { background: #1e40af; color: #f8fafc; border-color: #3b82f6; }
+
+  /* Mobile menu toggle */
+  #sidebar { transition: transform 0.2s ease-out; }
+  @media (max-width: 768px) {
+    #sidebar.closed { transform: translateX(-100%); }
+  }
+
+  /* Anchor offset so links don't hide under sticky header */
+  .prose :where(h1, h2, h3, h4)[id] { scroll-margin-top: 80px; }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen">
+
+<!-- Top bar -->
+<header class="sticky top-0 z-40 bg-slate-900/90 backdrop-blur border-b border-slate-800">
+  <div class="flex items-center justify-between px-4 py-3 md:px-6">
+    <div class="flex items-center gap-3">
+      <button id="menu-toggle" class="md:hidden p-1 rounded hover:bg-slate-800" aria-label="Toggle menu">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <div>
+        <h1 class="text-lg font-bold text-white">CHS Hub Docs</h1>
+        <p class="text-xs text-slate-400 hidden sm:block">Columbus Home Solutions — operational platform</p>
+      </div>
+    </div>
+    <div class="text-xs text-slate-500 hidden md:block">
+      <span id="last-updated">loading…</span>
+    </div>
+  </div>
+</header>
+
+<div class="flex">
+  <!-- Sidebar -->
+  <aside id="sidebar" class="fixed md:sticky top-[60px] left-0 bottom-0 md:top-auto md:h-[calc(100vh-60px)] w-64 bg-slate-900 border-r border-slate-800 overflow-y-auto z-30 md:z-auto">
+    <nav class="p-4 space-y-1">
+      <a href="#/" class="nav-item" data-slug="">
+        <div class="font-medium">Overview</div>
+        <div class="text-xs text-slate-500">README</div>
+      </a>
+      <a href="#/00-architecture" class="nav-item" data-slug="00-architecture">
+        <div class="font-medium">00 · Architecture</div>
+        <div class="text-xs text-slate-500">Master plan + D1 schema</div>
+      </a>
+      <a href="#/01-file-system" class="nav-item" data-slug="01-file-system">
+        <div class="font-medium">01 · File System</div>
+        <div class="text-xs text-slate-500">R2 + PWA capture</div>
+      </a>
+      <a href="#/02-estimating-app" class="nav-item" data-slug="02-estimating-app">
+        <div class="font-medium">02 · Estimating App</div>
+        <div class="text-xs text-slate-500">Blueprint → Jobber quote</div>
+      </a>
+      <a href="#/03-social-media" class="nav-item" data-slug="03-social-media">
+        <div class="font-medium">03 · Social Media</div>
+        <div class="text-xs text-slate-500">Monthly plan automation</div>
+      </a>
+    </nav>
+
+    <div class="px-4 py-3 mt-4 border-t border-slate-800">
+      <div class="text-xs text-slate-500 mb-2">On this page</div>
+      <div id="toc" class="space-y-1 text-xs"></div>
+    </div>
+  </aside>
+
+  <!-- Sidebar overlay on mobile -->
+  <div id="sidebar-overlay" class="md:hidden fixed inset-0 bg-black/60 z-20 hidden"></div>
+
+  <!-- Main content -->
+  <main class="flex-1 min-w-0">
+    <article id="content" class="prose px-4 py-6 md:px-10 md:py-10 max-w-4xl mx-auto">
+      <div class="text-slate-500 italic">Loading…</div>
+    </article>
+  </main>
+</div>
+
+<script>
+  // ── Config ───────────────────────────────────────────────────
+  const DOC_SOURCES = {
+    '':                  'README.md',
+    '00-architecture':   'docs/00-architecture.md',
+    '01-file-system':    'docs/01-file-system.md',
+    '02-estimating-app': 'docs/02-estimating-app.md',
+    '03-social-media':   'docs/03-social-media.md',
+  };
+
+  // ── Marked setup ─────────────────────────────────────────────
+  marked.setOptions({
+    gfm: true,
+    breaks: false,
+    headerIds: true,
+    mangle: false,
+    highlight: function(code, lang) {
+      if (lang && hljs.getLanguage(lang)) {
+        try { return hljs.highlight(code, { language: lang }).value; } catch(e) {}
+      }
+      return hljs.highlightAuto(code).value;
+    }
+  });
+
+  // ── Routing ──────────────────────────────────────────────────
+  function currentSlug() {
+    const h = location.hash.replace(/^#\/?/, '');
+    return DOC_SOURCES.hasOwnProperty(h) ? h : '';
+  }
+
+  async function renderPage() {
+    const slug = currentSlug();
+    const path = DOC_SOURCES[slug];
+    const el = document.getElementById('content');
+
+    // Update sidebar active state
+    document.querySelectorAll('.nav-item').forEach(a => {
+      a.classList.toggle('active', a.dataset.slug === slug);
+    });
+
+    try {
+      const res = await fetch(path, { cache: 'no-cache' });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const md = await res.text();
+      el.innerHTML = marked.parse(md);
+      buildToc();
+      // Update last-updated indicator if server provided Last-Modified
+      const lm = res.headers.get('Last-Modified');
+      if (lm) {
+        const d = new Date(lm);
+        document.getElementById('last-updated').textContent = 'Updated ' + d.toLocaleDateString();
+      }
+    } catch(e) {
+      el.innerHTML = `<h1>Not found</h1><p>Could not load <code>${path}</code>.</p><pre>${e.message}</pre>`;
+    }
+
+    // Close mobile sidebar after nav
+    if (window.innerWidth < 768) closeSidebar();
+    window.scrollTo({ top: 0 });
+  }
+
+  // ── Table of contents ───────────────────────────────────────
+  function buildToc() {
+    const toc = document.getElementById('toc');
+    toc.innerHTML = '';
+    const headings = document.querySelectorAll('#content h2, #content h3');
+    headings.forEach(h => {
+      const a = document.createElement('a');
+      a.href = '#' + h.id + '-heading';
+      a.textContent = h.textContent;
+      a.className = 'block py-0.5 text-slate-500 hover:text-slate-200 truncate';
+      if (h.tagName === 'H3') a.classList.add('pl-3');
+      a.onclick = (e) => {
+        e.preventDefault();
+        h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+      toc.appendChild(a);
+    });
+    if (headings.length === 0) {
+      toc.innerHTML = '<div class="text-slate-600 italic">No headings</div>';
+    }
+  }
+
+  // ── Mobile sidebar ──────────────────────────────────────────
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  function openSidebar()  { sidebar.classList.remove('closed'); overlay.classList.remove('hidden'); }
+  function closeSidebar() { sidebar.classList.add('closed');    overlay.classList.add('hidden'); }
+  if (window.innerWidth < 768) sidebar.classList.add('closed');
+  document.getElementById('menu-toggle').onclick = () => {
+    sidebar.classList.contains('closed') ? openSidebar() : closeSidebar();
+  };
+  overlay.onclick = closeSidebar;
+
+  // ── Boot ────────────────────────────────────────────────────
+  window.addEventListener('hashchange', renderPage);
+  renderPage();
+</script>
+</body>
+</html>

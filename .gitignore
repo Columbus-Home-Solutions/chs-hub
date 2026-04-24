@@ -1,0 +1,30 @@
+# Env + secrets
+.env
+.env.local
+.env.*.local
+.dev.vars
+*.pem
+*.key
+
+# Node / build
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+.wrangler/
+
+# Python (in case scripts land here)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

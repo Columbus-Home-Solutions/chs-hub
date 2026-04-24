@@ -110,9 +110,6 @@ main{position:relative;z-index:1;padding:14px 18px 20px;max-width:1800px;width:1
 .kbc-fu .kb-header{background:rgba(160,90,200,.25);border:1px solid rgba(160,90,200,.4);border-bottom:none;}
 .kbc-won .kb-header{background:rgba(82,192,122,.25);border:1px solid rgba(82,192,122,.4);border-bottom:none;}
 .kbc-lost .kb-header{background:rgba(224,82,82,.2);border:1px solid rgba(224,82,82,.35);border-bottom:none;}
-.kbc-dead .kb-header{background:rgba(100,100,100,.2);border:1px solid rgba(150,150,150,.3);border-bottom:none;}
-.kbc-dead .kb-count{opacity:.6;}
-
 .kb-card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:9px 10px;cursor:grab;transition:transform .15s,box-shadow .15s,border-color .15s;user-select:none;position:relative;}
 .kb-card:hover{border-color:rgba(240,165,0,.4);box-shadow:0 4px 14px rgba(0,0,0,.4);transform:translateY(-1px);}
 .kb-card.dragging{opacity:.5;transform:scale(.97);}
@@ -417,10 +414,8 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
           <div class="qlsec">Google</div>
           <div class="qlg">
             <a class="ql" href="googlegmail://" onclick="return mobAppLink(event,'googlegmail://','https://mail.google.com')"><span class="qi">📧</span><div><div>Gmail</div><div class="qs">Email</div></div></a>
-            <a class="ql" href="googlecalendar://" onclick="return mobAppLink(event,'googlecalendar://','https://calendar.google.com')"><span class="qi">📅</span><div><div>Calendar</div><div class="qs">Schedule</div></div></a>
             <a class="ql" href="googledrive://" onclick="return mobAppLink(event,'googledrive://','https://drive.google.com')"><span class="qi">📁</span><div><div>Drive</div><div class="qs">Files & Docs</div></div></a>
             <a class="ql" href="https://contacts.google.com" target="_blank"><span class="qi">👥</span><div><div>Contacts</div><div class="qs">Customers</div></div></a>
-            <a class="ql" href="googlegmail://" onclick="return mobAppLink(event,'googletasks://','https://tasks.google.com')"><span class="qi">✅</span><div><div>Tasks</div><div class="qs">To-do list</div></div></a>
             <a class="ql" href="https://keep.google.com" target="_blank"><span class="qi">📌</span><div><div>Google Keep</div><div class="qs">Quick notes</div></div></a>
           </div>
           <div class="qlsec">Social & Reviews</div>
@@ -438,15 +433,8 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
           <div class="qlsec">Spreadsheets</div>
           <div class="qlg s1" style="margin-top:6px;">
             <a class="ql" href="/jobs"><span class="qi">🔨</span><div><div>Jobs</div><div class="qs">Native · Job tracker</div></div></a>
-            <a class="ql" href="/notes"><span class="qi">🧠</span><div><div>Smart Notes</div><div class="qs">Native · Knowledge base</div></div></a>
             <a class="ql" href="/subs"><span class="qi">👷</span><div><div>Subcontractors</div><div class="qs">Native · Reference list</div></div></a>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
-            <a class="ql gc" id="tr2-ql-lnk" href="#" target="_blank" style="flex:1;"><span class="qi">💰</span><div><div>Wealthy Contractor Tracker</div><div class="qs">Financial growth · Profit planning</div></div></a>
-            <button class="lkb" id="tr2-lk" onclick="togLock(2)" title="Lock to hide" style="flex-shrink:0;">🔓</button>
-          </div>
-          <div class="tur" id="tr2-url-row" style="margin-top:4px;">
-            <input class="tui" id="tr2-url" placeholder="Paste Wealthy Contractor link..." oninput="updTr(2,this.value)">
+            <a class="ql" id="tr2-ql-lnk" href="https://docs.google.com/spreadsheets/d/1utmYdBkUM8cefQ-1mpEnhiyV-vVf-IOhN1yn_wfXyZo/edit" target="_blank"><span class="qi">💰</span><div><div>Wealthy Contractor Tracker</div><div class="qs">Financial growth · Profit planning</div></div></a>
           </div>
         </div>
       </div>
@@ -621,7 +609,6 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
             <span id="hl-sync-badge" style="font-size:9px;font-weight:700;background:rgba(255,255,255,.08);color:var(--muted);padding:3px 8px;border-radius:20px;border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;gap:4px;"><span id="hl-sync-dot" style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.25);display:inline-block;"></span><span id="hl-sync-txt">Connecting to High Level...</span></span>
             <span class="bdg" id="kb-total">0 leads</span>
             <span class="bdg" onclick="toggleWonCol()" id="won-col-toggle" style="cursor:pointer;">💰 Hide Completed</span>
-            <span class="bdg" onclick="toggleDeadCol()" id="dead-col-toggle" style="cursor:pointer;">💀 Hide Dead</span>
             <span class="bdg" onclick="openMod('lead-mod')" style="cursor:pointer;background:rgba(240,165,0,.28);">+ Add Lead</span>
           </div>
         </div>
@@ -832,7 +819,7 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
         <a class="ma-more-tile" href="https://www.google.com/maps/search/@34.7695,-92.2671,13z" target="_blank">🗺️ Maps</a>
       </div>
       <div class="ma-section-h" style="margin-top:8px;">Trackers</div>
-      <a class="ma-more-tile" id="ma-tr2" href="#" target="_blank" style="grid-column:1/-1;">💰 WC tracker</a>
+      <a class="ma-more-tile" id="ma-tr2" href="https://docs.google.com/spreadsheets/d/1utmYdBkUM8cefQ-1mpEnhiyV-vVf-IOhN1yn_wfXyZo/edit" target="_blank" style="grid-column:1/-1;">💰 WC tracker</a>
     </div>
   </div>
   <nav class="mob-nav" id="mob-nav">
@@ -857,7 +844,7 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
     <label class="ml">Temperature</label>
     <select id="l-temp"><option value="hot">🔥 Hot — Ready to book</option><option value="warm">🌤 Warm — Following up</option><option value="cold">❄️ Cold — Just inquired</option></select>
     <label class="ml">Pipeline Stage</label>
-    <select id="l-stage"><option value="new">New Lead</option><option value="cont">Contacted | Follow Up</option><option value="appt">Appointment Set</option><option value="est">Create Estimate</option><option value="estfu">Estimate Sent | Follow Up</option><option value="won">Job Completed | Collected</option><option value="unpaid">Job Completed | Not Collected</option><option value="dead">💀 Dead Lead</option></select>
+    <select id="l-stage"><option value="new">New Lead</option><option value="cont">Contacted | Follow Up</option><option value="appt">Appointment Set</option><option value="est">Create Estimate</option><option value="estfu">Estimate Sent | Follow Up</option><option value="won">Job Completed | Collected</option><option value="unpaid">Job Completed | Not Collected</option></select>
     <div class="mact"><button class="bcn" onclick="closeMod('lead-mod')">Cancel</button><button class="bpr" onclick="saveLead()">Save Lead</button></div>
   </div>
 </div>
@@ -1051,9 +1038,13 @@ var COLS=[
   {id:'est',   label:'Create Estimate',       cls:'kbc-est',  icon:'📋'},
   {id:'estfu', label:'Estimate Sent | F/U',   cls:'kbc-est',  icon:'📤'},
   {id:'won',   label:'Job Completed ✓ Paid',  cls:'kbc-won',  icon:'💰', hideable:true},
-  {id:'unpaid',label:'Completed | Unpaid',    cls:'kbc-lost', icon:'⏳'},
-  {id:'dead',  label:'Dead Lead',             cls:'kbc-dead', icon:'💀', hideable:true}
+  {id:'unpaid',label:'Completed | Unpaid',    cls:'kbc-lost', icon:'⏳'}
 ];
+
+// Stage names from HL that should be dropped from the dashboard entirely
+// (dead / lost leads are viewable in HighLevel itself — we don't carry
+// them into CHS anymore).
+var HL_DROP_STAGES=['dead lead','dead','disqualified','lost','closed lost','not interested','unqualified','no response'];
 
 var HL_STAGE_MAP={
   // New Lead
@@ -1069,9 +1060,7 @@ var HL_STAGE_MAP={
   // Job Completed | Collected
   'job completed | collected':'won','job completed':'won','collected':'won','closed won':'won','won':'won','booked':'won','closed':'won','paid':'won',
   // Job Completed | Not Collected
-  'job completed | not collected':'unpaid','not collected':'unpaid','job completed | not collected':'unpaid','awaiting payment':'unpaid',
-  // Dead Lead
-  'dead lead':'dead','dead':'dead','disqualified':'dead','lost':'dead','closed lost':'dead','not interested':'dead','unqualified':'dead','no response':'dead'
+  'job completed | not collected':'unpaid','not collected':'unpaid','job completed | not collected':'unpaid','awaiting payment':'unpaid'
 };
 
 var leads=JSON.parse(localStorage.getItem('chs_leads_kb')||'[]');
@@ -1081,11 +1070,13 @@ var dragId=null;
 
 function saveLeads(){localStorage.setItem('chs_leads_kb',JSON.stringify(leads));}
 
-// Older builds mapped unknown HL stages to 'lost', which is not a kanban column — recover those cards
+// One-time cleanup: drop any locally-cached dead/lost leads now that the
+// Dead Lead column has been retired. HL is the source of truth for those
+// statuses going forward.
 (function(){
-  var fix=false;
-  leads.forEach(function(l){if(l.stage==='lost'){l.stage='dead';fix=true;}});
-  if(fix)saveLeads();
+  var before=leads.length;
+  leads=leads.filter(function(l){return l.stage!=='dead'&&l.stage!=='lost';});
+  if(leads.length!==before)saveLeads();
 })();
 
 function setHLBadge(status,color){
@@ -1105,11 +1096,11 @@ function setHLBadge(status,color){
 }
 
 // Hardcoded stage ID → column map (from your HighLevel pipeline)
-// These are fetched dynamically below but kept as fallback
+// These are fetched dynamically below but kept as fallback. Mapping to
+// null means "drop this lead from the CHS board" (e.g. dead/lost stages).
 var HL_STAGE_ID_MAP={
   'adb468b0-7c7e-42b4-9ae9-fad4af5c0ec5':'new',      // New Lead
-  '021fb348-4343-494e-a6a0-41af99b2b0ef':'dead'       // Dead Lead
-  // More will be added as leads move through stages
+  '021fb348-4343-494e-a6a0-41af99b2b0ef':null        // Dead Lead — excluded
 };
 
 function getStageNameFromPipeline(op){
@@ -1140,14 +1131,18 @@ function mapHLStage(stageName){
   // Handle direct ID lookup (prefixed by getStageNameFromPipeline)
   if(stageName.indexOf('__id__')===0){
     var id=stageName.replace('__id__','');
-    return HL_STAGE_ID_MAP[id]||'new';
+    if(id in HL_STAGE_ID_MAP)return HL_STAGE_ID_MAP[id]; // may be null = drop
+    return 'new';
   }
 
-  var mapped=HL_STAGE_MAP[stageName.toLowerCase().trim()];
+  var key=stageName.toLowerCase().trim();
+  // Dead/lost stages are deliberately dropped from the CHS board.
+  if(HL_DROP_STAGES.indexOf(key)!==-1)return null;
+
+  var mapped=HL_STAGE_MAP[key];
   if(!mapped){
-    // Log unknown stage names so we can add them to the map
-    console.log('CHS: Unknown HL stage "'+stageName+'" — add to HL_STAGE_MAP to map it correctly. Defaulting to Dead Lead column.');
-    return 'dead'; // must match a COLS id (was 'lost', which has no column — cards vanished from the board)
+    console.log('CHS: Unknown HL stage "'+stageName+'" — add to HL_STAGE_MAP to map it correctly. Defaulting to New Lead.');
+    return 'new';
   }
   return mapped;
 }
@@ -1170,8 +1165,7 @@ function getHLStageId(colId,pipelineId){
     'est':'Create Estimate',
     'estfu':'Estimate Sent | Follow Up',
     'won':'Job Completed | Collected',
-    'unpaid':'Job Completed | Not Collected',
-    'dead':'Dead Lead'
+    'unpaid':'Job Completed | Not Collected'
   };
   var target=nameMap[colId]||colId;
   var stage=stages.find(function(s){return s.name&&s.name.toLowerCase()===target.toLowerCase();});
@@ -1221,20 +1215,23 @@ function fetchHLData(){
       });
       if(bestPid)hlPipelineId=bestPid;
       var localLeads=leads.filter(function(l){return !l.hlId;});
-      var hlLeads=ops.map(function(op){
+      var hlLeads=[];
+      ops.forEach(function(op){
         var stageName=getStageNameFromPipeline(op);
-        console.log('CHS HL lead: "'+(op.name||op.id)+'" stageId="'+(op.pipelineStageId||'')+'" stageName="'+stageName+'" → mapped="'+mapHLStage(stageName)+'"');
+        var stage=mapHLStage(stageName);
+        console.log('CHS HL lead: "'+(op.name||op.id)+'" stageId="'+(op.pipelineStageId||'')+'" stageName="'+stageName+'" → mapped="'+stage+'"');
+        if(stage===null)return; // dead/lost — skip
         var existing=leads.find(function(l){return l.hlId===op.id;});
-        return{
+        hlLeads.push({
           id:'hl-'+op.id,hlId:op.id,
           pipelineId:op.pipelineId||hlPipelineId,
           name:op.name||(op.contact&&op.contact.name)||'Unknown',
           contact:op.contact&&op.contact.phone?op.contact.phone:'',
           desc:op.source||'',
           temp:existing?existing.temp:(op.monetaryValue>5000?'hot':op.monetaryValue>1000?'warm':'cold'),
-          stage:mapHLStage(stageName),
+          stage:stage,
           hlValue:op.monetaryValue||0
-        };
+        });
       });
       leads=localLeads.concat(hlLeads);
       saveLeads();renderKanban();
@@ -1274,7 +1271,6 @@ function updateHLStage(lead,newStage){
   var stageId=getHLStageId(newStage,lead.pipelineId||hlPipelineId);
   var body={};
   if(newStage==='won')body.status='won';
-  else if(newStage==='dead')body.status='lost';
   else body.status='open';
   if(stageId)body.pipelineStageId=stageId;
   fetch(HL_BASE+'/opportunities/'+lead.hlId,{method:'PUT',headers:HL_HEADERS,body:JSON.stringify(body)})
@@ -1297,14 +1293,7 @@ if(localStorage.getItem('chs_kb_ver')!=='2'){
   localStorage.removeItem('chs_won_hidden');
   localStorage.setItem('chs_kb_ver','2');
 }
-var deadColHidden=JSON.parse(localStorage.getItem('chs_dead_hidden')||'false');
 var wonColHidden=JSON.parse(localStorage.getItem('chs_won_hidden')||'false');
-
-function toggleDeadCol(){
-  deadColHidden=!deadColHidden;
-  localStorage.setItem('chs_dead_hidden',JSON.stringify(deadColHidden));
-  renderKanban();
-}
 
 function toggleWonCol(){
   wonColHidden=!wonColHidden;
@@ -1316,18 +1305,12 @@ function renderKanban(){
   var board=document.getElementById('kanban-board');
   if(!board)return;
   var total=leads.length;
-  var deadCount=leads.filter(function(l){return l.stage==='dead';}).length;
-  console.log('CHS renderKanban: '+total+' total leads, '+deadCount+' dead, deadColHidden='+deadColHidden);
+  console.log('CHS renderKanban: '+total+' total leads');
   var kbTotal=document.getElementById('kb-total');
   if(kbTotal)kbTotal.textContent=total+' lead'+(total!==1?'s':'');
-  // Update toggle button labels
-  var deadBtn=document.getElementById('dead-col-toggle');
-  if(deadBtn)deadBtn.textContent=deadColHidden?'💀 Show Dead':'💀 Hide Dead';
   var wonBtn=document.getElementById('won-col-toggle');
   if(wonBtn)wonBtn.textContent=wonColHidden?'💰 Show Completed':'💰 Hide Completed';
-  // Filter hidden columns
   var visibleCols=COLS.filter(function(col){
-    if(col.id==='dead'&&deadColHidden)return false;
     if(col.id==='won'&&wonColHidden)return false;
     return true;
   });
@@ -1729,65 +1712,12 @@ renderTasks();
 
 
 // ── TRACKERS ──────────────────────────────────────────
-var locked={1:false,2:false};
-function updTr(n,url){
-  if(locked[n])return;
-  var lnk=document.getElementById('tr'+n+'-lnk');
-  var qlLnk=document.getElementById('tr'+n+'-ql-lnk');
-  if(lnk)lnk.href=url||'#';
-  if(qlLnk)qlLnk.href=url||'#';
-  localStorage.setItem('chs_tr'+n,url);
-  if(typeof syncMaTrackers==='function')syncMaTrackers();
-}
-function togLock(n){
-  var inp=document.getElementById('tr'+n+'-url');
-  var btn=document.getElementById('tr'+n+'-lk');
-  var row=document.getElementById('tr'+n+'-url-row');
-  if(!inp||!btn)return;
-  locked[n]=!locked[n];
-  if(locked[n]){
-    // Lock and hide input row
-    inp.disabled=true;
-    btn.textContent='🔒';
-    if(row)row.style.display='none';
-  } else {
-    // Unlock and show input row
-    inp.disabled=false;
-    btn.textContent='🔓';
-    if(row)row.style.display='flex';
-  }
-  localStorage.setItem('chs_trl'+n,locked[n]?'1':'0');
-}
-[1,2].forEach(function(n){
-  var sv=localStorage.getItem('chs_tr'+n);
-  var lk=localStorage.getItem('chs_trl'+n)==='1';
-  if(sv){
-    var lnk=document.getElementById('tr'+n+'-lnk');
-    var qlLnk=document.getElementById('tr'+n+'-ql-lnk');
-    var inp=document.getElementById('tr'+n+'-url');
-    if(lnk)lnk.href=sv;
-    if(qlLnk)qlLnk.href=sv;
-    if(inp)inp.value=sv;
-  }
-  if(lk)togLock(n);
+// WC link is hardcoded in the Spreadsheets tile above; no JS needed.
+// Clean up legacy localStorage keys from the old lock/paste system so the
+// keys don't clutter storage indefinitely.
+['chs_tr1','chs_tr2','chs_trl1','chs_trl2','chs_sub','chs_sub_lk'].forEach(function(k){
+  try{localStorage.removeItem(k);}catch(e){}
 });
-var subLocked=false;
-function updSub(url){if(subLocked)return;document.getElementById('sub-lnk').href=url||'https://drive.google.com';localStorage.setItem('chs_sub',url);}
-function togSubLock(){
-  var inp=document.getElementById('sub-url');
-  var btn=document.getElementById('sub-lk');
-  var row=document.getElementById('sub-url-row');
-  if(!inp||!btn)return;
-  subLocked=!subLocked;
-  inp.disabled=subLocked;
-  btn.textContent=subLocked?'🔒':'🔓';
-  if(row)row.style.display=subLocked?'none':'flex';
-  localStorage.setItem('chs_sub_locked',subLocked?'1':'0');
-}
-var ss=localStorage.getItem('chs_sub');
-if(ss){var sl=document.getElementById('sub-lnk'),su=document.getElementById('sub-url');if(sl)sl.href=ss;if(su)su.value=ss;}
-if(localStorage.getItem('chs_sub_locked')==='1')togSubLock();
-
 // ── SMART NOTES ────────────────────────────────────────
 
 async function importMeetingNotes(){
@@ -3305,7 +3235,6 @@ function renderMobileLeads(){
   var list=document.getElementById('ma-lead-list');
   if(!pills||!list)return;
   var vis=COLS.filter(function(c){
-    if(c.id==='dead'&&deadColHidden)return false;
     if(c.id==='won'&&wonColHidden)return false;
     return true;
   });
@@ -3489,7 +3418,7 @@ function renderMobKanban(){
   var counts={};
   COLS.forEach(function(c){counts[c.id]=0;});
   leads.forEach(function(l){if(counts[l.stage]!==undefined)counts[l.stage]++;});
-  el.innerHTML=COLS.filter(function(c){return !(c.id==='dead'&&deadColHidden);}).map(function(c){
+  el.innerHTML=COLS.map(function(c){
     return'<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05);">'+
       '<span style="font-size:13px;color:var(--cream);">'+c.icon+' '+c.label+'</span>'+
       '<span style="font-family:\'Bebas Neue\',sans-serif;font-size:18px;color:var(--gold);">'+counts[c.id]+'</span>'+

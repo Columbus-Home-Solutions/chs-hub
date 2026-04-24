@@ -13,7 +13,8 @@
     "db:execute": "wrangler d1 execute chs-hub-db --remote --command",
     "r2:create": "wrangler r2 bucket create chs-hub-files",
     "tail": "wrangler tail",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "jobber:oauth": "node scripts/jobber-oauth.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",

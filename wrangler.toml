@@ -41,6 +41,13 @@ migrations_dir = "migrations"
 binding = "FILES"
 bucket_name = "chs-hub-files"
 
+# ─── Scheduled jobs ────────────────────────────────────────────────────
+# Pull fresh data from Jobber every 30 minutes. The sync is cheap
+# (~10s, ~600 D1 rows written) and well under Workers' execution limits.
+
+[triggers]
+crons = ["*/30 * * * *"]
+
 # ─── Observability ─────────────────────────────────────────────────────
 
 [observability]

@@ -12,13 +12,16 @@
  *   env.DB      — D1 database (chs-hub-db)
  *   env.FILES   — R2 bucket   (chs-hub-files)
  *   env.ASSETS  — static assets fetcher
+ *
+ * Secrets (set via `wrangler secret put`):
+ *   env.JOBBER_CLIENT_ID / JOBBER_CLIENT_SECRET / JOBBER_REFRESH_TOKEN
+ *   env.SYNC_TRIGGER_SECRET
  */
 
-export interface Env {
-  DB: D1Database;
-  FILES: R2Bucket;
-  ASSETS: Fetcher;
-}
+import type { Env } from "./env.js";
+import { syncJobberToD1 } from "./lib/jobber/sync.js";
+import { handleKpis } from "./routes/kpis.js";
+import { handleJobberSync } from "./routes/sync.js";
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
@@ -28,21 +31,48 @@ export default {
       return handleHealth(env);
     }
 
+    if (url.pathname === "/api/kpis" && request.method === "GET") {
+      const payload = await handleKpis(env);
+      return jsonResponse(payload);
+    }
+
+    if (url.pathname === "/api/sync/jobber" && request.method === "POST") {
+      return handleJobberSync(request, env);
+    }
+
     if (url.pathname.startsWith("/api/")) {
-      return jsonResponse(
-        { error: "not_implemented", path: url.pathname },
-        { status: 404 },
-      );
+      return jsonResponse({ error: "not_found", path: url.pathname }, { status: 404 });
     }
 
     return env.ASSETS.fetch(request);
   },
+
+  // Scheduled handler — invoked by Cloudflare cron triggers (see wrangler.toml).
+  // Runs the Jobber sync autonomously so the dashboard stays fresh without any
+  // manual intervention.
+  async scheduled(
+    controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          const stats = await syncJobberToD1(env);
+          console.log(
+            `[cron ${controller.cron}] jobber_full: ${stats.jobs_written} jobs in ${stats.duration_ms}ms`,
+          );
+        } catch (err) {
+          console.error(
+            `[cron ${controller.cron}] jobber_full failed:`,
+            (err as Error).message,
+          );
+        }
+      })(),
+    );
+  },
 } satisfies ExportedHandler<Env>;
 
-/**
- * Smoke test endpoint. Returns 200 only if D1 and R2 are both reachable.
- * Used for post-deploy verification and future uptime monitoring.
- */
 async function handleHealth(env: Env): Promise<Response> {
   const startedAt = Date.now();
   const checks: {

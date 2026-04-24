@@ -17,11 +17,13 @@ package.json
 package-lock.json
 tsconfig.json
 
-# Worker source + migrations (executed server-side, not served)
+# Worker source + migrations + scripts (executed server-side, not served)
 src
 src/**
 migrations
 migrations/**
+scripts
+scripts/**
 
 # Secrets + logs
 .env

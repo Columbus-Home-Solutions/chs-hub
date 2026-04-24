@@ -55,6 +55,12 @@ export const QUOTES_PAGE_QUERY = /* GraphQL */ `
         jobs(first: 1) {
           nodes { id }
         }
+        client {
+          id
+          name
+          phones { number }
+          emails { address }
+        }
       }
     }
   }

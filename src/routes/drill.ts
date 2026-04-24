@@ -81,10 +81,11 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
       const placeholders = PIPELINE_QUOTE_STATUSES.map(() => "?").join(",");
       const rows = await env.DB.prepare(
         `SELECT q.id, q.quote_number, q.status, q.subtotal, q.created_at,
-                c.name AS client_name
+                COALESCE(c_direct.name, c_via_job.name) AS client_name
          FROM quotes q
+         LEFT JOIN clients c_direct ON c_direct.id = q.client_id
          LEFT JOIN jobs j ON j.id = q.job_id
-         LEFT JOIN clients c ON c.id = j.client_id
+         LEFT JOIN clients c_via_job ON c_via_job.id = j.client_id
          WHERE LOWER(COALESCE(q.status,'')) IN (${placeholders})
          ORDER BY q.created_at DESC
          LIMIT ${MAX_ROWS}`,

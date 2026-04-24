@@ -455,6 +455,12 @@ interface StandaloneQuote {
   createdAt?: string | null;
   transitionedAt?: string | null;
   jobs?: { nodes: Array<{ id: string }> } | null;
+  client?: {
+    id: string;
+    name?: string | null;
+    phones?: Array<{ number?: string | null }> | null;
+    emails?: Array<{ address?: string | null }> | null;
+  } | null;
 }
 
 async function syncAllQuotes(
@@ -479,15 +485,44 @@ async function syncAllQuotes(
 
     for (const q of nodes) {
       const linkedJobId = q.jobs?.nodes?.[0]?.id ?? null;
+      const clientId = q.client?.id ?? null;
+
+      // Upsert the client first so the FK is satisfied for the quote.
+      // Open quotes (not yet jobs) are the only path that surfaces these
+      // clients, so without this block the pipeline drill has no name to
+      // show. Sparse fields — we only update name/phone/email if present.
+      if (clientId) {
+        const phone = q.client?.phones?.[0]?.number ?? null;
+        const email = q.client?.emails?.[0]?.address ?? null;
+        try {
+          await env.DB.prepare(
+            `INSERT INTO clients (id, name, phone, email, synced_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               name = COALESCE(excluded.name, clients.name),
+               phone = COALESCE(excluded.phone, clients.phone),
+               email = COALESCE(excluded.email, clients.email),
+               synced_at = excluded.synced_at`,
+          )
+            .bind(clientId, q.client?.name ?? null, phone, email, syncedAt)
+            .run();
+        } catch (err) {
+          stats.errors.push(
+            `Client upsert (quote ${q.id}): ${(err as Error).message}`,
+          );
+        }
+      }
+
       try {
         // Upsert: if the quote already exists (e.g. from the jobs pass),
         // keep its job_id unless we have a newer one from this standalone
-        // query. Otherwise insert with whatever job link we have.
+        // query. Otherwise insert with whatever job + client links we have.
         await env.DB.prepare(
-          `INSERT INTO quotes (id, job_id, quote_number, status, subtotal, created_at, transitioned_at, synced_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO quotes (id, job_id, client_id, quote_number, status, subtotal, created_at, transitioned_at, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              job_id = COALESCE(excluded.job_id, quotes.job_id),
+             client_id = COALESCE(excluded.client_id, quotes.client_id),
              quote_number = excluded.quote_number,
              status = excluded.status,
              subtotal = excluded.subtotal,
@@ -498,6 +533,7 @@ async function syncAllQuotes(
           .bind(
             q.id,
             linkedJobId,
+            clientId,
             q.quoteNumber ?? null,
             q.quoteStatus ?? null,
             q.amounts?.subtotal ?? null,
@@ -512,11 +548,12 @@ async function syncAllQuotes(
         // with NULL so the quote still lands in our pipeline count.
         try {
           await env.DB.prepare(
-            `INSERT OR REPLACE INTO quotes (id, job_id, quote_number, status, subtotal, created_at, transitioned_at, synced_at)
-             VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+            `INSERT OR REPLACE INTO quotes (id, job_id, client_id, quote_number, status, subtotal, created_at, transitioned_at, synced_at)
+             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
           )
             .bind(
               q.id,
+              clientId,
               q.quoteNumber ?? null,
               q.quoteStatus ?? null,
               q.amounts?.subtotal ?? null,

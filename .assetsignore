@@ -1,0 +1,16 @@
+# Files that exist in the repo but should NOT be served as static assets.
+# Same syntax as .gitignore.
+
+wrangler.toml
+.assetsignore
+.gitignore
+.git
+.git/**
+node_modules
+node_modules/**
+package.json
+package-lock.json
+.env
+.env.*
+*.log
+.DS_Store

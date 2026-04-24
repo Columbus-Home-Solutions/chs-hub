@@ -1,0 +1,20 @@
+# Cloudflare Worker configuration for chs-hub
+#
+# Currently this is a static-assets-only Worker serving the docs site.
+# When we start Phase 6 (Session 6a), we'll add a `main = "worker/src/index.ts"`
+# line and wire up API routes, D1, R2, etc. alongside the static assets.
+#
+# Docs: https://developers.cloudflare.com/workers/static-assets/
+
+name = "chs-hub"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+# Serve everything in the repo root as static assets.
+# .assetsignore excludes repo-only files (wrangler.toml, .git, etc.) from being served.
+directory = "./"
+
+# When a URL doesn't match any file, fall back to index.html (so hash-based
+# routing in the docs SPA works + future /jobs, /leads, etc. paths resolve).
+not_found_handling = "single-page-application"

@@ -86,10 +86,21 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.year.start, ranges.year.end)
     .first<{ v: number }>();
 
-  const ytdCost = await env.DB.prepare(
+  // Cost = line-item cost (labor/subcontract) + expenses (materials,
+  // receipts, misc). Matches what the Python sync was computing.
+  const ytdLineItemCost = await env.DB.prepare(
     `SELECT COALESCE(SUM(li.quantity * li.unit_cost), 0) AS v
      FROM line_items li
      JOIN jobs j ON j.id = li.job_id
+     WHERE j.created_at >= ? AND j.created_at < ?`,
+  )
+    .bind(ranges.year.start, ranges.year.end)
+    .first<{ v: number }>();
+
+  const ytdExpenseCost = await env.DB.prepare(
+    `SELECT COALESCE(SUM(e.amount), 0) AS v
+     FROM expenses e
+     JOIN jobs j ON j.id = e.job_id
      WHERE j.created_at >= ? AND j.created_at < ?`,
   )
     .bind(ranges.year.start, ranges.year.end)
@@ -126,7 +137,9 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.week.start.slice(0, 10), ranges.week.end.slice(0, 10))
     .first<{ v: number }>();
 
-  const monthlyCost = await env.DB.prepare(
+  // Monthly cost — same inputs as YTD cost but scoped to jobs whose
+  // PAID invoice was issued this month (mirrors Python's monthly_cost logic).
+  const monthlyLineItemCost = await env.DB.prepare(
     `SELECT COALESCE(SUM(li.quantity * li.unit_cost), 0) AS v
      FROM line_items li
      JOIN jobs j ON j.id = li.job_id
@@ -137,12 +150,24 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();
 
+  const monthlyExpenseCost = await env.DB.prepare(
+    `SELECT COALESCE(SUM(e.amount), 0) AS v
+     FROM expenses e
+     JOIN jobs j ON j.id = e.job_id
+     JOIN invoices inv ON inv.job_id = j.id
+     WHERE UPPER(inv.status) = 'PAID'
+       AND inv.issued_date >= ? AND inv.issued_date < ?`,
+  )
+    .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
+    .first<{ v: number }>();
+
   const ytdCollectionsV = ytdCollections?.v ?? 0;
   const ytdRevenueGrossV = ytdRevenueGross?.v ?? 0;
-  const ytdCostV = ytdCost?.v ?? 0;
+  const ytdCostV = (ytdLineItemCost?.v ?? 0) + (ytdExpenseCost?.v ?? 0);
   const ytdProfit = ytdRevenueGrossV - ytdCostV;
   const monthlyCollectionsV = monthlyCollections?.v ?? 0;
-  const monthlyCostV = monthlyCost?.v ?? 0;
+  const monthlyCostV =
+    (monthlyLineItemCost?.v ?? 0) + (monthlyExpenseCost?.v ?? 0);
   const monthlyProfit = monthlyCollectionsV - monthlyCostV;
 
   const lastSyncRow = await env.DB.prepare(

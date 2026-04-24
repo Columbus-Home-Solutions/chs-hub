@@ -13,7 +13,11 @@
 import type { Env } from "../../env.js";
 import { getAccessToken } from "./auth.js";
 import { jobberQuery } from "./client.js";
-import { INVOICES_PAGE_QUERY, JOBS_PAGE_QUERY } from "./queries.js";
+import {
+  INVOICES_PAGE_QUERY,
+  JOBS_PAGE_QUERY,
+  buildJobExpensesQuery,
+} from "./queries.js";
 
 const JOBS_PAGE_SIZE = 25;
 const INVOICES_PAGE_SIZE = 50;
@@ -98,6 +102,23 @@ interface JobberInvoice {
   amounts?: { depositAmount?: number | null } | null;
 }
 
+// ─── Per-job expenses pass ─────────────────────────────────────────
+
+interface JobExpensesResult {
+  job: {
+    id: string;
+    expenses: {
+      nodes: Array<{
+        id: string;
+        title?: string | null;
+        description?: string | null;
+        total?: number | null;
+        date?: string | null;
+      }>;
+    } | null;
+  } | null;
+}
+
 // ─── Standalone invoices pass ──────────────────────────────────────
 
 interface InvoicesPageResult {
@@ -132,6 +153,8 @@ export interface SyncStats {
   invoice_pages: number;
   invoices_seen: number;
   payments_written: number;
+  expenses_written: number;
+  expenses_jobs_queried: number;
   started_at: string;
   finished_at: string;
   duration_ms: number;
@@ -153,6 +176,8 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
     invoice_pages: 0,
     invoices_seen: 0,
     payments_written: 0,
+    expenses_written: 0,
+    expenses_jobs_queried: 0,
     started_at: startedAt.toISOString(),
     finished_at: "",
     duration_ms: 0,
@@ -194,6 +219,10 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
     // (change orders, re-issues, invoices whose parent job ordering buried
     // them behind the `first: 1` limit on jobs.invoices).
     await syncAllInvoices(env, accessToken, stats);
+
+    // Per-job expenses pass — fetches material/misc expenses so profit math
+    // can subtract them. Scoped to current-year jobs for cost efficiency.
+    await syncYtdJobExpenses(env, accessToken, stats);
 
     const finishedAt = new Date();
     stats.finished_at = finishedAt.toISOString();
@@ -491,6 +520,67 @@ async function upsertStandaloneInvoice(
   await env.DB.batch(stmts);
 }
 
+// ─── Per-job expenses sync ─────────────────────────────────────────
+
+async function syncYtdJobExpenses(
+  env: Env,
+  accessToken: string,
+  stats: SyncStats,
+): Promise<void> {
+  const yearPrefix = new Date().getUTCFullYear().toString();
+  const yearStart = `${yearPrefix}-01-01T00:00:00.000Z`;
+
+  const rows = await env.DB.prepare(
+    `SELECT id FROM jobs WHERE created_at >= ? ORDER BY created_at DESC`,
+  )
+    .bind(yearStart)
+    .all<{ id: string }>();
+
+  const jobIds = (rows.results ?? []).map((r) => r.id);
+  stats.expenses_jobs_queried = jobIds.length;
+
+  for (const jobId of jobIds) {
+    try {
+      const result = await jobberQuery<JobExpensesResult>(
+        accessToken,
+        buildJobExpensesQuery(jobId),
+      );
+
+      // Wipe + re-insert expenses for this job, so deletions in Jobber
+      // propagate cleanly without needing a separate tombstone workflow.
+      const stmts: D1PreparedStatement[] = [
+        env.DB.prepare("DELETE FROM expenses WHERE job_id = ?").bind(jobId),
+      ];
+
+      const expenses = result.job?.expenses?.nodes ?? [];
+      const syncedAt = new Date().toISOString();
+
+      for (const exp of expenses) {
+        const description =
+          [exp.title, exp.description].filter(Boolean).join(" — ") || null;
+        stmts.push(
+          env.DB.prepare(
+            `INSERT INTO expenses (id, job_id, amount, description, incurred_at, synced_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          ).bind(
+            exp.id,
+            jobId,
+            exp.total ?? null,
+            description,
+            exp.date ?? null,
+            syncedAt,
+          ),
+        );
+        stats.expenses_written++;
+      }
+
+      await env.DB.batch(stmts);
+    } catch (err) {
+      stats.errors.push(`Expenses for job ${jobId}: ${(err as Error).message}`);
+    }
+  }
+}
+
 // ─── sync_log bookkeeping ──────────────────────────────────────────
 
 async function logSyncStart(
@@ -519,7 +609,8 @@ async function logSyncFinish(
     stats.quotes_written +
     stats.line_items_written +
     stats.invoices_written +
-    stats.payments_written;
+    stats.payments_written +
+    stats.expenses_written;
 
   await env.DB.prepare(
     `UPDATE sync_log

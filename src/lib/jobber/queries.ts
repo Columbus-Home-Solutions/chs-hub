@@ -4,6 +4,41 @@
  */
 
 /**
+ * Per-job expenses pull. Jobber's expenses connection isn't great at the
+ * top level (no great job-linked filtering), so we mirror the Python sync
+ * and issue one query per current-year job. At ~20 YTD jobs this stays
+ * well under any subrequest / throttle budget.
+ *
+ * Fields:
+ *   total       — dollar amount (maps to expenses.amount in D1)
+ *   title       — short label (maps to expenses.description)
+ *   description — longer detail (folded into description when title is blank)
+ *   date        — when the expense was incurred
+ */
+export function buildJobExpensesQuery(jobId: string): string {
+  // Inline the id (quoted) to match the Python sync's pattern — avoids
+  // having to guess whether Jobber's schema exposes the id type as
+  // `ID!`, `EncodedId!`, or `String!`.
+  const safe = jobId.replace(/"/g, '\\"');
+  return `
+    {
+      job(id: "${safe}") {
+        id
+        expenses(first: 50) {
+          nodes {
+            id
+            title
+            description
+            total
+            date
+          }
+        }
+      }
+    }
+  `;
+}
+
+/**
  * Standalone invoices pull. We run this *after* the per-job pass so that
  * every invoice is captured, not just the "primary" one attached to each
  * job. Jobber's per-job `invoices(first: 1)` misses change orders, re-issued

@@ -373,6 +373,7 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
     </button>
     <button class="rfb" onclick="refreshAll()" title="Refresh" aria-label="Refresh" style="padding:0;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;">⟳</button>
     <a href="/jobs" style="background:rgba(240,165,0,.14);border:1px solid rgba(240,165,0,.4);color:var(--gold);padding:7px 14px;border-radius:8px;text-decoration:none;font-family:'Nunito',sans-serif;font-size:12px;font-weight:700;transition:all .2s;white-space:nowrap;" onmouseover="this.style.background='rgba(240,165,0,.28)'" onmouseout="this.style.background='rgba(240,165,0,.14)'">Jobs →</a>
+    <a href="/notes" style="background:rgba(240,165,0,.14);border:1px solid rgba(240,165,0,.4);color:var(--gold);padding:7px 14px;border-radius:8px;text-decoration:none;font-family:'Nunito',sans-serif;font-size:12px;font-weight:700;transition:all .2s;white-space:nowrap;" onmouseover="this.style.background='rgba(240,165,0,.28)'" onmouseout="this.style.background='rgba(240,165,0,.14)'">Notes →</a>
   </div>
 </header>
 
@@ -575,8 +576,8 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
         <div class="ch">
           <span class="ct">🧠 Smart Notes</span>
           <div style="display:flex;gap:7px;align-items:center;">
-            <span id="sn-sheet-badge" style="font-size:9px;font-weight:700;background:rgba(82,192,122,.12);color:var(--green);padding:3px 8px;border-radius:20px;border:1px solid rgba(82,192,122,.3);display:flex;align-items:center;gap:4px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;"></span>Saving to Sheets</span>
-            <span class="bdg" onclick="fixSmartNotesSheet()" title="Apply headers & formatting to the Smart Notes tab" style="cursor:pointer;">🔧 Fix Sheet</span>
+            <span id="sn-sheet-badge" style="font-size:9px;font-weight:700;background:rgba(82,192,122,.12);color:var(--green);padding:3px 8px;border-radius:20px;border:1px solid rgba(82,192,122,.3);display:flex;align-items:center;gap:4px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;"></span>Synced</span>
+            <a href="/notes" class="bdg" style="cursor:pointer;text-decoration:none;">📖 All Notes</a>
             <span class="bdg" onclick="toggleArchive()" id="sn-archive-btn" style="cursor:pointer;">📦 Archive</span>
             <span class="bdg" onclick="toggleNoteHistory()" id="sn-history-btn" style="cursor:pointer;">📋 History</span>
           </div>
@@ -1890,6 +1891,7 @@ async function loadMeetingFile(fileId, fileName){
     // Put content in Smart Notes input and set category to Meeting
     document.getElementById('sn-input').value=text.substring(0,3000);
     document.getElementById('sn-cat').value='Meeting';
+    document.getElementById('sn-input').dataset.meetingSource=fileName;
     status.textContent='✅ Loaded! Click "Process with Claude" to extract action items.';
     document.getElementById('meeting-files-list').innerHTML='';
 
@@ -2004,22 +2006,25 @@ async function processNote(){
     }
     saveTasks();renderTasks();
 
-    setSNProgress(85,'Saving to Google Sheets...');
+    setSNProgress(85,'Saving to cloud...');
 
-    // Save note to Google Sheet
     var noteRecord={
       date:new Date().toLocaleDateString('en-US'),
       time:new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}),
       category:cat,
       rawNote:text,
       summary:parsed.summary||'',
-      tags:(parsed.tags||[]).join(', '),
+      tags:parsed.tags||[],
+      _tasksStructured:extractedTasks,   // structured tasks for D1
       tasksExtracted:extractedTasks.map(function(t){return t.title;}).join(' | '),
       taskCount:extractedTasks.length,
-      timestamp:new Date().toISOString()
+      timestamp:new Date().toISOString(),
+      meetingSource:document.getElementById('sn-input').dataset.meetingSource||null
     };
 
     await appendToSmartNotesSheet(noteRecord);
+    // Clear meeting source so next note isn't mis-tagged
+    delete document.getElementById('sn-input').dataset.meetingSource;
 
     // Save locally too
     snNotes.unshift(noteRecord);
@@ -2095,7 +2100,7 @@ function saveNoteOnly(){
   // Flash saved confirmation
   var badge=document.getElementById('sn-sheet-badge');
   badge.textContent='✓ Saved!';
-  setTimeout(function(){badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Saving to Sheets';},2000);
+  setTimeout(function(){badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Synced';},2000);
 }
 
 // ── SMART NOTES SHEET SETUP ───────────────────────────────────
@@ -2251,7 +2256,7 @@ async function recreateSmartNotesSheet(silent){
     SN_SHEET_READY=true;
     if(!silent&&badge){
       badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Sheet rebuilt ✓ ('+(dataRows.length)+' notes)';
-      setTimeout(function(){badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Saving to Sheets';},4000);
+      setTimeout(function(){badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Synced';},4000);
     }
     console.log('Smart Notes sheet rebuilt: '+dataRows.length+' rows');
     return true;
@@ -2264,21 +2269,38 @@ async function recreateSmartNotesSheet(silent){
 }
 
 // Expose the "Fix Sheet" button action
-async function fixSmartNotesSheet(){
-  SN_SHEET_READY=false;
-  await recreateSmartNotesSheet(false);
-}
+// ── Smart Notes: D1-backed API client ────────────────────────────
+// Replaces the Google Sheets writers that ran during the sheet era.
+var NOTES_API = '/api/notes';
 
+async function fixSmartNotesSheet(){ /* legacy no-op — sheet retired */ }
+
+// Persists a note record to D1. `note` is the same shape the old sheet
+// writer expected (date/time/category/rawNote/summary/tags/tasksExtracted/taskCount)
+// so callers don't need to change.
 async function appendToSmartNotesSheet(note){
-  await ensureSmartNotesReady();
-  // Append the data row (always after headers)
-  var row=[[note.date,note.time,note.category,note.rawNote,note.summary,note.tags,note.tasksExtracted,note.taskCount,'Needs Processing']];
-  var appendUrl='https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID+'/values/'+encodeURIComponent('Smart Notes!A:I')+':append?valueInputOption=RAW';
   try{
-    var appendResp=await fetch(appendUrl,{method:'POST',headers:sheetsWriteHeaders(),body:JSON.stringify({values:row,majorDimension:'ROWS'})});
-    var appendData=await appendResp.json();
-    if(appendData.error){console.log('Sheet append error:',appendData.error);}
-  }catch(e){console.log('Sheet append error:',e);}
+    var tagsArr = typeof note.tags === 'string'
+      ? note.tags.split(',').map(function(s){return s.trim();}).filter(Boolean)
+      : (Array.isArray(note.tags)?note.tags:[]);
+    var body = {
+      category: note.category || 'General',
+      raw_text: note.rawNote || '',
+      summary: note.summary && note.summary !== '(Not processed)' ? note.summary : null,
+      tags: tagsArr,
+      tasks_extracted: note._tasksStructured || [],
+      task_count: note.taskCount || 0,
+      meeting_source: note.meetingSource || null
+    };
+    var r = await fetch(NOTES_API, {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    var d = await r.json();
+    if(!r.ok){console.log('Note save failed:', d); return null;}
+    note._id = d.note.id;  // let callers know the server-assigned id
+    return d.note;
+  }catch(e){console.log('Note save error:', e); return null;}
 }
 
 function buildNoteCard(summary, category, date, time, taskCount, fullNote, doneBtn){
@@ -2297,94 +2319,46 @@ function buildNoteCard(summary, category, date, time, taskCount, fullNote, doneB
     '<div class="sn-note-full" style="display:none;margin-top:8px;font-size:11px;color:var(--muted);line-height:1.5;border-top:1px solid rgba(255,255,255,.07);padding-top:8px;">'+fullNote+'</div>';
 }
 
+// Pretty date/time from an ISO string.
+function _notesFmtDate(iso){
+  try{
+    var d=new Date(iso);
+    return d.toLocaleDateString('en-US');
+  }catch(e){return '';}
+}
+function _notesFmtTime(iso){
+  try{
+    var d=new Date(iso);
+    return d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+  }catch(e){return '';}
+}
+
 function loadNoteHistory(){
   var list=document.getElementById('sn-history-list');
   if(!list)return;
   list.innerHTML='<div class="empty" style="padding:8px 0;"><div class="spin" style="margin:0 auto 6px;"></div>Loading notes...</div>';
 
-  if(!oauthToken){renderLocalHistory(list);return;}
-
-  // Read A:I so we get the Status column too
-  fetch('https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID+'/values/'+encodeURIComponent('Smart Notes!A2:I200'),
-    {headers:{'Authorization':'Bearer '+oauthToken}})
+  fetch(NOTES_API+'?status=active&limit=100')
     .then(function(r){return r.json();})
     .then(function(d){
-      if(d.error){renderLocalHistory(list);return;}
-      var allRows=(d.values||[]).filter(function(r){return r[0]&&r[0]!=='Date';});
-      if(!allRows.length){list.innerHTML='<div class="empty">No notes yet — write one above!</div>';return;}
-
-      // Separate Done/Archived rows from active rows
-      var doneRows=[], activeIndexed=[];
-      allRows.forEach(function(r,i){
-        var status=(r[8]||'').trim();
-        if(status==='Done'||status==='Archived'){
-          doneRows.push({r:r,sheetRow:i+2});
-        }else{
-          activeIndexed.push({r:r,sheetRow:i+2});
-        }
-      });
-
-      // Auto-archive any Done rows found (fire-and-forget)
-      if(doneRows.length>0){
-        autoArchiveDoneRows(doneRows).then(function(){
-          // Re-load after archiving completes
-          loadNoteHistory();
-        });
-        list.innerHTML='<div class="empty" style="padding:8px 0;"><div class="spin" style="margin:0 auto 6px;"></div>Archiving '+doneRows.length+' completed note'+(doneRows.length>1?'s':'')+'...</div>';
-        return;
-      }
-
-      if(!activeIndexed.length){list.innerHTML='<div class="empty">No active notes — all done! 🎉</div>';return;}
-
-      // Newest first
-      activeIndexed.reverse();
-      list.innerHTML=activeIndexed.map(function(item){
-        var r=item.r, sheetRow=item.sheetRow;
-        var taskCount=parseInt(r[7])||0;
-        var status=r[8]||'Needs Processing';
-        var summary=r[4]&&r[4]!=='(Not processed)'?r[4]:(r[3]||'').substring(0,80)+((r[3]||'').length>80?'...':'');
-        var doneBtn='<button onclick="archiveNote('+sheetRow+',this)" class="sn-done-btn" style="flex-shrink:0;">✓ Done</button>';
-        var statusColor=status==='Needs Processing'?'rgba(224,82,82,.7)':status==='In Progress'?'var(--gold)':'var(--muted)';
-        return'<div style="background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:9px 11px;margin-bottom:2px;" data-sheet-row="'+sheetRow+'">'+
-          buildNoteCard(summary,r[2],r[0]||'',r[1]||'',taskCount,r[3]||'',
+      var notes=(d && d.notes) || [];
+      if(!notes.length){list.innerHTML='<div class="empty">No notes yet — write one above!</div>';return;}
+      list.innerHTML=notes.map(function(n){
+        var summary=n.summary?n.summary:(n.raw_text||'').substring(0,80)+((n.raw_text||'').length>80?'...':'');
+        var date=_notesFmtDate(n.created_at);
+        var time=_notesFmtTime(n.created_at);
+        var doneBtn='<button onclick="archiveNote(\''+n.id+'\',this)" class="sn-done-btn" style="flex-shrink:0;">✓ Done</button>';
+        var statusTxt=n.summary?'Processed':'Needs Processing';
+        var statusColor=n.summary?'var(--muted)':'rgba(224,82,82,.7)';
+        return'<div style="background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:9px 11px;margin-bottom:2px;" data-note-id="'+n.id+'">'+
+          buildNoteCard(summary,n.category||'General',date,time,n.task_count||0,n.raw_text||'',
             '<div style="display:flex;gap:5px;align-items:center;flex-shrink:0;">'+
-            '<span style="font-size:9px;color:'+statusColor+';font-weight:700;">'+status+'</span>'+
+            '<span style="font-size:9px;color:'+statusColor+';font-weight:700;">'+statusTxt+'</span>'+
             doneBtn+'</div>')+
         '</div>';
       }).join('');
     })
-    .catch(function(){renderLocalHistory(list);});
-}
-
-// Archive multiple rows at once — used when auto-scanning Done status
-async function autoArchiveDoneRows(doneRows){
-  if(!oauthToken)return;
-  try{
-    await ensureArchiveTab();
-    var base='https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID;
-
-    // Append all done rows to Archived Notes
-    var archiveValues=doneRows.map(function(item){
-      var r=item.r;
-      return[r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7],new Date().toLocaleDateString('en-US')];
-    });
-    await fetch(base+'/values/'+encodeURIComponent('Archived Notes!A:I')+':append?valueInputOption=RAW',
-      {method:'POST',headers:sheetsWriteHeaders(),body:JSON.stringify({values:archiveValues,majorDimension:'ROWS'})});
-
-    // Delete rows in reverse order (highest row first so indices don't shift)
-    var metaResp=await fetch(base+'?fields=sheets.properties',{headers:sheetsWriteHeaders()});
-    var metaData=await metaResp.json();
-    var tabId=null;
-    (metaData.sheets||[]).forEach(function(s){if(s.properties&&s.properties.title==='Smart Notes')tabId=s.properties.sheetId;});
-    if(tabId===null)return;
-
-    // Sort descending so we delete from bottom up
-    var sortedRows=doneRows.slice().sort(function(a,b){return b.sheetRow-a.sheetRow;});
-    var deleteRequests=sortedRows.map(function(item){
-      return{deleteDimension:{range:{sheetId:tabId,dimension:'ROWS',startIndex:item.sheetRow-1,endIndex:item.sheetRow}}};
-    });
-    await fetch(base+':batchUpdate',{method:'POST',headers:sheetsWriteHeaders(),body:JSON.stringify({requests:deleteRequests})});
-  }catch(e){console.error('Auto-archive error:',e);}
+    .catch(function(){list.innerHTML='<div class="empty">Could not load notes — check connection.</div>';});
 }
 function renderLocalHistory(list){
   if(!snNotes.length){list.innerHTML='<div class="empty">No notes yet</div>';return;}
@@ -2409,50 +2383,43 @@ function expandNote(el){
   var full=el.querySelector('.sn-note-full');
   if(full)full.style.display=full.style.display==='none'?'block':'none';
 }
-async function archiveNote(sheetRow, btn){
-  if(!oauthToken){alert('Connect Google first to archive notes.');return;}
+async function archiveNote(noteId, btn){
   btn.textContent='⏳';btn.disabled=true;
-  var base='https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID;
-
   try{
-    // 1 — Read the row we're archiving
-    var rowResp=await fetch(base+'/values/'+encodeURIComponent('Smart Notes!A'+sheetRow+':H'+sheetRow),
-      {headers:{'Authorization':'Bearer '+oauthToken}});
-    var rowData=await rowResp.json();
-    var rowValues=(rowData.values||[[]])[0]||[];
-    if(!rowValues.length){btn.textContent='✓ Done';btn.disabled=false;return;}
-
-    // 2 — Ensure "Archived Notes" tab exists and has headers
-    await ensureArchiveTab();
-
-    // 3 — Append to Archived Notes (with archived timestamp in col I)
-    var archiveRow=[rowValues[0],rowValues[1],rowValues[2],rowValues[3],rowValues[4],rowValues[5],rowValues[6],rowValues[7],new Date().toLocaleDateString('en-US')];
-    await fetch(base+'/values/'+encodeURIComponent('Archived Notes!A:I')+':append?valueInputOption=RAW',
-      {method:'POST',headers:sheetsWriteHeaders(),body:JSON.stringify({values:[archiveRow],majorDimension:'ROWS'})});
-
-    // 4 — Delete the row from Smart Notes via batchUpdate deleteDimension
-    var metaResp=await fetch(base+'?fields=sheets.properties',{headers:sheetsWriteHeaders()});
-    var metaData=await metaResp.json();
-    var tabId=null;
-    (metaData.sheets||[]).forEach(function(s){if(s.properties&&s.properties.title==='Smart Notes')tabId=s.properties.sheetId;});
-    if(tabId!==null){
-      await fetch(base+':batchUpdate',{method:'POST',headers:sheetsWriteHeaders(),body:JSON.stringify({requests:[{
-        deleteDimension:{range:{sheetId:tabId,dimension:'ROWS',startIndex:sheetRow-1,endIndex:sheetRow}}
-      }]})});
-    }
-
-    // 5 — Remove the note card from the UI with a fade
-    var card=btn.closest('[data-sheet-row]');
+    var r=await fetch(NOTES_API+'/'+encodeURIComponent(noteId),{
+      method:'PATCH', headers:{'content-type':'application/json'},
+      body: JSON.stringify({status:'archived'})
+    });
+    if(!r.ok){throw new Error('HTTP '+r.status);}
+    var card=btn.closest('[data-note-id]');
     if(card){
       card.style.transition='opacity .4s,max-height .4s';
       card.style.opacity='0';card.style.maxHeight='0';card.style.overflow='hidden';
       setTimeout(function(){card.remove();},420);
     }
-
   }catch(e){
     console.error('Archive error:',e);
     btn.textContent='✓ Done';btn.disabled=false;
     alert('Archive failed — check console.');
+  }
+}
+
+async function restoreNote(noteId, btn){
+  btn.textContent='⏳';btn.disabled=true;
+  try{
+    var r=await fetch(NOTES_API+'/'+encodeURIComponent(noteId),{
+      method:'PATCH', headers:{'content-type':'application/json'},
+      body: JSON.stringify({status:'active'})
+    });
+    if(!r.ok){throw new Error('HTTP '+r.status);}
+    var card=btn.closest('[data-note-id]');
+    if(card){
+      card.style.transition='opacity .4s';card.style.opacity='0';
+      setTimeout(function(){card.remove();},420);
+    }
+  }catch(e){
+    console.error('Restore error:',e);
+    btn.textContent='↩ Restore';btn.disabled=false;
   }
 }
 
@@ -2516,12 +2483,7 @@ function toggleArchive(){
   panel.style.display=snArchiveVisible?'block':'none';
   btn.textContent=snArchiveVisible?'📦 Hide Archive':'📦 Archive';
   if(snArchiveVisible){
-    // Create the tab now if it doesn't exist yet, then load notes
-    if(oauthToken){
-      ensureArchiveTab().then(function(){loadArchivedNotes();});
-    } else {
-      loadArchivedNotes();
-    }
+    loadArchivedNotes();
   }
   // Close history if open
   if(snArchiveVisible&&snHistoryVisible){snHistoryVisible=false;document.getElementById('sn-history').style.display='none';document.getElementById('sn-history-btn').textContent='📋 History';}
@@ -2530,27 +2492,30 @@ function toggleArchive(){
 function loadArchivedNotes(){
   var list=document.getElementById('sn-archive-list');
   list.innerHTML='<div class="empty"><div class="spin" style="margin:0 auto 6px;"></div>Loading...</div>';
-  var auth=sheetsAuth();
-  fetch('https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID+'/values/'+encodeURIComponent('Archived Notes!A2:I200')+auth.qs,{headers:auth.headers})
+  fetch(NOTES_API+'?status=archived&limit=200')
     .then(function(r){return r.json();})
     .then(function(d){
-      var rows=(d.values||[]).reverse();
-      if(!rows.length){list.innerHTML='<div class="empty">No archived notes yet — click ✓ Done on any note to archive it</div>';return;}
-      list.innerHTML=rows.map(function(r){
-        return'<div style="background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:9px 11px;opacity:.8;">'+
+      var notes=(d && d.notes) || [];
+      if(!notes.length){list.innerHTML='<div class="empty">No archived notes yet — click ✓ Done on any note to archive it</div>';return;}
+      list.innerHTML=notes.map(function(n){
+        var summary=n.summary?n.summary:(n.raw_text||'').substring(0,80)+((n.raw_text||'').length>80?'...':'');
+        var date=_notesFmtDate(n.created_at);
+        var archivedDate=n.archived_at?_notesFmtDate(n.archived_at):'';
+        return'<div data-note-id="'+n.id+'" style="background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:9px 11px;opacity:.8;">'+
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">'+
-            '<span style="font-size:9px;font-weight:800;background:rgba(255,255,255,.08);color:rgba(255,255,255,.4);padding:1px 7px;border-radius:20px;">'+(r[2]||'General')+'</span>'+
-            '<div style="display:flex;gap:8px;">'+
-              '<span style="font-size:9px;color:rgba(255,255,255,.25);">Archived '+(r[8]||'')+'</span>'+
-              '<span style="font-size:10px;color:rgba(255,255,255,.3);">'+(r[0]||'')+'</span>'+
+            '<span style="font-size:9px;font-weight:800;background:rgba(255,255,255,.08);color:rgba(255,255,255,.4);padding:1px 7px;border-radius:20px;">'+(n.category||'General')+'</span>'+
+            '<div style="display:flex;gap:8px;align-items:center;">'+
+              '<span style="font-size:9px;color:rgba(255,255,255,.25);">Archived '+archivedDate+'</span>'+
+              '<span style="font-size:10px;color:rgba(255,255,255,.3);">'+date+'</span>'+
+              '<button onclick="restoreNote(\''+n.id+'\',this)" class="sn-done-btn" style="flex-shrink:0;background:rgba(82,192,122,.12);color:var(--green);border:1px solid rgba(82,192,122,.3);">↩ Restore</button>'+
             '</div>'+
           '</div>'+
-          '<div style="font-size:12px;color:rgba(255,248,236,.5);line-height:1.4;cursor:pointer;" onclick="expandNote(this.parentElement)">'+(r[4]&&r[4]!=='(Not processed)'?r[4]:r[3].substring(0,80)+(r[3].length>80?'...':''))+'</div>'+
-          '<div class="sn-note-full" style="display:none;margin-top:8px;font-size:11px;color:rgba(255,255,255,.35);line-height:1.5;border-top:1px solid rgba(255,255,255,.05);padding-top:8px;">'+(r[3]||'')+'</div>'+
+          '<div style="font-size:12px;color:rgba(255,248,236,.5);line-height:1.4;cursor:pointer;" onclick="expandNote(this.parentElement)">'+summary+'</div>'+
+          '<div class="sn-note-full" style="display:none;margin-top:8px;font-size:11px;color:rgba(255,255,255,.35);line-height:1.5;border-top:1px solid rgba(255,255,255,.05);padding-top:8px;">'+(n.raw_text||'')+'</div>'+
         '</div>';
       }).join('');
     })
-    .catch(function(){list.innerHTML='<div class="empty">Could not load archive — create the "Archived Notes" tab by archiving a note first</div>';});
+    .catch(function(){list.innerHTML='<div class="empty">Could not load archive.</div>';});
 }
 
 // ── GOOGLE MEET ────────────────────────────────────────
@@ -3849,14 +3814,7 @@ function refreshAll(){
   window.fetchJobberMetrics = function(){ /* KPIs already cover this */ };
   window.fetchWCData = function(){ /* Business Pulse pulled from /api/kpis now */ };
 
-  // Stub the Smart Notes sheet writers until 6d builds native D1-backed notes.
-  // We leave read paths alone (they just show empty until data lands).
-  window.saveNoteToSheet = function(){ console.log('[chs] Smart Notes sheet write disabled — awaiting 6d migration'); };
-  window.fixSmartNotesSheet = function(){ alert('Smart Notes is being rebuilt on the new stack — coming in the next update.'); };
-
-  // Hide the "🔧 Fix Sheet" kludge button; it has no purpose on the new stack.
-  var fixBtn = document.getElementById('sn-sheet-badge');
-  if(fixBtn && fixBtn.onclick){ /* badge stays, just rename */ }
+  // Smart Notes are now D1-backed — see /api/notes (see NOTES_API in this file).
 
   // ── First paint ─────────────────────────────────────────────────────
   installShimmers();

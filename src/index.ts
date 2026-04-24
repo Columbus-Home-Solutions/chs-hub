@@ -24,6 +24,13 @@ import { syncWorkbook } from "./lib/wc/sync.js";
 import { handleDrill } from "./routes/drill.js";
 import { handleJobDetail, handleJobsList } from "./routes/jobs.js";
 import { handleKpis } from "./routes/kpis.js";
+import {
+  handleNoteCreate,
+  handleNoteDelete,
+  handleNoteGet,
+  handleNoteList,
+  handleNotePatch,
+} from "./routes/notes.js";
 import { handleSearch } from "./routes/search.js";
 import { handleSheetsInspect } from "./routes/sheets-debug.js";
 import { handleJobberSync } from "./routes/sync.js";
@@ -88,6 +95,19 @@ export default {
           { status: code === 404 ? 404 : 500 },
         );
       }
+    }
+
+    // ── Smart Notes ──────────────────────────────────────────────────
+    if (url.pathname === "/api/notes") {
+      if (request.method === "POST") return handleNoteCreate(env, request);
+      if (request.method === "GET") return handleNoteList(env, url);
+    }
+    const noteMatch = url.pathname.match(/^\/api\/notes\/([^/]+)$/);
+    if (noteMatch) {
+      const id = decodeURIComponent(noteMatch[1]);
+      if (request.method === "GET") return handleNoteGet(env, id);
+      if (request.method === "PATCH") return handleNotePatch(env, id, request);
+      if (request.method === "DELETE") return handleNoteDelete(env, id);
     }
 
     if (url.pathname.startsWith("/api/")) {

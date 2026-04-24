@@ -57,6 +57,13 @@ migrations_dir = "migrations"
 binding = "FILES"
 bucket_name = "chs-hub-files"
 
+# ─── Non-secret config ─────────────────────────────────────────────────
+# HL location ID is not sensitive (appears in HL's own URLs). Token is
+# stored separately via `wrangler secret put HL_PRIVATE_TOKEN`.
+
+[vars]
+HL_LOCATION_ID = "lZ8L8FAf6K2niuHoFbaw"
+
 # ─── Scheduled jobs ────────────────────────────────────────────────────
 # Pull fresh data from Jobber every 30 minutes. The sync is cheap
 # (~10s, ~600 D1 rows written) and well under Workers' execution limits.

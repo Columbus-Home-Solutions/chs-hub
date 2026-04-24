@@ -1026,10 +1026,11 @@ function openKpi(k){_ck=k;var c=KPI[k];document.getElementById('kpi-mod-t').text
 function saveKpi(){var v=document.getElementById('kpi-inp').value.trim();if(!v||!_ck)return;localStorage.setItem('chs_kpi_'+_ck,v);document.getElementById(KPI[_ck].el).textContent=v;closeMod('kpi-mod');}
 
 // ── HIGH LEVEL + KANBAN LEAD PIPELINE ───────────────────
-var HL_TOKEN='%%HL_TOKEN%%';
+// HL calls go through our worker proxy (/api/hl/*) so the PIT stays
+// server-side. The proxy forwards to services.leadconnectorhq.com.
 var HL_LOC='lZ8L8FAf6K2niuHoFbaw';
-var HL_BASE='https://services.leadconnectorhq.com';
-var HL_HEADERS={'Authorization':'Bearer '+HL_TOKEN,'Version':'2021-07-28','Content-Type':'application/json'};
+var HL_BASE='/api/hl';
+var HL_HEADERS={'Content-Type':'application/json'};
 
 var COLS=[
   {id:'new',   label:'New Lead',              cls:'kbc-new',  icon:'🆕'},

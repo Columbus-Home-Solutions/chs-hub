@@ -22,6 +22,7 @@ import type { Env } from "./env.js";
 import { syncJobberToD1 } from "./lib/jobber/sync.js";
 import { syncWorkbook } from "./lib/wc/sync.js";
 import { handleDrill } from "./routes/drill.js";
+import { handleHLProxy } from "./routes/hl.js";
 import { handleJobDetail, handleJobsList } from "./routes/jobs.js";
 import { handleKpis } from "./routes/kpis.js";
 import {
@@ -128,6 +129,13 @@ export default {
       if (request.method === "GET") return handleSubGet(env, id);
       if (request.method === "PATCH") return handleSubPatch(env, id, request);
       if (request.method === "DELETE") return handleSubDelete(env, id);
+    }
+
+    // ── HighLevel API proxy ──────────────────────────────────────────
+    // Forwards /api/hl/* to services.leadconnectorhq.com with the PIT
+    // attached server-side. Keeps the token off the client + dodges CORS.
+    if (url.pathname.startsWith("/api/hl/")) {
+      return handleHLProxy(env, request, url);
     }
 
     if (url.pathname.startsWith("/api/")) {

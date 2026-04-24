@@ -31,6 +31,13 @@ import {
   handleNoteList,
   handleNotePatch,
 } from "./routes/notes.js";
+import {
+  handleSubCreate,
+  handleSubDelete,
+  handleSubGet,
+  handleSubList,
+  handleSubPatch,
+} from "./routes/subs.js";
 import { handleSearch } from "./routes/search.js";
 import { handleSheetsInspect } from "./routes/sheets-debug.js";
 import { handleJobberSync } from "./routes/sync.js";
@@ -108,6 +115,19 @@ export default {
       if (request.method === "GET") return handleNoteGet(env, id);
       if (request.method === "PATCH") return handleNotePatch(env, id, request);
       if (request.method === "DELETE") return handleNoteDelete(env, id);
+    }
+
+    // ── Subcontractor reference list ─────────────────────────────────
+    if (url.pathname === "/api/subs") {
+      if (request.method === "POST") return handleSubCreate(env, request);
+      if (request.method === "GET") return handleSubList(env, url);
+    }
+    const subMatch = url.pathname.match(/^\/api\/subs\/([^/]+)$/);
+    if (subMatch) {
+      const id = decodeURIComponent(subMatch[1]);
+      if (request.method === "GET") return handleSubGet(env, id);
+      if (request.method === "PATCH") return handleSubPatch(env, id, request);
+      if (request.method === "DELETE") return handleSubDelete(env, id);
     }
 
     if (url.pathname.startsWith("/api/")) {

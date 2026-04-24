@@ -174,6 +174,9 @@ Lower priority Phase 6 items, probably not worth doing:
 - ~~Replay command~~ — would only matter if we had the event log
 
 ### 🟢 Photos system (planning phase — open decision)
+
+> **Spec:** `docs/01-file-system.md` is the authoritative plan (PWA capture, R2 + D1, Drive migration, signed-URL sharing, role matrix). Read it before writing any code. Decision was locked 2026-04-24; nothing has changed since.
+
 Open question Tony is sleeping on: **R2-primary with Drive mirror, or Drive-primary?**
 
 My recommendation: **R2 + D1 + Cloudflare Images as primary, Google Shared Drive as optional mirror.** Reasoning: the value of photos isn't the storage, it's the queryable metadata (before/after pairing, "5-star sub's last 3 jobs," social media composer pulling from a photo library). That requires SQL, not Drive folders.
@@ -186,6 +189,9 @@ Schema sketch (not yet built):
 When Tony decides, **build vertical slice first**: storage → mobile capture page → Job/Lead drill-down photo tabs. ~4–6 hours to "snap a photo on a job and see it on the dashboard."
 
 ### 🟢 Social media system (after photos)
+
+> **Spec:** `docs/03-social-media.md` is the authoritative plan (monthly plan generator, approval queue, Flux Pro image gen, Hashtag Bank + Caption Templates, Metricool hand-off). Anchored on Tony's existing `CHS_ProjectInstructions_and_SOP` doc + `ColumbusHomeSolutions_SocialMedia_System` sheet. Read it before writing any code.
+
 Wait until photos foundation exists. Then:
 - D1 `social_drafts` table referencing photo IDs
 - `/social` composer page (pick photos, write caption, schedule)
@@ -193,6 +199,9 @@ Wait until photos foundation exists. Then:
 - Metricool API for actual publishing (or zapier-glue if Metricool API isn't suitable)
 
 ### 🟡 Mobile quick-capture (small win, ~1–2 hours)
+
+> **Note:** The "big" mobile capture flow (photos on a job site) is covered by the photos spec in `docs/01-file-system.md` — don't rebuild that here. This smaller task is just about non-photo quick actions from the home screen.
+
 - PWA shortcuts in `manifest.json`: `📝 New Note`, `🔨 New Job`, `👷 New Sub`, `🎯 Add Lead` (long-press the dashboard icon on iOS/Android)
 - Thumb-optimized `/capture` page with voice dictation (Web Speech API)
 - Optional iOS Shortcut on top for true Lock Screen widget + share-sheet capture from Apple Notes / Keep / Safari

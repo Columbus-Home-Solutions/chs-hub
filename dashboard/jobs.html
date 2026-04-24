@@ -199,6 +199,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
     <input class="f-input" id="f-q" type="text" placeholder="Title, client, #number…" autocomplete="off">
     <button class="f-btn clear" id="f-clear">Clear filters</button>
     <span class="f-spacer"></span>
+    <button class="f-btn" id="f-copy" title="Copy as TSV — paste into any Google Sheet or Excel tab">📋 Copy to Sheet</button>
     <button class="f-btn" id="f-export">⬇ Export CSV</button>
   </div>
 
@@ -400,30 +401,72 @@ td.jobnum{font-weight:700;color:var(--gold);}
     applyFilters();
   });
 
-  // CSV export
-  $('f-export').addEventListener('click', () => {
-    const cols = [
-      ['job_number','Job #'],['title','Title'],['client_name','Client'],['status','Status'],
-      ['source','Source'],['created_at','Created'],['start_at','Start'],['completed_at','Completed'],
-      ['total','Quoted'],['invoiced','Invoiced'],['paid','Paid'],['outstanding','Outstanding'],
-      ['line_item_cost','Line Item Cost'],['expense_cost','Expenses'],['profit','Profit'],
-      ['margin_pct','Margin %'],['line_item_count','# Line Items'],['needs_costing','Needs Costing'],
-      ['needs_costing_priced','NC Priced'],
-    ];
-    const header = cols.map(c=>'"' + c[1] + '"').join(',');
-    const body = VIEW.map(j => cols.map(c => {
+  // Export: columns are shared between CSV download + TSV clipboard copy.
+  const EXPORT_COLS = [
+    ['job_number','Job #'],['title','Title'],['client_name','Client'],['status','Status'],
+    ['source','Source'],['created_at','Created'],['start_at','Start'],['completed_at','Completed'],
+    ['total','Quoted'],['invoiced','Invoiced'],['paid','Paid'],['outstanding','Outstanding'],
+    ['line_item_cost','Line Item Cost'],['expense_cost','Expenses'],['profit','Profit'],
+    ['margin_pct','Margin %'],['line_item_count','# Line Items'],['needs_costing','Needs Costing'],
+    ['needs_costing_priced','NC Priced'],
+  ];
+
+  function buildRows(){
+    return VIEW.map(j => EXPORT_COLS.map(c => {
       const v = j[c[0]];
-      if(v == null) return '';
-      const s = String(v).replace(/"/g,'""');
-      return '"' + s + '"';
-    }).join(',')).join('\n');
+      return v == null ? '' : String(v);
+    }));
+  }
+
+  function flashBtn(btn, ok){
+    const orig = btn.textContent;
+    btn.textContent = ok ? '✓ Copied!' : '⚠ Copy failed';
+    btn.style.background = ok ? 'rgba(82,192,122,.22)' : 'rgba(224,82,82,.18)';
+    btn.style.borderColor = ok ? 'rgba(82,192,122,.55)' : 'rgba(224,82,82,.45)';
+    btn.style.color = ok ? 'var(--green)' : 'var(--red)';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.background = ''; btn.style.borderColor = ''; btn.style.color = '';
+    }, 1200);
+  }
+
+  // CSV download — RFC 4180 quoting.
+  $('f-export').addEventListener('click', () => {
+    if(!VIEW.length){ alert('Nothing to export — adjust your filters.'); return; }
+    const q = s => '"' + String(s).replace(/"/g,'""') + '"';
+    const header = EXPORT_COLS.map(c => q(c[1])).join(',');
+    const body = buildRows().map(r => r.map(q).join(',')).join('\n');
     const csv = header + '\n' + body;
-    const blob = new Blob([csv], {type:'text/csv'});
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
     const a = document.createElement('a');
     const today = new Date().toISOString().slice(0,10);
     a.href = URL.createObjectURL(blob);
     a.download = 'chs-jobs-' + today + '.csv';
     a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  // Copy to clipboard as TSV — pastes cleanly into Google Sheets / Excel.
+  // Tabs + newlines are stripped from cell values so nothing fragments.
+  $('f-copy').addEventListener('click', async () => {
+    if(!VIEW.length){ alert('Nothing to copy — adjust your filters.'); return; }
+    const clean = s => String(s).replace(/[\t\r\n]+/g, ' ');
+    const header = EXPORT_COLS.map(c => clean(c[1])).join('\t');
+    const body = buildRows().map(r => r.map(clean).join('\t')).join('\n');
+    const tsv = header + '\n' + body;
+    const btn = $('f-copy');
+    try {
+      await navigator.clipboard.writeText(tsv);
+      flashBtn(btn, true);
+    } catch(e) {
+      // Fallback for older browsers / no-clipboard contexts.
+      const ta = document.createElement('textarea');
+      ta.value = tsv; ta.style.position='fixed'; ta.style.left='-9999px';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      flashBtn(btn, ok);
+    }
   });
 
   // Row click → drill down

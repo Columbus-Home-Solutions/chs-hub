@@ -163,6 +163,8 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;}
     <span class="f-lbl">Search</span>
     <input class="f-in" id="f-q" type="text" placeholder="Company, contact, city, trade…" autocomplete="off">
     <button class="f-btn danger" id="f-clear">Clear</button>
+    <button class="f-btn" id="f-copy" title="Copy as TSV — paste into any Google Sheet or Excel tab">📋 Copy to Sheet</button>
+    <button class="f-btn" id="f-export">⬇ Export CSV</button>
     <span class="f-spacer"></span>
     <span id="f-count" style="font-size:11px;color:var(--muted);"></span>
   </div>
@@ -382,6 +384,95 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;}
     else { STATE.sort = key; STATE.dir = 'asc'; }
     render();
   }));
+
+  // ── Export (CSV download + TSV clipboard) ────────────────────────────
+
+  // Columns mirror the Google Sheet template so the export pastes back
+  // into the original workbook shape if you ever need to.
+  const EXPORT_COLS = [
+    ['company','Company / Individual'],
+    ['trade','Trade / Scope'],
+    ['primary_contact','Primary Contact'],
+    ['reference_type','Reference Type'],
+    ['phone','Phone'],
+    ['email','Email'],
+    ['city_state','City, State'],
+    ['service_area','Service Area'],
+    ['license_number','License # / State'],
+    ['insurance_verified','Insurance Verified'],
+    ['years_worked','Years Worked Together'],
+    ['last_project','Last Project'],
+    ['last_project_date','Last Project Date'],
+    ['rating','Reference Rating (1-5)'],
+    ['would_rehire','Would Rehire?'],
+    ['notes','Notes'],
+    ['website','Website / Source'],
+    ['follow_up_date','Follow-up Date'],
+    ['active_status','Active Status'],
+    ['completeness_pct','Completeness %'],
+  ];
+
+  function cellValue(sub, key){
+    const v = sub[key];
+    if(v === null || v === undefined) return '';
+    if(key === 'insurance_verified') return v ? 'Yes' : 'No';
+    if(key === 'would_rehire') return v === true ? 'Yes' : v === false ? 'No' : '';
+    if(key === 'completeness_pct') return v + '%';
+    return String(v);
+  }
+
+  function viewForExport(){
+    return sortSubs(applyQuery(SUBS));
+  }
+
+  function flashBtn(btn, ok){
+    const orig = btn.textContent;
+    btn.textContent = ok ? '✓ Copied!' : '⚠ Copy failed';
+    btn.style.background = ok ? 'rgba(82,192,122,.22)' : 'rgba(224,82,82,.18)';
+    btn.style.borderColor = ok ? 'rgba(82,192,122,.55)' : 'rgba(224,82,82,.45)';
+    btn.style.color = ok ? 'var(--green)' : 'var(--red)';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.background = ''; btn.style.borderColor = ''; btn.style.color = '';
+    }, 1200);
+  }
+
+  $('f-export').addEventListener('click', () => {
+    const view = viewForExport();
+    if(!view.length){ alert('Nothing to export — adjust your filters.'); return; }
+    const q = s => '"' + String(s).replace(/"/g,'""') + '"';
+    const header = EXPORT_COLS.map(c => q(c[1])).join(',');
+    const body = view.map(sub => EXPORT_COLS.map(c => q(cellValue(sub, c[0]))).join(',')).join('\n');
+    const csv = header + '\n' + body;
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+    const a = document.createElement('a');
+    const today = new Date().toISOString().slice(0,10);
+    a.href = URL.createObjectURL(blob);
+    a.download = 'chs-subcontractors-' + today + '.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  $('f-copy').addEventListener('click', async () => {
+    const view = viewForExport();
+    if(!view.length){ alert('Nothing to copy — adjust your filters.'); return; }
+    const clean = s => String(s).replace(/[\t\r\n]+/g, ' ');
+    const header = EXPORT_COLS.map(c => clean(c[1])).join('\t');
+    const body = view.map(sub => EXPORT_COLS.map(c => clean(cellValue(sub, c[0]))).join('\t')).join('\n');
+    const tsv = header + '\n' + body;
+    const btn = $('f-copy');
+    try {
+      await navigator.clipboard.writeText(tsv);
+      flashBtn(btn, true);
+    } catch(e) {
+      const ta = document.createElement('textarea');
+      ta.value = tsv; ta.style.position='fixed'; ta.style.left='-9999px';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      flashBtn(btn, ok);
+    }
+  });
 
   // ── Modal (add / edit) ────────────────────────────────────────────────
 

@@ -20,11 +20,13 @@
 
 import type { Env } from "./env.js";
 import { syncJobberToD1 } from "./lib/jobber/sync.js";
+import { syncWorkbook } from "./lib/wc/sync.js";
 import { handleDrill } from "./routes/drill.js";
 import { handleKpis } from "./routes/kpis.js";
 import { handleSearch } from "./routes/search.js";
 import { handleSheetsInspect } from "./routes/sheets-debug.js";
 import { handleJobberSync } from "./routes/sync.js";
+import { handleWcSync } from "./routes/wc-sync.js";
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
@@ -62,6 +64,10 @@ export default {
 
     if (url.pathname === "/api/debug/sheets-inspect" && request.method === "GET") {
       return handleSheetsInspect(request, env);
+    }
+
+    if (url.pathname === "/api/wc/sync" && request.method === "POST") {
+      return handleWcSync(request, env);
     }
 
     if (url.pathname.startsWith("/api/")) {
@@ -105,6 +111,23 @@ export default {
         } catch (err) {
           console.error(
             `[cron ${controller.cron}] jobber_full failed:`,
+            (err as Error).message,
+          );
+        }
+
+        // WC sync piggybacks on the Jobber tick so the sheet always
+        // reflects the freshest D1 state. Failures here are non-fatal.
+        try {
+          const wc = await syncWorkbook(env);
+          console.log(
+            `[cron ${controller.cron}] wc_sync: monthly=${wc.monthly.rows_written} weeks=${wc.kbpi.weeks_matched} in ${wc.duration_ms}ms ok=${wc.ok}`,
+          );
+          if (wc.errors.length > 0) {
+            console.warn(`[cron ${controller.cron}] wc_sync errors:`, wc.errors);
+          }
+        } catch (err) {
+          console.error(
+            `[cron ${controller.cron}] wc_sync failed:`,
             (err as Error).message,
           );
         }

@@ -159,14 +159,14 @@ export async function computeWeekly(
     year,
   );
 
-  // Closed = quotes whose status changed to 'approved' OR that got converted
-  // to a job that week. We approximate with quotes.updated_at where status
-  // = 'approved' (Jobber sets updated_at when the status transition happens).
+  // Closed = quotes whose status transitioned to 'approved' or 'converted'
+  // in that week. Jobber records the timestamp of the most recent status
+  // change in quotes.transitioned_at.
   const closed = await aggregateByWeek(
     env,
-    `SELECT substr(updated_at, 1, 10) AS d, 1 AS v
+    `SELECT substr(transitioned_at, 1, 10) AS d, 1 AS v
      FROM quotes
-     WHERE updated_at >= ? AND updated_at < ?
+     WHERE transitioned_at >= ? AND transitioned_at < ?
        AND LOWER(COALESCE(status, '')) IN ('approved', 'converted')`,
     year,
   );

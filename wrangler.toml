@@ -1,20 +1,47 @@
 # Cloudflare Worker configuration for chs-hub
 #
-# Currently this is a static-assets-only Worker serving the docs site.
-# When we start Phase 6 (Session 6a), we'll add a `main = "worker/src/index.ts"`
-# line and wire up API routes, D1, R2, etc. alongside the static assets.
+# Single Worker strategy (see docs/00-architecture.md §6 and chat):
+#   - Static docs site is served from the repo root via [assets]
+#   - API routes (/health, /api/*) are handled by src/index.ts
+#   - Cloudflare's asset pipeline serves matching files directly; unmatched
+#     requests fall through to the Worker, which either answers or delegates
+#     back to env.ASSETS.
 #
 # Docs: https://developers.cloudflare.com/workers/static-assets/
 
 name = "chs-hub"
+main = "src/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
-[assets]
-# Serve everything in the repo root as static assets.
-# .assetsignore excludes repo-only files (wrangler.toml, .git, etc.) from being served.
-directory = "./"
+# ─── Static assets ─────────────────────────────────────────────────────
+# `directory = "./"` serves everything in the repo that isn't listed in
+# .assetsignore. We intentionally do NOT set `not_found_handling` here —
+# the Worker itself decides what to do with unmatched paths (either answer
+# as an API route, or proxy back to env.ASSETS for docs-style content).
 
-# When a URL doesn't match any file, fall back to index.html (so hash-based
-# routing in the docs SPA works + future /jobs, /leads, etc. paths resolve).
-not_found_handling = "single-page-application"
+[assets]
+directory = "./"
+binding = "ASSETS"
+
+# ─── D1 database ───────────────────────────────────────────────────────
+# Created via: wrangler d1 create chs-hub-db
+# The database_id below is filled in after creation in Session 6a.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chs-hub-db"
+database_id = "bfcb169f-04ec-48d4-a07a-37a8d6f561e4"
+migrations_dir = "migrations"
+
+# ─── R2 bucket ─────────────────────────────────────────────────────────
+# Created via: wrangler r2 bucket create chs-hub-files
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "chs-hub-files"
+
+# ─── Observability ─────────────────────────────────────────────────────
+
+[observability]
+enabled = true

@@ -1,16 +1,31 @@
 # Files that exist in the repo but should NOT be served as static assets.
 # Same syntax as .gitignore.
 
+# Wrangler / infra config
 wrangler.toml
 .assetsignore
 .gitignore
 .git
 .git/**
+.wrangler
+.wrangler/**
+
+# Node / TypeScript
 node_modules
 node_modules/**
 package.json
 package-lock.json
+tsconfig.json
+
+# Worker source + migrations (executed server-side, not served)
+src
+src/**
+migrations
+migrations/**
+
+# Secrets + logs
 .env
 .env.*
+.dev.vars
 *.log
 .DS_Store

@@ -20,7 +20,9 @@
 
 import type { Env } from "./env.js";
 import { syncJobberToD1 } from "./lib/jobber/sync.js";
+import { handleDrill } from "./routes/drill.js";
 import { handleKpis } from "./routes/kpis.js";
+import { handleSearch } from "./routes/search.js";
 import { handleJobberSync } from "./routes/sync.js";
 
 export default {
@@ -36,6 +38,23 @@ export default {
       return jsonResponse(payload);
     }
 
+    if (url.pathname === "/api/search" && request.method === "GET") {
+      const payload = await handleSearch(env, url);
+      return jsonResponse({ results: payload });
+    }
+
+    if (url.pathname === "/api/drill" && request.method === "GET") {
+      try {
+        const payload = await handleDrill(env, url);
+        return jsonResponse(payload);
+      } catch (err) {
+        return jsonResponse(
+          { error: "bad_request", message: (err as Error).message },
+          { status: 400 },
+        );
+      }
+    }
+
     if (url.pathname === "/api/sync/jobber" && request.method === "POST") {
       return handleJobberSync(request, env);
     }
@@ -45,13 +64,16 @@ export default {
     }
 
     // Hostname-based routing:
-    //   dash.homesolutionsar.com  → /dashboard/* (Access-protected in CF dashboard)
+    //   dashboard.homesolutionsar.com  → /dashboard/* (Access-protected in CF)
     //   anything else (docs.*, workers.dev root) → /* (current docs site)
-    // The dash.* host rewrites the URL so that "/" maps to "/dashboard/index.html",
-    // which lets the dashboard act as its own origin without exposing the
-    // /dashboard/ prefix to the browser.
+    // The dashboard host rewrites the URL so that "/" maps to
+    // "/dashboard/index.html", letting the dashboard act as its own origin
+    // without exposing the /dashboard/ prefix to the browser.
     const host = url.hostname;
-    if (host.startsWith("dash.") && !url.pathname.startsWith("/dashboard")) {
+    const isDashboardHost =
+      host === "dashboard.homesolutionsar.com" ||
+      host === "dash.homesolutionsar.com"; // legacy alias, harmless to keep
+    if (isDashboardHost && !url.pathname.startsWith("/dashboard")) {
       const rewritten = new URL(request.url);
       rewritten.pathname = "/dashboard" + (url.pathname === "/" ? "/" : url.pathname);
       return env.ASSETS.fetch(new Request(rewritten.toString(), request));

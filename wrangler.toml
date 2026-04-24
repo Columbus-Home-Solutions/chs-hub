@@ -37,7 +37,7 @@ run_worker_first = true
 # The Worker's fetch handler rewrites dash.*/ → /dashboard/ internally.
 
 [[routes]]
-pattern = "dash.homesolutionsar.com"
+pattern = "dashboard.homesolutionsar.com"
 custom_domain = true
 
 # ─── D1 database ───────────────────────────────────────────────────────

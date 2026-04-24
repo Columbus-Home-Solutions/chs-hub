@@ -3851,6 +3851,269 @@ function refreshAll(){
     if(document.hidden) stopPoll(); else { startPoll(); window.chsFetchKpis(); }
   });
   startPoll();
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Drill-down modal — click any KPI tile to see the rows behind the number
+  // ═══════════════════════════════════════════════════════════════════
+  var modalStyle = document.createElement('style');
+  modalStyle.textContent =
+    '.chs-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(6px);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:40px 16px 16px;overflow-y:auto;animation:chsFade .15s ease-out;}' +
+    '@keyframes chsFade{from{opacity:0}to{opacity:1}}' +
+    '@keyframes chsSlide{from{transform:translateY(-8px);opacity:0}to{transform:translateY(0);opacity:1}}' +
+    '.chs-modal{background:#1a1a1f;border:1px solid rgba(255,255,255,.08);border-radius:14px;max-width:960px;width:100%;max-height:calc(100vh - 80px);display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.5);animation:chsSlide .18s ease-out;}' +
+    '.chs-modal-head{padding:18px 22px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;gap:12px;}' +
+    '.chs-modal-title{font-family:Bebas Neue,sans-serif;font-size:22px;letter-spacing:.5px;color:#f5f5f0;margin:0;}' +
+    '.chs-modal-sub{font-size:11px;color:#888;margin-top:2px;}' +
+    '.chs-modal-x{background:none;border:none;color:#aaa;font-size:24px;cursor:pointer;padding:4px 10px;border-radius:8px;line-height:1;transition:background .15s,color .15s;}' +
+    '.chs-modal-x:hover{background:rgba(255,255,255,.08);color:#fff;}' +
+    '.chs-modal-body{overflow-y:auto;padding:0;flex:1;}' +
+    '.chs-modal-body table{width:100%;border-collapse:collapse;font-size:13px;}' +
+    '.chs-modal-body th{text-align:left;padding:10px 16px;background:rgba(255,255,255,.03);color:#aaa;font-weight:600;font-size:10px;letter-spacing:.08em;text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid rgba(255,255,255,.07);}' +
+    '.chs-modal-body td{padding:10px 16px;color:#e2e2e0;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top;}' +
+    '.chs-modal-body tr:last-child td{border-bottom:none;}' +
+    '.chs-modal-body tr:hover td{background:rgba(255,255,255,.03);}' +
+    '.chs-modal-body td.r,.chs-modal-body th.r{text-align:right;font-variant-numeric:tabular-nums;}' +
+    '.chs-modal-body .chs-totals td{background:rgba(240,165,0,.08);border-top:1px solid rgba(240,165,0,.2);font-weight:700;color:#f5c85a;}' +
+    '.chs-modal-body .chs-empty{padding:48px 20px;text-align:center;color:#888;}' +
+    '.chs-modal-body .chs-loading{padding:28px;text-align:center;color:#888;}' +
+    '.kpi{cursor:pointer;}' +
+    '.kpi:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,0,0,.25);}';
+  document.head.appendChild(modalStyle);
+
+  function openDrill(tile){
+    var backdrop = document.createElement('div');
+    backdrop.className = 'chs-modal-backdrop';
+    backdrop.innerHTML =
+      '<div class="chs-modal">' +
+        '<div class="chs-modal-head">' +
+          '<div><h3 class="chs-modal-title">Loading…</h3><div class="chs-modal-sub">' + tile + '</div></div>' +
+          '<button class="chs-modal-x" aria-label="Close">&times;</button>' +
+        '</div>' +
+        '<div class="chs-modal-body"><div class="chs-loading">Fetching data…</div></div>' +
+      '</div>';
+    document.body.appendChild(backdrop);
+
+    function close(){ backdrop.remove(); document.removeEventListener('keydown', onEsc); }
+    function onEsc(e){ if(e.key === 'Escape') close(); }
+    backdrop.addEventListener('click', function(e){ if(e.target === backdrop) close(); });
+    backdrop.querySelector('.chs-modal-x').addEventListener('click', close);
+    document.addEventListener('keydown', onEsc);
+
+    fetch(API_BASE + '/api/drill?tile=' + encodeURIComponent(tile), {credentials:'same-origin'})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(d){
+        var head = backdrop.querySelector('.chs-modal-head > div');
+        head.innerHTML =
+          '<h3 class="chs-modal-title">' + escapeHtml(d.title) + '</h3>' +
+          '<div class="chs-modal-sub">As of ' + new Date(d.as_of).toLocaleString() + '</div>';
+
+        var body = backdrop.querySelector('.chs-modal-body');
+        if(!d.rows || d.rows.length === 0){
+          body.innerHTML = '<div class="chs-empty">Nothing here yet.</div>';
+          return;
+        }
+        var html = '<table><thead><tr>';
+        d.columns.forEach(function(col){
+          html += '<th class="' + (col.align === 'right' ? 'r' : '') + '">' + escapeHtml(col.label) + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        d.rows.forEach(function(row){
+          html += '<tr>';
+          d.columns.forEach(function(col){
+            html += '<td class="' + (col.align === 'right' ? 'r' : '') + '">' + escapeHtml(String(row[col.key] != null ? row[col.key] : '—')) + '</td>';
+          });
+          html += '</tr>';
+        });
+        if(d.totals){
+          html += '<tr class="chs-totals">';
+          d.columns.forEach(function(col,i){
+            var label = i === 0 ? 'Total' : (d.totals[col.key] != null ? d.totals[col.key] : '');
+            // If totals provides an explicit value for the first column (e.g. "YTD"), use it.
+            if(i === 0 && d.totals[col.key] != null) label = d.totals[col.key];
+            html += '<td class="' + (col.align === 'right' ? 'r' : '') + '">' + escapeHtml(String(label)) + '</td>';
+          });
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        body.innerHTML = html;
+      })
+      .catch(function(err){
+        backdrop.querySelector('.chs-modal-body').innerHTML =
+          '<div class="chs-empty">Could not load — ' + escapeHtml(err.message) + '</div>';
+      });
+  }
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  // Map each KPI tile element to a drill tile key.
+  var TILE_MAP = {
+    'kv-ji': 'jobs-in-progress',
+    'kv-wr': 'weekly-revenue',
+    'kv-ui': 'unpaid',
+    'kv-ps': 'scheduled',
+    'kv-mp': 'monthly-revenue',
+    'kv-ol': 'ytd-profit',
+    'kv-pl': 'pipeline'
+  };
+  Object.keys(TILE_MAP).forEach(function(id){
+    var el = document.getElementById(id);
+    if(!el) return;
+    // Walk up to the nearest .kpi container so the whole tile is clickable.
+    var tile = el.closest ? el.closest('.kpi') : null;
+    if(!tile) return;
+    tile.setAttribute('role','button');
+    tile.setAttribute('tabindex','0');
+    tile.addEventListener('click', function(){ openDrill(TILE_MAP[id]); });
+    tile.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openDrill(TILE_MAP[id]); }
+    });
+  });
+  // Also wire the mobile mirrors so the feature works on phones.
+  var MOBILE_MAP = {
+    'ma-kv-ji':'jobs-in-progress','ma-kv-wr':'weekly-revenue','ma-kv-ui':'unpaid',
+    'ma-kv-ps':'scheduled','ma-kv-mp':'monthly-revenue','ma-kv-ol':'ytd-profit','ma-kv-pl':'pipeline'
+  };
+  Object.keys(MOBILE_MAP).forEach(function(id){
+    var el = document.getElementById(id);
+    if(!el) return;
+    var chip = el.closest ? el.closest('.ma-kpi-chip') : null;
+    if(!chip) return;
+    chip.style.cursor = 'pointer';
+    chip.addEventListener('click', function(){ openDrill(MOBILE_MAP[id]); });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Auto-refresh on focus: refresh KPIs when the user returns to the tab
+  // ═══════════════════════════════════════════════════════════════════
+  window.addEventListener('focus', function(){ window.chsFetchKpis(); });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Cmd+K / Ctrl+K — global quick switcher across clients, jobs, quotes, invoices
+  // ═══════════════════════════════════════════════════════════════════
+  var kStyle = document.createElement('style');
+  kStyle.textContent =
+    '.chs-k-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding-top:14vh;animation:chsFade .1s ease-out;}' +
+    '.chs-k-panel{background:#1a1a1f;border:1px solid rgba(255,255,255,.08);border-radius:12px;width:min(640px,92vw);max-height:70vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.6);animation:chsSlide .14s ease-out;}' +
+    '.chs-k-input{background:transparent;border:none;outline:none;color:#fff;font-size:16px;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.06);font-family:inherit;}' +
+    '.chs-k-input::placeholder{color:#777;}' +
+    '.chs-k-list{overflow-y:auto;flex:1;}' +
+    '.chs-k-item{padding:11px 18px;display:flex;align-items:center;gap:12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.03);}' +
+    '.chs-k-item.active,.chs-k-item:hover{background:rgba(240,165,0,.1);}' +
+    '.chs-k-tag{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;padding:3px 7px;border-radius:5px;background:rgba(255,255,255,.08);color:#ccc;flex-shrink:0;}' +
+    '.chs-k-tag.client{background:rgba(100,150,255,.18);color:#8cb0ff;}' +
+    '.chs-k-tag.job{background:rgba(82,192,122,.18);color:#52c07a;}' +
+    '.chs-k-tag.quote{background:rgba(240,165,0,.18);color:#f5c85a;}' +
+    '.chs-k-tag.invoice{background:rgba(220,90,110,.18);color:#ff9fb0;}' +
+    '.chs-k-main{flex:1;min-width:0;}' +
+    '.chs-k-label{color:#eee;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.chs-k-sub{color:#888;font-size:11px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.chs-k-meta{color:#f5c85a;font-size:12px;font-variant-numeric:tabular-nums;flex-shrink:0;}' +
+    '.chs-k-empty{padding:40px 20px;text-align:center;color:#888;font-size:13px;}' +
+    '.chs-k-hint{padding:8px 18px;border-top:1px solid rgba(255,255,255,.05);font-size:10px;color:#666;background:rgba(0,0,0,.2);display:flex;gap:14px;}' +
+    '.chs-k-hint kbd{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);border-radius:3px;padding:1px 5px;font-family:inherit;font-size:10px;color:#ccc;}';
+  document.head.appendChild(kStyle);
+
+  var kBackdrop = null;
+  var kDebounce = null;
+  var kResults = [];
+  var kActive = 0;
+
+  function openQuickK(){
+    if(kBackdrop) return;
+    kBackdrop = document.createElement('div');
+    kBackdrop.className = 'chs-k-backdrop';
+    kBackdrop.innerHTML =
+      '<div class="chs-k-panel">' +
+        '<input class="chs-k-input" placeholder="Search jobs, clients, quotes, invoices…" autocomplete="off" spellcheck="false">' +
+        '<div class="chs-k-list"></div>' +
+        '<div class="chs-k-hint"><span><kbd>&uarr;</kbd><kbd>&darr;</kbd> navigate</span><span><kbd>&crarr;</kbd> open</span><span><kbd>esc</kbd> close</span></div>' +
+      '</div>';
+    document.body.appendChild(kBackdrop);
+
+    var input = kBackdrop.querySelector('.chs-k-input');
+    var list = kBackdrop.querySelector('.chs-k-list');
+    input.focus();
+
+    function closeK(){ if(kBackdrop){ kBackdrop.remove(); kBackdrop = null; } document.removeEventListener('keydown', onKey); }
+    function renderList(){
+      if(kResults.length === 0){
+        list.innerHTML = '<div class="chs-k-empty">Type at least 2 characters to search.</div>';
+        return;
+      }
+      list.innerHTML = kResults.map(function(r,i){
+        return '<div class="chs-k-item' + (i === kActive ? ' active' : '') + '" data-idx="'+i+'">' +
+          '<span class="chs-k-tag ' + r.type + '">' + r.type + '</span>' +
+          '<div class="chs-k-main">' +
+            '<div class="chs-k-label">' + escapeHtml(r.label) + '</div>' +
+            '<div class="chs-k-sub">' + escapeHtml(r.secondary) + '</div>' +
+          '</div>' +
+          (r.meta ? '<span class="chs-k-meta">' + escapeHtml(r.meta) + '</span>' : '') +
+        '</div>';
+      }).join('');
+      Array.prototype.forEach.call(list.querySelectorAll('.chs-k-item'), function(el){
+        el.addEventListener('click', function(){ kActive = Number(el.getAttribute('data-idx')); pick(); });
+      });
+    }
+    function pick(){
+      var r = kResults[kActive];
+      if(!r){ closeK(); return; }
+      closeK();
+      // For now: picking a result opens the relevant drill view.
+      // In 6c we'll add per-entity detail pages.
+      if(r.type === 'job') openDrill('jobs-in-progress');
+      else if(r.type === 'quote') openDrill('pipeline');
+      else if(r.type === 'invoice') openDrill('unpaid');
+      else if(r.type === 'client') alert(r.label + '\n\n' + r.secondary + '\n\nClient detail view lands in 6c.');
+    }
+
+    function onInput(){
+      var q = input.value.trim();
+      if(kDebounce) clearTimeout(kDebounce);
+      if(q.length < 2){ kResults = []; kActive = 0; renderList(); return; }
+      kDebounce = setTimeout(function(){
+        fetch(API_BASE + '/api/search?q=' + encodeURIComponent(q), {credentials:'same-origin'})
+          .then(function(r){ return r.json(); })
+          .then(function(d){
+            kResults = d.results || [];
+            kActive = 0;
+            if(kResults.length === 0){
+              list.innerHTML = '<div class="chs-k-empty">No matches for "' + escapeHtml(q) + '".</div>';
+            } else {
+              renderList();
+            }
+          })
+          .catch(function(){
+            list.innerHTML = '<div class="chs-k-empty">Search failed. Try again.</div>';
+          });
+      }, 140);
+    }
+    input.addEventListener('input', onInput);
+
+    function onKey(e){
+      if(e.key === 'Escape'){ e.preventDefault(); closeK(); return; }
+      if(e.key === 'ArrowDown'){ e.preventDefault(); kActive = Math.min(kResults.length - 1, kActive + 1); renderList(); scrollActive(); return; }
+      if(e.key === 'ArrowUp'){ e.preventDefault(); kActive = Math.max(0, kActive - 1); renderList(); scrollActive(); return; }
+      if(e.key === 'Enter'){ e.preventDefault(); pick(); return; }
+    }
+    function scrollActive(){
+      var el = list.querySelector('.chs-k-item.active');
+      if(el) el.scrollIntoView({block:'nearest'});
+    }
+    document.addEventListener('keydown', onKey);
+    kBackdrop.addEventListener('click', function(e){ if(e.target === kBackdrop) closeK(); });
+    renderList();
+  }
+
+  document.addEventListener('keydown', function(e){
+    if((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')){
+      e.preventDefault();
+      if(kBackdrop){ return; }
+      openQuickK();
+    }
+  });
 })();
 </script>
 </body>

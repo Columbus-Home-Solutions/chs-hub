@@ -14,6 +14,7 @@
  *   ytd-profit        → monthly revenue / cost / profit / margin breakdown
  *   monthly-revenue   → invoices paid this month, ordered newest first
  *   weekly-revenue    → invoices paid this week, ordered newest first
+ *   needs-costing     → YTD line items missing unit_cost, grouped by job
  */
 
 import type { Env } from "../env.js";
@@ -134,7 +135,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          FROM invoices inv
          LEFT JOIN jobs j ON j.id = inv.job_id
          LEFT JOIN clients c ON c.id = j.client_id
-         WHERE UPPER(COALESCE(inv.status,'')) <> 'PAID'
+         WHERE UPPER(COALESCE(inv.status,'')) NOT IN ('PAID', 'BAD_DEBT')
            AND COALESCE(inv.total,0) > COALESCE(inv.payments_total,0)
          ORDER BY inv.issued_date ASC
          LIMIT ${MAX_ROWS}`,
@@ -188,7 +189,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          FROM invoices inv
          LEFT JOIN jobs j ON j.id = inv.job_id
          LEFT JOIN clients c ON c.id = j.client_id
-         WHERE UPPER(COALESCE(inv.status,'')) <> 'PAID'
+         WHERE UPPER(COALESCE(inv.status,'')) NOT IN ('PAID', 'BAD_DEBT')
            AND inv.due_date IS NOT NULL
            AND inv.due_date >= ?
          ORDER BY inv.due_date ASC
@@ -295,14 +296,15 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
     }
 
     case "ytd-profit": {
-      // Per-month gross revenue (from jobs.total) and line-item cost,
+      // Per-month gross revenue (from invoices issued, to match Jobber's
+      // Invoices page and accounting convention) and line-item cost,
       // joined with expenses bucketed by month.
       const monthly = await env.DB.prepare(
         `WITH months AS (
-           SELECT SUBSTR(created_at, 1, 7) AS ym,
+           SELECT SUBSTR(issued_date, 1, 7) AS ym,
                   COALESCE(SUM(total), 0) AS gross
-           FROM jobs
-           WHERE created_at >= ? AND created_at < ?
+           FROM invoices
+           WHERE issued_date >= ? AND issued_date < ?
            GROUP BY ym
          ),
          li_cost AS (
@@ -330,8 +332,8 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          ORDER BY m.ym ASC`,
       )
         .bind(
-          yearStart,
-          yearEnd,
+          yearStart.slice(0, 10),
+          yearEnd.slice(0, 10),
           yearStart,
           yearEnd,
           yearStart.slice(0, 10),
@@ -445,6 +447,70 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
           total: fmtMoney(r.total),
         })),
         totals: { total: fmtMoney(total) },
+        as_of: asOf,
+      };
+    }
+
+    case "needs-costing": {
+      // Line items on YTD jobs where unit_cost is missing (NULL or 0).
+      // Groups the job_number + client + line item name + priced value so
+      // the user can pull up each job in Jobber and fill in the cost.
+      const rows = await env.DB.prepare(
+        `SELECT j.job_number AS job_num,
+                j.title       AS job_title,
+                SUBSTR(j.created_at, 1, 10) AS job_date,
+                c.name        AS client,
+                li.name       AS line_item,
+                li.quantity   AS qty,
+                li.unit_price AS unit_price
+         FROM line_items li
+         JOIN jobs j ON j.id = li.job_id
+         LEFT JOIN clients c ON c.id = j.client_id
+         WHERE j.created_at >= ? AND j.created_at < ?
+           AND COALESCE(li.unit_cost, 0) = 0
+         ORDER BY j.created_at DESC, j.job_number DESC
+         LIMIT ${MAX_ROWS}`,
+      )
+        .bind(yearStart, yearEnd)
+        .all<{
+          job_num: number | null;
+          job_title: string | null;
+          job_date: string | null;
+          client: string | null;
+          line_item: string | null;
+          qty: number | null;
+          unit_price: number | null;
+        }>();
+
+      const data = rows.results ?? [];
+      const priced = data.reduce(
+        (s, r) => s + (r.qty ?? 0) * (r.unit_price ?? 0),
+        0,
+      );
+
+      return {
+        tile,
+        title: `Needs Costing — ${data.length} line item${data.length === 1 ? "" : "s"} missing unit cost`,
+        columns: [
+          { key: "job_date", label: "Date" },
+          { key: "job_num", label: "Job #" },
+          { key: "client", label: "Client" },
+          { key: "line_item", label: "Line Item" },
+          { key: "qty", label: "Qty", align: "right" },
+          { key: "priced", label: "Priced", align: "right" },
+        ],
+        rows: data.map((r) => ({
+          job_date: r.job_date || "—",
+          job_num: r.job_num ?? "—",
+          client: r.client || "—",
+          line_item: r.line_item || "—",
+          qty: r.qty ?? 0,
+          priced: fmtMoney((r.qty ?? 0) * (r.unit_price ?? 0)),
+        })),
+        totals: {
+          line_item: "Total priced (uncosted)",
+          priced: fmtMoney(priced),
+        },
         as_of: asOf,
       };
     }

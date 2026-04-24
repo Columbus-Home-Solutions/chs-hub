@@ -67,6 +67,11 @@ interface KpiResponse {
   ytd_jobs: number;
   pipeline_dollars: number;
   pipeline_count: number;
+  // Line items on YTD jobs missing a sub/material unit_cost. Surfaced as a
+  // warning pill under the YTD Profit tile so the margin doesn't silently
+  // drift when we forget to cost out a job.
+  needs_costing_count: number;
+  needs_costing_priced: number;
   last_sync: {
     started_at: string | null;
     finished_at: string | null;
@@ -124,10 +129,16 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
 
   // ── Revenue + profit ───────────────────────────────────────────────
 
+  // Gross revenue = invoices issued this year, matching Jobber's
+  // "Invoices issued" total on the Invoices page. Using jobs.total by
+  // created_at diverges because a job created in Jan might only be
+  // partially invoiced (deposit issued, final still pending). Accounting
+  // convention — revenue is recognized when billed.
   const ytdRevenueGross = await env.DB.prepare(
-    `SELECT COALESCE(SUM(total), 0) AS v FROM jobs WHERE created_at >= ? AND created_at < ?`,
+    `SELECT COALESCE(SUM(total), 0) AS v FROM invoices
+     WHERE issued_date >= ? AND issued_date < ?`,
   )
-    .bind(ranges.year.start, ranges.year.end)
+    .bind(ranges.year.start.slice(0, 10), ranges.year.end.slice(0, 10))
     .first<{ v: number }>();
 
   const ytdLineItemCost = await env.DB.prepare(
@@ -205,12 +216,16 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     ELSE 0 END`;
 
   // Unpaid = any invoice not fully paid (past due, pending, etc.).
+  // We explicitly exclude 'bad_debt' — those are written-off invoices
+  // that Jobber surfaces separately and shouldn't count against
+  // collectable AR. Matches Jobber's "Past due" + "Awaiting payment"
+  // buckets on the Invoices page.
   const unpaid = await env.DB.prepare(
     `SELECT
        COALESCE(SUM(${balanceExpr}), 0) AS v,
        COUNT(*) AS n
      FROM invoices
-     WHERE UPPER(COALESCE(status,'')) <> 'PAID'
+     WHERE UPPER(COALESCE(status,'')) NOT IN ('PAID', 'BAD_DEBT')
        AND COALESCE(total, 0) > COALESCE(payments_total, 0)`,
   ).first<{ v: number; n: number }>();
 
@@ -222,12 +237,28 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
        COALESCE(SUM(${balanceExpr}), 0) AS v,
        COUNT(*) AS n
      FROM invoices
-     WHERE UPPER(COALESCE(status,'')) <> 'PAID'
+     WHERE UPPER(COALESCE(status,'')) NOT IN ('PAID', 'BAD_DEBT')
        AND due_date IS NOT NULL
        AND due_date >= ?`,
   )
     .bind(today)
     .first<{ v: number; n: number }>();
+
+  // ── Needs Costing (line items missing unit_cost on YTD jobs) ──────
+  // We count line items where unit_cost is NULL or 0 on jobs created
+  // this year, and sum the priced value (qty × unit_price) to show the
+  // user the financial exposure.
+  const needsCosting = await env.DB.prepare(
+    `SELECT
+       COUNT(*) AS n,
+       COALESCE(SUM(li.quantity * COALESCE(li.unit_price, 0)), 0) AS v
+     FROM line_items li
+     JOIN jobs j ON j.id = li.job_id
+     WHERE j.created_at >= ? AND j.created_at < ?
+       AND COALESCE(li.unit_cost, 0) = 0`,
+  )
+    .bind(ranges.year.start, ranges.year.end)
+    .first<{ n: number; v: number }>();
 
   // ── Pipeline $ (open quotes) ───────────────────────────────────────
 
@@ -288,6 +319,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     ytd_jobs: ytdJobs?.n ?? 0,
     pipeline_dollars: round2(pipeline?.v ?? 0),
     pipeline_count: pipeline?.n ?? 0,
+    needs_costing_count: needsCosting?.n ?? 0,
+    needs_costing_priced: round2(needsCosting?.v ?? 0),
     last_sync: lastSyncRow ?? null,
   };
 }

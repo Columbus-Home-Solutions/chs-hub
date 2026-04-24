@@ -23,6 +23,7 @@ import { syncJobberToD1 } from "./lib/jobber/sync.js";
 import { handleDrill } from "./routes/drill.js";
 import { handleKpis } from "./routes/kpis.js";
 import { handleSearch } from "./routes/search.js";
+import { handleSheetsInspect } from "./routes/sheets-debug.js";
 import { handleJobberSync } from "./routes/sync.js";
 
 export default {
@@ -57,6 +58,10 @@ export default {
 
     if (url.pathname === "/api/sync/jobber" && request.method === "POST") {
       return handleJobberSync(request, env);
+    }
+
+    if (url.pathname === "/api/debug/sheets-inspect" && request.method === "GET") {
+      return handleSheetsInspect(request, env);
     }
 
     if (url.pathname.startsWith("/api/")) {

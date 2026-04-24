@@ -3459,6 +3459,7 @@ if('serviceWorker' in navigator){
   });
 }
 
+
 // ── MOBILE DATA SYNC ─────────────────────────────────────────
 // Mirror live KPI values to mobile elements
 function syncMobKPIs(){
@@ -3707,7 +3708,15 @@ function refreshAll(){
     '.chs-shimmer{display:inline-block;background:linear-gradient(90deg,rgba(255,255,255,.05) 0%,rgba(255,255,255,.12) 50%,rgba(255,255,255,.05) 100%);background-size:200% 100%;animation:chsShim 1.4s ease-in-out infinite;border-radius:4px;height:1em;min-width:72px;vertical-align:middle;}' +
     '@keyframes chsShim{0%{background-position:200% 0}100%{background-position:-200% 0}}' +
     '.chs-freshness.stale{color:#f0a500!important;}' +
-    '.chs-freshness.fresh{color:#52c07a!important;}';
+    '.chs-freshness.fresh{color:#52c07a!important;}' +
+    '.kpi.o{position:relative;}' +
+    '.chs-nc-pill{position:absolute;top:8px;right:8px;background:rgba(240,165,0,.14);color:#f0a500;border:1px solid rgba(240,165,0,.3);padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.02em;cursor:pointer;transition:background .15s,color .15s,transform .15s;z-index:2;white-space:nowrap;line-height:1.4;}' +
+    '.chs-nc-pill:hover{background:rgba(240,165,0,.28);color:#ffc14d;transform:translateY(-1px);}' +
+    '.rfb .rfb-icon{display:inline-block;transition:transform .25s;}' +
+    '.rfb.chs-spin{pointer-events:none;opacity:.85;}' +
+    '.rfb.chs-spin .rfb-icon{animation:chsRfbSpin .9s linear infinite;}' +
+    '.rfb.chs-success{background:rgba(82,192,122,.22)!important;border-color:rgba(82,192,122,.55)!important;color:#52c07a!important;transform:scale(1.02);}' +
+    '@keyframes chsRfbSpin{from{transform:rotate(0deg)}to{transform:rotate(-360deg)}}';
   document.head.appendChild(style);
 
   // Swap all the existing spinners for shimmer placeholders on first load.
@@ -3731,6 +3740,27 @@ function refreshAll(){
     setText('kv-mp', fmtMoney(k.monthly_collections));
     setText('kv-ol', fmtMoney(k.ytd_profit));
     setText('kv-ol-sub', 'Margin ' + (k.ytd_profit_margin_pct||0).toFixed(1) + '% · Gross ' + fmtMoney(k.ytd_revenue_gross));
+    // Render the "Needs Costing" pill in the top-right corner of the
+    // YTD Profit tile itself (not inline with the subtext).
+    var ncCount = k.needs_costing_count || 0;
+    var profitTile = document.getElementById('kv-ol');
+    profitTile = profitTile && profitTile.closest ? profitTile.closest('.kpi') : null;
+    if(profitTile){
+      var existing = profitTile.querySelector('.chs-nc-pill');
+      if(ncCount > 0){
+        if(!existing){
+          existing = document.createElement('span');
+          existing.className = 'chs-nc-pill';
+          existing.setAttribute('data-drill', 'needs-costing');
+          profitTile.appendChild(existing);
+        }
+        existing.textContent = '⚠ ' + ncCount;
+        existing.title = ncCount + ' line item' + (ncCount === 1 ? '' : 's') +
+          ' missing unit cost · click to see list';
+      } else if(existing){
+        existing.remove();
+      }
+    }
     setText('kv-pl', fmtMoney(k.pipeline_dollars));
     setText('kv-pl-sub', (k.pipeline_count||0) + ' open quote' + ((k.pipeline_count === 1) ? '' : 's'));
 
@@ -3966,7 +3996,18 @@ function refreshAll(){
     if(!tile) return;
     tile.setAttribute('role','button');
     tile.setAttribute('tabindex','0');
-    tile.addEventListener('click', function(){ openDrill(TILE_MAP[id]); });
+    tile.addEventListener('click', function(e){
+      // If the user clicked the "needs costing" pill, open that drill
+      // instead of the tile's default drill.
+      var t = e.target;
+      if(t && t.closest && t.closest('.chs-nc-pill')){
+        e.stopPropagation();
+        var pill = t.closest('.chs-nc-pill');
+        openDrill(pill.getAttribute('data-drill') || 'needs-costing');
+        return;
+      }
+      openDrill(TILE_MAP[id]);
+    });
     tile.addEventListener('keydown', function(e){
       if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openDrill(TILE_MAP[id]); }
     });
@@ -3989,6 +4030,55 @@ function refreshAll(){
   // Auto-refresh on focus: refresh KPIs when the user returns to the tab
   // ═══════════════════════════════════════════════════════════════════
   window.addEventListener('focus', function(){ window.chsFetchKpis(); });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Refresh button visual feedback — spin, then flash green when done
+  // ═══════════════════════════════════════════════════════════════════
+  (function(){
+    var rfbs = document.querySelectorAll('.rfb');
+    rfbs.forEach(function(btn){
+      // Wrap the existing glyph (⟳) in a span we can rotate via CSS.
+      var html = btn.innerHTML;
+      // Only rewrap once — avoid double-wrapping on hot-reload.
+      if(!btn.querySelector('.rfb-icon')){
+        btn.innerHTML = html.replace(
+          /⟳/,
+          '<span class="rfb-icon">⟳</span>'
+        );
+      }
+      var origHTML = btn.innerHTML;
+      btn.addEventListener('click', function(){
+        if(btn.classList.contains('chs-spin')) return;
+        btn.classList.remove('chs-success');
+        btn.classList.add('chs-spin');
+        // Swap the text (but keep the icon span) while spinning.
+        if(btn.textContent.trim().length > 2){
+          btn.innerHTML = '<span class="rfb-icon">⟳</span>&nbsp;Refreshing...';
+        }
+        // Kick off a KPI refetch so we have a real completion hook.
+        var done = window.chsFetchKpis ? window.chsFetchKpis() : Promise.resolve();
+        // Minimum spin time so the user actually sees the animation even
+        // when the cache returns instantly.
+        var minSpin = new Promise(function(r){ setTimeout(r, 700); });
+        Promise.all([done, minSpin]).then(function(){
+          btn.classList.remove('chs-spin');
+          btn.classList.add('chs-success');
+          if(origHTML.indexOf('Refresh') > -1){
+            btn.innerHTML = '<span class="rfb-icon">✓</span>&nbsp;Refreshed';
+          } else {
+            btn.innerHTML = '<span class="rfb-icon">✓</span>';
+          }
+          setTimeout(function(){
+            btn.classList.remove('chs-success');
+            btn.innerHTML = origHTML;
+          }, 1500);
+        }).catch(function(){
+          btn.classList.remove('chs-spin');
+          btn.innerHTML = origHTML;
+        });
+      });
+    });
+  })();
 
   // ═══════════════════════════════════════════════════════════════════
   // Cmd+K / Ctrl+K — global quick switcher across clients, jobs, quotes, invoices

@@ -79,7 +79,7 @@ export default {
     const jobDetail = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (jobDetail && request.method === "GET") {
       try {
-        const payload = await handleJobDetail(env, jobDetail[1]);
+        const payload = await handleJobDetail(env, decodeURIComponent(jobDetail[1]));
         return jsonResponse(payload);
       } catch (err) {
         const code = (err as { code?: number }).code ?? 500;

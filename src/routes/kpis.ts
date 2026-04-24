@@ -8,13 +8,14 @@
  *   ytd_revenue_collections → B2 (YTD Revenue — collections if any, else gross)
  *   monthly_collections      → C2 (Monthly Revenue)
  *   weekly_collections       → D2 (Weekly Collections)
- *   ytd_profit               → E2 (YTD Profit — gross revenue minus line-item cost)
- *   monthly_profit           → F2 (Monthly Profit — collections minus line-item cost)
+ *   ytd_profit               → E2 (YTD gross revenue − line-item cost − expenses)
+ *   monthly_profit           → F2 (Monthly collections − line-item cost − expenses)
  *   ytd_jobs                 → G2 (Job Count)
  *
- * Caveat: line-item cost does NOT yet include expenses (those need a
- * separate per-job API fetch). Profit numbers will be slightly higher than
- * the Python sync produces. Expenses sync ships in a follow-up pass.
+ * Expenses are sourced from Jobber's top-level expenses connection and
+ * totaled by expense date (incurred_at), matching Jobber's Expense Report.
+ * This captures business-wide categories (Overhead, Vehicle, Office, etc.)
+ * that aren't linked to a specific job.
  */
 
 import type { Env } from "../env.js";
@@ -97,13 +98,16 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.year.start, ranges.year.end)
     .first<{ v: number }>();
 
+  // Expenses are filtered by incurred_at (the expense `date` field) rather
+  // than joining through jobs, because many expenses (Overhead, Vehicle,
+  // Office, Apparel, Tools) are not tied to a specific job. This matches
+  // Jobber's own Expense Report, which totals by expense date.
   const ytdExpenseCost = await env.DB.prepare(
-    `SELECT COALESCE(SUM(e.amount), 0) AS v
-     FROM expenses e
-     JOIN jobs j ON j.id = e.job_id
-     WHERE j.created_at >= ? AND j.created_at < ?`,
+    `SELECT COALESCE(SUM(amount), 0) AS v
+     FROM expenses
+     WHERE incurred_at >= ? AND incurred_at < ?`,
   )
-    .bind(ranges.year.start, ranges.year.end)
+    .bind(ranges.year.start.slice(0, 10), ranges.year.end.slice(0, 10))
     .first<{ v: number }>();
 
   // Collections formula: for PAID invoices, use `total` (Jobber's UI treats
@@ -150,13 +154,12 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();
 
+  // Monthly expenses = incurred this month, matching Jobber's Expense Report
+  // convention. Business-wide costs (overhead, vehicle, etc.) count too.
   const monthlyExpenseCost = await env.DB.prepare(
-    `SELECT COALESCE(SUM(e.amount), 0) AS v
-     FROM expenses e
-     JOIN jobs j ON j.id = e.job_id
-     JOIN invoices inv ON inv.job_id = j.id
-     WHERE UPPER(inv.status) = 'PAID'
-       AND inv.issued_date >= ? AND inv.issued_date < ?`,
+    `SELECT COALESCE(SUM(amount), 0) AS v
+     FROM expenses
+     WHERE incurred_at >= ? AND incurred_at < ?`,
   )
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();

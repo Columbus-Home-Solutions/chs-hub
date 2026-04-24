@@ -14,13 +14,14 @@ import type { Env } from "../../env.js";
 import { getAccessToken } from "./auth.js";
 import { jobberQuery } from "./client.js";
 import {
+  EXPENSES_PAGE_QUERY,
   INVOICES_PAGE_QUERY,
   JOBS_PAGE_QUERY,
-  buildJobExpensesQuery,
 } from "./queries.js";
 
 const JOBS_PAGE_SIZE = 25;
 const INVOICES_PAGE_SIZE = 50;
+const EXPENSES_PAGE_SIZE = 50;
 const MAX_PAGES = 200; // 200 × 25 = 5000 jobs ceiling; safety stop for runaway loops
 
 // ─── GraphQL response shapes ────────────────────────────────────────
@@ -102,21 +103,22 @@ interface JobberInvoice {
   amounts?: { depositAmount?: number | null } | null;
 }
 
-// ─── Per-job expenses pass ─────────────────────────────────────────
+// ─── Standalone expenses pass ──────────────────────────────────────
 
-interface JobExpensesResult {
-  job: {
-    id: string;
-    expenses: {
-      nodes: Array<{
-        id: string;
-        title?: string | null;
-        description?: string | null;
-        total?: number | null;
-        date?: string | null;
-      }>;
-    } | null;
-  } | null;
+interface ExpensesPageResult {
+  expenses: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: StandaloneExpense[];
+  };
+}
+
+interface StandaloneExpense {
+  id: string;
+  title?: string | null;
+  description?: string | null;
+  total?: number | null;
+  date?: string | null;
+  linkedJob?: { id: string } | null;
 }
 
 // ─── Standalone invoices pass ──────────────────────────────────────
@@ -154,7 +156,8 @@ export interface SyncStats {
   invoices_seen: number;
   payments_written: number;
   expenses_written: number;
-  expenses_jobs_queried: number;
+  expense_pages: number;
+  expenses_seen: number;
   started_at: string;
   finished_at: string;
   duration_ms: number;
@@ -177,7 +180,8 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
     invoices_seen: 0,
     payments_written: 0,
     expenses_written: 0,
-    expenses_jobs_queried: 0,
+    expense_pages: 0,
+    expenses_seen: 0,
     started_at: startedAt.toISOString(),
     finished_at: "",
     duration_ms: 0,
@@ -220,9 +224,10 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
     // them behind the `first: 1` limit on jobs.invoices).
     await syncAllInvoices(env, accessToken, stats);
 
-    // Per-job expenses pass — fetches material/misc expenses so profit math
-    // can subtract them. Scoped to current-year jobs for cost efficiency.
-    await syncYtdJobExpenses(env, accessToken, stats);
+    // Standalone expenses pass — captures ALL expenses (not just those linked
+    // to jobs), including Overhead / Vehicle / Office / Apparel / Tools
+    // categories which are typically entered without a job link.
+    await syncAllExpenses(env, accessToken, stats);
 
     const finishedAt = new Date();
     stats.finished_at = finishedAt.toISOString();
@@ -520,64 +525,106 @@ async function upsertStandaloneInvoice(
   await env.DB.batch(stmts);
 }
 
-// ─── Per-job expenses sync ─────────────────────────────────────────
+// ─── Standalone expenses sync ──────────────────────────────────────
 
-async function syncYtdJobExpenses(
+async function syncAllExpenses(
   env: Env,
   accessToken: string,
   stats: SyncStats,
 ): Promise<void> {
-  const yearPrefix = new Date().getUTCFullYear().toString();
-  const yearStart = `${yearPrefix}-01-01T00:00:00.000Z`;
+  // Full refresh: wipe expenses and re-insert from Jobber's top-level
+  // expenses connection. This captures both job-linked and business-wide
+  // expenses (Overhead, Vehicle, Office, Apparel, Tools). Expense count
+  // is small (~100s), so full-refresh is cheap and handles deletions.
+  await env.DB.prepare("DELETE FROM expenses").run();
 
-  const rows = await env.DB.prepare(
-    `SELECT id FROM jobs WHERE created_at >= ? ORDER BY created_at DESC`,
-  )
-    .bind(yearStart)
-    .all<{ id: string }>();
+  let cursor: string | null = null;
 
-  const jobIds = (rows.results ?? []).map((r) => r.id);
-  stats.expenses_jobs_queried = jobIds.length;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const result: ExpensesPageResult = await jobberQuery<ExpensesPageResult>(
+      accessToken,
+      EXPENSES_PAGE_QUERY,
+      { variables: { first: EXPENSES_PAGE_SIZE, after: cursor } },
+    );
 
-  for (const jobId of jobIds) {
-    try {
-      const result = await jobberQuery<JobExpensesResult>(
-        accessToken,
-        buildJobExpensesQuery(jobId),
+    const nodes: StandaloneExpense[] = result.expenses?.nodes ?? [];
+    stats.expense_pages = page;
+    stats.expenses_seen += nodes.length;
+
+    const syncedAt = new Date().toISOString();
+    const stmts: D1PreparedStatement[] = [];
+
+    for (const exp of nodes) {
+      const description =
+        [exp.title, exp.description].filter(Boolean).join(" — ") || null;
+      // linkedJob may point to a job we don't have in D1 (e.g. from a
+      // previous year). Only set job_id if the job exists locally,
+      // otherwise FK would fail. Cheapest check: bind NULL and let KPI
+      // math reconcile — expense totals don't require the FK.
+      stmts.push(
+        env.DB.prepare(
+          `INSERT INTO expenses (id, job_id, amount, description, incurred_at, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        ).bind(
+          exp.id,
+          exp.linkedJob?.id ?? null,
+          exp.total ?? null,
+          description,
+          exp.date ?? null,
+          syncedAt,
+        ),
       );
-
-      // Wipe + re-insert expenses for this job, so deletions in Jobber
-      // propagate cleanly without needing a separate tombstone workflow.
-      const stmts: D1PreparedStatement[] = [
-        env.DB.prepare("DELETE FROM expenses WHERE job_id = ?").bind(jobId),
-      ];
-
-      const expenses = result.job?.expenses?.nodes ?? [];
-      const syncedAt = new Date().toISOString();
-
-      for (const exp of expenses) {
-        const description =
-          [exp.title, exp.description].filter(Boolean).join(" — ") || null;
-        stmts.push(
-          env.DB.prepare(
-            `INSERT INTO expenses (id, job_id, amount, description, incurred_at, synced_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          ).bind(
-            exp.id,
-            jobId,
-            exp.total ?? null,
-            description,
-            exp.date ?? null,
-            syncedAt,
-          ),
-        );
-        stats.expenses_written++;
-      }
-
-      await env.DB.batch(stmts);
-    } catch (err) {
-      stats.errors.push(`Expenses for job ${jobId}: ${(err as Error).message}`);
+      stats.expenses_written++;
     }
+
+    if (stmts.length > 0) {
+      try {
+        await env.DB.batch(stmts);
+      } catch (err) {
+        // If FK fails for a linked job not in D1, retry individually and
+        // null the job_id on failure so we still capture the expense.
+        stats.errors.push(
+          `Expenses page ${page} batch failed, retrying individually: ${(err as Error).message}`,
+        );
+        for (const exp of nodes) {
+          const description =
+            [exp.title, exp.description].filter(Boolean).join(" — ") || null;
+          try {
+            await env.DB.prepare(
+              `INSERT INTO expenses (id, job_id, amount, description, incurred_at, synced_at)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+            )
+              .bind(
+                exp.id,
+                exp.linkedJob?.id ?? null,
+                exp.total ?? null,
+                description,
+                exp.date ?? null,
+                syncedAt,
+              )
+              .run();
+          } catch {
+            // FK failure — retry with job_id = NULL
+            await env.DB.prepare(
+              `INSERT OR REPLACE INTO expenses (id, job_id, amount, description, incurred_at, synced_at)
+               VALUES (?, NULL, ?, ?, ?, ?)`,
+            )
+              .bind(
+                exp.id,
+                exp.total ?? null,
+                description,
+                exp.date ?? null,
+                syncedAt,
+              )
+              .run();
+          }
+        }
+      }
+    }
+
+    const pageInfo = result.expenses?.pageInfo;
+    if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
+    cursor = pageInfo.endCursor;
   }
 }
 

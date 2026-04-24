@@ -22,6 +22,7 @@ import type { Env } from "./env.js";
 import { syncJobberToD1 } from "./lib/jobber/sync.js";
 import { syncWorkbook } from "./lib/wc/sync.js";
 import { handleDrill } from "./routes/drill.js";
+import { handleJobDetail, handleJobsList } from "./routes/jobs.js";
 import { handleKpis } from "./routes/kpis.js";
 import { handleSearch } from "./routes/search.js";
 import { handleSheetsInspect } from "./routes/sheets-debug.js";
@@ -68,6 +69,25 @@ export default {
 
     if (url.pathname === "/api/wc/sync" && request.method === "POST") {
       return handleWcSync(request, env);
+    }
+
+    if (url.pathname === "/api/jobs" && request.method === "GET") {
+      const payload = await handleJobsList(env, url);
+      return jsonResponse(payload);
+    }
+
+    const jobDetail = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
+    if (jobDetail && request.method === "GET") {
+      try {
+        const payload = await handleJobDetail(env, jobDetail[1]);
+        return jsonResponse(payload);
+      } catch (err) {
+        const code = (err as { code?: number }).code ?? 500;
+        return jsonResponse(
+          { error: code === 404 ? "not_found" : "internal", message: (err as Error).message },
+          { status: code === 404 ? 404 : 500 },
+        );
+      }
     }
 
     if (url.pathname.startsWith("/api/")) {

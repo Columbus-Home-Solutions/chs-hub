@@ -439,13 +439,6 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
           </div>
           <div class="qlsec">Spreadsheets</div>
           <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
-            <a class="ql" id="tr1-ql-lnk" href="#" target="_blank" style="flex:1;"><span class="qi">📋</span><div><div>Job Cost Tracker</div><div class="qs">Cost tracking · Dashboard</div></div></a>
-            <button class="lkb" id="tr1-lk" onclick="togLock(1)" title="Lock to hide" style="flex-shrink:0;">🔓</button>
-          </div>
-          <div class="tur" id="tr1-url-row" style="margin-top:4px;">
-            <input class="tui" id="tr1-url" placeholder="Paste Job Tracker link..." oninput="updTr(1,this.value)">
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
             <a class="ql gc" id="tr2-ql-lnk" href="#" target="_blank" style="flex:1;"><span class="qi">💰</span><div><div>Wealthy Contractor Tracker</div><div class="qs">Financial growth · Profit planning</div></div></a>
             <button class="lkb" id="tr2-lk" onclick="togLock(2)" title="Lock to hide" style="flex-shrink:0;">🔓</button>
           </div>
@@ -575,12 +568,7 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
       <div class="card" id="smart-notes-card">
         <div class="ch">
           <span class="ct">🧠 Smart Notes</span>
-          <div style="display:flex;gap:7px;align-items:center;">
-            <span id="sn-sheet-badge" style="font-size:9px;font-weight:700;background:rgba(82,192,122,.12);color:var(--green);padding:3px 8px;border-radius:20px;border:1px solid rgba(82,192,122,.3);display:flex;align-items:center;gap:4px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;"></span>Synced</span>
-            <a href="/notes" class="bdg" style="cursor:pointer;text-decoration:none;">📖 All Notes</a>
-            <span class="bdg" onclick="toggleArchive()" id="sn-archive-btn" style="cursor:pointer;">📦 Archive</span>
-            <span class="bdg" onclick="toggleNoteHistory()" id="sn-history-btn" style="cursor:pointer;">📋 History</span>
-          </div>
+          <a href="/notes" class="bdg" style="cursor:pointer;text-decoration:none;">📖 All Notes →</a>
         </div>
         <div class="cb" style="padding:12px 14px;">
           <!-- Write area -->
@@ -626,27 +614,6 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
             </div>
           </div>
 
-          <!-- Note History -->
-          <div id="sn-history" style="display:none;border-top:1px solid rgba(240,165,0,.12);padding-top:10px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-              <div style="font-size:9px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--muted);">Recent Notes</div>
-              <span onclick="loadNoteHistory()" style="font-size:10px;color:var(--gold);cursor:pointer;">⟳ Refresh</span>
-            </div>
-            <div id="sn-history-list" style="display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;padding-right:2px;">
-              <div class="empty">Click Refresh to load note history</div>
-            </div>
-          </div>
-
-          <!-- Archive view -->
-          <div id="sn-archive-panel" style="display:none;border-top:1px solid rgba(240,165,0,.12);padding-top:10px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-              <div style="font-size:9px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--muted);">📦 Archived Notes</div>
-              <span onclick="loadArchivedNotes()" style="font-size:10px;color:var(--gold);cursor:pointer;">⟳ Refresh</span>
-            </div>
-            <div id="sn-archive-list" style="display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;padding-right:2px;">
-              <div class="empty">Loading archived notes...</div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -869,7 +836,6 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
         <a class="ma-more-tile" href="https://www.google.com/maps/search/@34.7695,-92.2671,13z" target="_blank">🗺️ Maps</a>
       </div>
       <div class="ma-section-h" style="margin-top:8px;">Trackers</div>
-      <a class="ma-more-tile" id="ma-tr1" href="#" target="_blank" style="grid-column:1/-1;">📋 Job cost tracker</a>
       <a class="ma-more-tile" id="ma-tr2" href="#" target="_blank" style="grid-column:1/-1;">💰 WC tracker</a>
     </div>
   </div>
@@ -2096,11 +2062,6 @@ function saveNoteOnly(){
   localStorage.setItem('chs_smart_notes',JSON.stringify(snNotes));
   document.getElementById('sn-input').value='';
   document.getElementById('sn-cat').value='';
-  if(snHistoryVisible)loadNoteHistory();
-  // Flash saved confirmation
-  var badge=document.getElementById('sn-sheet-badge');
-  badge.textContent='✓ Saved!';
-  setTimeout(function(){badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Synced';},2000);
 }
 
 // ── SMART NOTES SHEET SETUP ───────────────────────────────────

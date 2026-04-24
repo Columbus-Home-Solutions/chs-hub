@@ -92,7 +92,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
 .status-action_required,.status-requires_invoicing,.status-late{background:rgba(224,82,82,.15);color:var(--red);border:1px solid rgba(224,82,82,.4);}
 .status-archived{background:rgba(82,192,122,.12);color:var(--green);border:1px solid rgba(82,192,122,.3);}
 .status-default{background:rgba(255,248,236,.1);color:var(--cream);border:1px solid rgba(255,248,236,.2);}
-.nc-flag{color:var(--red);font-size:14px;cursor:help;}
+.nc-flag{color:var(--red);font-size:14px;cursor:pointer;}
 .profit-pos{color:var(--green);}
 .profit-neg{color:var(--red);}
 .margin-good{color:var(--green);}
@@ -212,8 +212,9 @@ td.jobnum{font-weight:700;color:var(--gold);}
             <th data-sort="client_name">Client</th>
             <th data-sort="status" class="center">Status</th>
             <th data-sort="created_at">Created</th>
-            <th data-sort="total" class="num">Quoted</th>
-            <th data-sort="invoiced" class="num">Invoiced</th>
+            <th data-sort="total" class="num">Total</th>
+            <th data-sort="line_item_cost" class="num">Unit Cost</th>
+            <th data-sort="expense_cost" class="num">Expenses</th>
             <th data-sort="paid" class="num">Paid</th>
             <th data-sort="outstanding" class="num">Outstanding</th>
             <th data-sort="profit" class="num">Profit</th>
@@ -221,7 +222,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
             <th data-sort="needs_costing" class="center" title="Needs Costing">⚠</th>
           </tr>
         </thead>
-        <tbody id="jobs-tbody"><tr><td colspan="12" class="empty-msg"><span class="spinner"></span> Loading jobs…</td></tr></tbody>
+        <tbody id="jobs-tbody"><tr><td colspan="13" class="empty-msg"><span class="spinner"></span> Loading jobs…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -279,7 +280,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
       ALL = data.jobs || [];
       applyFilters();
     } catch(err){
-      $('jobs-tbody').innerHTML = '<tr><td colspan="12" class="empty-msg">Failed to load: ' + esc(err.message) + '</td></tr>';
+      $('jobs-tbody').innerHTML = '<tr><td colspan="13" class="empty-msg">Failed to load: ' + esc(err.message) + '</td></tr>';
     }
   }
 
@@ -323,13 +324,16 @@ td.jobnum{font-weight:700;color:var(--gold);}
   function render(){
     const tbody = $('jobs-tbody');
     if(VIEW.length === 0){
-      tbody.innerHTML = '<tr><td colspan="12" class="empty-msg">No jobs match the current filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="13" class="empty-msg">No jobs match the current filters.</td></tr>';
       return;
     }
     const rows = VIEW.map(j => {
       const nc = j.needs_costing ? ' nc' : '';
       const profitCls = j.profit >= 0 ? 'profit-pos' : 'profit-neg';
       const marginCls = marginClass(j.margin_pct);
+      const ucDisplay = j.needs_costing
+        ? '<span style="color:var(--red)" title="Missing unit_cost on at least one line item">⚠ ' + money0(j.line_item_cost) + '</span>'
+        : money0(j.line_item_cost);
       return '<tr data-id="' + esc(j.id) + '" class="' + nc + '">' +
         '<td class="num jobnum">' + (j.job_number ? '#' + j.job_number : '—') + '</td>' +
         '<td class="title" title="' + esc(j.title || '') + '">' + esc(j.title || '—') + '</td>' +
@@ -337,7 +341,8 @@ td.jobnum{font-weight:700;color:var(--gold);}
         '<td class="center">' + statusPill(j.status) + '</td>' +
         '<td>' + fmtDate(j.created_at) + '</td>' +
         '<td class="num">' + money0(j.total) + '</td>' +
-        '<td class="num">' + money0(j.invoiced) + '</td>' +
+        '<td class="num">' + ucDisplay + '</td>' +
+        '<td class="num">' + money0(j.expense_cost) + '</td>' +
         '<td class="num">' + money0(j.paid) + '</td>' +
         '<td class="num">' + (j.outstanding > 0 ? '<span style="color:var(--red)">' + money0(j.outstanding) + '</span>' : money0(j.outstanding)) + '</td>' +
         '<td class="num ' + profitCls + '">' + money0(j.profit) + '</td>' +

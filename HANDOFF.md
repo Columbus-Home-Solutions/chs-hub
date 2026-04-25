@@ -255,6 +255,23 @@ Deferred — needs a lead-source data source. Currently lead sources are spread 
 - Add `docs/runbooks/` (quarterly-run-failed.md, refresh-token-died.md, kpi-sync-tab-deleted.md)
 - Tag `v1.0` on both `chs-estimator-seeder` and `chs-dashboard`
 
+### 🟢 Project completion deliverable: system overview doc (do this LAST, before declaring "done")
+**Trigger**: Once the photos + social tracks are shipped and the system feels feature-complete, create a polished one-page overview that Tony (or a future hire) can use to understand the whole stack at a glance.
+
+**What it should contain**:
+- **Architecture diagram** — clean version of the ASCII diagram at the top of this file. Tools: Excalidraw, draw.io, or a hand-drawn diagram in Figma. Export as both PNG (for embed) and SVG (for high-res print).
+- **Service inventory** — table of every external SaaS the system depends on, with for each: role, plan/tier, monthly cost, account email, password-manager entry, dashboard URL, criticality (load-bearing vs nice-to-have), failure mode if it goes down. Current list to seed it: Cloudflare (Workers, D1, R2, Pages, Access, DNS), Resend, Jobber, HighLevel, Google Workspace (Sheets, Tasks, Meet, Drive), Anthropic Claude, GitHub, possibly Metricool, possibly Cloudflare Images.
+- **Data flow** — what data enters from where, where it's stored, who can read it, retention policy.
+- **Disaster recovery** — for each load-bearing service: how to detect failure, what backup we have, recovery procedure, who to call.
+- **"Hit by a bus" doc** — a ~half-page section explaining how someone else could take over: which 1Password vault has what, where each repo lives, where to find recurring credentials/keys, how to restore from the nightly D1 backup, etc.
+
+**Surfaces to publish to**:
+- `/about` page on the dashboard (link in the header). Plain HTML, can include the SVG diagram inline.
+- Save the PDF to a "CHS — System & Operations" folder in Google Drive.
+- Print a copy and put it in Tony's office as a fallback for "the day everything is on fire and the dashboard is down."
+
+**Estimate**: ~3–4 hours when the time comes. Best done in one sitting so the picture is internally consistent.
+
 ---
 
 ## Open decisions for Tony

@@ -289,7 +289,12 @@
       <input class="cap-search" id="cap-expense-vendor" type="text" placeholder="Lowe's, Home Depot, …" autocomplete="off" maxlength="120">
 
       <label for="cap-expense-desc" class="cap-screen-sub" style="margin-top:0">Description (optional)</label>
-      <input class="cap-search" id="cap-expense-desc" type="text" placeholder="2x4s and screws" autocomplete="off" maxlength="200">
+      <div class="cap-dictate-row">
+        <input class="cap-search cap-dictate-input" id="cap-expense-desc" type="text" placeholder="2x4s and screws" autocomplete="off" maxlength="200">
+        <button class="cap-dictate-btn" id="cap-expense-dictate" data-action="dictate-expense" type="button" aria-label="Dictate description" title="Dictate (Web Speech)">
+          <span class="cap-dictate-icon">🎙️</span>
+        </button>
+      </div>
 
       <button class="cap-action cap-action--primary" data-action="submit-expense" id="cap-expense-submit" style="grid-column:1/-1">
         <span class="cap-action-icon">✅</span>

@@ -65,6 +65,7 @@ import {
   handleExpenseCreate,
   handleExpenseList,
   handleExpenseReceipt,
+  handleExpensePush,
 } from "./routes/expenses.js";
 import { handleWcSync } from "./routes/wc-sync.js";
 
@@ -188,6 +189,10 @@ export default {
     const expenseReceipt = url.pathname.match(/^\/api\/expenses\/([^/]+)\/receipt$/);
     if (expenseReceipt && (request.method === "GET" || request.method === "HEAD")) {
       return handleExpenseReceipt(env, decodeURIComponent(expenseReceipt[1]));
+    }
+    const expensePush = url.pathname.match(/^\/api\/expenses\/([^/]+)\/push-to-jobber$/);
+    if (expensePush && request.method === "POST") {
+      return handleExpensePush(env, decodeURIComponent(expensePush[1]));
     }
 
     // ── Smart Notes ──────────────────────────────────────────────────

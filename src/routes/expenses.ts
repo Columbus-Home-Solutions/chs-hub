@@ -23,6 +23,7 @@
  */
 
 import type { Env } from "../env.js";
+import { pushExpenseToJobber } from "../lib/jobber/expenses.js";
 
 interface ExpenseRow {
   id: string;
@@ -162,12 +163,39 @@ export async function handleExpenseCreate(
     .bind(id, jobId, amount, description, incurredAt, now, vendor, receiptKey)
     .run();
 
+  // Best-effort Jobber write-back. We deliberately await so the success
+  // result can flow back in the response — the PWA waits anyway because
+  // it needs to dismiss the form. If Jobber is down, the row stays in
+  // D1 with the PENDING JOBBER badge and the dashboard's retry button
+  // can flush it later. The push helper itself never throws — it
+  // converts errors into a result object.
+  const push = await pushExpenseToJobber(env, id);
+
   return jsonResponse({
     expense: {
       id,
       receipt_url: receiptKey ? `/api/expenses/${id}/receipt` : null,
+      jobber_pushed: push.ok,
+      jobber_id: push.jobber_id ?? null,
+      jobber_error: push.ok ? null : push.error ?? null,
     },
   });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// POST /api/expenses/:id/push-to-jobber
+// ────────────────────────────────────────────────────────────────────────
+//
+// Manual retry of the Jobber write-back. Used by the dashboard's
+// "Retry Jobber sync" button next to the PENDING JOBBER badge. Idempotent:
+// if the row is already pushed we just return the existing jobber_id.
+
+export async function handleExpensePush(
+  env: Env,
+  expenseId: string,
+): Promise<Response> {
+  const result = await pushExpenseToJobber(env, expenseId);
+  return jsonResponse(result, { status: result.ok ? 200 : 502 });
 }
 
 // ────────────────────────────────────────────────────────────────────────

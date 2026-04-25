@@ -299,16 +299,41 @@ Items intentionally not done (lower priority Phase 6 carryovers):
 - Voice-dictation on the description field (mentioned in the original plan as "optional"). Easy to add later by reusing `buildRecognition()` from the voice-note flow.
 - Hash-deduped R2 keys (we use the row UUID instead of a content hash; collisions on a UUID are basically zero, and Tony might genuinely re-snap the same receipt for two expenses).
 
-### 🟡 Remaining follow-up — Jobber write-back for PWA-captured expenses (~30–60 min)
+### ✅ Jobber write-back code shipped — 🔴 BLOCKED on OAuth scope (built 2026-04-25)
 
-Currently every PWA expense lives in D1+R2 only and shows a `PENDING JOBBER` badge in the drill-down. To complete Option A:
+**All code is in place.** A scope-test against Jobber's API confirmed:
 
-1. Open the Jobber GraphQL API explorer with `JOBBER_TOKEN` and confirm an expense-create mutation exists (likely `expenseCreate` / `createJobExpense`). Note the input shape (job ID, amount, vendor, etc.) and what comes back (`expense.id`?).
-2. Add `src/jobber/expenses.ts` with a `pushExpenseToJobber(env, expenseId)` helper that runs the mutation, then patches the D1 row with `pushed_to_jobber_at = now()` and `jobber_id = <returned id>`.
-3. Wire it into `POST /api/expenses` (best-effort, after the D1 row is saved — don't block the PWA response on Jobber being up). Optionally also expose `POST /api/expenses/:id/push-to-jobber` so the dashboard can re-try a single failed row from a button next to the `PENDING JOBBER` badge.
-4. Make sure the cron Jobber sync **does not** re-import a PWA expense after it's been pushed back: match on `jobber_id` and skip rows already in D1.
+- `expenseCreate(input: ExpenseCreateInput!) -> ExpenseCreatePayload` is the right mutation. Required input fields: `title` (vendor), `date` (incurred_at), plus optional `description`, `total`, `linkedJobId`. Returns `expense { id title total }` and `userErrors { message path }`.
+- `src/lib/jobber/expenses.ts` runs the mutation, writes `jobber_id` + `pushed_to_jobber_at` back to D1 on success, and surfaces `userErrors` cleanly on failure. Idempotent: re-running on an already-pushed row no-ops.
+- `POST /api/expenses` runs the push best-effort *after* the local D1+R2 write; the response includes `jobber_pushed: true|false` and `jobber_error` so the PWA could in future surface "synced ✓" vs "queued for retry" copy.
+- `POST /api/expenses/:id/push-to-jobber` exposes a manual retry. Wired into the dashboard's `RETRY` button next to the `PENDING JOBBER` badge — click it, get a green ✓ on success or a tooltip with Jobber's error on failure, drill auto-rerenders so badges clear.
+- `src/lib/jobber/sync.ts` no longer wipes PWA-captured expense rows on its 30-min refresh, and skips re-inserting any Jobber expense whose ID matches a `jobber_id` we already own (so push-then-cron doesn't create duplicates).
 
-**If the GraphQL mutation doesn't exist:** downgrade to Option B — PWA expenses stay local-only, Tony reconciles weekly in Jobber. The badge already labels them; no code change needed.
+**🔴 Live blocker (2026-04-25):** the first push to Jobber returned:
+
+> `Jobber GraphQL errors: An object of type ExpenseCreate was hidden due to permissions`
+
+The current `JOBBER_REFRESH_TOKEN` was minted with read-only scopes. To unblock:
+
+1. **Jobber Developer Center → your app → Scopes**. Enable the `write_expenses` scope (exact name may differ — Jobber uses `read_expenses` for read; the write equivalent will be alongside it).
+2. **Re-authorize** the app: go through the OAuth consent flow once with the updated scope list. This issues a fresh refresh token attached to the new scope set.
+3. `npx wrangler secret put JOBBER_REFRESH_TOKEN` and paste the new token. Wrangler will prompt — paste, hit enter, deploy isn't required (secrets hot-reload).
+4. Smoke-test: tap a PWA expense's `RETRY` button in the dashboard. Should turn green ✓ and the badge should clear after a brief reload. Or via curl: `curl -X POST .../api/expenses/<id>/push-to-jobber` should return `{ "ok": true, "jobber_id": "..." }`.
+
+**Once unblocked, all in-flight PWA expense rows auto-flush** — the `RETRY` button is idempotent and the next 30-min cron sync will not clobber them. No code change needed.
+
+### 🟡 Receipt upload to Jobber (small follow-up after scope is fixed)
+
+Right now the write-back sends metadata only (title, date, total, linkedJobId, description). Two ways to attach the receipt photo:
+
+- **Easy:** make `/api/expenses/:id/receipt` reachable without Cloudflare Access (signed-URL endpoint scoped to a single expense ID, valid for ~1h) and pass it as `receiptUrl` in the input. Jobber fetches the image during the mutation.
+- **Cleaner:** implement Jobber's two-step ActiveStorage upload to get a `receiptSignedBlobId` and pass that. Higher effort, no public URL needed.
+
+Pick easy when this becomes a priority; the cleaner path is overkill until receipts genuinely need to round-trip through Jobber's UI (currently they're viewable in the dashboard via the `📎` thumbnail next to the row).
+
+### ✅ Voice dictation on the expense description (built 2026-04-25)
+
+The expense description input now has a `🎙️` mic button that toggles Web Speech transcription directly into the field. Reuses `buildRecognition()` from the voice-note flow but in transcript-only mode (no Claude round-trip; recognized phrases append straight into the input). Tap once to start — button pulses red — tap again to stop, or navigate away from the Expense screen and the recognizer auto-stops. Final transcript caps at the same 200-char limit as typed input.
 
 ### 🟢 Social media system (after photos)
 

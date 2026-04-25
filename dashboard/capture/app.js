@@ -120,6 +120,10 @@
     }
     // Stop a live recording if the user navigates away from the voice screen.
     if (name !== 'voice' && voiceState.recognition) stopRecording();
+    // Stop dictation if user leaves the expense screen.
+    if (name !== 'expense' && expenseState.dictateRec) {
+      try { expenseState.dictateRec.stop(); } catch (_) { /* non-fatal */ }
+    }
   }
 
   /** Lazy-load active jobs the first time the switcher is opened. */
@@ -809,6 +813,8 @@
     receipt: null,           // Blob | null
     receiptPreviewUrl: null, // object URL we revoke on reset
     submitting: false,
+    dictateRec: null,        // active SpeechRecognition while dictating, else null
+    dictateBaseText: '',     // input value at the time dictation started
   };
 
   /** Render the "Attach to" strip on the Expense screen. */
@@ -1003,6 +1009,79 @@
       expenseState.submitting = false;
       if (submitBtn) submitBtn.removeAttribute('disabled');
       if (submitSub) submitSub.textContent = 'Saves to D1 + R2. Jobber sync will follow up later.';
+    }
+  }
+
+  /**
+   * Toggle voice dictation on the expense description input. Reuses the
+   * shared `buildRecognition()` from the voice-note flow but in
+   * transcript-only mode — we don't fold results through Claude, just
+   * append recognized phrases directly into the input.
+   */
+  function toggleExpenseDictation() {
+    const input = /** @type {HTMLInputElement|null} */ (document.getElementById('cap-expense-desc'));
+    const btn = document.getElementById('cap-expense-dictate');
+    if (!input || !btn) return;
+
+    if (expenseState.dictateRec) {
+      try { expenseState.dictateRec.stop(); } catch (_) { /* non-fatal */ }
+      return;
+    }
+
+    const rec = buildRecognition();
+    if (!rec) {
+      toast('Voice dictation not supported in this browser');
+      return;
+    }
+
+    expenseState.dictateBaseText = input.value || '';
+    expenseState.dictateRec = rec;
+    btn.dataset.recording = 'true';
+
+    rec.onresult = (ev) => {
+      let finalAdds = '';
+      let interim = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i];
+        const text = (r[0] && r[0].transcript) || '';
+        if (r.isFinal) finalAdds += (finalAdds ? ' ' : '') + text.trim();
+        else interim += text;
+      }
+      // Commit final phrases into baseText so a later interim doesn't
+      // erase them; interim text shows in the input but is overwritten
+      // on each result event.
+      if (finalAdds) {
+        expenseState.dictateBaseText = (expenseState.dictateBaseText
+          ? expenseState.dictateBaseText + ' '
+          : '') + finalAdds;
+      }
+      const interimSep = interim && expenseState.dictateBaseText ? ' ' : '';
+      input.value = (expenseState.dictateBaseText + interimSep + interim).slice(0, 200);
+    };
+
+    rec.onerror = (ev) => {
+      console.warn('Dictation error:', ev.error);
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+        toast('Mic permission was denied');
+      }
+    };
+
+    rec.onend = () => {
+      expenseState.dictateRec = null;
+      btn.dataset.recording = 'false';
+      // If the recognizer stopped while interim text was on screen, fold
+      // it into the persistent value so the user can edit it.
+      if (input.value !== expenseState.dictateBaseText) {
+        expenseState.dictateBaseText = input.value;
+      }
+    };
+
+    try {
+      rec.start();
+    } catch (err) {
+      console.warn('Dictation start failed:', err);
+      expenseState.dictateRec = null;
+      btn.dataset.recording = 'false';
     }
   }
 
@@ -1278,6 +1357,7 @@
       case 'submit-photo':      submitPendingPhoto(); break;
       case 'discard-photo':     discardPendingPhoto(); break;
       case 'submit-expense':    submitExpense(); break;
+      case 'dictate-expense':   toggleExpenseDictation(); break;
       case 'voice-toggle-rec':  onVoiceToggleRec(); break;
       case 'voice-discard':     discardVoice(); break;
       case 'voice-save-claude': saveVoiceNote(true); break;

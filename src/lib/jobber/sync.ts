@@ -749,11 +749,26 @@ async function syncAllExpenses(
   accessToken: string,
   stats: SyncStats,
 ): Promise<void> {
-  // Full refresh: wipe expenses and re-insert from Jobber's top-level
-  // expenses connection. This captures both job-linked and business-wide
-  // expenses (Overhead, Vehicle, Office, Apparel, Tools). Expense count
-  // is small (~100s), so full-refresh is cheap and handles deletions.
-  await env.DB.prepare("DELETE FROM expenses").run();
+  // Full refresh: wipe Jobber-sourced expenses and re-insert from Jobber's
+  // top-level expenses connection. PWA-captured rows (entered_via='pwa')
+  // are preserved — they're the source of truth for receipts Tony
+  // captures on-site, and they may or may not have been pushed back to
+  // Jobber yet. Expense count is small (~100s), so full-refresh is cheap
+  // and handles Jobber-side deletions.
+  await env.DB.prepare(
+    `DELETE FROM expenses WHERE entered_via IS NULL OR entered_via = 'jobber'`,
+  ).run();
+
+  // Build a set of Jobber expense IDs that are already represented by a
+  // PWA row (because we pushed them back via expenseCreate). The next
+  // INSERT loop skips these to avoid creating a duplicate row — the PWA
+  // row is canonical and already shows pushed_to_jobber_at + jobber_id.
+  const pushedRows = await env.DB.prepare(
+    `SELECT jobber_id FROM expenses WHERE entered_via = 'pwa' AND jobber_id IS NOT NULL`,
+  ).all<{ jobber_id: string }>();
+  const skipJobberIds = new Set(
+    (pushedRows.results ?? []).map((r) => r.jobber_id),
+  );
 
   let cursor: string | null = null;
 
@@ -772,6 +787,9 @@ async function syncAllExpenses(
     const stmts: D1PreparedStatement[] = [];
 
     for (const exp of nodes) {
+      // Skip Jobber rows we already own through a PWA push — the PWA row
+      // is canonical and the dashboard renders it with cleared badges.
+      if (skipJobberIds.has(exp.id)) continue;
       const description =
         [exp.title, exp.description].filter(Boolean).join(" — ") || null;
       // linkedJob may point to a job we don't have in D1 (e.g. from a
@@ -804,6 +822,7 @@ async function syncAllExpenses(
           `Expenses page ${page} batch failed, retrying individually: ${(err as Error).message}`,
         );
         for (const exp of nodes) {
+          if (skipJobberIds.has(exp.id)) continue;
           const description =
             [exp.title, exp.description].filter(Boolean).join(" — ") || null;
           try {

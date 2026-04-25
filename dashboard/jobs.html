@@ -141,6 +141,11 @@ td.jobnum{font-weight:700;color:var(--gold);}
 .exp-badge.pending{background:rgba(196,57,26,.15);border:1px solid rgba(196,57,26,.45);color:#e88c75;}
 .exp-receipt-thumb{width:36px;height:36px;border-radius:6px;object-fit:cover;border:1px solid rgba(240,165,0,.25);cursor:pointer;background:#000;display:block;}
 .exp-receipt-cell{width:44px;}
+.exp-retry-btn{margin-left:6px;padding:1px 7px;border-radius:8px;border:1px solid rgba(240,165,0,.45);background:transparent;color:var(--gold);font-size:9px;font-weight:800;letter-spacing:.6px;cursor:pointer;font-family:inherit;}
+.exp-retry-btn:hover{background:rgba(240,165,0,.18);}
+.exp-retry-btn:disabled{opacity:.55;cursor:wait;}
+.exp-retry-btn.success{border-color:#3a7d3a;color:#7fbf7f;}
+.exp-retry-btn.failed{border-color:#a84a3a;color:#e88c75;}
 
 /* Photos tab + general-photos modal */
 .photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;}
@@ -606,6 +611,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
 
   function renderDrill(d, initialTab){
     const j = d.job, w = d.waterfall;
+    window.__currentDrillJobId = j.id;
     $('m-title').textContent = (j.job_number ? '#' + j.job_number + ' · ' : '') + (j.title || 'Untitled');
     $('m-sub').textContent = [j.client_name, j.status ? j.status.replace(/_/g,' ') : '', fmtDate(j.created_at)].filter(Boolean).join(' · ');
 
@@ -657,7 +663,8 @@ td.jobnum{font-weight:700;color:var(--gold);}
       const pendingPush = isPwa && !e.pushed_to_jobber_at;
       const badges =
         (isPwa ? '<span class="exp-badge pwa" title="Captured via the CHS Capture PWA">PWA</span>' : '') +
-        (pendingPush ? '<span class="exp-badge pending" title="Not yet pushed back to Jobber. Reconcile manually for now.">PENDING JOBBER</span>' : '');
+        (pendingPush ? '<span class="exp-badge pending" title="Not yet pushed back to Jobber.">PENDING JOBBER</span>' : '') +
+        (pendingPush ? '<button type="button" class="exp-retry-btn" data-exp-retry="' + esc(e.id) + '" title="Retry Jobber sync now">RETRY</button>' : '');
       const thumbCell = e.receipt_r2_key
         ? '<td class="exp-receipt-cell"><img class="exp-receipt-thumb" src="/api/expenses/' + esc(e.id) + '/receipt" alt="Receipt" onclick="openReceiptLightbox(\'' + esc(e.id) + '\')" loading="lazy"></td>'
         : '<td class="exp-receipt-cell"></td>';
@@ -786,6 +793,47 @@ td.jobnum{font-weight:700;color:var(--gold);}
   }
   window.openReceiptLightbox = openReceiptLightbox;
 
+  /**
+   * Retry the Jobber write-back for one PWA expense. Wired up via event
+   * delegation on the modal body so we don't have to re-bind on every
+   * tab switch / drill-down render.
+   */
+  async function retryExpensePush(expenseId, btn){
+    if(!btn || btn.disabled) return;
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.classList.remove('success','failed');
+    btn.textContent = '…';
+    try {
+      const r = await fetch(API + '/api/expenses/' + encodeURIComponent(expenseId) + '/push-to-jobber', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok && data.ok) {
+        btn.classList.add('success');
+        btn.textContent = '✓';
+        // Re-render the drill-down so the badge clears and the row picks
+        // up its new jobber_id without a full page refresh.
+        setTimeout(() => {
+          const j = window.__currentDrillJobId;
+          if (j) openDrill(j, 'exp');
+        }, 700);
+      } else {
+        btn.classList.add('failed');
+        btn.textContent = '✕';
+        btn.title = (data.user_errors && data.user_errors.join('; ')) || data.error || 'Push failed';
+        setTimeout(() => { btn.disabled = false; btn.textContent = original; btn.classList.remove('failed'); }, 3500);
+      }
+    } catch (err) {
+      btn.classList.add('failed');
+      btn.textContent = '✕';
+      btn.title = 'Network error: ' + (err && err.message ? err.message : err);
+      setTimeout(() => { btn.disabled = false; btn.textContent = original; btn.classList.remove('failed'); }, 3500);
+    }
+  }
+  window.retryExpensePush = retryExpensePush;
+
   /** Friendly relative-time helper used by the photo grid. */
   function fmtRelative(iso){
     if(!iso) return '';
@@ -833,6 +881,18 @@ td.jobnum{font-weight:700;color:var(--gold);}
 
   // Toolbar entry → open the "general" photos view in the existing modal.
   $('f-general-photos').addEventListener('click', openGeneralPhotos);
+
+  // Delegated handler for "Retry Jobber sync" buttons that appear next
+  // to PENDING JOBBER badges in the Expenses tab. Bound once to the
+  // modal body since renderDrill rewrites m-body's innerHTML on every
+  // open and we don't want to re-bind each time.
+  $('m-body').addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest('[data-exp-retry]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    retryExpensePush(btn.getAttribute('data-exp-retry'), btn);
+  });
 
   // Refresh button with visual feedback
   $('refresh-btn').addEventListener('click', async () => {

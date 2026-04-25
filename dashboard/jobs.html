@@ -156,6 +156,22 @@ td.jobnum{font-weight:700;color:var(--gold);}
 /* Toolbar button matching .f-btn so the "General Photos" entry blends in */
 .f-btn.photos{background:rgba(240,165,0,.18);border-color:rgba(240,165,0,.45);color:var(--gold);}
 
+/* Header freshness pill + Sync Now button (live updates wiring) */
+.updated-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:14px;font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--muted);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);white-space:nowrap;font-variant-numeric:tabular-nums;}
+.updated-pill .udot{width:6px;height:6px;border-radius:50%;background:#52c07a;box-shadow:0 0 6px rgba(82,192,122,.7);}
+.updated-pill.stale .udot{background:#f0a500;box-shadow:0 0 6px rgba(240,165,0,.6);}
+.updated-pill.error .udot{background:#e54c4c;box-shadow:0 0 6px rgba(229,76,76,.6);}
+.updated-pill.refreshing .udot{animation:udotPulse 1s ease-in-out infinite;}
+@keyframes udotPulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.4;transform:scale(.6);}}
+.sync-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:8px;background:rgba(240,165,0,.14);border:1px solid rgba(240,165,0,.4);color:var(--gold);font-size:12px;font-weight:700;cursor:pointer;transition:background .15s,transform .15s;}
+.sync-btn:hover{background:rgba(240,165,0,.26);}
+.sync-btn:disabled{opacity:.65;cursor:wait;}
+.sync-btn .syni{display:inline-block;transition:transform .25s;}
+.sync-btn.spinning .syni{animation:syniSpin .9s linear infinite;}
+@keyframes syniSpin{from{transform:rotate(0)}to{transform:rotate(-360deg)}}
+.sync-btn.success{background:rgba(82,192,122,.22);border-color:rgba(82,192,122,.55);color:#52c07a;}
+.hr{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+
 @media (max-width:768px){
   .stats{grid-template-columns:repeat(2,1fr);}
   .waterfall{grid-template-columns:repeat(3,1fr);}
@@ -177,6 +193,8 @@ td.jobnum{font-weight:700;color:var(--gold);}
     </div>
   </div>
   <div class="hr">
+    <span class="updated-pill" id="updated-pill" title="Last refresh of the jobs table"><span class="udot"></span><span id="updated-pill-text">Loading…</span></span>
+    <button class="sync-btn" id="sync-now-btn" title="Pull the latest jobs/invoices/payments from Jobber right now (instead of waiting for the next 30-min cron)"><span class="syni">↻</span><span>Sync Now</span></button>
     <button class="rfb" id="refresh-btn">⟳&nbsp;Refresh</button>
   </div>
 </header>
@@ -303,15 +321,64 @@ td.jobnum{font-weight:700;color:var(--gold);}
     return 'margin-bad';
   }
 
+  // ── Freshness pill state ──────────────────────────────────────────
+  // Tracks when /api/jobs last returned successfully so we can render
+  // the "Updated Ns ago" pill in the header. The ticker runs every
+  // 5s independently of the actual refresh cycle.
+  let lastUpdatedAt = 0;
+  let lastLoadFailed = false;
+  let isRefreshing = false;
+
+  function setPillState(state){
+    const pill = $('updated-pill');
+    if(!pill) return;
+    pill.classList.remove('stale','error','refreshing');
+    if(state) pill.classList.add(state);
+  }
+  function updatePillText(){
+    const pill = $('updated-pill');
+    const text = $('updated-pill-text');
+    if(!pill || !text) return;
+    if(isRefreshing){ text.textContent = 'Refreshing…'; return; }
+    if(lastLoadFailed){ text.textContent = 'Refresh failed'; return; }
+    if(!lastUpdatedAt){ text.textContent = 'Loading…'; return; }
+    const ageS = Math.max(0, Math.floor((Date.now() - lastUpdatedAt) / 1000));
+    if(ageS < 5)        text.textContent = 'Just now';
+    else if(ageS < 60)  text.textContent = ageS + 's ago';
+    else if(ageS < 3600){
+      const m = Math.floor(ageS / 60);
+      text.textContent = m + 'm ago';
+    } else {
+      const h = Math.floor(ageS / 3600);
+      text.textContent = h + 'h ago';
+    }
+    pill.classList.toggle('stale', ageS > 180 && !isRefreshing && !lastLoadFailed);
+  }
+  setInterval(updatePillText, 5000);
+
   async function loadJobs(){
+    isRefreshing = true; setPillState('refreshing'); updatePillText();
     try {
-      const r = await fetch(API + '/api/jobs');
+      const r = await fetch(API + '/api/jobs', { cache: 'no-store' });
       if(!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
       ALL = data.jobs || [];
       applyFilters();
+      lastUpdatedAt = Date.now();
+      lastLoadFailed = false;
+      setPillState(null);
     } catch(err){
-      $('jobs-tbody').innerHTML = '<tr><td colspan="14" class="empty-msg">Failed to load: ' + esc(err.message) + '</td></tr>';
+      lastLoadFailed = true;
+      setPillState('error');
+      // Only paint the failure into the table on the very first load —
+      // if we had a previous good render, keep showing it (stale data
+      // is better than a blanked-out table during a transient hiccup).
+      if(!lastUpdatedAt){
+        $('jobs-tbody').innerHTML = '<tr><td colspan="14" class="empty-msg">Failed to load: ' + esc(err.message) + '</td></tr>';
+      }
+    } finally {
+      isRefreshing = false;
+      updatePillText();
     }
   }
 
@@ -758,6 +825,67 @@ td.jobnum{font-weight:700;color:var(--gold);}
   if(defaultTh) defaultTh.classList.add('sort-desc');
 
   loadJobs();
+
+  // ── Auto-refresh: 60s polling while the tab is visible, and an
+  //    immediate refresh whenever the user comes back to the tab.
+  //    Re-renders only update the table body; open drill-down modals,
+  //    sort state, filter inputs, scroll position, and the photo
+  //    lightbox are all preserved.
+  let pollTimer = null;
+  function startPoll(){
+    if(pollTimer) return;
+    pollTimer = setInterval(() => { if(!document.hidden) loadJobs(); }, 60000);
+  }
+  function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
+  document.addEventListener('visibilitychange', () => {
+    if(document.hidden){ stopPoll(); }
+    else { startPoll(); loadJobs(); }
+  });
+  window.addEventListener('focus', () => { if(!document.hidden) loadJobs(); });
+  startPoll();
+
+  // ── "Sync Now" button: triggers a Jobber → D1 sync server-side and
+  //    then refreshes the jobs list so any newly-pulled data shows up.
+  //    Without this, fresh CRM data only lands every 30 minutes when
+  //    the cron tick runs.
+  const syncBtn = $('sync-now-btn');
+  if(syncBtn){
+    syncBtn.addEventListener('click', async () => {
+      if(syncBtn.disabled) return;
+      syncBtn.disabled = true;
+      syncBtn.classList.add('spinning');
+      syncBtn.classList.remove('success');
+      const labelEl = syncBtn.querySelector('span:last-child');
+      const origLabel = labelEl ? labelEl.textContent : 'Sync Now';
+      if(labelEl) labelEl.textContent = 'Syncing…';
+      try {
+        const r = await fetch(API + '/api/sync/now', { method: 'POST', cache: 'no-store' });
+        if(!r.ok){
+          const body = await r.text().catch(() => '');
+          throw new Error('HTTP ' + r.status + (body ? ' · ' + body.slice(0,80) : ''));
+        }
+        const data = await r.json();
+        await loadJobs();
+        syncBtn.classList.remove('spinning');
+        syncBtn.classList.add('success');
+        if(labelEl){
+          const wrote = (data && data.jobs_written) || 0;
+          labelEl.textContent = wrote ? ('✓ ' + wrote + ' updated') : '✓ Up to date';
+        }
+        setTimeout(() => {
+          syncBtn.classList.remove('success');
+          if(labelEl) labelEl.textContent = origLabel;
+        }, 2200);
+      } catch(err){
+        syncBtn.classList.remove('spinning');
+        if(labelEl) labelEl.textContent = 'Sync failed';
+        console.warn('[jobs] sync now failed:', err.message);
+        setTimeout(() => { if(labelEl) labelEl.textContent = origLabel; }, 2400);
+      } finally {
+        syncBtn.disabled = false;
+      }
+    });
+  }
 })();
 </script>
 </body>

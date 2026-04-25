@@ -60,7 +60,7 @@ import {
 } from "./routes/subs.js";
 import { handleSearch } from "./routes/search.js";
 import { handleSheetsInspect } from "./routes/sheets-debug.js";
-import { handleJobberSync } from "./routes/sync.js";
+import { handleJobberSync, handleSyncNow } from "./routes/sync.js";
 import { handleWcSync } from "./routes/wc-sync.js";
 
 export default {
@@ -95,6 +95,10 @@ export default {
 
     if (url.pathname === "/api/sync/jobber" && request.method === "POST") {
       return handleJobberSync(request, env);
+    }
+
+    if (url.pathname === "/api/sync/now" && request.method === "POST") {
+      return handleSyncNow(request, env);
     }
 
     if (url.pathname === "/api/debug/sheets-inspect" && request.method === "GET") {

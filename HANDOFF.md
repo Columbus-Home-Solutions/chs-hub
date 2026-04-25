@@ -349,6 +349,16 @@ Tracked here so they don't get lost between bigger features.
 
 - ~~**Add Thumbtack link to the advertising section.**~~ ✅ **Shipped 2026-04-25.** Added 📌 Thumbtack tile to the Quick Launch → Advertising section in `dashboard/index.html`. Uses the same `mobAppLink(thumbtack://, https://www.thumbtack.com/login)` pattern as the other native-app tiles, so it opens the Thumbtack pro app on phone and falls back to web on desktop.
 
+### 🟡 Revisit: end-to-end photo system testing (desktop + mobile)
+The PWA Capture v1 build (2026-04-25) was unit-tested with curl + a single manual upload. Before declaring the photo system "done," do a real-world QA pass:
+- **Mobile (iOS Safari)** — install the PWA from `/capture/`, take 5–10 photos across multiple jobs and the General bucket, verify they appear in the Photos tab and the new 📷 column count updates. Test the offline flow: airplane mode, take 2 photos, re-enable network, confirm Background Sync drains the queue.
+- **Mobile (Android Chrome)** — same flow; verify the install prompt and that the manifest icons render correctly.
+- **Desktop** — `/capture/` likely shouldn't be the primary surface, but verify the `<input type="file">` fallback still works with a webcam and that the upload path is identical.
+- **Voice notes** — record on each platform, confirm Web Speech API transcription works (Safari iOS is the riskiest), confirm Claude categorization round-trips through `chs-claude-proxy`, confirm `job_id` attachment toggles correctly.
+- **Photo viewer** — open the lightbox on both desktop and mobile, verify image scales correctly, GPS metadata renders (or fails silently if missing).
+- **Edge cases** — very large photos (>10 MB), HEIC vs JPEG, photos with no EXIF, photos taken while on cellular vs WiFi.
+- **Cleanup** — make sure category tagging and the before/after pair UI are still on the roadmap before users start relying on filename-based organization.
+
 ### 🟢 Project completion deliverable: system overview doc (do this LAST, before declaring "done")
 **Trigger**: Once the photos + social tracks are shipped and the system feels feature-complete, create a polished one-page overview that Tony (or a future hire) can use to understand the whole stack at a glance.
 

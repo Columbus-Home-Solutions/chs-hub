@@ -21,4 +21,14 @@ export interface Env {
   HL_PRIVATE_TOKEN: string;
   // Location ID. Not secret — appears in HL URLs — lives in wrangler.toml [vars].
   HL_LOCATION_ID: string;
+
+  // ─── Operational notifications (Resend) ─────────────────────────
+  // All four reliability features (heartbeat, DLQ retry alerts, backup
+  // verification, daily summary) flow through src/lib/ops/notify.ts.
+  // If any of these are missing, notify() falls back to dry-run logging
+  // rather than throwing — alerts must never break the sync itself.
+  RESEND_API_KEY: string;       // secret, "re_..."
+  ALERT_EMAIL_FROM: string;     // secret, must be a verified Resend sender
+  ALERT_EMAIL_TO: string;       // secret, recipient (alias preferred)
+  RESEND_DRY_RUN: string;       // var, "1" disables real sends (logs only)
 }

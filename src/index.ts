@@ -20,6 +20,10 @@
 
 import type { Env } from "./env.js";
 import { syncJobberToD1 } from "./lib/jobber/sync.js";
+import { runBackup } from "./lib/ops/backup.js";
+import { sendDailySummary } from "./lib/ops/daily-summary.js";
+import { replayDeadLetters } from "./lib/ops/dlq.js";
+import { checkHeartbeat } from "./lib/ops/heartbeat.js";
 import { syncWorkbook } from "./lib/wc/sync.js";
 import { handleDrill } from "./routes/drill.js";
 import { handleHLProxy } from "./routes/hl.js";
@@ -32,6 +36,15 @@ import {
   handleNoteList,
   handleNotePatch,
 } from "./routes/notes.js";
+import {
+  handleAlertTest,
+  handleBackupLatest,
+  handleBackupRun,
+  handleDlqReplay,
+  handleDlqSummary,
+  handleHeartbeatCheck,
+  handleSummarySend,
+} from "./routes/ops.js";
 import {
   handleSubCreate,
   handleSubDelete,
@@ -84,6 +97,30 @@ export default {
 
     if (url.pathname === "/api/wc/sync" && request.method === "POST") {
       return handleWcSync(request, env);
+    }
+
+    // ── Ops / reliability routes ─────────────────────────────────────
+    // All gated by SYNC_TRIGGER_SECRET. See src/routes/ops.ts.
+    if (url.pathname === "/api/ops/heartbeat" && request.method === "GET") {
+      return handleHeartbeatCheck(request, env);
+    }
+    if (url.pathname === "/api/ops/dlq" && request.method === "GET") {
+      return handleDlqSummary(request, env);
+    }
+    if (url.pathname === "/api/ops/dlq/replay" && request.method === "POST") {
+      return handleDlqReplay(request, env);
+    }
+    if (url.pathname === "/api/ops/backup" && request.method === "POST") {
+      return handleBackupRun(request, env);
+    }
+    if (url.pathname === "/api/ops/backup/latest" && request.method === "GET") {
+      return handleBackupLatest(request, env);
+    }
+    if (url.pathname === "/api/ops/summary" && request.method === "POST") {
+      return handleSummarySend(request, env);
+    }
+    if (url.pathname === "/api/ops/alert-test" && request.method === "POST") {
+      return handleAlertTest(request, env);
     }
 
     if (url.pathname === "/api/jobs" && request.method === "GET") {
@@ -162,47 +199,112 @@ export default {
   },
 
   // Scheduled handler — invoked by Cloudflare cron triggers (see wrangler.toml).
-  // Runs the Jobber sync autonomously so the dashboard stays fresh without any
-  // manual intervention.
+  //
+  // We have four cron schedules (as of the Phase 7 reliability pass):
+  //
+  //   "*/30 * * * *"  → Jobber sync + WC workbook export
+  //   "15 * * * *"    → heartbeat check + DLQ replay
+  //   "15 7 * * *"    → nightly D1 → R2 backup + 30-day retention sweep
+  //   "0 12 * * *"    → daily summary email (7 AM Central)
+  //
+  // Cloudflare passes the literal cron string in controller.cron, which we
+  // dispatch on. Anything not recognised falls through to the legacy
+  // every-30-min path so accidental cron additions don't disable the sync.
   async scheduled(
     controller: ScheduledController,
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(
-      (async () => {
-        try {
-          const stats = await syncJobberToD1(env);
-          console.log(
-            `[cron ${controller.cron}] jobber_full: ${stats.jobs_written} jobs in ${stats.duration_ms}ms`,
-          );
-        } catch (err) {
-          console.error(
-            `[cron ${controller.cron}] jobber_full failed:`,
-            (err as Error).message,
-          );
-        }
-
-        // WC sync piggybacks on the Jobber tick so the sheet always
-        // reflects the freshest D1 state. Failures here are non-fatal.
-        try {
-          const wc = await syncWorkbook(env);
-          console.log(
-            `[cron ${controller.cron}] wc_sync: monthly=${wc.monthly.rows_written} weeks=${wc.kbpi.weeks_matched} in ${wc.duration_ms}ms ok=${wc.ok}`,
-          );
-          if (wc.errors.length > 0) {
-            console.warn(`[cron ${controller.cron}] wc_sync errors:`, wc.errors);
-          }
-        } catch (err) {
-          console.error(
-            `[cron ${controller.cron}] wc_sync failed:`,
-            (err as Error).message,
-          );
-        }
-      })(),
-    );
+    const cron = controller.cron;
+    ctx.waitUntil(dispatchCron(cron, env));
   },
 } satisfies ExportedHandler<Env>;
+
+async function dispatchCron(cron: string, env: Env): Promise<void> {
+  switch (cron) {
+    case "15 * * * *":
+      await runHourly(env);
+      return;
+    case "15 7 * * *":
+      await runNightly(env);
+      return;
+    case "0 12 * * *":
+      await runMorning(env);
+      return;
+    case "*/30 * * * *":
+    default:
+      await runJobberTick(cron, env);
+      return;
+  }
+}
+
+async function runJobberTick(cron: string, env: Env): Promise<void> {
+  try {
+    const stats = await syncJobberToD1(env);
+    console.log(
+      `[cron ${cron}] jobber_full: ${stats.jobs_written} jobs in ${stats.duration_ms}ms`,
+    );
+  } catch (err) {
+    console.error(`[cron ${cron}] jobber_full failed:`, (err as Error).message);
+  }
+
+  // WC sync piggybacks on the Jobber tick so the sheet always reflects
+  // the freshest D1 state. Failures here are non-fatal.
+  try {
+    const wc = await syncWorkbook(env);
+    console.log(
+      `[cron ${cron}] wc_sync: monthly=${wc.monthly.rows_written} weeks=${wc.kbpi.weeks_matched} in ${wc.duration_ms}ms ok=${wc.ok}`,
+    );
+    if (wc.errors.length > 0) {
+      console.warn(`[cron ${cron}] wc_sync errors:`, wc.errors);
+    }
+  } catch (err) {
+    console.error(`[cron ${cron}] wc_sync failed:`, (err as Error).message);
+  }
+}
+
+async function runHourly(env: Env): Promise<void> {
+  try {
+    const hb = await checkHeartbeat(env);
+    console.log(
+      `[cron 15 * * * *] heartbeat: healthy=${hb.healthy} age_ms=${hb.age_ms ?? "null"} alerted=${hb.alerted}`,
+    );
+  } catch (err) {
+    console.error(`[cron 15 * * * *] heartbeat failed:`, (err as Error).message);
+  }
+
+  try {
+    const replay = await replayDeadLetters(env);
+    console.log(
+      `[cron 15 * * * *] dlq_replay: picked=${replay.picked} ok=${replay.succeeded} fail=${replay.failed} alerted=${replay.alerted}`,
+    );
+    if (replay.errors.length > 0) {
+      console.warn(`[cron 15 * * * *] dlq_replay errors:`, replay.errors);
+    }
+  } catch (err) {
+    console.error(`[cron 15 * * * *] dlq_replay failed:`, (err as Error).message);
+  }
+}
+
+async function runNightly(env: Env): Promise<void> {
+  try {
+    const result = await runBackup(env);
+    console.log(
+      `[cron 15 7 * * *] backup: ok=${result.ok} key=${result.key} rows=${result.total_rows} size_kb=${Math.round(result.size_bytes / 1024)} retention_deleted=${result.retention_deleted} duration_ms=${result.duration_ms}`,
+    );
+  } catch (err) {
+    console.error(`[cron 15 7 * * *] backup failed:`, (err as Error).message);
+  }
+}
+
+async function runMorning(env: Env): Promise<void> {
+  try {
+    const { sent } = await sendDailySummary(env);
+    console.log(`[cron 0 12 * * *] daily_summary: sent=${sent}`);
+  } catch (err) {
+    console.error(`[cron 0 12 * * *] daily_summary failed:`, (err as Error).message);
+  }
+}
 
 async function handleHealth(env: Env): Promise<Response> {
   const startedAt = Date.now();

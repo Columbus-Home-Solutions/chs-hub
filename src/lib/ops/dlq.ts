@@ -1,0 +1,264 @@
+/**
+ * Dead-letter queue for sync failures.
+ *
+ * Capture path:
+ *   recordDeadLetter() — called from src/lib/jobber/sync.ts catch blocks
+ *                        instead of (or alongside) stats.errors. Stores the
+ *                        original Jobber node JSON so we can replay later.
+ *
+ * Replay path:
+ *   replayDeadLetters() — invoked by the hourly cron. Picks up to N
+ *                         unresolved rows, calls the appropriate upsert,
+ *                         marks resolved on success or bumps attempts on
+ *                         failure. Fires a notify() alert when a row hits
+ *                         5+ attempts (deduped via alerted_at column).
+ *
+ * Why store the payload (vs. just the entity_id):
+ *   The data may have changed in Jobber by the time we retry. We want to
+ *   replay the *exact* state that failed so that "fix the bug, retry" gives
+ *   identical behaviour. If you instead want to refetch latest state,
+ *   simply trigger a fresh full sync — it'll naturally cover everything.
+ */
+
+import type { Env } from "../../env.js";
+import { upsertJobFromPayload } from "../jobber/sync.js";
+import { notify } from "./notify.js";
+
+export type DlqEntityType =
+  | "job"
+  | "invoice"
+  | "quote"
+  | "expense"
+  | "payment"
+  | "client";
+
+export interface RecordDeadLetterArgs {
+  jobName: string;            // e.g. 'jobber_full'
+  entityType: DlqEntityType;
+  entityId: string | null;    // null for page-level failures
+  payload: unknown;           // serialized to JSON; pass the raw Jobber node
+  errorMessage: string;
+}
+
+export async function recordDeadLetter(
+  env: Env,
+  args: RecordDeadLetterArgs,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const payloadJson = args.payload === undefined ? null : safeStringify(args.payload);
+
+  // Upsert pattern: insert a new row, or bump attempts + last_seen on the
+  // existing open row. The partial unique index handles the dedup.
+  await env.DB.prepare(
+    `INSERT INTO sync_dead_letters
+       (job_name, entity_type, entity_id, payload, error_message,
+        first_seen_at, last_seen_at, attempts, last_attempt_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'failed')
+     ON CONFLICT(job_name, entity_type, entity_id) WHERE resolved_at IS NULL
+     DO UPDATE SET
+       payload = excluded.payload,
+       error_message = excluded.error_message,
+       last_seen_at = excluded.last_seen_at,
+       attempts = sync_dead_letters.attempts + 1,
+       last_attempt_status = 'failed'`,
+  )
+    .bind(
+      args.jobName,
+      args.entityType,
+      args.entityId,
+      payloadJson,
+      args.errorMessage,
+      now,
+      now,
+    )
+    .run();
+}
+
+export interface ReplayResult {
+  picked: number;
+  succeeded: number;
+  failed: number;
+  alerted: number;
+  errors: string[];
+}
+
+const REPLAY_BATCH = 25;
+const ALERT_AFTER_ATTEMPTS = 5;
+
+export async function replayDeadLetters(env: Env): Promise<ReplayResult> {
+  const result: ReplayResult = {
+    picked: 0,
+    succeeded: 0,
+    failed: 0,
+    alerted: 0,
+    errors: [],
+  };
+
+  const rows = await env.DB.prepare(
+    `SELECT id, job_name, entity_type, entity_id, payload, attempts, alerted_at
+     FROM sync_dead_letters
+     WHERE resolved_at IS NULL
+     ORDER BY last_seen_at ASC
+     LIMIT ?`,
+  )
+    .bind(REPLAY_BATCH)
+    .all<{
+      id: number;
+      job_name: string;
+      entity_type: DlqEntityType;
+      entity_id: string | null;
+      payload: string | null;
+      attempts: number;
+      alerted_at: string | null;
+    }>();
+
+  result.picked = rows.results.length;
+
+  for (const row of rows.results) {
+    try {
+      await replayOne(env, row);
+      await markResolved(env, row.id);
+      result.succeeded++;
+    } catch (err) {
+      const msg = (err as Error).message;
+      await markFailed(env, row.id, msg);
+      result.failed++;
+      result.errors.push(`dlq#${row.id} ${row.entity_type}:${row.entity_id}: ${msg}`);
+
+      // Alert once when we cross the 5-attempts threshold.
+      const newAttempts = row.attempts + 1;
+      if (newAttempts >= ALERT_AFTER_ATTEMPTS && !row.alerted_at) {
+        const sent = await notify(env, {
+          severity: "error",
+          subject: `DLQ entry stuck: ${row.entity_type} ${row.entity_id ?? "(page-level)"}`,
+          text:
+            `Dead-letter row #${row.id} has now failed ${newAttempts} replay attempts.\n` +
+            `job=${row.job_name} type=${row.entity_type} id=${row.entity_id}\n` +
+            `Last error: ${msg}\n\n` +
+            `Inspect: SELECT * FROM sync_dead_letters WHERE id = ${row.id};`,
+          dedupeKey: `dlq:${row.id}:stuck`,
+          dedupeWindowMs: 24 * 60 * 60 * 1000,
+        });
+        if (sent.sent || sent.reason === "dry_run") {
+          await env.DB.prepare(
+            `UPDATE sync_dead_letters SET alerted_at = ? WHERE id = ?`,
+          )
+            .bind(new Date().toISOString(), row.id)
+            .run();
+          if (sent.sent) result.alerted++;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+// ─── Replay dispatch ──────────────────────────────────────────────
+
+async function replayOne(
+  env: Env,
+  row: {
+    id: number;
+    job_name: string;
+    entity_type: DlqEntityType;
+    entity_id: string | null;
+    payload: string | null;
+  },
+): Promise<void> {
+  if (!row.payload) {
+    throw new Error("no payload to replay");
+  }
+  const payload = JSON.parse(row.payload);
+
+  switch (row.entity_type) {
+    case "job":
+      await upsertJobFromPayload(env, payload);
+      return;
+    // For other types, defer to the next full sync. Recording these still
+    // gives us visibility (and an alert if they keep failing); the sync
+    // job will retry naturally on its own pass.
+    case "invoice":
+    case "quote":
+    case "expense":
+    case "payment":
+    case "client":
+      throw new Error(
+        `replay not yet implemented for ${row.entity_type}; awaiting next full sync`,
+      );
+    default:
+      throw new Error(`unknown entity_type: ${row.entity_type}`);
+  }
+}
+
+async function markResolved(env: Env, id: number): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE sync_dead_letters
+     SET resolved_at = ?, last_attempt_status = 'success', last_seen_at = ?
+     WHERE id = ?`,
+  )
+    .bind(now, now, id)
+    .run();
+}
+
+async function markFailed(env: Env, id: number, errorMessage: string): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE sync_dead_letters
+     SET attempts = attempts + 1,
+         last_seen_at = ?,
+         last_attempt_status = 'failed',
+         error_message = ?
+     WHERE id = ?`,
+  )
+    .bind(now, errorMessage, id)
+    .run();
+}
+
+function safeStringify(value: unknown): string | null {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Read API for dashboard / debugging ───────────────────────────
+
+export interface DlqSummary {
+  open: number;
+  resolved_24h: number;
+  oldest_open_at: string | null;
+  by_type: Record<string, number>;
+}
+
+export async function getDlqSummary(env: Env): Promise<DlqSummary> {
+  const open = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM sync_dead_letters WHERE resolved_at IS NULL`,
+  ).first<{ n: number }>();
+
+  const resolved = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM sync_dead_letters
+     WHERE resolved_at IS NOT NULL AND resolved_at >= datetime('now', '-1 day')`,
+  ).first<{ n: number }>();
+
+  const oldest = await env.DB.prepare(
+    `SELECT MIN(first_seen_at) AS oldest FROM sync_dead_letters WHERE resolved_at IS NULL`,
+  ).first<{ oldest: string | null }>();
+
+  const byType = await env.DB.prepare(
+    `SELECT entity_type, COUNT(*) AS n FROM sync_dead_letters
+     WHERE resolved_at IS NULL GROUP BY entity_type`,
+  ).all<{ entity_type: string; n: number }>();
+
+  const map: Record<string, number> = {};
+  for (const r of byType.results) map[r.entity_type] = r.n;
+
+  return {
+    open: open?.n ?? 0,
+    resolved_24h: resolved?.n ?? 0,
+    oldest_open_at: oldest?.oldest ?? null,
+    by_type: map,
+  };
+}

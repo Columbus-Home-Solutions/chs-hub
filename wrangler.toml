@@ -63,13 +63,27 @@ bucket_name = "chs-hub-files"
 
 [vars]
 HL_LOCATION_ID = "lZ8L8FAf6K2niuHoFbaw"
+# Set to "1" to disable real Resend sends (notify() will log to console
+# instead). Useful while wiring up the Resend domain or for dev runs.
+RESEND_DRY_RUN = "0"
 
 # ─── Scheduled jobs ────────────────────────────────────────────────────
-# Pull fresh data from Jobber every 30 minutes. The sync is cheap
-# (~10s, ~600 D1 rows written) and well under Workers' execution limits.
+# All four schedules dispatch through src/index.ts → dispatchCron().
+#
+#   */30 * * * *  → Jobber → D1 sync + Wealthy Contractor workbook export
+#   15 * * * *    → heartbeat check + DLQ replay (every hour at :15 to dodge
+#                   the :00 / :30 sync windows)
+#   15 7 * * *    → nightly D1 → R2 backup at 02:15 Central (07:15 UTC) +
+#                   30-day retention sweep
+#   0 12 * * *    → daily summary email at 07:00 Central (12:00 UTC)
 
 [triggers]
-crons = ["*/30 * * * *"]
+crons = [
+  "*/30 * * * *",
+  "15 * * * *",
+  "15 7 * * *",
+  "0 12 * * *",
+]
 
 # ─── Observability ─────────────────────────────────────────────────────
 

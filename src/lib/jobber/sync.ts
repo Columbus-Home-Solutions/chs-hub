@@ -11,6 +11,7 @@
  */
 
 import type { Env } from "../../env.js";
+import { recordDeadLetter } from "../ops/dlq.js";
 import { getAccessToken } from "./auth.js";
 import { jobberQuery } from "./client.js";
 import {
@@ -217,6 +218,13 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
         } catch (err) {
           const msg = (err as Error).message;
           stats.errors.push(`Job ${job.id}: ${msg}`);
+          await recordDeadLetter(env, {
+            jobName: "jobber_full",
+            entityType: "job",
+            entityId: job.id,
+            payload: job,
+            errorMessage: msg,
+          }).catch(() => undefined);
         }
       }
 
@@ -255,6 +263,51 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
     await logSyncFinish(env, "jobber_full", startedAt, finishedAt, stats, msg);
     throw err;
   }
+}
+
+// ─── DLQ replay entry ──────────────────────────────────────────────
+// Used by src/lib/ops/dlq.ts to replay a failed job upsert from its
+// stored payload. Wraps upsertJob with a throwaway stats object so the
+// internal counters don't leak out.
+
+export async function upsertJobFromPayload(
+  env: Env,
+  payload: unknown,
+): Promise<void> {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("invalid job payload");
+  }
+  const job = payload as JobberJob;
+  if (!job.id || typeof job.id !== "string") {
+    throw new Error("job payload missing id");
+  }
+  const throwawayStats = makeEmptyStats();
+  await upsertJob(env, job, throwawayStats);
+}
+
+function makeEmptyStats(): SyncStats {
+  const now = new Date().toISOString();
+  return {
+    pages: 0,
+    jobs_seen: 0,
+    jobs_written: 0,
+    clients_written: 0,
+    quotes_written: 0,
+    quote_pages: 0,
+    quotes_seen: 0,
+    line_items_written: 0,
+    invoices_written: 0,
+    invoice_pages: 0,
+    invoices_seen: 0,
+    payments_written: 0,
+    expenses_written: 0,
+    expense_pages: 0,
+    expenses_seen: 0,
+    started_at: now,
+    finished_at: now,
+    duration_ms: 0,
+    errors: [],
+  };
 }
 
 // ─── Per-job upsert ────────────────────────────────────────────────
@@ -564,7 +617,15 @@ async function syncAllQuotes(
             .run();
           stats.quotes_written++;
         } catch (err2) {
-          stats.errors.push(`Quote ${q.id}: ${(err2 as Error).message}`);
+          const msg = (err2 as Error).message;
+          stats.errors.push(`Quote ${q.id}: ${msg}`);
+          await recordDeadLetter(env, {
+            jobName: "jobber_full",
+            entityType: "quote",
+            entityId: q.id,
+            payload: q,
+            errorMessage: msg,
+          }).catch(() => undefined);
         }
       }
     }
@@ -599,7 +660,15 @@ async function syncAllInvoices(
       try {
         await upsertStandaloneInvoice(env, inv, stats);
       } catch (err) {
-        stats.errors.push(`Invoice ${inv.id}: ${(err as Error).message}`);
+        const msg = (err as Error).message;
+        stats.errors.push(`Invoice ${inv.id}: ${msg}`);
+        await recordDeadLetter(env, {
+          jobName: "jobber_full",
+          entityType: "invoice",
+          entityId: inv.id,
+          payload: inv,
+          errorMessage: msg,
+        }).catch(() => undefined);
       }
     }
 

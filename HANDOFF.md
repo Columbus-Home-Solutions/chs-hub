@@ -2,7 +2,7 @@
 
 > **For Tony:** Open Cursor on `~/projects/chs-hub`, start a brand new chat, and paste the contents of this file as your first message. Then say _"Read HANDOFF.md and confirm you're caught up. I want to work on **&lt;X&gt;** today."_
 
-> **For the next AI session:** This is the source of truth for project state as of **Apr 24, 2026**. Trust this over any older context. The previous chat (where the dashboard rebuild happened) was archived because it had become unwieldy. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
+> **For the next AI session:** This is the source of truth for project state as of **Apr 25, 2026**. Trust this over any older context. The previous chat (where the dashboard rebuild happened) was archived because it had become unwieldy. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
 
 ---
 
@@ -11,11 +11,12 @@
 We are deep into **Phase 7** of the original migration playbook (the "dashboard rebuild" phase). What was originally going to be a separate `chs-automation` repo (Phase 6) got merged into this one, so `chs-hub` now contains:
 
 - The Cloudflare Worker backend (Jobber sync + KPIs + drill routes + WC workbook auto-export + HighLevel proxy + Smart Notes API + Jobs API + Subcontractor API)
-- The D1 database (jobs, invoices, line_items, payments, expenses, quotes, notes, subcontractors)
+- The D1 database (jobs, invoices, line_items, payments, expenses, quotes, notes, subcontractors, sync_dead_letters)
 - The static dashboard frontend (vanilla HTML/CSS/JS served from Cloudflare Pages at `dashboard.homesolutionsar.com`)
 - The Cloudflare Pages docs site (`docs.homesolutionsar.com`)
+- A reliability subsystem (heartbeat alerts, dead-letter queue, nightly D1→R2 backup, daily summary email — see "Reliability subsystem" below)
 
-The dashboard is **live, in daily use, and stable**. The Jobber → D1 pipeline runs on a cron schedule, the WC Google Sheet auto-syncs every 30 minutes, and HighLevel is wired through a server-side PIT proxy.
+The dashboard is **live, in daily use, and stable**. The Jobber → D1 pipeline runs on a cron schedule, the WC Google Sheet auto-syncs every 30 minutes, HighLevel is wired through a server-side PIT proxy, and operational alerts go to `tony@homesolutionsar.com` via Resend.
 
 ---
 
@@ -51,6 +52,14 @@ The dashboard is **live, in daily use, and stable**. The Jobber → D1 pipeline 
                        └──────────────────────┘
                               ▲
                               │ Smart Notes processing
+
+                       ┌──────────────────────┐
+                       │ Resend               │
+                       │ alerts@send.homesol… │
+                       └──────────────────────┘
+                              ▲
+                              │ ops emails (heartbeat,
+                              │  DLQ, daily summary)
 ```
 
 **Production URLs**
@@ -59,6 +68,7 @@ The dashboard is **live, in daily use, and stable**. The Jobber → D1 pipeline 
 - Docs: `https://docs.homesolutionsar.com`
 - Wealthy Contractor sheet: hardcoded in `dashboard/index.html`
 - HighLevel location ID: `lZ8L8FAf6K2niuHoFbaw`
+- Resend dashboard: `https://resend.com/domains` (sending domain `send.homesolutionsar.com`)
 
 **Access control**
 - Cloudflare Access protects `dashboard.homesolutionsar.com` — only `tony@homesolutionsar.com` is on the allowlist right now.
@@ -84,9 +94,10 @@ chs-hub/
 │   ├── 0001_init.sql ..................... jobs/invoices/line_items/payments/expenses/quotes
 │   ├── 0002_quote_client.sql
 │   ├── 0003_notes.sql
-│   └── 0004_subcontractors.sql
+│   ├── 0004_subcontractors.sql
+│   └── 0005_dead_letters.sql ............. sync_dead_letters table
 ├── src/
-│   ├── index.ts .......................... Worker entry + router + scheduled handler
+│   ├── index.ts .......................... Worker entry + router + scheduled handler (cron dispatch)
 │   ├── env.ts ............................ Env interface (secrets + bindings)
 │   ├── routes/
 │   │   ├── kpis.ts ....................... GET /api/kpis  (dashboard KPI tiles)
@@ -96,6 +107,7 @@ chs-hub/
 │   │   ├── subs.ts ....................... /api/subs CRUD
 │   │   ├── search.ts
 │   │   ├── hl.ts ......................... /api/hl/* (HighLevel PIT proxy)
+│   │   ├── ops.ts ........................ /api/ops/* (heartbeat, DLQ, backup, summary, alert-test)
 │   │   ├── sync.ts ....................... Jobber → D1 sync
 │   │   ├── sheets-debug.ts ............... /api/debug/sheets-inspect
 │   │   └── wc-sync.ts .................... POST /api/wc/sync (manual + scheduled)
@@ -103,6 +115,12 @@ chs-hub/
 │       ├── google/
 │       │   ├── auth.ts ................... Service account JWT signing
 │       │   └── sheets.ts ................. Sheets v4 REST client
+│       ├── ops/
+│       │   ├── notify.ts ................. Resend wrapper + dedupe + dry-run
+│       │   ├── heartbeat.ts .............. 4h staleness check on sync_log
+│       │   ├── dlq.ts .................... record + replay dead letters
+│       │   ├── backup.ts ................. nightly D1 → NDJSON.gz → R2
+│       │   └── daily-summary.ts .......... 24h roll-up email
 │       └── wc/
 │           ├── compute.ts ................ Monthly + KBPI rollups from D1
 │           └── sync.ts ................... Writes to WC workbook
@@ -148,10 +166,25 @@ chs-hub/
 - ✅ CSV export + TSV clipboard copy on Jobs and Subs pages
 - ✅ PWA manifest + service worker (installable from Chrome's three-dot menu)
 
+### Reliability subsystem (shipped 2026-04-25)
+- ✅ Notification primitive (`src/lib/ops/notify.ts`) — Resend wrapper with kv_cache dedupe, dry-run fallback, severity prefix in subject
+- ✅ Heartbeat alert — fires when `sync_log` has no `success` row in 4+ hours; runs hourly at :15
+- ✅ Dead-letter queue (`sync_dead_letters` table) — failed Jobber upserts captured with full payload; hourly replay; alerts at ≥5 attempts
+- ✅ Nightly D1 → R2 backup at 02:15 Central — all 21 tables → NDJSON.gz to `backups/d1/YYYY-MM-DD.ndjson.gz`; 30-day retention sweep in same run
+- ✅ Daily summary email at 07:00 Central — sync counts, activity (jobs/quotes/invoices/notes), DLQ depth, latest backup age/size; flags if anything is amiss
+- ✅ Manual ops endpoints (gated by `SYNC_TRIGGER_SECRET`):
+  - `GET /api/ops/heartbeat`
+  - `GET /api/ops/dlq` + `POST /api/ops/dlq/replay`
+  - `POST /api/ops/backup` + `GET /api/ops/backup/latest`
+  - `POST /api/ops/summary`
+  - `POST /api/ops/alert-test`
+
 ### Auth + secrets
 - ✅ Cloudflare Access protecting dashboard for tony@homesolutionsar.com only
-- ✅ Worker secrets: `JOBBER_*`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `HL_PRIVATE_TOKEN`, `CLAUDE_*`
-- ✅ Wrangler vars: `HL_LOCATION_ID`
+- ✅ Worker secrets: `JOBBER_*`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `HL_PRIVATE_TOKEN`, `CLAUDE_*`, `RESEND_API_KEY`, `ALERT_EMAIL_FROM`, `ALERT_EMAIL_TO`, `SYNC_TRIGGER_SECRET`
+- ✅ Wrangler vars: `HL_LOCATION_ID`, `RESEND_DRY_RUN`
+- 📍 Resend sending domain: `send.homesolutionsar.com` (verified via Cloudflare DNS auto-config)
+- 📍 Alert recipient: `tony@homesolutionsar.com` (consider migrating to `ops@homesolutionsar.com` Workspace alias when convenient)
 
 ### Legacy (frozen, do not touch)
 - 🟡 `chs-estimator-seeder` — quarterly Jobber pricebook → Sheets sync. Still runs. Not under active development.
@@ -161,19 +194,19 @@ chs-hub/
 
 ## Active backlog (priority order)
 
-### 🔴 Reliability debt (recommended next, ~half day)
-Carryover from the original Phase 6 plan that we shortcut. Worth doing before adding new features so we have a safety net:
-- [ ] **Heartbeat alert** — if Jobber sync hasn't succeeded in 4+ hours, send email/SMS
-- [ ] **Dead-letter table** in D1 for failed sync events + hourly retry job
-- [ ] **Nightly D1 → R2 backup** with 30-day retention
-- [ ] **Daily summary email** ("everything is fine, X jobs synced, Y new leads")
+### ✅ Reliability debt — DONE (shipped 2026-04-25, commit `f24bacd`)
+All four items from the original Phase 6 carryover are live. See "Reliability subsystem" above.
+- [x] **Heartbeat alert** — sync staleness check, 4h threshold, hourly cron
+- [x] **Dead-letter table** + hourly replay (with ≥5-attempts alert)
+- [x] **Nightly D1 → R2 backup** with 30-day retention
+- [x] **Daily summary email** at 7 AM Central
 
-Lower priority Phase 6 items, probably not worth doing:
+Items intentionally not done (lower priority Phase 6 carryovers):
 - ~~Jobber webhook receiver~~ — polling is fine at current scale
-- ~~Append-only event log with `event_id` dedup~~ — overkill for current volume
-- ~~Replay command~~ — would only matter if we had the event log
+- ~~Append-only event log with `event_id` dedup~~ — overkill for current volume; DLQ covers the failure-recovery case
+- ~~SMS alerts~~ — email-only for v1; can add Twilio later if needed
 
-### 🟢 Photos system (planning phase — open decision)
+### 🟢 Photos system (recommended next — planning phase, open decision)
 
 > **Spec:** `docs/01-file-system.md` is the authoritative plan (PWA capture, R2 + D1, Drive migration, signed-URL sharing, role matrix). Read it before writing any code. Decision was locked 2026-04-24; nothing has changed since.
 
@@ -226,9 +259,9 @@ Deferred — needs a lead-source data source. Currently lead sources are spread 
 
 ## Open decisions for Tony
 
-1. **Photo storage model** — R2-primary (recommended) vs Drive-primary vs hybrid. Sleep-on item.
-2. **Build order** — Reliability pass → photos → social → mobile? Or photos first because it unblocks more of the original vision? Recommend reliability first to lock in what we have.
-3. **Social publish channel** — Metricool API (preferred, Tony already has account) vs Zapier vs manual approval-only.
+1. **Photo storage model** — R2-primary (recommended) vs Drive-primary vs hybrid. Sleep-on item. Now the next thing blocking forward progress on the photos track.
+2. **Social publish channel** — Metricool API (preferred, Tony already has account) vs Zapier vs manual approval-only.
+3. **Alert recipient** — currently `tony@homesolutionsar.com`. Optional follow-up: create a Google Workspace alias `ops@homesolutionsar.com` and switch `ALERT_EMAIL_TO`. No code change, just `wrangler secret put`.
 
 ---
 
@@ -257,24 +290,52 @@ git log --oneline -20                       # recent commits
 
 ### Manual triggers
 ```bash
-# Force a Jobber sync (requires SYNC_SECRET)
-curl -X POST https://chs-hub.tony-bc5.workers.dev/api/sync \
-  -H "Authorization: Bearer $SYNC_SECRET"
+# Most ops endpoints take ?secret=$SYNC_TRIGGER_SECRET (also accepts x-sync-token header).
+# The token lives in ~/projects/chs-hub/.env (gitignored).
 
-# Force a WC workbook sync
-curl -X POST https://chs-hub.tony-bc5.workers.dev/api/wc/sync \
-  -H "Authorization: Bearer $SYNC_SECRET"
+SECRET="$SYNC_TRIGGER_SECRET"   # or paste the value from .env
+BASE=https://chs-hub.tony-bc5.workers.dev
 
-# Inspect the WC sheet's structure
-curl https://chs-hub.tony-bc5.workers.dev/api/debug/sheets-inspect
+# Sync triggers (legacy endpoints, header-style auth)
+curl -X POST $BASE/api/sync/jobber -H "x-sync-token: $SECRET"
+curl -X POST $BASE/api/wc/sync -H "x-sync-token: $SECRET"
+
+# Reliability ops endpoints (query-string-style auth)
+curl    "$BASE/api/ops/heartbeat?secret=$SECRET"          # is sync stale?
+curl    "$BASE/api/ops/dlq?secret=$SECRET"                # DLQ depth + breakdown
+curl -X POST "$BASE/api/ops/dlq/replay?secret=$SECRET"    # force a replay pass
+curl -X POST "$BASE/api/ops/backup?secret=$SECRET"        # run an ad-hoc D1 backup
+curl    "$BASE/api/ops/backup/latest?secret=$SECRET"      # most recent backup
+curl -X POST "$BASE/api/ops/summary?secret=$SECRET"       # send the daily summary now
+curl -X POST "$BASE/api/ops/alert-test?secret=$SECRET"    # round-trip test the email pipeline
+
+# Other
+curl $BASE/health                                          # public health probe (D1+R2)
+curl $BASE/api/debug/sheets-inspect                        # WC sheet structure
+```
+
+### Useful npm scripts (debugging)
+```bash
+npm run ops:dlq:list          # open dead-letter rows
+npm run ops:dlq:resolved      # most-recent successful replays
+npm run ops:sync:log          # last 20 sync_log entries
 ```
 
 ### Key IDs
 - D1 DB name: `chs-hub-db`
-- R2 bucket: `chs-hub-files`
+- R2 bucket: `chs-hub-files` (also holds nightly backups under `backups/d1/`)
 - HL location: `lZ8L8FAf6K2niuHoFbaw`
 - WC sheet ID: `1utmYdBkUM8cefQ-1mpEnhiyV-vVf-IOhN1yn_wfXyZo`
 - Old Subcontractor sheet (now retired, copy of structure lives in D1): `1L7Ai9p-GTDuwlozh5ssGWRGkrP1AC3SLIrmwOsTEgW0`
+- Resend sending domain: `send.homesolutionsar.com`
+
+### Cron schedule (all in `wrangler.toml`)
+```
+*/30 * * * *   Jobber + WC sync
+15 * * * *     Heartbeat (alerts if sync >4h stale) + DLQ replay
+15 7 * * *     Nightly D1→R2 backup + 30-day retention sweep (02:15 Central)
+0 12 * * *     Daily summary email (07:00 Central)
+```
 
 ---
 
@@ -282,10 +343,10 @@ curl https://chs-hub.tony-bc5.workers.dev/api/debug/sheets-inspect
 
 Pick one:
 
-> "Read `HANDOFF.md` and confirm you're caught up. Today I want to ship the **reliability pass** — heartbeat alert, dead-letter table, and nightly R2 backup. Walk me through what you'd build first."
-
 > "Read `HANDOFF.md` and confirm you're caught up. I've decided on photo storage: **&lt;R2-primary | Drive-primary | hybrid&gt;**. Let's start the photos foundation."
 
 > "Read `HANDOFF.md` and confirm you're caught up. Quick win first — I want the **mobile capture** page wired up so I can use this from my phone properly."
+
+> "Read `HANDOFF.md` and confirm you're caught up. The reliability pass is shipped; what makes the most sense to tackle next?" (Lets the AI propose the path based on current state.)
 
 Whichever path you pick, the AI should start by reading this file end-to-end, then proposing a plan before writing any code.

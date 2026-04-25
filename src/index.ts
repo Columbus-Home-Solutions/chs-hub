@@ -67,6 +67,11 @@ import {
   handleExpenseReceipt,
   handleExpensePush,
 } from "./routes/expenses.js";
+import {
+  handleJobberOAuthStart,
+  handleJobberOAuthCallback,
+  handleJobberStatus,
+} from "./routes/oauth-jobber.js";
 import { handleWcSync } from "./routes/wc-sync.js";
 
 export default {
@@ -97,6 +102,19 @@ export default {
           { status: 400 },
         );
       }
+    }
+
+    // ── Jobber OAuth (operator-facing self-serve re-auth) ───────────
+    // Matches /oauth/jobber/* explicitly so the dashboard host rewrite
+    // (further down) doesn't fold these into /dashboard/oauth/jobber/*.
+    if (url.pathname === "/oauth/jobber/start" && request.method === "GET") {
+      return handleJobberOAuthStart(env, request);
+    }
+    if (url.pathname === "/oauth/jobber/callback" && request.method === "GET") {
+      return handleJobberOAuthCallback(env, request);
+    }
+    if (url.pathname === "/api/jobber/status" && request.method === "GET") {
+      return handleJobberStatus(env);
     }
 
     if (url.pathname === "/api/sync/jobber" && request.method === "POST") {

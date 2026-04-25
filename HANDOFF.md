@@ -299,7 +299,7 @@ Items intentionally not done (lower priority Phase 6 carryovers):
 - Voice-dictation on the description field (mentioned in the original plan as "optional"). Easy to add later by reusing `buildRecognition()` from the voice-note flow.
 - Hash-deduped R2 keys (we use the row UUID instead of a content hash; collisions on a UUID are basically zero, and Tony might genuinely re-snap the same receipt for two expenses).
 
-### ✅ Jobber write-back code shipped — 🔴 BLOCKED on OAuth scope (built 2026-04-25)
+### ✅ Jobber write-back code shipped — 🟡 awaiting scope toggle + self-serve OAuth (built 2026-04-25)
 
 **All code is in place.** A scope-test against Jobber's API confirmed:
 
@@ -309,18 +309,34 @@ Items intentionally not done (lower priority Phase 6 carryovers):
 - `POST /api/expenses/:id/push-to-jobber` exposes a manual retry. Wired into the dashboard's `RETRY` button next to the `PENDING JOBBER` badge — click it, get a green ✓ on success or a tooltip with Jobber's error on failure, drill auto-rerenders so badges clear.
 - `src/lib/jobber/sync.ts` no longer wipes PWA-captured expense rows on its 30-min refresh, and skips re-inserting any Jobber expense whose ID matches a `jobber_id` we already own (so push-then-cron doesn't create duplicates).
 
-**🔴 Live blocker (2026-04-25):** the first push to Jobber returned:
+**🟡 Live status (2026-04-25):** the first push to Jobber returned:
 
 > `Jobber GraphQL errors: An object of type ExpenseCreate was hidden due to permissions`
 
-The current `JOBBER_REFRESH_TOKEN` was minted with read-only scopes. To unblock:
+The current refresh token was minted with read-only scopes. **Self-serve unblock flow now exists** (`src/routes/oauth-jobber.ts`):
 
-1. **Jobber Developer Center → your app → Scopes**. Enable the `write_expenses` scope (exact name may differ — Jobber uses `read_expenses` for read; the write equivalent will be alongside it).
-2. **Re-authorize** the app: go through the OAuth consent flow once with the updated scope list. This issues a fresh refresh token attached to the new scope set.
-3. `npx wrangler secret put JOBBER_REFRESH_TOKEN` and paste the new token. Wrangler will prompt — paste, hit enter, deploy isn't required (secrets hot-reload).
-4. Smoke-test: tap a PWA expense's `RETRY` button in the dashboard. Should turn green ✓ and the badge should clear after a brief reload. Or via curl: `curl -X POST .../api/expenses/<id>/push-to-jobber` should return `{ "ok": true, "jobber_id": "..." }`.
+#### Operator runbook — re-authorize Jobber with new scopes
+
+1. **Jobber Developer Center → your app → Settings**:
+   - Under **OAuth Callback URL**, set exactly:
+     `https://dashboard.homesolutionsar.com/oauth/jobber/callback`
+     (already-existing callback URLs can stay; Jobber accepts a list).
+   - Under **Scopes**, enable `write_expenses` (the exact name appears next to `read_expenses` in the same list). Save.
+
+2. **Walk the OAuth flow** (one click — does the rest automatically):
+   - Visit https://dashboard.homesolutionsar.com/oauth/jobber/start
+   - Cloudflare Access challenges you (regular SSO).
+   - Jobber's consent page lists the new scope set — click **Allow Access**.
+   - Lands on a green "Jobber re-authorized ✓" page that shows the granted scopes.
+   - The new refresh token is written to D1 (`integrations` row id='jobber') automatically. No `wrangler secret put` needed — `src/lib/jobber/auth.ts` reads from D1 first and rotates from there.
+
+3. **Verify**: https://dashboard.homesolutionsar.com/api/jobber/status returns the integration row including a masked token preview and the granted scope list. Confirm the `refresh_token_preview` changed from the value you saw before.
+
+4. **Smoke-test**: tap a PWA expense's `RETRY` button in the job drill-down. Should turn green ✓ and clear the badge after the auto-reload. Or via curl: `curl -X POST .../api/expenses/<id>/push-to-jobber` should return `{ "ok": true, "jobber_id": "..." }`.
 
 **Once unblocked, all in-flight PWA expense rows auto-flush** — the `RETRY` button is idempotent and the next 30-min cron sync will not clobber them. No code change needed.
+
+This same flow is reusable for any future Jobber scope additions — toggle the scope in the Dev Center, visit `/oauth/jobber/start`, done.
 
 ### 🟡 Receipt upload to Jobber (small follow-up after scope is fixed)
 
@@ -373,8 +389,25 @@ Wait until photos foundation exists. Then:
 - Long-press shortcuts on the **dashboard** PWA (not CHS Capture): `🔨 New Job`, `👷 New Sub`, `🎯 Add Lead` in `dashboard/manifest.json`. (CHS Capture already has `📷 Take a Photo` and `🎙️ Voice Note` shortcuts.)
 - Optional iOS Shortcut on top for true Lock Screen widget + share-sheet capture from Apple Notes / Keep / Safari into `/api/notes`.
 
-### 🟡 Apple Notes / Google Keep integration
-Bundles with mobile capture. Both have no usable API — only feasible via iOS Shortcut → `/api/capture`. Tabled until mobile capture ships.
+### 🟡 Notes strategy revisit — replace Apple Notes / Keep with our own capture app
+**Tony, ask me about this next time.** Now that the PWA ships with the voice-note flow (`/capture` → Voice → Claude categorize) **and** the Smart Notes API (`/api/notes` with job_id, tags, summary, task extraction), the original "integrate Apple Notes / Google Keep" plan is probably the wrong move. The integration plan was always shaky — neither has a usable API; it would have been an iOS Shortcut hack at best.
+
+What we have now in CHS Hub already covers the use cases that drove the Keep/Notes integration:
+- **Quick capture from the field** — PWA Voice screen, transcript editable, attached to a job or general.
+- **Categorization + task extraction** — Claude proxy already does this on save.
+- **Cross-device** — anything captured shows up in the dashboard's Smart Notes view immediately.
+- **Search** — D1-backed, can query by job, tag, or text.
+
+The conversation to have:
+1. Are you still using Apple Notes / Keep for anything CHS-related, or has the PWA voice-note flow taken over?
+2. If yes, what's the gap? (Speed of opening? Specific UI affordances? Sharing?)
+3. Should we **replace** Keep/Notes with a dedicated CHS Notes screen in the PWA — searchable, taggable, optionally pinned to the home dashboard — instead of integrating with them?
+4. Voice-first capture: the current Voice screen is great for "snap a thought during a job"; do we also want a "browse / edit / pin" surface in the PWA so the field flow is closed-loop without ever opening the dashboard?
+
+If we go the "build our own" route, scope sketch (~3-4 hours):
+- New PWA screen `dashboard/capture/notes.html` (or a `notes` screen in the existing PWA): list view of all your notes, filter by job / tag / date, pin-to-top, quick-edit.
+- Existing `/api/notes` already has the data; just need a list endpoint + a PATCH endpoint for edits.
+- Optional: pin a note to the dashboard's KPI strip ("today's reminders").
 
 ### 🟡 Role-based access
 - Right before Tony's first hire — needs a separate dashboard view that hides revenue/profit KPIs.

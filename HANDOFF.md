@@ -85,6 +85,7 @@ chs-hub/
 ├── wrangler.toml ......................... Worker config (D1 binding, vars, cron)
 ├── package.json .......................... npm scripts (db:migrate:remote, deploy, tail, etc.)
 ├── dashboard/
+│   ├── theme.css ......................... 🎨 brand source of truth (palette + base + page wash). Edit :root here to recolor everything.
 │   ├── index.html ........................ main dashboard (KPIs, quick launch, kanban)
 │   ├── jobs.html ......................... native Job Tracker
 │   ├── notes.html ........................ native Smart Notes
@@ -221,6 +222,23 @@ Schema sketch (not yet built):
 
 When Tony decides, **build vertical slice first**: storage → mobile capture page → Job/Lead drill-down photo tabs. ~4–6 hours to "snap a photo on a job and see it on the dashboard."
 
+### 🟢 Native expense capture in PWA (after photos foundation, ~3–4 hours)
+
+> **Decision locked 2026-04-25**: Option A — native PWA capture with Jobber write-back. Receipts get snapped on-site, Tony stays out of the Jobber app. Currently `expenses` is a read-only table fed by Jobber sync; this adds a write path.
+
+**Why this is locked to Option A and not "stay in Jobber":** the whole point of the PWA is on-site capture without app-switching. Logging an expense by leaving the photos PWA, opening Jobber, finding the job, and entering the receipt defeats the purpose. The cost of native capture is one new endpoint and a small UI; the savings is real (Tony stops dropping receipts because Jobber's mobile expense flow is slow).
+
+**Build steps** when the time comes:
+1. **Migration**: extend `expenses` table with `vendor TEXT`, `receipt_r2_key TEXT`, `entered_via TEXT` (`'jobber'` vs `'pwa'`), `pushed_to_jobber_at TEXT`, `jobber_id TEXT NULL` (filled in after write-back succeeds).
+2. **Endpoint**: `POST /api/expenses` — accepts `{ job_id, amount, vendor, description, incurred_at, receipt_blob }`. Stores blob in R2 at `expenses/{job_id}/{yyyy-mm-dd}/{sha256}.jpg`, row in D1 with `entered_via='pwa'`, returns the new ID.
+3. **Jobber write-back**: investigate Jobber GraphQL mutation for expense creation (likely `expenseCreate` or similar — need to confirm in the API explorer with `JOBBER_TOKEN`). On success, fill `jobber_id` and `pushed_to_jobber_at`. On failure, leave the row PWA-local and show a yellow "not yet synced to Jobber" badge in the dashboard so Tony knows to reconcile.
+4. **PWA UI**: tap "Log expense" on PWA Home → screen with active-job tile (same toggle pattern as voice notes — Active job / General; "General" maps to `job_id = null` for "office supplies, not a job"), receipt photo button (uses same camera primitive as the photos flow), amount + vendor + description fields, optional voice-dictation on description (reuse the voice-note recorder, transcript-only mode).
+5. **Dashboard**: existing job drill-down already shows expenses; just add the "entered via PWA" badge and the "not synced to Jobber" badge for failed write-backs.
+
+**Open question to resolve before building**: confirm Jobber GraphQL supports expense write. If it doesn't, downgrade to **Option B** (PWA-local only, reconcile in Jobber weekly) — but check first; this is a 5-minute test in their API explorer.
+
+**Wireframe placeholder**: the `Log expense` button on the PWA Home screen in `canvases/pwa-capture-wireframe.canvas.tsx` is rendered as a dashed-border `v2` button so it's visible but obviously unwired.
+
 ### 🟢 Social media system (after photos)
 
 > **Spec:** `docs/03-social-media.md` is the authoritative plan (monthly plan generator, approval queue, Flux Pro image gen, Hashtag Bank + Caption Templates, Metricool hand-off). Anchored on Tony's existing `CHS_ProjectInstructions_and_SOP` doc + `ColumbusHomeSolutions_SocialMedia_System` sheet. Read it before writing any code.
@@ -344,6 +362,12 @@ npm run ops:sync:log          # last 20 sync_log entries
 - HL location: `lZ8L8FAf6K2niuHoFbaw`
 - WC sheet ID: `1utmYdBkUM8cefQ-1mpEnhiyV-vVf-IOhN1yn_wfXyZo`
 - Old Subcontractor sheet (now retired, copy of structure lives in D1): `1L7Ai9p-GTDuwlozh5ssGWRGkrP1AC3SLIrmwOsTEgW0`
+
+### Branding / theming
+- All four dashboard pages (and the future PWA) link `dashboard/theme.css` for the brand palette and base styles.
+- To recolor the entire dashboard, edit the `:root { ... }` block in `dashboard/theme.css`. That file owns: palette (gold/burgundy/cream/etc.), `*` reset, `body` typography + background, and the radial-gradient page wash.
+- Per-page component styles (`.kpi`, `.card`, `.filters`, `.modal`, `.bn`, `.bdg`, etc.) currently still live inline in each `.html` file because of historical class-name drift between pages. Consolidate into `theme.css` next time a component gets touched — not as a standalone refactor.
+- The PWA capture flow wireframe (`canvases/pwa-capture-wireframe.canvas.tsx`) mirrors this same palette so the production PWA can drop into the existing visual language without re-design.
 - Resend sending domain: `send.homesolutionsar.com`
 
 ### Cron schedule (all in `wrangler.toml`)

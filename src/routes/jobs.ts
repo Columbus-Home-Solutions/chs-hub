@@ -44,6 +44,7 @@ export interface JobRow {
   line_item_count: number;
   needs_costing: 0 | 1; // 1 if any line item is missing unit_cost
   needs_costing_priced: number; // $ value at risk from missing costs
+  photo_count: number; // count of /api/photos rows attached to this job
 }
 
 export async function handleJobsList(env: Env, url: URL): Promise<{
@@ -105,7 +106,10 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
          FROM line_items li
          WHERE li.job_id = j.id
            AND COALESCE(li.unit_cost, 0) = 0
-       ), 0) AS needs_costing_priced
+       ), 0) AS needs_costing_priced,
+       (
+         SELECT COUNT(*) FROM photos ph WHERE ph.job_id = j.id
+       ) AS photo_count
      FROM jobs j
      LEFT JOIN clients c ON c.id = j.client_id`,
   ).all<{
@@ -127,6 +131,7 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
     line_item_count: number;
     needs_costing_count: number;
     needs_costing_priced: number;
+    photo_count: number;
   }>();
 
   let jobs: JobRow[] = (rows.results ?? []).map((r) => {
@@ -155,6 +160,7 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
       line_item_count: r.line_item_count,
       needs_costing: r.needs_costing_count > 0 ? 1 : 0,
       needs_costing_priced: round2(r.needs_costing_priced),
+      photo_count: r.photo_count,
     };
   });
 

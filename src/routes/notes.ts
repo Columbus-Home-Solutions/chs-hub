@@ -28,6 +28,7 @@ export interface NoteRow {
   status: "active" | "archived";
   archived_at: string | null;
   meeting_source: string | null;
+  job_id: string | null; // FK to jobs.id; NULL = "general"
 }
 
 interface RawNoteRow {
@@ -43,6 +44,7 @@ interface RawNoteRow {
   status: string;
   archived_at: string | null;
   meeting_source: string | null;
+  job_id: string | null;
 }
 
 function hydrate(row: RawNoteRow): NoteRow {
@@ -59,6 +61,7 @@ function hydrate(row: RawNoteRow): NoteRow {
     status: row.status === "archived" ? "archived" : "active",
     archived_at: row.archived_at,
     meeting_source: row.meeting_source,
+    job_id: row.job_id,
   };
 }
 
@@ -114,12 +117,16 @@ export async function handleNoteCreate(
         : 0;
   const meetingSource =
     typeof body.meeting_source === "string" ? body.meeting_source : null;
+  const jobId =
+    typeof body.job_id === "string" && body.job_id.trim()
+      ? body.job_id.trim()
+      : null;
 
   await env.DB.prepare(
     `INSERT INTO notes
        (id, created_at, updated_at, category, raw_text, summary, tags,
-        tasks_extracted, task_count, status, archived_at, meeting_source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?)`,
+        tasks_extracted, task_count, status, archived_at, meeting_source, job_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)`,
   )
     .bind(
       id,
@@ -132,6 +139,7 @@ export async function handleNoteCreate(
       tasksExtracted,
       taskCount,
       meetingSource,
+      jobId,
     )
     .run();
 
@@ -155,6 +163,7 @@ export async function handleNoteList(
   const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
   const since = url.searchParams.get("since"); // ISO date
   const until = url.searchParams.get("until"); // ISO date
+  const jobId = url.searchParams.get("job_id"); // exact id, or "general" for NULL
   const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "500", 10) || 500, 1000);
 
   const where: string[] = [];
@@ -175,6 +184,12 @@ export async function handleNoteList(
   if (until) {
     where.push(`created_at < ?`);
     binds.push(until);
+  }
+  if (jobId === "general") {
+    where.push(`job_id IS NULL`);
+  } else if (jobId) {
+    where.push(`job_id = ?`);
+    binds.push(jobId);
   }
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -277,6 +292,16 @@ export async function handleNotePatch(
     binds.push(body.status);
     updates.push("archived_at = ?");
     binds.push(body.status === "archived" ? now : null);
+  }
+  // job_id is settable explicitly: pass a string to attach, or `null` /
+  // empty string to detach (mark "general"). Missing key = no change.
+  if ("job_id" in body) {
+    updates.push("job_id = ?");
+    if (typeof body.job_id === "string" && body.job_id.trim()) {
+      binds.push(body.job_id.trim());
+    } else {
+      binds.push(null);
+    }
   }
 
   if (updates.length === 0) return jsonErr(400, "no_updatable_fields");

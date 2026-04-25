@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="pragma" content="no-cache">
+  <meta http-equiv="expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+
+  <title>CHS Capture</title>
+
+  <!-- PWA meta -->
+  <meta name="theme-color" content="#3D0C1F">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CHS Capture">
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Apple touch icon — same camera-on-burgundy mark as the manifest icons. -->
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='30' fill='%233D0C1F'/><path d='M52 64 L66 50 L126 50 L140 64 L160 64 Q170 64 170 74 L170 144 Q170 154 160 154 L32 154 Q22 154 22 144 L22 74 Q22 64 32 64 Z' fill='none' stroke='%23F0A500' stroke-width='9' stroke-linejoin='round'/><circle cx='96' cy='112' r='30' fill='none' stroke='%23F0A500' stroke-width='9'/><circle cx='96' cy='112' r='14' fill='%23F0A500'/><circle cx='148' cy='80' r='5' fill='%23F0A500'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='10' fill='%233D0C1F'/><path d='M18 22 L23 17 L42 17 L47 22 L54 22 Q57 22 57 25 L57 49 Q57 52 54 52 L11 52 Q8 52 8 49 L8 25 Q8 22 11 22 Z' fill='none' stroke='%23F0A500' stroke-width='3'/><circle cx='32' cy='38' r='10' fill='none' stroke='%23F0A500' stroke-width='3'/><circle cx='32' cy='38' r='4.5' fill='%23F0A500'/></svg>">
+
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="capture-app">
+
+    <!-- Top bar — brand + hamburger placeholder. -->
+    <header class="cap-topbar">
+      <div class="cap-brand">
+        <span class="cap-brand-mark">📸</span>
+        <span class="cap-brand-text">CHS CAPTURE</span>
+      </div>
+      <button id="cap-pending-btn" class="cap-iconbtn" aria-label="Pending uploads" title="Pending uploads">⟳</button>
+    </header>
+
+    <!--
+      ── Home screen ────────────────────────────────────────────────
+      Visible on first load. Shows current job context + action grid.
+      Phase 3+ wires Camera and Voice; Phase 5 wires the pending badge.
+    -->
+    <section class="cap-screen" data-screen="home" data-active="true">
+      <div class="cap-jobstrip" id="cap-current-job" data-mode="general">
+        <div>
+          <div class="cap-jobstrip-label">Current job</div>
+          <div class="cap-jobstrip-title" id="cap-current-job-title">General (no job selected)</div>
+          <div class="cap-jobstrip-meta" id="cap-current-job-meta">Tap “Switch job” to attach photos &amp; notes to a job.</div>
+        </div>
+        <button class="cap-jobstrip-switch" data-action="goto-switch-job">Switch</button>
+      </div>
+
+      <div class="cap-action-grid">
+        <button class="cap-action cap-action--primary" data-action="open-camera">
+          <span class="cap-action-icon">📷</span>
+          <span>
+            <div class="cap-action-title">Take a Photo</div>
+            <div class="cap-action-sub">Auto-tagged to current job. Categorize after capture.</div>
+          </span>
+        </button>
+
+        <button class="cap-action" data-action="goto-voice">
+          <span class="cap-action-icon">🎙️</span>
+          <div class="cap-action-title">Voice note</div>
+          <div class="cap-action-sub">Job or general — Claude tags it.</div>
+        </button>
+
+        <button class="cap-action" data-action="goto-pending">
+          <span class="cap-action-icon">⟳</span>
+          <div class="cap-action-title">Pending</div>
+          <div class="cap-action-sub">Uploads waiting to sync.</div>
+          <span class="cap-action-badge" id="cap-pending-count" data-count="0">0</span>
+        </button>
+      </div>
+
+      <div class="cap-stub">
+        <strong>Phase 2 shell.</strong> The capture flows for camera and voice land in Phases 3 and 4. This page exists to confirm routing, manifest, and Cloudflare Access work end-to-end.
+      </div>
+    </section>
+
+    <!--
+      ── Camera screen ───────────────────────────────────────────────
+      Most of the time the user never lands here: the Home button and
+      bottom-nav Camera button both invoke the native camera directly.
+      This screen exists as a fallback (e.g. iOS canceled the file
+      picker, or future phases want a "current batch" view here).
+    -->
+    <section class="cap-screen" data-screen="camera">
+      <div class="cap-screen-title">Camera</div>
+      <div class="cap-screen-sub">Tap below to open the camera again.</div>
+
+      <button class="cap-action cap-action--primary" data-action="open-camera" style="grid-column:1/-1">
+        <span class="cap-action-icon">📷</span>
+        <span>
+          <div class="cap-action-title">Open Camera</div>
+          <div class="cap-action-sub">Captures full-resolution; thumbnail generated client-side.</div>
+        </span>
+      </button>
+
+      <button class="cap-jobstrip-switch" data-action="goto-home" style="align-self:flex-start">← Back</button>
+    </section>
+
+    <!-- ── Review screen ─────────────────────────────────────────── -->
+    <section class="cap-screen" data-screen="review">
+      <div class="cap-screen-title">Review &amp; tag</div>
+
+      <div class="cap-review-preview">
+        <img id="cap-review-img" alt="Photo preview" />
+      </div>
+
+      <!-- Read-only echo of which job the photo will attach to. -->
+      <div class="cap-jobstrip" id="cap-review-jobstrip" data-mode="general">
+        <div>
+          <div class="cap-jobstrip-label">Will attach to</div>
+          <div class="cap-jobstrip-title" id="cap-review-job-title">General</div>
+          <div class="cap-jobstrip-meta" id="cap-review-job-meta">No specific job.</div>
+        </div>
+        <button class="cap-jobstrip-switch" data-action="goto-switch-job">Change</button>
+      </div>
+
+      <div class="cap-screen-sub">Category</div>
+      <div class="cap-cat-grid" id="cap-cat-grid">
+        <button class="cap-cat" data-category="before">Before</button>
+        <button class="cap-cat" data-category="progress" data-selected="true">Progress</button>
+        <button class="cap-cat" data-category="final">Final</button>
+        <button class="cap-cat" data-category="issue">Issue</button>
+        <button class="cap-cat" data-category="marketing">Marketing</button>
+        <button class="cap-cat" data-category="safety">Safety</button>
+        <button class="cap-cat" data-category="incident">Incident</button>
+      </div>
+
+      <input class="cap-search" id="cap-review-caption" type="text" placeholder="Caption (optional)…" autocomplete="off" maxlength="200">
+
+      <button class="cap-action cap-action--primary" data-action="submit-photo" style="grid-column:1/-1">
+        <span class="cap-action-icon">✅</span>
+        <span>
+          <div class="cap-action-title" id="cap-submit-title">Upload photo</div>
+          <div class="cap-action-sub" id="cap-submit-sub">Sends both the original and a 800px thumbnail.</div>
+        </span>
+      </button>
+
+      <button class="cap-jobstrip-switch" data-action="discard-photo" style="align-self:flex-start">Discard &amp; retake</button>
+    </section>
+
+    <!--
+      ── Voice screen (Phase 4) ──────────────────────────────────
+      Records with the browser's Web Speech API, optionally sends the
+      transcript to chs-claude-proxy for category/tasks extraction,
+      then POSTs the result to /api/notes with the chosen job_id.
+    -->
+    <section class="cap-screen" data-screen="voice">
+      <div class="cap-screen-title">Voice note</div>
+      <div class="cap-screen-sub">Speak; the browser transcribes. Stop when done.</div>
+
+      <div class="cap-voice-toggle" role="tablist" aria-label="Attach voice note to">
+        <button class="cap-voice-toggle-btn" data-voice-target="job" data-active="true" role="tab">Attach to job</button>
+        <button class="cap-voice-toggle-btn" data-voice-target="general" role="tab">General</button>
+      </div>
+
+      <div class="cap-jobstrip" id="cap-voice-jobstrip" data-mode="general">
+        <div>
+          <div class="cap-jobstrip-label">Will attach to</div>
+          <div class="cap-jobstrip-title" id="cap-voice-job-title">General</div>
+          <div class="cap-jobstrip-meta" id="cap-voice-job-meta">No specific job.</div>
+        </div>
+        <button class="cap-jobstrip-switch" data-action="goto-switch-job">Change</button>
+      </div>
+
+      <div class="cap-voice-recorder" id="cap-voice-rec" data-state="idle">
+        <button class="cap-voice-mic" id="cap-voice-mic" data-action="voice-toggle-rec" aria-label="Start recording">
+          <span class="cap-voice-mic-icon" aria-hidden="true">🎙️</span>
+        </button>
+        <div class="cap-voice-status" id="cap-voice-status">Tap to start</div>
+        <div class="cap-voice-timer" id="cap-voice-timer">0:00</div>
+      </div>
+
+      <div class="cap-voice-transcript-wrap">
+        <label for="cap-voice-transcript" class="cap-screen-sub" style="margin-top:0">Transcript (editable)</label>
+        <textarea
+          class="cap-voice-transcript"
+          id="cap-voice-transcript"
+          rows="6"
+          placeholder="Live transcript appears here. You can edit before saving."></textarea>
+      </div>
+
+      <div class="cap-voice-actions">
+        <button class="cap-jobstrip-switch" data-action="voice-discard">Discard</button>
+        <button class="cap-action cap-action--primary" data-action="voice-save-claude" id="cap-voice-save-claude">
+          <span class="cap-action-icon">🤖</span>
+          <span>
+            <div class="cap-action-title" id="cap-voice-save-claude-title">Save with Claude</div>
+            <div class="cap-action-sub">Categorize + extract tasks before saving.</div>
+          </span>
+        </button>
+        <button class="cap-action" data-action="voice-save-raw" id="cap-voice-save-raw">
+          <span class="cap-action-icon">💾</span>
+          <span>
+            <div class="cap-action-title" id="cap-voice-save-raw-title">Save raw</div>
+            <div class="cap-action-sub">Skip Claude — saves the transcript as-is.</div>
+          </span>
+        </button>
+      </div>
+
+      <button class="cap-jobstrip-switch" data-action="goto-home" style="align-self:flex-start">← Back</button>
+    </section>
+
+    <!-- ── Switch-job screen ────────────────────────────────────── -->
+    <section class="cap-screen" data-screen="switch-job">
+      <div class="cap-screen-title">Choose a job</div>
+      <div class="cap-screen-sub">Photos and voice notes you take next will attach to your selection.</div>
+      <input class="cap-search" id="cap-job-search" type="search" placeholder="Search jobs…" autocomplete="off">
+      <div class="cap-joblist" id="cap-job-list">
+        <button class="cap-jobrow cap-jobrow--general" data-job-id="">
+          <span class="cap-jobrow-num">GENERAL</span>
+          <span class="cap-jobrow-title">No specific job</span>
+          <span class="cap-jobrow-meta">Office supplies, marketing, miscellaneous.</span>
+        </button>
+      </div>
+      <button class="cap-jobstrip-switch" data-action="goto-home" style="align-self:flex-start">← Back</button>
+    </section>
+
+    <!--
+      ── Pending uploads (Phase 5) ────────────────────────────────
+      Lists every photo/note currently sitting in the IndexedDB
+      queue. The "Retry" button forces an immediate drain — useful
+      on iOS Safari, which doesn't implement Background Sync.
+    -->
+    <section class="cap-screen" data-screen="pending">
+      <div class="cap-screen-title">Pending uploads</div>
+      <div class="cap-screen-sub">Anything that failed to send lives here until it lands.</div>
+
+      <div class="cap-pending-actions">
+        <button class="cap-jobstrip-switch" data-action="pending-retry" id="cap-pending-retry">Retry now</button>
+        <button class="cap-jobstrip-switch" data-action="goto-home">← Back</button>
+      </div>
+
+      <div class="cap-pending-list" id="cap-pending-list"></div>
+    </section>
+
+  </main>
+
+  <!-- Bottom nav: three primary actions, always visible. -->
+  <nav class="cap-bottomnav" aria-label="Primary actions">
+    <button class="cap-navbtn" data-action="goto-home" data-active="true">
+      <span class="cap-navbtn-icon">🏠</span><span>Home</span>
+    </button>
+    <button class="cap-navbtn" data-action="open-camera">
+      <span class="cap-navbtn-icon">📷</span><span>Camera</span>
+    </button>
+    <button class="cap-navbtn" data-action="goto-voice">
+      <span class="cap-navbtn-icon">🎙️</span><span>Voice</span>
+    </button>
+  </nav>
+
+  <!--
+    Hidden file input drives the native camera. Lives at the top level so
+    every screen can reach it. `capture="environment"` hints iOS/Android
+    to open the back camera; some iOS versions ignore it and open the
+    chooser instead, which is acceptable.
+  -->
+  <input type="file"
+         id="cap-camera-input"
+         accept="image/*"
+         capture="environment"
+         hidden>
+
+  <div class="cap-toast" id="cap-toast" role="status" aria-live="polite"></div>
+
+  <!--
+    queue.js loads first so window.CHSQueue is in scope by the time
+    app.js boots. Both files are tiny and fetched as a single
+    deferred batch.
+  -->
+  <script src="queue.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

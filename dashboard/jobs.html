@@ -129,6 +129,33 @@ td.jobnum{font-weight:700;color:var(--gold);}
 /* Loading */
 .spinner{width:22px;height:22px;border:3px solid rgba(240,165,0,.2);border-top-color:var(--gold);border-radius:50%;animation:chsRfbSpin .8s linear infinite;display:inline-block;}
 
+/* Per-row photo pill in the jobs table */
+.photo-pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:rgba(240,165,0,.18);border:1px solid rgba(240,165,0,.45);color:var(--gold);font-size:11px;font-weight:800;letter-spacing:.5px;cursor:pointer;}
+.photo-pill.empty{background:transparent;border-color:rgba(240,165,0,.18);color:rgba(240,165,0,.45);}
+.photo-pill:hover{background:rgba(240,165,0,.32);}
+.photos-col{cursor:pointer;}
+
+/* Photos tab + general-photos modal */
+.photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;}
+.photo-thumb{position:relative;aspect-ratio:1/1;background:#000;border:1px solid var(--bdr);border-radius:8px;overflow:hidden;cursor:pointer;transition:transform .12s ease,border-color .12s ease;}
+.photo-thumb:hover{border-color:var(--gold);transform:scale(1.02);}
+.photo-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+.photo-thumb-cat{position:absolute;left:4px;top:4px;background:rgba(26,5,8,.85);color:var(--gold);font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;padding:2px 6px;border-radius:5px;}
+.photo-thumb-when{position:absolute;right:4px;bottom:4px;background:rgba(26,5,8,.85);color:var(--cream);font-size:10px;padding:2px 6px;border-radius:5px;}
+.photo-empty{padding:20px;text-align:center;color:var(--muted);font-size:13px;background:rgba(240,165,0,.05);border:1px dashed rgba(240,165,0,.25);border-radius:8px;}
+.photo-toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--muted);}
+.photo-toolbar a{color:var(--gold);text-decoration:none;font-weight:700;}
+
+/* Image lightbox — sits on top of the existing detail modal */
+.imgmodal{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:1000;cursor:zoom-out;}
+.imgmodal.open{display:flex;}
+.imgmodal img{max-width:96vw;max-height:92vh;border:1px solid var(--gold);border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.6);}
+.imgmodal-meta{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(26,5,8,.92);border:1px solid var(--bdr);color:var(--cream);font-size:12px;padding:6px 12px;border-radius:6px;max-width:88vw;text-align:center;}
+.imgmodal-close{position:absolute;top:14px;right:18px;background:rgba(26,5,8,.85);border:1px solid var(--bdr);color:var(--gold);font-size:18px;width:34px;height:34px;border-radius:50%;cursor:pointer;}
+
+/* Toolbar button matching .f-btn so the "General Photos" entry blends in */
+.f-btn.photos{background:rgba(240,165,0,.18);border-color:rgba(240,165,0,.45);color:var(--gold);}
+
 @media (max-width:768px){
   .stats{grid-template-columns:repeat(2,1fr);}
   .waterfall{grid-template-columns:repeat(3,1fr);}
@@ -192,6 +219,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
     <span class="f-spacer"></span>
     <button class="f-btn" id="f-copy" title="Copy as TSV — paste into any Google Sheet or Excel tab">📋 Copy to Sheet</button>
     <button class="f-btn" id="f-export">⬇ Export CSV</button>
+    <button class="f-btn photos" id="f-general-photos" title="Photos not attached to any job">📷 General Photos</button>
   </div>
 
   <div class="table-wrap">
@@ -212,9 +240,10 @@ td.jobnum{font-weight:700;color:var(--gold);}
             <th data-sort="profit" class="num">Profit</th>
             <th data-sort="margin_pct" class="num">Margin %</th>
             <th data-sort="needs_costing" class="center" title="Needs Costing">⚠</th>
+            <th data-sort="photo_count" class="center" title="Photos attached to this job (click to view)">📷</th>
           </tr>
         </thead>
-        <tbody id="jobs-tbody"><tr><td colspan="13" class="empty-msg"><span class="spinner"></span> Loading jobs…</td></tr></tbody>
+        <tbody id="jobs-tbody"><tr><td colspan="14" class="empty-msg"><span class="spinner"></span> Loading jobs…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -232,6 +261,16 @@ td.jobnum{font-weight:700;color:var(--gold);}
     </div>
     <div class="modal-body" id="m-body"><span class="spinner"></span> Loading…</div>
   </div>
+</div>
+
+<!--
+  Lightbox for full-size photos. Lives outside the detail modal so it
+  can sit *above* it when a thumb is clicked from inside a drill-down.
+-->
+<div class="imgmodal" id="imgmodal" role="dialog" aria-label="Photo viewer">
+  <button class="imgmodal-close" id="imgmodal-close" aria-label="Close">×</button>
+  <img id="imgmodal-img" alt="Photo">
+  <div class="imgmodal-meta" id="imgmodal-meta"></div>
 </div>
 
 <script>
@@ -272,7 +311,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
       ALL = data.jobs || [];
       applyFilters();
     } catch(err){
-      $('jobs-tbody').innerHTML = '<tr><td colspan="13" class="empty-msg">Failed to load: ' + esc(err.message) + '</td></tr>';
+      $('jobs-tbody').innerHTML = '<tr><td colspan="14" class="empty-msg">Failed to load: ' + esc(err.message) + '</td></tr>';
     }
   }
 
@@ -316,7 +355,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
   function render(){
     const tbody = $('jobs-tbody');
     if(VIEW.length === 0){
-      tbody.innerHTML = '<tr><td colspan="13" class="empty-msg">No jobs match the current filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="14" class="empty-msg">No jobs match the current filters.</td></tr>';
       return;
     }
     const rows = VIEW.map(j => {
@@ -326,6 +365,10 @@ td.jobnum{font-weight:700;color:var(--gold);}
       const ucDisplay = j.needs_costing
         ? '<span style="color:var(--red)" title="Missing unit_cost on at least one line item">⚠ ' + money0(j.line_item_cost) + '</span>'
         : money0(j.line_item_cost);
+      const photoCount = Number(j.photo_count || 0);
+      const photoCell = photoCount > 0
+        ? '<span class="photo-pill" title="' + photoCount + ' photo' + (photoCount === 1 ? '' : 's') + ' attached — click to view">📷 ' + photoCount + '</span>'
+        : '<span class="photo-pill empty" title="No photos yet">📷</span>';
       return '<tr data-id="' + esc(j.id) + '" class="' + nc + '">' +
         '<td class="num jobnum">' + (j.job_number ? '#' + j.job_number : '—') + '</td>' +
         '<td class="title" title="' + esc(j.title || '') + '">' + esc(j.title || '—') + '</td>' +
@@ -340,6 +383,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
         '<td class="num ' + profitCls + '">' + money0(j.profit) + '</td>' +
         '<td class="num ' + marginCls + '">' + pct(j.margin_pct) + '</td>' +
         '<td class="center">' + (j.needs_costing ? '<span class="nc-flag" title="Missing unit_cost on at least one line item — ' + money0(j.needs_costing_priced) + ' priced without cost">⚠</span>' : '') + '</td>' +
+        '<td class="center photos-col" data-photos="' + photoCount + '">' + photoCell + '</td>' +
       '</tr>';
     }).join('');
     tbody.innerHTML = rows;
@@ -370,7 +414,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
     th.addEventListener('click', () => {
       const col = th.getAttribute('data-sort');
       if(SORT.col === col){ SORT.dir = SORT.dir === 'asc' ? 'desc' : 'asc'; }
-      else { SORT.col = col; SORT.dir = (col === 'created_at' || col === 'total' || col === 'invoiced' || col === 'paid' || col === 'profit' || col === 'margin_pct' || col === 'outstanding') ? 'desc' : 'asc'; }
+      else { SORT.col = col; SORT.dir = (col === 'created_at' || col === 'total' || col === 'invoiced' || col === 'paid' || col === 'profit' || col === 'margin_pct' || col === 'outstanding' || col === 'photo_count') ? 'desc' : 'asc'; }
       document.querySelectorAll('thead th').forEach(t => t.classList.remove('sort-asc','sort-desc'));
       th.classList.add(SORT.dir === 'asc' ? 'sort-asc' : 'sort-desc');
       sortView();
@@ -399,7 +443,7 @@ td.jobnum{font-weight:700;color:var(--gold);}
     ['total','Quoted'],['invoiced','Invoiced'],['paid','Paid'],['outstanding','Outstanding'],
     ['line_item_cost','Line Item Cost'],['expense_cost','Expenses'],['profit','Profit'],
     ['margin_pct','Margin %'],['line_item_count','# Line Items'],['needs_costing','Needs Costing'],
-    ['needs_costing_priced','NC Priced'],
+    ['needs_costing_priced','NC Priced'],['photo_count','# Photos'],
   ];
 
   function buildRows(){
@@ -460,14 +504,17 @@ td.jobnum{font-weight:700;color:var(--gold);}
     }
   });
 
-  // Row click → drill down
+  // Row click → drill down. Clicking the camera column jumps the drill
+  // straight to the Photos tab; everywhere else lands on the default
+  // (Line Items) tab.
   $('jobs-tbody').addEventListener('click', e => {
     const tr = e.target.closest('tr[data-id]');
     if(!tr) return;
-    openDrill(tr.getAttribute('data-id'));
+    const jumpToPhotos = !!e.target.closest('.photos-col');
+    openDrill(tr.getAttribute('data-id'), jumpToPhotos ? 'photos' : null);
   });
 
-  async function openDrill(jobId){
+  async function openDrill(jobId, initialTab){
     const modal = $('modal');
     modal.classList.add('open');
     $('m-title').textContent = 'Loading…';
@@ -477,13 +524,13 @@ td.jobnum{font-weight:700;color:var(--gold);}
       const r = await fetch(API + '/api/jobs/' + encodeURIComponent(jobId));
       if(!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
-      renderDrill(d);
+      renderDrill(d, initialTab);
     } catch(err){
       $('m-body').innerHTML = '<div class="empty-msg">Failed to load: ' + esc(err.message) + '</div>';
     }
   }
 
-  function renderDrill(d){
+  function renderDrill(d, initialTab){
     const j = d.job, w = d.waterfall;
     $('m-title').textContent = (j.job_number ? '#' + j.job_number + ' · ' : '') + (j.title || 'Untitled');
     $('m-sub').textContent = [j.client_name, j.status ? j.status.replace(/_/g,' ') : '', fmtDate(j.created_at)].filter(Boolean).join(' · ');
@@ -544,24 +591,149 @@ td.jobnum{font-weight:700;color:var(--gold);}
         '<div class="tab" data-tab="inv">Invoices<span class="tab-count">' + invs.length + '</span></div>' +
         '<div class="tab" data-tab="pay">Payments<span class="tab-count">' + pays.length + '</span></div>' +
         '<div class="tab" data-tab="exp">Expenses<span class="tab-count">' + exps.length + '</span></div>' +
+        '<div class="tab" data-tab="photos">Photos<span class="tab-count" id="photos-tab-count">·</span></div>' +
       '</div>' +
       '<div class="tab-panel active" data-panel="li">' + liTable + '</div>' +
       '<div class="tab-panel" data-panel="inv">' + invTable + '</div>' +
       '<div class="tab-panel" data-panel="pay">' + payTable + '</div>' +
-      '<div class="tab-panel" data-panel="exp">' + expTable + '</div>';
+      '<div class="tab-panel" data-panel="exp">' + expTable + '</div>' +
+      '<div class="tab-panel" data-panel="photos" data-job-id="' + esc(j.id) + '">' +
+        '<div class="photo-toolbar"><span>Photos uploaded from the CHS Capture PWA.</span></div>' +
+        '<div class="photo-grid" id="photos-grid"><div class="photo-empty"><span class="spinner"></span> Loading photos…</div></div>' +
+      '</div>';
 
     $('m-body').querySelectorAll('.tab').forEach(t => {
       t.addEventListener('click', () => {
         const key = t.getAttribute('data-tab');
         $('m-body').querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
         $('m-body').querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.getAttribute('data-panel') === key));
+        if (key === 'photos') loadPhotosForJob(j.id);
+      });
+    });
+
+    // Eagerly populate the photos count so the user knows whether
+    // there's anything in there worth clicking. Keep this cheap — we
+    // already need the list once they open the tab, so cache the result.
+    loadPhotosForJob(j.id);
+
+    // If the caller asked us to land on a specific tab (e.g. clicking
+    // the 📷 column), fire that tab's click after the initial wiring.
+    if (initialTab) {
+      const targetTab = $('m-body').querySelector('.tab[data-tab="' + initialTab + '"]');
+      if (targetTab) targetTab.click();
+    }
+  }
+
+  /**
+   * Fetch /api/photos for a job (or "general") and render the thumbnail
+   * grid. Cached per job_id so flipping tabs doesn't re-fetch.
+   */
+  const PHOTO_CACHE = new Map();
+  async function loadPhotosForJob(jobId){
+    const grid = $('photos-grid');
+    if(!grid) return;
+
+    let photos = PHOTO_CACHE.get(jobId);
+    if(!photos){
+      try {
+        const qs = jobId === 'general' ? 'job_id=general' : 'job_id=' + encodeURIComponent(jobId);
+        const r = await fetch(API + '/api/photos?' + qs + '&limit=200');
+        if(!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        photos = Array.isArray(data.photos) ? data.photos : [];
+        PHOTO_CACHE.set(jobId, photos);
+      } catch(err){
+        grid.innerHTML = '<div class="photo-empty">Could not load photos: ' + esc(err.message) + '</div>';
+        return;
+      }
+    }
+
+    const countEl = $('photos-tab-count');
+    if(countEl) countEl.textContent = String(photos.length);
+
+    if(photos.length === 0){
+      grid.innerHTML = '<div class="photo-empty">No photos yet. Capture some from the CHS Capture app on your phone.</div>';
+      return;
+    }
+
+    grid.innerHTML = photos.map(p => {
+      const cat = (p.category || 'progress').toString();
+      const when = fmtRelative(p.taken_at || p.created_at);
+      const thumb = API + '/api/photos/' + encodeURIComponent(p.id) + '/thumb';
+      const meta = [cat, when, p.uploaded_by ? 'by ' + p.uploaded_by : ''].filter(Boolean).join(' · ');
+      return '<div class="photo-thumb" data-id="' + esc(p.id) + '" data-meta="' + esc(meta) + '">' +
+               '<img loading="lazy" src="' + esc(thumb) + '" alt="">' +
+               '<span class="photo-thumb-cat">' + esc(cat) + '</span>' +
+               '<span class="photo-thumb-when">' + esc(when || '') + '</span>' +
+             '</div>';
+    }).join('');
+
+    grid.querySelectorAll('.photo-thumb').forEach(el => {
+      el.addEventListener('click', () => {
+        openImgModal(el.getAttribute('data-id'), el.getAttribute('data-meta') || '');
       });
     });
   }
 
+  /** Lightbox for the full-size original photo. */
+  function openImgModal(photoId, metaText){
+    const m = $('imgmodal');
+    const img = $('imgmodal-img');
+    const meta = $('imgmodal-meta');
+    img.src = API + '/api/photos/' + encodeURIComponent(photoId);
+    img.alt = metaText || 'Photo';
+    meta.textContent = metaText || '';
+    m.classList.add('open');
+  }
+  function closeImgModal(){ $('imgmodal').classList.remove('open'); $('imgmodal-img').src = ''; }
+
+  /** Friendly relative-time helper used by the photo grid. */
+  function fmtRelative(iso){
+    if(!iso) return '';
+    const t = Date.parse(iso);
+    if(Number.isNaN(t)) return '';
+    const diff = Date.now() - t;
+    const sec = Math.round(diff / 1000);
+    if(sec < 60) return sec + 's ago';
+    const min = Math.round(sec / 60);
+    if(min < 60) return min + 'm ago';
+    const hr = Math.round(min / 60);
+    if(hr < 24) return hr + 'h ago';
+    const d = Math.round(hr / 24);
+    if(d < 30) return d + 'd ago';
+    return new Date(t).toLocaleDateString();
+  }
+
+  /**
+   * Open the detail modal in a "general photos" mode — same modal,
+   * different content. Mirrors loadPhotosForJob but with job_id=general.
+   */
+  async function openGeneralPhotos(){
+    const modal = $('modal');
+    modal.classList.add('open');
+    $('m-title').textContent = 'General Photos';
+    $('m-sub').textContent = 'Captures with no specific job attached';
+    $('m-body').innerHTML =
+      '<div class="photo-toolbar"><span>Photos uploaded without a job association.</span></div>' +
+      '<div class="photo-grid" id="photos-grid"><div class="photo-empty"><span class="spinner"></span> Loading photos…</div></div>';
+    loadPhotosForJob('general');
+  }
+
   $('m-close').addEventListener('click', () => $('modal').classList.remove('open'));
   $('modal').addEventListener('click', e => { if(e.target === $('modal')) $('modal').classList.remove('open'); });
-  document.addEventListener('keydown', e => { if(e.key === 'Escape') $('modal').classList.remove('open'); });
+  document.addEventListener('keydown', e => {
+    if(e.key !== 'Escape') return;
+    // Close the lightbox first if it's open, otherwise close the detail modal.
+    if($('imgmodal').classList.contains('open')) closeImgModal();
+    else $('modal').classList.remove('open');
+  });
+
+  // Lightbox close: button, click outside the image, or Escape (above).
+  $('imgmodal-close').addEventListener('click', closeImgModal);
+  $('imgmodal').addEventListener('click', e => { if(e.target === $('imgmodal')) closeImgModal(); });
+
+  // Toolbar entry → open the "general" photos view in the existing modal.
+  $('f-general-photos').addEventListener('click', openGeneralPhotos);
 
   // Refresh button with visual feedback
   $('refresh-btn').addEventListener('click', async () => {

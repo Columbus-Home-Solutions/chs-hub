@@ -1,0 +1,587 @@
+/*
+ * CHS Capture — mobile-first PWA stylesheet.
+ *
+ * Designed for one-thumb operation on a phone in the field. Big tap
+ * targets (>= 56px), high contrast against the burgundy wash, and a
+ * fixed bottom nav so primary actions stay reachable regardless of
+ * which screen the crew is on.
+ *
+ * Theme tokens (--burg, --gold, --cream, etc.) come from theme.css,
+ * which is linked alongside this file in index.html. Editing the brand
+ * palette in theme.css updates this PWA in one go.
+ */
+
+/* ── Layout ──────────────────────────────────────────────────────── */
+
+:root {
+  --capture-pad: 18px;
+  --capture-gap: 14px;
+  --capture-radius: 16px;
+  --bottom-nav-h: 78px;
+}
+
+body {
+  /* The capture PWA is single-screen and never scrolls horizontally;
+     extra padding accounts for the iOS home-indicator zone. */
+  padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom));
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: contain;
+}
+
+#capture-app {
+  position: relative;
+  z-index: 1;
+  max-width: 540px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 0 var(--capture-pad);
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────── */
+
+.cap-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(env(safe-area-inset-top) + 12px) 0 14px;
+  position: sticky;
+  top: 0;
+  background: linear-gradient(180deg, var(--dark) 80%, transparent);
+  z-index: 20;
+}
+
+.cap-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cap-brand-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--burg);
+  border: 1px solid rgba(240, 165, 0, 0.4);
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+}
+
+.cap-brand-text {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px;
+  letter-spacing: 2px;
+  color: var(--gold);
+}
+
+.cap-iconbtn {
+  background: rgba(240, 165, 0, 0.12);
+  border: 1px solid rgba(240, 165, 0, 0.3);
+  color: var(--gold);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 18px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.cap-iconbtn:active { transform: scale(0.95); }
+
+/* ── Screen plumbing ─────────────────────────────────────────────── */
+
+.cap-screen {
+  display: none;
+  flex-direction: column;
+  gap: var(--capture-gap);
+  padding: 4px 0 24px;
+}
+.cap-screen[data-active="true"] { display: flex; }
+
+/* ── Job context strip (shown on Home + Camera + Voice) ──────────── */
+
+.cap-jobstrip {
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: var(--capture-radius);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cap-jobstrip-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cap-jobstrip-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--cream);
+  margin-top: 2px;
+  line-height: 1.25;
+}
+
+.cap-jobstrip-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.cap-jobstrip-switch {
+  background: rgba(240, 165, 0, 0.18);
+  border: 1px solid rgba(240, 165, 0, 0.45);
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  border-radius: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cap-jobstrip[data-mode="general"] .cap-jobstrip-title { color: var(--gold-lt); }
+
+/* ── Action grid (Home) ──────────────────────────────────────────── */
+
+.cap-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.cap-action {
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: var(--capture-radius);
+  padding: 22px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  min-height: 130px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--cream);
+  font-family: inherit;
+  position: relative;
+  transition: transform 0.1s ease;
+}
+.cap-action:active { transform: scale(0.97); }
+
+.cap-action-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  background: rgba(240, 165, 0, 0.18);
+  border: 1px solid rgba(240, 165, 0, 0.4);
+}
+
+.cap-action--primary {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, rgba(240, 165, 0, 0.22), rgba(196, 57, 26, 0.22));
+  border-color: rgba(240, 165, 0, 0.55);
+  min-height: 110px;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+}
+.cap-action--primary .cap-action-icon { background: var(--gold); color: var(--burg); border-color: transparent; }
+
+.cap-action-title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.cap-action-sub {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.cap-action-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: var(--gold);
+  color: var(--burg);
+  font-size: 11px;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 2px 9px;
+  min-width: 22px;
+  text-align: center;
+  display: none;
+}
+.cap-action-badge[data-count]:not([data-count="0"]) { display: block; }
+
+/* ── Section title used on inner screens ─────────────────────────── */
+
+.cap-screen-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px;
+  letter-spacing: 2px;
+  color: var(--gold);
+  margin-top: 4px;
+}
+
+.cap-screen-sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: -8px;
+}
+
+/* ── Job switcher list ───────────────────────────────────────────── */
+
+.cap-search {
+  background: rgba(255, 248, 236, 0.06);
+  border: 1px solid var(--bdr);
+  color: var(--cream);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  width: 100%;
+}
+.cap-search::placeholder { color: var(--muted); }
+
+.cap-joblist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cap-jobrow {
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--cream);
+  font-family: inherit;
+}
+.cap-jobrow:active { background: rgba(240, 165, 0, 0.08); }
+
+.cap-jobrow-num {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.cap-jobrow-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.cap-jobrow-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cap-jobrow--general {
+  border-color: rgba(240, 165, 0, 0.45);
+  background: rgba(240, 165, 0, 0.08);
+}
+
+/* ── Bottom nav ──────────────────────────────────────────────────── */
+
+.cap-bottomnav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--bottom-nav-h);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: linear-gradient(180deg, transparent, var(--dark) 22%);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border-top: 1px solid rgba(240, 165, 0, 0.18);
+  z-index: 30;
+}
+
+.cap-navbtn {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.cap-navbtn-icon { font-size: 20px; }
+.cap-navbtn[data-active="true"] { color: var(--gold); }
+
+/* ── Toast / status ──────────────────────────────────────────────── */
+
+.cap-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--bottom-nav-h) + 16px);
+  transform: translateX(-50%);
+  background: rgba(26, 5, 8, 0.95);
+  border: 1px solid var(--gold);
+  color: var(--cream);
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  z-index: 40;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.cap-toast[data-visible="true"] { opacity: 1; }
+
+/* ── Review screen ───────────────────────────────────────────────── */
+
+.cap-review-preview {
+  background: #000;
+  border: 1px solid var(--bdr);
+  border-radius: var(--capture-radius);
+  overflow: hidden;
+  /* Cap preview height so a portrait phone photo doesn't push the
+     category grid off-screen on a small device. */
+  max-height: 50vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cap-review-preview img {
+  width: 100%;
+  height: auto;
+  max-height: 50vh;
+  object-fit: contain;
+  display: block;
+}
+
+.cap-cat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.cap-cat {
+  background: rgba(255, 248, 236, 0.05);
+  border: 1px solid var(--bdr);
+  color: var(--cream);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 12px 6px;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: center;
+  text-transform: uppercase;
+}
+.cap-cat:active { transform: scale(0.96); }
+.cap-cat[data-selected="true"] {
+  background: rgba(240, 165, 0, 0.22);
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+/* ── Voice screen (Phase 4) ───────────────────────────────────── */
+
+.cap-voice-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: 12px;
+  padding: 4px;
+}
+.cap-voice-toggle-btn {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 10px 8px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.cap-voice-toggle-btn[data-active="true"] {
+  background: rgba(240, 165, 0, 0.22);
+  color: var(--gold);
+}
+
+.cap-voice-recorder {
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: var(--capture-radius);
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.cap-voice-mic {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 3px solid var(--gold);
+  background: rgba(240, 165, 0, 0.12);
+  color: var(--gold);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.1s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.cap-voice-mic:active { transform: scale(0.96); }
+.cap-voice-mic-icon { font-size: 38px; }
+
+.cap-voice-recorder[data-state="recording"] .cap-voice-mic {
+  background: rgba(196, 57, 26, 0.32);
+  border-color: #e05252;
+  color: #ffd9d9;
+  animation: cap-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes cap-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224, 82, 82, 0.55); }
+  50%      { box-shadow: 0 0 0 14px rgba(224, 82, 82, 0); }
+}
+
+.cap-voice-status {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--cream);
+  text-transform: uppercase;
+}
+.cap-voice-recorder[data-state="recording"] .cap-voice-status { color: #e05252; }
+
+.cap-voice-timer {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 26px;
+  letter-spacing: 2px;
+  color: var(--gold);
+}
+
+.cap-voice-transcript-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cap-voice-transcript {
+  width: 100%;
+  background: rgba(255, 248, 236, 0.06);
+  border: 1px solid var(--bdr);
+  color: var(--cream);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.45;
+  resize: vertical;
+  min-height: 120px;
+}
+.cap-voice-transcript::placeholder { color: var(--muted); }
+
+.cap-voice-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+/* ── Pending uploads (Phase 5) ─────────────────────────────────── */
+
+.cap-pending-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cap-pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cap-pending-row {
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.cap-pending-row[data-failed="true"] { border-color: rgba(224, 82, 82, 0.55); }
+
+.cap-pending-row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--gold);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.cap-pending-row-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cap-pending-row-error {
+  color: #e05252;
+  font-size: 11px;
+}
+
+.cap-pending-empty {
+  background: rgba(240, 165, 0, 0.06);
+  border: 1px dashed rgba(240, 165, 0, 0.3);
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ── Phase 2 placeholder banner ──────────────────────────────────── */
+
+.cap-stub {
+  background: rgba(240, 165, 0, 0.07);
+  border: 1px dashed rgba(240, 165, 0, 0.35);
+  border-radius: 12px;
+  padding: 16px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.cap-stub strong { color: var(--gold); font-weight: 700; }

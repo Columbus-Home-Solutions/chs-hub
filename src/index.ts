@@ -46,6 +46,12 @@ import {
   handleSummarySend,
 } from "./routes/ops.js";
 import {
+  handleActiveJobs,
+  handlePhotoCreate,
+  handlePhotoList,
+  handlePhotoStream,
+} from "./routes/photos.js";
+import {
   handleSubCreate,
   handleSubDelete,
   handleSubGet,
@@ -128,6 +134,12 @@ export default {
       return jsonResponse(payload);
     }
 
+    // /api/jobs/active must match BEFORE the /api/jobs/:id regex below,
+    // otherwise "active" is treated as a Jobber job ID.
+    if (url.pathname === "/api/jobs/active" && request.method === "GET") {
+      return handleActiveJobs(env);
+    }
+
     const jobDetail = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (jobDetail && request.method === "GET") {
       try {
@@ -140,6 +152,23 @@ export default {
           { status: code === 404 ? 404 : 500 },
         );
       }
+    }
+
+    // ── Photos (PWA capture) ─────────────────────────────────────────
+    if (url.pathname === "/api/photos") {
+      if (request.method === "POST") return handlePhotoCreate(env, request);
+      if (request.method === "GET") return handlePhotoList(env, url);
+    }
+    // /thumb suffix must match BEFORE the bare :id pattern.
+    // HEAD is accepted alongside GET so probing tools (curl -I, SW caches)
+    // get the right status; Workers auto-strips the body on HEAD responses.
+    const photoThumb = url.pathname.match(/^\/api\/photos\/([^/]+)\/thumb$/);
+    if (photoThumb && (request.method === "GET" || request.method === "HEAD")) {
+      return handlePhotoStream(env, decodeURIComponent(photoThumb[1]), "thumb");
+    }
+    const photoDetail = url.pathname.match(/^\/api\/photos\/([^/]+)$/);
+    if (photoDetail && (request.method === "GET" || request.method === "HEAD")) {
+      return handlePhotoStream(env, decodeURIComponent(photoDetail[1]), "original");
     }
 
     // ── Smart Notes ──────────────────────────────────────────────────

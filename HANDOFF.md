@@ -90,13 +90,22 @@ chs-hub/
 │   ├── jobs.html ......................... native Job Tracker
 │   ├── notes.html ........................ native Smart Notes
 │   ├── subs.html ......................... native Subcontractor Reference List
-│   ├── manifest.json + sw.js ............. PWA basics
+│   ├── manifest.json + sw.js ............. dashboard PWA basics ("CHS Command")
+│   └── capture/ .......................... 🆕 CHS Capture PWA (photos + voice notes)
+│       ├── index.html .................... single-page shell (Home/Camera/Review/Voice/Switch/Pending)
+│       ├── manifest.json ................. distinct icon, scope=/capture/, installed as separate PWA
+│       ├── styles.css .................... mobile-first; pulls palette from /theme.css
+│       ├── app.js ........................ camera + canvas thumb + voice + queue UI
+│       ├── queue.js ...................... shared IndexedDB queue (loaded by both app.js and sw.js)
+│       └── sw.js ......................... service worker: drains queue on Background Sync / message
 ├── migrations/
 │   ├── 0001_init.sql ..................... jobs/invoices/line_items/payments/expenses/quotes
 │   ├── 0002_quote_client.sql
 │   ├── 0003_notes.sql
 │   ├── 0004_subcontractors.sql
-│   └── 0005_dead_letters.sql ............. sync_dead_letters table
+│   ├── 0005_dead_letters.sql ............. sync_dead_letters table
+│   ├── 0006_photos.sql ................... 🆕 photos table for CHS Capture PWA
+│   └── 0007_notes_job_id.sql ............. 🆕 adds notes.job_id (NULL = "general")
 ├── src/
 │   ├── index.ts .......................... Worker entry + router + scheduled handler (cron dispatch)
 │   ├── env.ts ............................ Env interface (secrets + bindings)
@@ -104,7 +113,8 @@ chs-hub/
 │   │   ├── kpis.ts ....................... GET /api/kpis  (dashboard KPI tiles)
 │   │   ├── drill.ts ...................... GET /api/drill/:type  (KPI drilldowns)
 │   │   ├── jobs.ts ....................... /api/jobs + /api/jobs/:id
-│   │   ├── notes.ts ...................... /api/notes CRUD
+│   │   ├── notes.ts ...................... /api/notes CRUD (now job_id-aware)
+│   │   ├── photos.ts ..................... 🆕 /api/photos + /api/jobs/active (CHS Capture backend)
 │   │   ├── subs.ts ....................... /api/subs CRUD
 │   │   ├── search.ts
 │   │   ├── hl.ts ......................... /api/hl/* (HighLevel PIT proxy)
@@ -156,7 +166,7 @@ chs-hub/
 - ✅ Lead pipeline (Kanban) backed by HighLevel via the proxy
   - 8 stages, no Dead Lead column (intentionally hidden — view in HL itself)
   - Drag-to-update writes back to HL
-- ✅ Quick Launch tiles (Spreadsheets section + Google section)
+- ✅ Quick Launch tiles (Internal Tools, Google, Social, Advertising sections)
 - ✅ Native pages: `/jobs`, `/notes`, `/subs`
 - ✅ Smart Notes quick-capture card on main dashboard (POST /api/notes)
 - ✅ Claude-powered note processing (categorize, extract tasks, summarize)
@@ -166,6 +176,7 @@ chs-hub/
 - ✅ Compact icon-only header buttons (Connect Google + Refresh)
 - ✅ CSV export + TSV clipboard copy on Jobs and Subs pages
 - ✅ PWA manifest + service worker (installable from Chrome's three-dot menu)
+- ✅ **CHS Capture PWA** at `/capture/` (shipped 2026-04-25) — separate-manifest mobile PWA for crew photo + voice-note capture, IndexedDB offline queue, Photos tab on Job drill-down. See "Photos system" below for the full feature breakdown.
 
 ### Reliability subsystem (shipped 2026-04-25)
 - ✅ Notification primitive (`src/lib/ops/notify.ts`) — Resend wrapper with kv_cache dedupe, dry-run fallback, severity prefix in subject
@@ -207,20 +218,59 @@ Items intentionally not done (lower priority Phase 6 carryovers):
 - ~~Append-only event log with `event_id` dedup~~ — overkill for current volume; DLQ covers the failure-recovery case
 - ~~SMS alerts~~ — email-only for v1; can add Twilio later if needed
 
-### 🟢 Photos system (recommended next — planning phase, open decision)
+### ✅ Photos system (PWA Capture v1 — built 2026-04-25)
 
-> **Spec:** `docs/01-file-system.md` is the authoritative plan (PWA capture, R2 + D1, Drive migration, signed-URL sharing, role matrix). Read it before writing any code. Decision was locked 2026-04-24; nothing has changed since.
+> **Spec:** `docs/01-file-system.md` is the long-term roadmap (signed-URL sharing, EXIF stripping, full role matrix, video uploads). v1 of the capture path is now in production; the items below are deliberately deferred from v1 and remain in that spec.
 
-Open question Tony is sleeping on: **R2-primary with Drive mirror, or Drive-primary?**
+**Locked decisions** (2026-04-25; do not relitigate without writing them up here first):
 
-My recommendation: **R2 + D1 + Cloudflare Images as primary, Google Shared Drive as optional mirror.** Reasoning: the value of photos isn't the storage, it's the queryable metadata (before/after pairing, "5-star sub's last 3 jobs," social media composer pulling from a photo library). That requires SQL, not Drive folders.
+1. **Auth: Cloudflare Access.** The existing CF Access policy on `dashboard.homesolutionsar.com` automatically protects `/capture/*`. No second auth surface. Crew Workspace emails get added to the ACL when each onboards (see "Parked questions" below). The Worker reads `Cf-Access-Authenticated-User-Email` to attribute uploads to `photos.uploaded_by`.
+2. **Scope: photos + voice notes.** Native expense capture is wireframed but **not** in v1; it remains as a separate locked-Option-A backlog item below.
+3. **URL/path: same domain, separate manifest.** Crews install a *second* PWA called **CHS Capture** whose icon opens straight to `/capture/`. The existing dashboard PWA stays as-is for admin use. Two manifests, two icons, one origin.
+4. **Migration timing: decoupled.** Drive backfill is a separate session. v1 ships with new-photos-only flowing into R2 + D1; no automated migration of historical Jobber/Drive photos.
 
-Schema sketch (not yet built):
-- `photos` table: `id`, `r2_key`, `thumb_key`, `job_id`, `lead_id`, `subcontractor_id`, `category` (before/after/progress/marketing/safety/incident), `taken_at`, `uploaded_by`, `gps_lat`, `gps_lng`, `tags`, `caption`, `before_after_pair_id`
-- R2 bucket: already created (`chs-hub-files`)
-- Cloudflare Images: enables resize/transform on the fly; would be a paid add-on
+**Storage model** (resolves the prior "R2-primary vs Drive-primary" sleep-on item — answer is **R2 + D1, no Drive mirror in v1**):
 
-When Tony decides, **build vertical slice first**: storage → mobile capture page → Job/Lead drill-down photo tabs. ~4–6 hours to "snap a photo on a job and see it on the dashboard."
+- R2 bucket `chs-hub-files`:
+  - `photos/{job_id|"general"}/{YYYY-MM-DD}/{uuid}.jpg` (original)
+  - `photos-thumbs/{job_id|"general"}/{YYYY-MM-DD}/{uuid}.jpg` (~800 px thumb, generated client-side via `<canvas>`)
+- D1 `photos` table (`migrations/0006_photos.sql`): `id`, `created_at`, `taken_at`, `job_id` (NULL for "general"), `category`, `r2_key`, `thumb_key`, `uploaded_by`, `gps_lat`, `gps_lng`, `tags`, `caption`, `before_after_pair_id`. Indexes on `(job_id, taken_at DESC)`, `category`, `created_at`.
+- D1 `notes` table now carries `job_id TEXT` (`migrations/0007_notes_job_id.sql`) so voice notes attach to a job (or stay general when NULL).
+
+**API surface** (`src/routes/photos.ts`, `src/routes/notes.ts`):
+
+- `POST /api/photos` — multipart (`original`, `thumb`, `metadata` JSON). Writes both blobs to R2 then inserts the D1 row. Returns `{ photo: { id, thumb_url, original_url } }`.
+- `GET  /api/photos?job_id=&since=&limit=` — list. `job_id=general` filters for unattached photos.
+- `GET  /api/photos/:id` — stream original from R2.
+- `GET  /api/photos/:id/thumb` — stream thumbnail. Both also accept `HEAD`.
+- `GET  /api/jobs/active` — minimal in-progress job list, used by the PWA's job switcher.
+- `POST/GET/PATCH /api/notes` — extended to accept/return/filter on `job_id` (additive; existing notes stay NULL = "general").
+
+**PWA** (`dashboard/capture/`):
+
+- `index.html`, `manifest.json`, `app.js`, `styles.css`, `sw.js`, `queue.js`. Linked into `theme.css` for palette parity.
+- Screens: Home, Camera (uses `<input type="file" capture="environment">`), Review (category tagging + caption), Voice (Web Speech API → optional `chs-claude-proxy` categorization → `/api/notes`), Switch-job, Pending.
+- **Offline queue** (Phase 5): IndexedDB store `pending_uploads` holds failed photo and note POSTs. The service worker registers a `chs-capture-drain` Background Sync tag and drains the queue on `sync` events; the page also drains on `online` and visibility events as the iOS-Safari fallback. Pending count surfaces as a badge on the Home tile, with a list view at `/capture/?screen=pending`.
+
+**Dashboard viewer** (`dashboard/jobs.html`):
+
+- New **Photos** tab on the Job drill-down: lazy-fetches `/api/photos?job_id=…`, renders a thumbnail grid, click opens a lightbox of the original.
+- **General Photos** button in the toolbar opens the same modal scoped to `job_id=general` for unattached uploads.
+- **📷 column on the main jobs table** (added 2026-04-25): shows a gold pill `📷 N` per row with the photo count, dim outline `📷` when empty. Sortable header (`data-sort="photo_count"`). Clicking the cell opens the drill-down with the Photos tab pre-selected. Backed by a new `photo_count` rollup on `GET /api/jobs` (single subquery against `photos.job_id`, no extra round-trips).
+
+**Out of scope for v1, deferred to follow-up sessions:**
+
+- Drive → R2 backfill of historical photos.
+- Signed URLs / external sharing (and the EXIF stripping that bundles with it).
+- Cloudflare Images (resize-on-the-fly). Sticking with client-pre-computed thumbs until image transforms become a real bottleneck.
+- Multipart upload for >100 MB videos (the "Wifi only" toggle comes back when video lands).
+- Full role-based access matrix (still tracked separately below).
+- R2-to-R2 cross-region backup.
+
+**Parked operational follow-up — Cloudflare Access ACL onboarding:**
+
+- The CF Access policy on `dashboard.homesolutionsar.com` currently allows only `tony@homesolutionsar.com`. Adding a crew member is a Cloudflare-dashboard-only change (no code) — append their Workspace email to the policy. Do this **at hire**, not preemptively, so we don't have stale identities lingering on the allowlist.
+- When you add a crew email, also confirm the same email exists in any future `users` / `crew` D1 table once roles are real (today there's no such table; uploaded_by is just a string).
 
 ### 🟢 Native expense capture in PWA (after photos foundation, ~3–4 hours)
 
@@ -272,11 +322,10 @@ Wait until photos foundation exists. Then:
 
 ### 🟡 Mobile quick-capture (small win, ~1–2 hours)
 
-> **Note:** The "big" mobile capture flow (photos on a job site) is covered by the photos spec in `docs/01-file-system.md` — don't rebuild that here. This smaller task is just about non-photo quick actions from the home screen.
+> **Note:** The "big" mobile capture flow (photos + voice notes on a job site) shipped 2026-04-25 as the **CHS Capture** PWA at `/capture/` — see "Photos system" above. This smaller task is what's *left*: extra non-photo quick actions and OS integrations.
 
-- PWA shortcuts in `manifest.json`: `📝 New Note`, `🔨 New Job`, `👷 New Sub`, `🎯 Add Lead` (long-press the dashboard icon on iOS/Android)
-- Thumb-optimized `/capture` page with voice dictation (Web Speech API)
-- Optional iOS Shortcut on top for true Lock Screen widget + share-sheet capture from Apple Notes / Keep / Safari
+- Long-press shortcuts on the **dashboard** PWA (not CHS Capture): `🔨 New Job`, `👷 New Sub`, `🎯 Add Lead` in `dashboard/manifest.json`. (CHS Capture already has `📷 Take a Photo` and `🎙️ Voice Note` shortcuts.)
+- Optional iOS Shortcut on top for true Lock Screen widget + share-sheet capture from Apple Notes / Keep / Safari into `/api/notes`.
 
 ### 🟡 Apple Notes / Google Keep integration
 Bundles with mobile capture. Both have no usable API — only feasible via iOS Shortcut → `/api/capture`. Tabled until mobile capture ships.
@@ -298,7 +347,7 @@ Deferred — needs a lead-source data source. Currently lead sources are spread 
 
 Tracked here so they don't get lost between bigger features.
 
-- **Add Thumbtack link to the advertising section.** *Open question:* which "advertising section" — the dashboard's Quick Launch tiles, a section on the public marketing site, or somewhere else? Confirm location before editing. If it's a Quick Launch tile, that's a 5-line edit in `dashboard/index.html`. If it's an external site, the change happens there.
+- ~~**Add Thumbtack link to the advertising section.**~~ ✅ **Shipped 2026-04-25.** Added 📌 Thumbtack tile to the Quick Launch → Advertising section in `dashboard/index.html`. Uses the same `mobAppLink(thumbtack://, https://www.thumbtack.com/login)` pattern as the other native-app tiles, so it opens the Thumbtack pro app on phone and falls back to web on desktop.
 
 ### 🟢 Project completion deliverable: system overview doc (do this LAST, before declaring "done")
 **Trigger**: Once the photos + social tracks are shipped and the system feels feature-complete, create a polished one-page overview that Tony (or a future hire) can use to understand the whole stack at a glance.
@@ -321,9 +370,10 @@ Tracked here so they don't get lost between bigger features.
 
 ## Open decisions for Tony
 
-1. **Photo storage model** — R2-primary (recommended) vs Drive-primary vs hybrid. Sleep-on item. Now the next thing blocking forward progress on the photos track.
+1. ~~**Photo storage model** — R2-primary vs Drive-primary vs hybrid.~~ **Resolved 2026-04-25:** R2 + D1, no Drive mirror in v1. Drive backfill is a separate decoupled session. See "Photos system" above for the four locked decisions.
 2. **Social publish channel** — Metricool API (preferred, Tony already has account) vs Zapier vs manual approval-only.
 3. **Alert recipient** — currently `tony@homesolutionsar.com`. Optional follow-up: create a Google Workspace alias `ops@homesolutionsar.com` and switch `ALERT_EMAIL_TO`. No code change, just `wrangler secret put`.
+4. **Crew CF Access onboarding policy** — parked. When the first crew member onboards, decide whether each gets added to the same dashboard CF Access policy (current default — they'd see the full admin dashboard *and* CHS Capture) or whether we split into two CF Access apps so crew gets only `/capture/*`. Lean toward splitting once role-based access lands; until then, keep the allowlist tight and add emails one at a time.
 
 ---
 

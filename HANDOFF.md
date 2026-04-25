@@ -338,6 +338,33 @@ The current refresh token was minted with read-only scopes. **Self-serve unblock
 
 This same flow is reusable for any future Jobber scope additions — toggle the scope in the Dev Center, visit `/oauth/jobber/start`, done.
 
+### 🟡 "Files" browser inside the dashboard (Drive-style quick access)
+
+> **Why:** Tony wants to grab any photo / receipt / voice note quickly without bouncing to the Cloudflare R2 dashboard. Today the only in-app surfaces are the per-job Photos tab, the General-Photos modal, and the per-expense receipt thumbnail. Good for "show me this job's photos" but bad for "where was that receipt from last Tuesday".
+>
+> **Tony's preference (2026-04-25):** either a quicklink in the existing dashboard or a dedicated page — whichever is cleaner. Lean toward dedicated page so it has room to grow (search, filters, multi-select).
+
+**Rough scope (~45-90 min):**
+
+- New `/files` route on the dashboard host (e.g. `dashboard/files.html` + a small route block in `src/index.ts`).
+- New `GET /api/files` aggregating across the existing tables/buckets:
+  - photos (D1 `photos` + R2 `photos/`)
+  - expense receipts (D1 `expenses` + R2 `expenses/`)
+  - voice notes (D1 `notes` + R2 `voice-notes/`)
+  - backups (R2 `backups/`)
+- UI: folder-tree on the left (by kind → by job → by date), grid/list on the right, search box on top (filename/job/vendor/transcript), click → lightbox or download.
+- Quicklink button on the main dashboard toolbar (alongside `🔄 Sync Now`) → "📁 Files" → opens `/files`.
+- Auth: zero new code — Cloudflare Access already gates `dashboard.homesolutionsar.com`.
+
+**Nice-to-haves (defer):**
+- Multi-select + bulk download (zip on the worker — easy with R2's streaming).
+- Drag-and-drop upload (less critical given the PWA capture path).
+- "Share link" button that mints a 24h signed URL for one file, useful for emailing a photo to a client. (See item below.)
+
+### 🟡 Signed-URL share button (~30 min, complement to /files)
+
+When the Files browser lands, add a small `🔗` button next to each file → mints a short-lived signed URL (24h default), copies to clipboard. Lets Tony text/email a single photo or receipt to a client without making the bucket public. Implementation: new `POST /api/files/:kind/:id/share` returning `{ url, expires_at }`, signed via R2 presigned URL or via a simple HMAC param the worker validates on a `/share/:token` route (worker-side validation lets us keep R2 fully private).
+
 ### 🟡 Receipt upload to Jobber (small follow-up after scope is fixed)
 
 Right now the write-back sends metadata only (title, date, total, linkedJobId, description). Two ways to attach the receipt photo:

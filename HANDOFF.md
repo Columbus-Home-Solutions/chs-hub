@@ -249,6 +249,27 @@ Wait until photos foundation exists. Then:
 - Approval queue (manual approval per the original spec)
 - Metricool API for actual publishing (or zapier-glue if Metricool API isn't suitable)
 
+**Content creation tooling — decide as part of this build:** the spec currently lists Flux Pro for image gen, but the "content creation section" should be expanded to enumerate every app/service we land on for image gen, video gen, caption drafting, etc. (e.g., Flux Pro, possibly Canva, possibly Runway, possibly others). Tony will surface candidates as the build approaches. Record the final stack in `docs/03-social-media.md` and reflect it in the dashboard's content-creation surface so the team sees the canonical toolset, not just whatever I happened to wire up first.
+
+### 🟡 Live updates — dashboard + public site without manual refresh
+
+> **Source:** raised by Tony 2026-04-25 — "test and fine-tune the high-level connection so it updates on the website and the dashboard without having to refresh every time."
+
+**Current behavior**
+- Dashboard reads from D1 + HighLevel proxy on every page load. The Lead Pipeline (Kanban) is HL-backed and only reflects HL state at the moment the page rendered. To see a card move that another user (or HL workflow) made, you have to hit Refresh.
+- KPIs and Jobs come from D1, which is itself updated only every 30 minutes by the Jobber sync cron. So even an auto-refresh on the dashboard would lag job activity by up to 30 min.
+- The public website (whatever surface this refers to — likely `homesolutionsar.com` or a Squarespace/marketing site, **clarify before building**) presumably reads from the same upstreams or its own cache.
+
+**Fix paths, ranked by effort**
+
+1. **Cheap win (~1 hr): periodic background fetch on the dashboard.** Add a `setInterval` on each page (15s for HL Kanban, 60s for KPIs/Jobs) that re-fetches the data and patches the DOM in place. Show a subtle "updated 12s ago" indicator. Doesn't fix the 30-min Jobber lag, but kills the manual-refresh annoyance for HL.
+2. **Medium (~3 hrs): HighLevel webhook → Worker → SSE/WebSocket fan-out.** HL fires a webhook when a lead/contact/opportunity changes; Worker pushes the update to any open dashboard via Server-Sent Events. Truly live for HL events; KPIs still need polling.
+3. **Big (~6+ hrs): full live-sync model.** Jobber webhooks (when scopes allow) → Worker → D1 update → SSE push to dashboard. Eliminates the 30-min lag too. Worth doing only if (1) and (2) aren't enough and Jobber permits webhook scopes for the events we care about.
+
+**Recommendation**: ship (1) first as a 1-hour quality-of-life patch, evaluate, then decide whether (2) and (3) are worth the complexity. Don't skip (1) and jump straight to webhooks — polling at 15s is genuinely fine for a 1-person ops team, and the webhook plumbing is non-trivial to debug.
+
+**Open question before any work**: which "website" — the marketing site, the dashboard itself, or both? If it's a Squarespace-style site, "live updates" there is a different problem (probably Zapier-driven content) and needs a separate issue.
+
 ### 🟡 Mobile quick-capture (small win, ~1–2 hours)
 
 > **Note:** The "big" mobile capture flow (photos on a job site) is covered by the photos spec in `docs/01-file-system.md` — don't rebuild that here. This smaller task is just about non-photo quick actions from the home screen.
@@ -272,6 +293,12 @@ Deferred — needs a lead-source data source. Currently lead sources are spread 
 - Add `README.md` + `.env.example` to `chs-estimator-seeder`
 - Add `docs/runbooks/` (quarterly-run-failed.md, refresh-token-died.md, kpi-sync-tab-deleted.md)
 - Tag `v1.0` on both `chs-estimator-seeder` and `chs-dashboard`
+
+### 📌 Small content / link items (drive-by fixes)
+
+Tracked here so they don't get lost between bigger features.
+
+- **Add Thumbtack link to the advertising section.** *Open question:* which "advertising section" — the dashboard's Quick Launch tiles, a section on the public marketing site, or somewhere else? Confirm location before editing. If it's a Quick Launch tile, that's a 5-line edit in `dashboard/index.html`. If it's an external site, the change happens there.
 
 ### 🟢 Project completion deliverable: system overview doc (do this LAST, before declaring "done")
 **Trigger**: Once the photos + social tracks are shipped and the system feels feature-complete, create a polished one-page overview that Tony (or a future hire) can use to understand the whole stack at a glance.

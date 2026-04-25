@@ -7,15 +7,16 @@
  *
  *   {
  *     id:         string  // uuid
- *     kind:       'photo' | 'note'
+ *     kind:       'photo' | 'note' | 'expense'
  *     created_at: string  // ISO
  *     attempts:   number  // starts at 0, bumped on each retry
  *     last_error: string | null
  *     payload:    object  // see below per-kind
  *   }
  *
- *   payload (photo): { metadata: object, original: Blob, thumb: Blob, filename: string }
- *   payload (note):  { body: object }   // exactly the JSON we'd send to /api/notes
+ *   payload (photo):   { metadata: object, original: Blob, thumb: Blob, filename: string }
+ *   payload (note):    { body: object }   // exactly the JSON we'd send to /api/notes
+ *   payload (expense): { metadata: object, receipt: Blob | null, filename: string }
  *
  * Blobs survive structured-clone into IDB, so we can persist the exact
  * bytes the camera produced and replay them later from either context.
@@ -30,6 +31,7 @@
   const SYNC_TAG = 'chs-capture-drain';
   const PHOTOS_URL = '/api/photos';
   const NOTES_URL = '/api/notes';
+  const EXPENSES_URL = '/api/expenses';
 
   /** Open (and migrate) the database. */
   function open() {
@@ -161,6 +163,20 @@
         body: JSON.stringify(item.payload.body || {}),
       });
       if (!res.ok) throw new Error('note HTTP ' + res.status);
+      return res;
+    }
+    if (item.kind === 'expense') {
+      const p = item.payload || {};
+      const form = new FormData();
+      form.append('metadata', JSON.stringify(p.metadata || {}));
+      // Receipt is optional; only attach if we captured one.
+      if (p.receipt) form.append('receipt', p.receipt, p.filename || 'receipt.jpg');
+      const res = await fetch(EXPENSES_URL, {
+        method: 'POST',
+        body: form,
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error('expense HTTP ' + res.status);
       return res;
     }
     throw new Error('Unknown queue item kind: ' + item.kind);

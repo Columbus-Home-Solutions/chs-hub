@@ -61,6 +61,11 @@ import {
 import { handleSearch } from "./routes/search.js";
 import { handleSheetsInspect } from "./routes/sheets-debug.js";
 import { handleJobberSync, handleSyncNow } from "./routes/sync.js";
+import {
+  handleExpenseCreate,
+  handleExpenseList,
+  handleExpenseReceipt,
+} from "./routes/expenses.js";
 import { handleWcSync } from "./routes/wc-sync.js";
 
 export default {
@@ -173,6 +178,16 @@ export default {
     const photoDetail = url.pathname.match(/^\/api\/photos\/([^/]+)$/);
     if (photoDetail && (request.method === "GET" || request.method === "HEAD")) {
       return handlePhotoStream(env, decodeURIComponent(photoDetail[1]), "original");
+    }
+
+    // ── Expenses (PWA capture) ───────────────────────────────────────
+    if (url.pathname === "/api/expenses") {
+      if (request.method === "POST") return handleExpenseCreate(env, request);
+      if (request.method === "GET") return handleExpenseList(env, url);
+    }
+    const expenseReceipt = url.pathname.match(/^\/api\/expenses\/([^/]+)\/receipt$/);
+    if (expenseReceipt && (request.method === "GET" || request.method === "HEAD")) {
+      return handleExpenseReceipt(env, decodeURIComponent(expenseReceipt[1]));
     }
 
     // ── Smart Notes ──────────────────────────────────────────────────

@@ -272,22 +272,43 @@ Items intentionally not done (lower priority Phase 6 carryovers):
 - The CF Access policy on `dashboard.homesolutionsar.com` currently allows only `tony@homesolutionsar.com`. Adding a crew member is a Cloudflare-dashboard-only change (no code) — append their Workspace email to the policy. Do this **at hire**, not preemptively, so we don't have stale identities lingering on the allowlist.
 - When you add a crew email, also confirm the same email exists in any future `users` / `crew` D1 table once roles are real (today there's no such table; uploaded_by is just a string).
 
-### 🟢 Native expense capture in PWA (after photos foundation, ~3–4 hours)
+### ✅ Native expense capture in PWA (Option A core — built 2026-04-25)
 
-> **Decision locked 2026-04-25**: Option A — native PWA capture with Jobber write-back. Receipts get snapped on-site, Tony stays out of the Jobber app. Currently `expenses` is a read-only table fed by Jobber sync; this adds a write path.
+> **Status:** core capture path shipped. PWA can snap a receipt + amount + vendor + description and persist it to D1 + R2; the dashboard drill-down expense tab shows it next to Jobber-imported expenses with clear `PWA` and `PENDING JOBBER` badges. Jobber GraphQL write-back is the remaining piece — see "Remaining follow-up" below.
 
-**Why this is locked to Option A and not "stay in Jobber":** the whole point of the PWA is on-site capture without app-switching. Logging an expense by leaving the photos PWA, opening Jobber, finding the job, and entering the receipt defeats the purpose. The cost of native capture is one new endpoint and a small UI; the savings is real (Tony stops dropping receipts because Jobber's mobile expense flow is slow).
+**What shipped:**
+- **Schema** — `migrations/0008_expenses_pwa.sql` adds `vendor`, `receipt_r2_key`, `entered_via` (`'jobber'`/`'pwa'`), `pushed_to_jobber_at`, `jobber_id` to the existing `expenses` table, plus an index on `(entered_via, pushed_to_jobber_at)` for the "pending Jobber sync" badge query.
+- **API** — `src/routes/expenses.ts`:
+  - `POST /api/expenses` (multipart): metadata JSON (job_id, amount, vendor, description, incurred_at) + optional `receipt` Blob. Validates amount > 0, generates R2 key at `expenses/{job_id|"general"}/{yyyy-mm-dd}/{uuid}.jpg`, writes R2 then D1 (same ordering rule as photos so D1 never points at missing R2). Sets `entered_via='pwa'`, leaves `pushed_to_jobber_at`/`jobber_id` NULL until Jobber write-back lands.
+  - `GET /api/expenses?job_id=&since=&limit=` — used by future tooling; today the dashboard reads expenses through `/api/jobs/:id`.
+  - `GET /api/expenses/:id/receipt` — streams the receipt JPEG from R2 (used by the lightbox).
+- **PWA UI** — `dashboard/capture/`:
+  - New `Log expense` tile on Home + `💵 Expense` slot in the bottom nav (nav grew from 3 to 4 columns).
+  - New `expense` screen with the same active-job/general toggle pattern as voice notes, optional receipt photo button (separate hidden file input — `cap-receipt-input` — so it can't collide with the photo capture pipeline), and amount/vendor/description inputs. Receipts are downscaled client-side to ~1600px JPEG before upload.
+  - Offline queue extended in `queue.js` (new `'expense'` kind with `{ metadata, receipt, filename }` payload). On network failure, expenses queue alongside photos and notes; the SW drains them on the next Background Sync or page poke.
+  - Pending screen now labels expense items as `💵 EXPENSE` with vendor + amount.
+- **Dashboard viewer** — `dashboard/jobs.html`:
+  - `/api/jobs/:id` now returns the new fields on every expense row.
+  - Expense table grew a vendor cell (with description as a sub-line), a thumbnail cell that links to the same lightbox photos use, and badges:
+    - `PWA` — entered via the PWA.
+    - `PENDING JOBBER` — entered via PWA but not yet pushed back to Jobber. Once the Jobber write-back ships, this clears automatically when `pushed_to_jobber_at` fills in.
 
-**Build steps** when the time comes:
-1. **Migration**: extend `expenses` table with `vendor TEXT`, `receipt_r2_key TEXT`, `entered_via TEXT` (`'jobber'` vs `'pwa'`), `pushed_to_jobber_at TEXT`, `jobber_id TEXT NULL` (filled in after write-back succeeds).
-2. **Endpoint**: `POST /api/expenses` — accepts `{ job_id, amount, vendor, description, incurred_at, receipt_blob }`. Stores blob in R2 at `expenses/{job_id}/{yyyy-mm-dd}/{sha256}.jpg`, row in D1 with `entered_via='pwa'`, returns the new ID.
-3. **Jobber write-back**: investigate Jobber GraphQL mutation for expense creation (likely `expenseCreate` or similar — need to confirm in the API explorer with `JOBBER_TOKEN`). On success, fill `jobber_id` and `pushed_to_jobber_at`. On failure, leave the row PWA-local and show a yellow "not yet synced to Jobber" badge in the dashboard so Tony knows to reconcile.
-4. **PWA UI**: tap "Log expense" on PWA Home → screen with active-job tile (same toggle pattern as voice notes — Active job / General; "General" maps to `job_id = null` for "office supplies, not a job"), receipt photo button (uses same camera primitive as the photos flow), amount + vendor + description fields, optional voice-dictation on description (reuse the voice-note recorder, transcript-only mode).
-5. **Dashboard**: existing job drill-down already shows expenses; just add the "entered via PWA" badge and the "not synced to Jobber" badge for failed write-backs.
+**Smoke-tested 2026-04-25** on `chs-hub.tony-bc5.workers.dev` with two POSTs (one with receipt, one without) + a GET list + HEAD on the receipt stream.
 
-**Open question to resolve before building**: confirm Jobber GraphQL supports expense write. If it doesn't, downgrade to **Option B** (PWA-local only, reconcile in Jobber weekly) — but check first; this is a 5-minute test in their API explorer.
+**Out of scope for this build (intentional):**
+- Voice-dictation on the description field (mentioned in the original plan as "optional"). Easy to add later by reusing `buildRecognition()` from the voice-note flow.
+- Hash-deduped R2 keys (we use the row UUID instead of a content hash; collisions on a UUID are basically zero, and Tony might genuinely re-snap the same receipt for two expenses).
 
-**Wireframe placeholder**: the `Log expense` button on the PWA Home screen in `canvases/pwa-capture-wireframe.canvas.tsx` is rendered as a dashed-border `v2` button so it's visible but obviously unwired.
+### 🟡 Remaining follow-up — Jobber write-back for PWA-captured expenses (~30–60 min)
+
+Currently every PWA expense lives in D1+R2 only and shows a `PENDING JOBBER` badge in the drill-down. To complete Option A:
+
+1. Open the Jobber GraphQL API explorer with `JOBBER_TOKEN` and confirm an expense-create mutation exists (likely `expenseCreate` / `createJobExpense`). Note the input shape (job ID, amount, vendor, etc.) and what comes back (`expense.id`?).
+2. Add `src/jobber/expenses.ts` with a `pushExpenseToJobber(env, expenseId)` helper that runs the mutation, then patches the D1 row with `pushed_to_jobber_at = now()` and `jobber_id = <returned id>`.
+3. Wire it into `POST /api/expenses` (best-effort, after the D1 row is saved — don't block the PWA response on Jobber being up). Optionally also expose `POST /api/expenses/:id/push-to-jobber` so the dashboard can re-try a single failed row from a button next to the `PENDING JOBBER` badge.
+4. Make sure the cron Jobber sync **does not** re-import a PWA expense after it's been pushed back: match on `jobber_id` and skip rows already in D1.
+
+**If the GraphQL mutation doesn't exist:** downgrade to Option B — PWA expenses stay local-only, Tony reconciles weekly in Jobber. The badge already labels them; no code change needed.
 
 ### 🟢 Social media system (after photos)
 

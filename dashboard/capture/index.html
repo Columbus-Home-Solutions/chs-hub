@@ -67,6 +67,12 @@
           <div class="cap-action-sub">Job or general — Claude tags it.</div>
         </button>
 
+        <button class="cap-action" data-action="goto-expense">
+          <span class="cap-action-icon">💵</span>
+          <div class="cap-action-title">Log expense</div>
+          <div class="cap-action-sub">Snap receipt, attach to job. Pushes to Jobber later.</div>
+        </button>
+
         <button class="cap-action" data-action="goto-pending">
           <span class="cap-action-icon">⟳</span>
           <div class="cap-action-title">Pending</div>
@@ -239,9 +245,66 @@
       <div class="cap-pending-list" id="cap-pending-list"></div>
     </section>
 
+    <!-- ── Expense screen ──────────────────────────────────────────────
+      Tony's "log a receipt while standing at the lumber yard" flow.
+      Optional receipt photo (uses a separate hidden file input so it
+      can't collide with the photo-capture pipeline), then numeric
+      amount, vendor, optional description, and the same active-job /
+      general toggle the voice screen uses. POSTs to /api/expenses;
+      Jobber write-back is a follow-up.
+    -->
+    <section class="cap-screen" data-screen="expense">
+      <div class="cap-screen-title">Log expense</div>
+
+      <div class="cap-jobstrip" id="cap-expense-jobstrip" data-mode="general">
+        <div>
+          <div class="cap-jobstrip-label">Attach to</div>
+          <div class="cap-jobstrip-title" id="cap-expense-job-title">General</div>
+          <div class="cap-jobstrip-meta" id="cap-expense-job-meta">No job · "office supplies, not a job".</div>
+        </div>
+        <button class="cap-jobstrip-switch" data-action="goto-switch-job">Change</button>
+      </div>
+
+      <div class="cap-voice-toggle cap-expense-toggle" role="tablist" aria-label="Expense target">
+        <button class="cap-expense-toggle-btn cap-voice-toggle-btn" data-expense-target="job" data-active="true" role="tab">Attach to job</button>
+        <button class="cap-expense-toggle-btn cap-voice-toggle-btn" data-expense-target="general" role="tab">General</button>
+      </div>
+
+      <button class="cap-action" data-action="open-receipt-camera" id="cap-receipt-btn" style="grid-column:1/-1">
+        <span class="cap-action-icon">🧾</span>
+        <span>
+          <div class="cap-action-title" id="cap-receipt-title">Add receipt photo (optional)</div>
+          <div class="cap-action-sub" id="cap-receipt-sub">Tap to snap; otherwise the expense saves without a photo.</div>
+        </span>
+      </button>
+
+      <div class="cap-review-preview" id="cap-receipt-preview" hidden>
+        <img id="cap-receipt-img" alt="Receipt preview" />
+      </div>
+
+      <label for="cap-expense-amount" class="cap-screen-sub" style="margin-top:0">Amount (USD)</label>
+      <input class="cap-search" id="cap-expense-amount" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00" autocomplete="off">
+
+      <label for="cap-expense-vendor" class="cap-screen-sub" style="margin-top:0">Vendor</label>
+      <input class="cap-search" id="cap-expense-vendor" type="text" placeholder="Lowe's, Home Depot, …" autocomplete="off" maxlength="120">
+
+      <label for="cap-expense-desc" class="cap-screen-sub" style="margin-top:0">Description (optional)</label>
+      <input class="cap-search" id="cap-expense-desc" type="text" placeholder="2x4s and screws" autocomplete="off" maxlength="200">
+
+      <button class="cap-action cap-action--primary" data-action="submit-expense" id="cap-expense-submit" style="grid-column:1/-1">
+        <span class="cap-action-icon">✅</span>
+        <span>
+          <div class="cap-action-title">Save expense</div>
+          <div class="cap-action-sub" id="cap-expense-submit-sub">Saves to D1 + R2. Jobber sync will follow up later.</div>
+        </span>
+      </button>
+
+      <button class="cap-jobstrip-switch" data-action="goto-home" style="align-self:flex-start">← Back</button>
+    </section>
+
   </main>
 
-  <!-- Bottom nav: three primary actions, always visible. -->
+  <!-- Bottom nav: four primary actions, always visible. -->
   <nav class="cap-bottomnav" aria-label="Primary actions">
     <button class="cap-navbtn" data-action="goto-home" data-active="true">
       <span class="cap-navbtn-icon">🏠</span><span>Home</span>
@@ -251,6 +314,9 @@
     </button>
     <button class="cap-navbtn" data-action="goto-voice">
       <span class="cap-navbtn-icon">🎙️</span><span>Voice</span>
+    </button>
+    <button class="cap-navbtn" data-action="goto-expense">
+      <span class="cap-navbtn-icon">💵</span><span>Expense</span>
     </button>
   </nav>
 
@@ -262,6 +328,17 @@
   -->
   <input type="file"
          id="cap-camera-input"
+         accept="image/*"
+         capture="environment"
+         hidden>
+
+  <!--
+    Separate hidden input for receipt photos so the expense flow can't
+    accidentally consume an in-flight job-photo capture (and vice versa).
+    Both share the same `capture="environment"` hint.
+  -->
+  <input type="file"
+         id="cap-receipt-input"
          accept="image/*"
          capture="environment"
          hidden>

@@ -261,7 +261,9 @@ export async function handleJobDetail(
     .all<Record<string, unknown>>();
 
   const expenses = await env.DB.prepare(
-    `SELECT id, description, amount, incurred_at
+    `SELECT id, description, amount, incurred_at,
+            vendor, receipt_r2_key, entered_via,
+            pushed_to_jobber_at, jobber_id
      FROM expenses
      WHERE job_id = ?
      ORDER BY incurred_at DESC`,

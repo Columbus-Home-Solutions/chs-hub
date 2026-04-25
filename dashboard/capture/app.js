@@ -105,11 +105,13 @@
       const matches =
         (action === 'goto-home' && name === 'home') ||
         (action === 'goto-camera' && name === 'camera') ||
-        (action === 'goto-voice' && name === 'voice');
+        (action === 'goto-voice' && name === 'voice') ||
+        (action === 'goto-expense' && name === 'expense');
       btn.dataset.active = matches ? 'true' : 'false';
     });
     if (name === 'switch-job') ensureActiveJobsLoaded();
     if (name === 'voice') renderVoiceJobStrip();
+    if (name === 'expense') renderExpenseJobStrip();
     if (name === 'pending') {
       // Refresh the list whenever the user navigates here, and quietly
       // poke the SW to drain in case Background Sync is unsupported.
@@ -189,6 +191,10 @@
     }
     saveCurrentJob();
     renderCurrentJob();
+    // Both screens that have their own "Attach to" strip need refreshing
+    // since the user may have come from one of them.
+    renderVoiceJobStrip();
+    renderExpenseJobStrip();
     showScreen('home');
     toast(jobId ? 'Job selected' : 'Switched to General');
   }
@@ -789,6 +795,235 @@
     }
   }
 
+  // ── Expense capture (Phase 7) ────────────────────────────────────
+  //
+  // Mirror of the voice flow's job/general toggle, plus an optional
+  // receipt photo (separate hidden file input so it can't collide with
+  // the photo-capture pipeline). On submit we POST a multipart form to
+  // /api/expenses; on network failure we fall back to the offline
+  // queue identical to photos and notes.
+
+  /** Mutable state for the in-flight expense form. */
+  const expenseState = {
+    target: 'job',
+    receipt: null,           // Blob | null
+    receiptPreviewUrl: null, // object URL we revoke on reset
+    submitting: false,
+  };
+
+  /** Render the "Attach to" strip on the Expense screen. */
+  function renderExpenseJobStrip() {
+    const strip = document.getElementById('cap-expense-jobstrip');
+    const titleEl = document.getElementById('cap-expense-job-title');
+    const metaEl = document.getElementById('cap-expense-job-meta');
+    const jobSubEl = document.getElementById('cap-expense-target-job-sub');
+    if (!strip || !titleEl || !metaEl) return;
+
+    // The Active-job toggle's subtitle echoes the job so users see what
+    // they'd be attaching to without scrolling up.
+    if (jobSubEl) jobSubEl.textContent = currentJob.title || 'No job selected';
+
+    const useJob = expenseState.target === 'job' && currentJob.id;
+    if (useJob) {
+      strip.dataset.mode = 'job';
+      titleEl.textContent = currentJob.title || 'Job (no title)';
+      metaEl.textContent = currentJob.meta || 'Expense will attach to this job.';
+    } else {
+      strip.dataset.mode = 'general';
+      if (expenseState.target === 'job' && !currentJob.id) {
+        titleEl.textContent = 'No job selected';
+        metaEl.textContent = 'Tap “Change” to choose a job, or switch to General.';
+      } else {
+        titleEl.textContent = 'General';
+        metaEl.textContent = 'No job · "office supplies, not a job".';
+      }
+    }
+  }
+
+  function setExpenseTarget(target) {
+    if (target !== 'job' && target !== 'general') return;
+    expenseState.target = target;
+    document.querySelectorAll('.cap-expense-toggle-btn').forEach((b) => {
+      b.dataset.active = b.dataset.expenseTarget === target ? 'true' : 'false';
+    });
+    renderExpenseJobStrip();
+  }
+
+  /** Trigger the receipt-only file input. */
+  function openReceiptCamera() {
+    const input = document.getElementById('cap-receipt-input');
+    if (!input) return;
+    input.value = '';
+    input.click();
+  }
+
+  /**
+   * Stash the snapped receipt into expenseState and show a thumbnail
+   * preview. We don't generate a separate small thumb (receipts are
+   * already small, and the dashboard renders them at native size in a
+   * lightbox), but we DO downscale to ~1600px so a 12MP receipt photo
+   * doesn't bloat R2.
+   */
+  async function onReceiptInput(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    try {
+      const downscaled = await downscaleImage(file, 1600);
+      expenseState.receipt = downscaled;
+      if (expenseState.receiptPreviewUrl) URL.revokeObjectURL(expenseState.receiptPreviewUrl);
+      const url = URL.createObjectURL(downscaled);
+      expenseState.receiptPreviewUrl = url;
+
+      const img = document.getElementById('cap-receipt-img');
+      const wrap = document.getElementById('cap-receipt-preview');
+      const title = document.getElementById('cap-receipt-title');
+      const sub = document.getElementById('cap-receipt-sub');
+      if (img) img.src = url;
+      if (wrap) wrap.removeAttribute('hidden');
+      if (title) title.textContent = 'Replace receipt photo';
+      if (sub) sub.textContent = 'Tap to retake; will overwrite the image above.';
+    } catch (err) {
+      console.error('Receipt capture failed:', err);
+      toast('Could not process receipt');
+    }
+  }
+
+  /**
+   * Resize an image Blob to fit within `maxEdge` on the long side, JPEG
+   * 0.85 quality. Returns a JPEG Blob. Falls through with the original
+   * if the canvas pipeline isn't available.
+   */
+  async function downscaleImage(file, maxEdge) {
+    if (!('createImageBitmap' in window)) return file;
+    const bitmap = await createImageBitmap(file);
+    const longest = Math.max(bitmap.width, bitmap.height);
+    if (longest <= maxEdge) {
+      bitmap.close && bitmap.close();
+      return file;
+    }
+    const scale = maxEdge / longest;
+    const w = Math.round(bitmap.width * scale);
+    const h = Math.round(bitmap.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { bitmap.close && bitmap.close(); return file; }
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close && bitmap.close();
+    return await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b || file), 'image/jpeg', 0.85),
+    );
+  }
+
+  function resetExpenseForm() {
+    expenseState.receipt = null;
+    if (expenseState.receiptPreviewUrl) {
+      URL.revokeObjectURL(expenseState.receiptPreviewUrl);
+      expenseState.receiptPreviewUrl = null;
+    }
+    const img = document.getElementById('cap-receipt-img');
+    const wrap = document.getElementById('cap-receipt-preview');
+    const title = document.getElementById('cap-receipt-title');
+    const sub = document.getElementById('cap-receipt-sub');
+    if (img) img.removeAttribute('src');
+    if (wrap) wrap.setAttribute('hidden', '');
+    if (title) title.textContent = 'Add receipt photo (optional)';
+    if (sub) sub.textContent = 'Tap to snap; otherwise the expense saves without a photo.';
+    ['cap-expense-amount', 'cap-expense-vendor', 'cap-expense-desc'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+  }
+
+  async function submitExpense() {
+    if (expenseState.submitting) return;
+
+    const amountEl = document.getElementById('cap-expense-amount');
+    const vendorEl = document.getElementById('cap-expense-vendor');
+    const descEl = document.getElementById('cap-expense-desc');
+    const submitBtn = document.getElementById('cap-expense-submit');
+    const submitSub = document.getElementById('cap-expense-submit-sub');
+
+    const amount = Number((amountEl && amountEl.value) || '');
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast('Enter an amount > 0');
+      amountEl && amountEl.focus();
+      return;
+    }
+    const vendor = (vendorEl && vendorEl.value || '').trim();
+    const description = (descEl && descEl.value || '').trim();
+
+    if (expenseState.target === 'job' && !currentJob.id) {
+      toast('Pick a job or switch to General');
+      return;
+    }
+
+    const targetIsJob = expenseState.target === 'job' && currentJob.id;
+    const metadata = {
+      job_id: targetIsJob ? currentJob.id : null,
+      amount,
+      vendor: vendor || null,
+      description: description || null,
+      incurred_at: new Date().toISOString(),
+    };
+
+    expenseState.submitting = true;
+    if (submitBtn) submitBtn.setAttribute('disabled', '');
+    if (submitSub) submitSub.textContent = 'Sending…';
+
+    const form = new FormData();
+    form.append('metadata', JSON.stringify(metadata));
+    if (expenseState.receipt) {
+      form.append('receipt', expenseState.receipt, 'receipt.jpg');
+    }
+
+    try {
+      const res = await fetch('/api/expenses', {
+        method: 'POST',
+        body: form,
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error('http ' + res.status);
+      resetExpenseForm();
+      showScreen('home');
+      toast(targetIsJob ? 'Expense saved to job' : 'Expense saved (general)');
+    } catch (err) {
+      console.error('Expense save failed:', err);
+      const enqueued = await tryEnqueueExpense(metadata);
+      if (enqueued) {
+        resetExpenseForm();
+        showScreen('home');
+        toast('Saved offline — will sync when reconnected');
+        refreshPendingBadge();
+      } else {
+        toast('Save failed — try again');
+      }
+    } finally {
+      expenseState.submitting = false;
+      if (submitBtn) submitBtn.removeAttribute('disabled');
+      if (submitSub) submitSub.textContent = 'Saves to D1 + R2. Jobber sync will follow up later.';
+    }
+  }
+
+  /** Persist a failed expense submission to IndexedDB for retry. */
+  async function tryEnqueueExpense(metadata) {
+    const q = queue();
+    if (!q) return false;
+    try {
+      await q.add('expense', {
+        metadata,
+        receipt: expenseState.receipt || null,
+        filename: 'receipt.jpg',
+      });
+      await registerSyncTag();
+      return true;
+    } catch (err) {
+      console.warn('Expense enqueue failed:', err);
+      return false;
+    }
+  }
+
   // ── Offline queue (Phase 5) ──────────────────────────────────────
 
   /** Reference to the shared queue module; null if it failed to load. */
@@ -920,14 +1155,23 @@
 
     list.innerHTML = items.map((it) => {
       const when = it.created_at ? formatRelative(it.created_at) : '';
-      const meta = it.kind === 'photo'
-        ? describePhotoItem(it)
-        : describeNoteItem(it);
+      let meta;
+      let label;
+      if (it.kind === 'photo') {
+        meta = describePhotoItem(it);
+        label = '📷 PHOTO';
+      } else if (it.kind === 'expense') {
+        meta = describeExpenseItem(it);
+        label = '💵 EXPENSE';
+      } else {
+        meta = describeNoteItem(it);
+        label = '🎙️ NOTE';
+      }
       const failed = (it.attempts || 0) > 0;
       return `
         <div class="cap-pending-row" data-failed="${failed ? 'true' : 'false'}">
           <div class="cap-pending-row-head">
-            <span>${it.kind === 'photo' ? '📷 PHOTO' : '🎙️ NOTE'}</span>
+            <span>${label}</span>
             <span>${escapeHtml(when)}</span>
           </div>
           <div class="cap-pending-row-meta">${escapeHtml(meta)}</div>
@@ -941,6 +1185,13 @@
     const job = m.job_id ? 'Job ' + m.job_id : 'General';
     const cat = (m.category || 'progress').toString();
     return `${job} · ${cat}`;
+  }
+  function describeExpenseItem(it) {
+    const m = (it.payload && it.payload.metadata) || {};
+    const job = m.job_id ? 'Job ' + m.job_id : 'General';
+    const amt = Number.isFinite(Number(m.amount)) ? '$' + Number(m.amount).toFixed(2) : '$?';
+    const vendor = m.vendor ? ' · ' + m.vendor : '';
+    return `${job} · ${amt}${vendor}`;
   }
   function describeNoteItem(it) {
     const b = (it.payload && it.payload.body) || {};
@@ -986,10 +1237,21 @@
     const cat = el.closest('#cap-cat-grid .cap-cat');
     if (cat) { onCategoryClick(cat); return; }
 
+    // Expense job/general toggle. Has to come before the voice handler
+    // because both buttons share the .cap-voice-toggle-btn class for
+    // styling; differentiated by which data attribute is set.
+    const expenseTab = el.closest('.cap-expense-toggle-btn');
+    if (expenseTab) { setExpenseTarget(expenseTab.dataset.expenseTarget); return; }
+
     // Voice job/general toggle (also takes precedence so the toggle
     // buttons don't accidentally match a stray data-action selector).
+    // Skip toggle buttons that don't carry a voice-target — those belong
+    // to other screens (expense) that share the styling class.
     const voiceTab = el.closest('.cap-voice-toggle-btn');
-    if (voiceTab) { setVoiceTarget(voiceTab.dataset.voiceTarget); return; }
+    if (voiceTab && voiceTab.dataset.voiceTarget) {
+      setVoiceTarget(voiceTab.dataset.voiceTarget);
+      return;
+    }
 
     const target = el.closest('[data-action], .cap-jobrow');
     if (!target) return;
@@ -1010,9 +1272,12 @@
       case 'goto-voice':        showScreen('voice'); break;
       case 'goto-switch-job':   showScreen('switch-job'); break;
       case 'goto-pending':      showScreen('pending'); break;
+      case 'goto-expense':      showScreen('expense'); break;
       case 'open-camera':       openCamera(); break;
+      case 'open-receipt-camera': openReceiptCamera(); break;
       case 'submit-photo':      submitPendingPhoto(); break;
       case 'discard-photo':     discardPendingPhoto(); break;
+      case 'submit-expense':    submitExpense(); break;
       case 'voice-toggle-rec':  onVoiceToggleRec(); break;
       case 'voice-discard':     discardVoice(); break;
       case 'voice-save-claude': saveVoiceNote(true); break;
@@ -1080,6 +1345,7 @@
   document.addEventListener('click', onClick);
   document.getElementById('cap-job-search')?.addEventListener('input', onSearchInput);
   document.getElementById('cap-camera-input')?.addEventListener('change', onCameraInput);
+  document.getElementById('cap-receipt-input')?.addEventListener('change', onReceiptInput);
   renderCurrentJob();
   applyDeepLink();
   registerSW();

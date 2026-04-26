@@ -22,6 +22,12 @@ export interface Env {
   // Location ID. Not secret — appears in HL URLs — lives in wrangler.toml [vars].
   HL_LOCATION_ID: string;
 
+  // Dashboard `index.html` — replace %%…%% at the edge (wrangler [vars]).
+  DASHBOARD_OAUTH_CLIENT_ID?: string;
+  DASHBOARD_GOOGLE_API_KEY?: string;
+  JOB_TRACKER_SHEET_ID?: string;
+  WC_SHEET_ID?: string;
+
   // ─── Operational notifications (Resend) ─────────────────────────
   // All four reliability features (heartbeat, DLQ retry alerts, backup
   // verification, daily summary) flow through src/lib/ops/notify.ts.

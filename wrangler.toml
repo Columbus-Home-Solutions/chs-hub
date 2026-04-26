@@ -66,6 +66,9 @@ HL_LOCATION_ID = "lZ8L8FAf6K2niuHoFbaw"
 # Set to "1" to disable real Resend sends (notify() will log to console
 # instead). Useful while wiring up the Resend domain or for dev runs.
 RESEND_DRY_RUN = "0"
+# Optional [vars] for the dashboard (do not commit real values here if you prefer
+# the Cloudflare UI): DASHBOARD_OAUTH_CLIENT_ID, DASHBOARD_GOOGLE_API_KEY,
+# JOB_TRACKER_SHEET_ID, WC_SHEET_ID — see docs/google-oauth-dashboard.md
 
 # ─── Scheduled jobs ────────────────────────────────────────────────────
 # All four schedules dispatch through src/index.ts → dispatchCron().

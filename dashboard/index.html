@@ -912,9 +912,9 @@ function isAuthenticated(){return oauthToken&&Date.now()<oauthExpiry;}
 // Auth headers for all Google API calls
 function authHeaders(){return{'Authorization':'Bearer '+oauthToken,'Content-Type':'application/json'};}
 
-// Launch OAuth popup
+// Launch OAuth (implicit flow — token in URL hash on return to this exact origin)
 function connectGoogle(){
-  var redirectUri='https://dashboard.homesolutionsar.com';
+  var redirectUri=window.location.origin;
   var params=new URLSearchParams({
     client_id:OAUTH_CLIENT_ID,
     redirect_uri:redirectUri,

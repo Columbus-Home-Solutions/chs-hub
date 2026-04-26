@@ -16,6 +16,10 @@
  * Secrets (set via `wrangler secret put`):
  *   env.JOBBER_CLIENT_ID / JOBBER_CLIENT_SECRET / JOBBER_REFRESH_TOKEN
  *   env.SYNC_TRIGGER_SECRET
+ *
+ * Public dashboard vars (Cloudflare → Worker → Settings, optional in wrangler [vars]):
+ *   DASHBOARD_OAUTH_CLIENT_ID, DASHBOARD_GOOGLE_API_KEY, JOB_TRACKER_SHEET_ID, WC_SHEET_ID
+ *   (injected into dashboard/index.html — see src/lib/dashboard-inject.ts, docs/google-oauth-dashboard.md)
  */
 
 import type { Env } from "./env.js";
@@ -73,6 +77,16 @@ import {
   handleJobberStatus,
 } from "./routes/oauth-jobber.js";
 import { handleWcSync } from "./routes/wc-sync.js";
+import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
+
+async function fetchAssetWithDashboardInject(
+  env: Env,
+  assetRequest: Request,
+): Promise<Response> {
+  const u = new URL(assetRequest.url);
+  const res = await env.ASSETS.fetch(assetRequest);
+  return maybeInjectDashboardHtml(env, u, assetRequest, res);
+}
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
@@ -263,10 +277,13 @@ export default {
     if (isDashboardHost && !url.pathname.startsWith("/dashboard")) {
       const rewritten = new URL(request.url);
       rewritten.pathname = "/dashboard" + (url.pathname === "/" ? "/" : url.pathname);
-      return env.ASSETS.fetch(new Request(rewritten.toString(), request));
+      return fetchAssetWithDashboardInject(
+        env,
+        new Request(rewritten.toString(), request),
+      );
     }
 
-    return env.ASSETS.fetch(request);
+    return fetchAssetWithDashboardInject(env, request);
   },
 
   // Scheduled handler — invoked by Cloudflare cron triggers (see wrangler.toml).

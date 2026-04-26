@@ -2,7 +2,7 @@
 
 > **For Tony:** Open Cursor on `~/projects/chs-hub`, start a brand new chat, and paste the contents of this file as your first message. Then say _"Read HANDOFF.md and confirm you're caught up. I want to work on **&lt;X&gt;** today."_
 
-> **For the next AI session:** This is the source of truth for project state as of **Apr 25, 2026**. Trust this over any older context. The previous chat (where the dashboard rebuild happened) was archived because it had become unwieldy. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
+> **For the next AI session:** This is the source of truth for project state as of **Apr 26, 2026**. Trust this over any older context. The previous chat (where the dashboard rebuild happened) was archived because it had become unwieldy. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
 
 ---
 
@@ -408,24 +408,18 @@ The expense description input now has a `🎙️` mic button that toggles Web Sp
 
 **Open questions** already listed in spec section 8 — copy into the first PR description and tick them off.
 
-### 🟡 Live updates — dashboard + public site without manual refresh
+### ✅ Live updates — HighLevel lead pipeline (shipped 2026-04-26)
 
-> **Source:** raised by Tony 2026-04-25 — "test and fine-tune the high-level connection so it updates on the website and the dashboard without having to refresh every time."
+> **Source:** raised by Tony — HighLevel and dashboard should stay in sync without a manual full page refresh.
 
-**Current behavior**
-- Dashboard reads from D1 + HighLevel proxy on every page load. The Lead Pipeline (Kanban) is HL-backed and only reflects HL state at the moment the page rendered. To see a card move that another user (or HL workflow) made, you have to hit Refresh.
-- KPIs and Jobs come from D1, which is itself updated only every 30 minutes by the Jobber sync cron. So even an auto-refresh on the dashboard would lag job activity by up to 30 min.
-- The public website (whatever surface this refers to — likely `homesolutionsar.com` or a Squarespace/marketing site, **clarify before building**) presumably reads from the same upstreams or its own cache.
+**Shipped in `dashboard/index.html`:**
+- **`HL_PIPELINE_POLL_MS` (15s):** while the tab is in the **foreground** (`document.hidden === false`), the worker proxy re-fetches all opportunities (with pagination) on a timer — typically see HL-side moves within one interval.
+- **`visibilitychange` + `window` `focus`:** refetch when you return to the tab or refocus the browser window (e.g. after moving a deal in HighLevel in another window).
+- **Drag on the board** still calls `updateHLStage` then `fetchHLData()` so dashboard → HL stays consistent.
 
-**Fix paths, ranked by effort**
+**Not in scope of this pass:** the **marketing / public** site, KPI tiles backed by D1+Jobber cron, or true **push** (webhooks + SSE). Those sit in **Fine tuning (end of project)** at the end of this file.
 
-1. **Cheap win (~1 hr): periodic background fetch on the dashboard.** Add a `setInterval` on each page (15s for HL Kanban, 60s for KPIs/Jobs) that re-fetches the data and patches the DOM in place. Show a subtle "updated 12s ago" indicator. Doesn't fix the 30-min Jobber lag, but kills the manual-refresh annoyance for HL.
-2. **Medium (~3 hrs): HighLevel webhook → Worker → SSE/WebSocket fan-out.** HL fires a webhook when a lead/contact/opportunity changes; Worker pushes the update to any open dashboard via Server-Sent Events. Truly live for HL events; KPIs still need polling.
-3. **Big (~6+ hrs): full live-sync model.** Jobber webhooks (when scopes allow) → Worker → D1 update → SSE push to dashboard. Eliminates the 30-min lag too. Worth doing only if (1) and (2) aren't enough and Jobber permits webhook scopes for the events we care about.
-
-**Recommendation**: ship (1) first as a 1-hour quality-of-life patch, evaluate, then decide whether (2) and (3) are worth the complexity. Don't skip (1) and jump straight to webhooks — polling at 15s is genuinely fine for a 1-person ops team, and the webhook plumbing is non-trivial to debug.
-
-**Open question before any work**: which "website" — the marketing site, the dashboard itself, or both? If it's a Squarespace-style site, "live updates" there is a different problem (probably Zapier-driven content) and needs a separate issue.
+**Open product question (deferred):** if "live" should ever apply to a **non-dashboard** property (e.g. Squarespace), that is a separate integration — clarify URL and data source first.
 
 ### 🟡 Mobile quick-capture (small win, ~1–2 hours)
 
@@ -588,6 +582,45 @@ npm run ops:sync:log          # last 20 sync_log entries
 15 7 * * *     Nightly D1→R2 backup + 30-day retention sweep (02:15 Central)
 0 12 * * *     Daily summary email (07:00 Central)
 ```
+
+---
+
+## Fine tuning (end of project)
+
+> **When:** After the big rocks are done (capture, social, files browser, etc.) and the system is in **daily use** with no burning gaps. These are **polish and latency** upgrades, not blockers. Budget **roughly 1–2 days** if you do both HighLevel and Jobber push paths; half a day for HL-only.
+
+### 1) HighLevel — push-based lead pipeline (sub-second, optional)
+
+**Problem today:** the dashboard **polls** the LeadConnector API on an interval. It is efficient and good enough for one operator, but it is not **instant** and it burns a small amount of API traffic forever.
+
+**Target behavior:** a card **moves on the board within ~1s** of a change in HighLevel (or of a successful `PUT` from the dashboard) without waiting for the next poll.
+
+**Approach (scoped):**
+1. **HighLevel** — In the GHL / LeadConnector app settings, subscribe to **opportunity** (and if needed **contact**) webhooks for the sub-account, pointing at a new HTTPS endpoint, e.g. `POST /api/integrations/hl/webhook` (Access **off** for this path; use **HMAC or shared-secret** query/body validation so only GHL can post).
+2. **Worker** — Verify the signature, parse the event (at minimum `OpportunityUpdate` / stage change; optionally dedupe with `eventId` if provided). Enqueue a tiny payload `{ type, opportunityId, locationId, pipelineStageId? }` to a **Durable Object** or just **broadcast** to interested clients (see next).
+3. **Browser** — Open a **Server-Sent Events (SSE)** stream from the same worker origin, e.g. `GET /api/integrations/hl/events` (protected by **Cloudflare Access** like the rest of the dashboard), `EventSource` in `index.html` listening for `opportunity` events. On message: either call existing `fetchHLData()` (simplest) or **patch a single card** in the DOM if the payload is rich enough.
+4. **Back-pressure / fallback** — If SSE disconnects, fall back to current **15s polling** (keep today’s poller as safety net). Optional: `Last-Event-ID` reconnection (SSE standard).
+
+**Out of scope for this item:** rewiring **KPIs** or **Jobber** rows (separate line below). **Do not** remove the poll loop until SSE is proven stable in production.
+
+**Rough effort:** **~3–5 hours** for HL-only push + SSE + secret verification; add buffer if GHL’s webhook shape or signing docs require iteration.
+
+### 2) Jobber — near-live jobs / KPIs (larger, optional)
+
+**Problem today:** D1 is refreshed on a **30-minute cron** (plus on-demand sync). The dashboard can poll KPI endpoints more often, but the **data** is still at most 30 min fresh unless someone triggers a sync.
+
+**Target behavior:** **significant** Jobber events (e.g. job status, new invoice) trickle into D1 **within a minute** and optionally notify the open dashboard.
+
+**Approach (scoped, high level):** Jobber **webhooks** (if available for your plan and events) or scheduled **incremental** GraphQL pull more often for **hot** entities only → Worker writes D1 → same **SSE channel** (or a second event type) to the dashboard. Requires **webhook URL registration** in Jobber, idempotent writes, and careful alignment with the existing `syncJobberToD1` full sync so cron doesn’t fight incremental updates.
+
+**Rough effort:** **~6+ hours** — treat as a small project; only worth it if sub-30-min job data is a real pain after HL push is done.
+
+### 3) Small UX add-ons (same “fine tuning” bucket)
+
+- **"Updated 12s ago"** (or "Live · synced 3s ago") on the lead pipeline card header — uses `performance.now()` or a `lastHLSyncedAt` timestamp; purely cosmetic.
+- **Throttle** SSE + polling so both never run full fetches in the same second (minor).
+
+**Record in git:** when this ships, add a short `docs/runbooks/hl-sse-pipeline.md` (webhook URL, secret rotation, how to test with `curl`).
 
 ---
 

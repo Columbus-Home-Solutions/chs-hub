@@ -378,17 +378,35 @@ Pick easy when this becomes a priority; the cleaner path is overkill until recei
 
 The expense description input now has a `🎙️` mic button that toggles Web Speech transcription directly into the field. Reuses `buildRecognition()` from the voice-note flow but in transcript-only mode (no Claude round-trip; recognized phrases append straight into the input). Tap once to start — button pulses red — tap again to stop, or navigate away from the Expense screen and the recognizer auto-stops. Final transcript caps at the same 200-char limit as typed input.
 
-### 🟢 Social media system (after photos)
+### 🟢 Social media system — **planning phase** (implementation when Cursor usage resets)
 
-> **Spec:** `docs/03-social-media.md` is the authoritative plan (monthly plan generator, approval queue, Flux Pro image gen, Hashtag Bank + Caption Templates, Metricool hand-off). Anchored on Tony's existing `CHS_ProjectInstructions_and_SOP` doc + `ColumbusHomeSolutions_SocialMedia_System` sheet. Read it before writing any code.
+> **Status (2026-04-26):** Tony hit Cursor Pro usage for the cycle; we're **not coding this block until usage resets**. Use the sections below as the single planning handoff so the first implementation session can start without re-discovering context.
+>
+> **Canonical spec:** `docs/03-social-media.md` (milestones Session 8a / 14 / 15+). Anchored on `CHS_ProjectInstructions_and_SOP` + `ColumbusHomeSolutions_SocialMedia_System` sheet. Read the spec end-to-end before touching code.
 
-Wait until photos foundation exists. Then:
-- D1 `social_drafts` table referencing photo IDs
-- `/social` composer page (pick photos, write caption, schedule)
-- Approval queue (manual approval per the original spec)
-- Metricool API for actual publishing (or zapier-glue if Metricool API isn't suitable)
+**Prerequisite (met):** The photos + PWA capture foundation is in production (`/capture/`, D1 `photos`, R2 `photos/`). The old "wait until photos exist" gate in the spec is **satisfied**. Remaining dependency is **product decisions + API keys**, not infrastructure.
 
-**Content creation tooling — decide as part of this build:** the spec currently lists Flux Pro for image gen, but the "content creation section" should be expanded to enumerate every app/service we land on for image gen, video gen, caption drafting, etc. (e.g., Flux Pro, possibly Canva, possibly Runway, possibly others). Tony will surface candidates as the build approaches. Record the final stack in `docs/03-social-media.md` and reflect it in the dashboard's content-creation surface so the team sees the canonical toolset, not just whatever I happened to wire up first.
+**Decisions to lock before Session 8a (monthly plan generator)**
+
+| Topic | Question | Default in spec | Decide by |
+|-------|----------|-----------------|-----------|
+| Caption / plan AI | Run Anthropic (Claude) from the Worker using a stored API key, or keep monthly planning as a manual Claude Project session for v0? | Worker `POST /api/social/monthly-plan` with prompt template from SOP | First build session |
+| Image generation (Session 14) | Flux Pro via Replicate vs DALL-E 3 vs other — see `docs/03-social-media.md` sections 5 and 8 (Q1) | Flux Pro 1.1 via Replicate | Before Session 14; can defer if 8a ships first |
+| Publishing | Original spec: **Metricool = manual paste** (no Meta Graph API). Revisit only if Tony wants API schedule push; else keep clipboard + download workflow | Manual | Anytime; not blocking 8a |
+| Data model name | Spec mentions `social_posts` / `social_plans`; implementation may use `social_drafts` or align names to the doc — pick one schema in the first migration | Per `docs/03-social-media.md` section 2 | First migration PR |
+| "Ready for Social" | Photos: flag in hub (`social_ready` / category) vs Drive folder — **hub-only** per spec section 4 | D1 + dashboard toggle on photo | Part of queue/library milestone |
+
+**First implementation slice (when resuming — estimated 1–2 hrs in spec)**
+
+1. D1 migrations: `social_plans`, `social_posts` (or equivalent), plus seed path for hashtag/caption tables if doing settings in the same pass.
+2. `POST /api/social/monthly-plan` — inputs: month, featured job IDs; output: structured posts; persist to D1.
+3. Dashboard `/social/plan` — minimal: month picker, job multi-select, Generate, editable table, export CSV/clipboard (per Session 8a in spec).
+
+**Second slice (later):** Session 14 — `/social/queue`, AI image gen to R2, approval + clipboard flow; photo picker filtered to **Ready for Social** from R2/D1.
+
+**Content creation tooling inventory (fill in during planning, not ad hoc in code):** Image gen, optional video, caption drafting — record the **final** stack in `docs/03-social-media.md` (new "Approved tools" subsection at the top) so the dashboard and runbooks show one canonical list (Flux vs Canva vs Runway, etc.).
+
+**Open questions** already listed in spec section 8 — copy into the first PR description and tick them off.
 
 ### 🟡 Live updates — dashboard + public site without manual refresh
 

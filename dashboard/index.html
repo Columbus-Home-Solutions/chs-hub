@@ -1054,11 +1054,20 @@ var COLS=[
 // them into CHS anymore).
 var HL_DROP_STAGES=['dead lead','dead','disqualified','lost','closed lost','not interested','unqualified','no response'];
 
+// Normalize GHL stage labels so "/ vs |" and extra spaces still map.
+function normalizeHLStageKey(name){
+  if(!name||typeof name!=='string')return '';
+  return name.toLowerCase()
+    .replace(/\s*\/\s*/g, ' | ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 var HL_STAGE_MAP={
   // New Lead
   'new lead':'new','new':'new','incoming':'new',
-  // Contacted / Follow Up
-  'contacted | follow up':'cont','contacted':'cont','follow up':'cont','follow-up':'cont','nurture':'cont',
+  // Contacted / Follow Up (UI may use " | ", " / ", or odd spacing)
+  'contacted | follow up':'cont','contacted':'cont','follow up':'cont','follow-up':'cont','followup':'cont','nurture':'cont',
   // Appointment Set
   'appointment set':'appt','appointment scheduled':'appt','appointment':'appt','appt scheduled':'appt','scheduled':'appt',
   // Create Estimate
@@ -1112,21 +1121,33 @@ var HL_STAGE_ID_MAP={
 };
 
 function getStageNameFromPipeline(op){
+  // Search response often includes the same label the HL UI shows — prefer it so
+  // the dashboard matches the Opportunities board (avoids off-by-one columns when
+  // ID resolution fails e.g. multi-pipeline or renamed stages).
+  var direct=op.pipelineStageName||(op.pipelineStage&&op.pipelineStage.name)||'';
+  if(direct&&String(direct).trim())return String(direct).trim();
+
   var stageId=op.pipelineStageId||op.stageId||(op.stage&&op.stage.id)||'';
 
-  // First: try hardcoded ID map (instant, no network dependency)
-  if(stageId&&HL_STAGE_ID_MAP[stageId]){
-    return '__id__'+stageId; // special prefix so mapHLStage knows it's an ID
+  // If we know this stage UUID (including dynamic pipeline fetch + null = dead)
+  if(stageId&&HL_STAGE_ID_MAP[stageId]!==undefined){
+    return '__id__'+stageId;
   }
 
-  // Second: try the pipeline this opportunity belongs to (not always pipelines[0])
+  // Resolve stage name from pipeline definition — try op's pipeline, then *every*
+  // pipeline (some API payloads omit pipelineId; stage UUID is still unique in practice).
   if(stageId&&hlPipelines.length){
-    var pipeline=null;
-    if(op.pipelineId)pipeline=hlPipelines.find(function(p){return p.id===op.pipelineId;});
-    if(!pipeline)pipeline=hlPipelines[0];
-    var stages=hlPipelineStages(pipeline);
-    var match=stages.find(function(s){return s.id===stageId;});
-    if(match)return match.name||'';
+    var order=[];
+    if(op.pipelineId){
+      var pMatch=hlPipelines.find(function(p){return p.id===op.pipelineId;});
+      if(pMatch)order.push(pMatch);
+    }
+    hlPipelines.forEach(function(p){if(order.indexOf(p)===-1)order.push(p);});
+    for(var oi=0;oi<order.length;oi++){
+      var stages=hlPipelineStages(order[oi]);
+      var match=stages.find(function(s){return s.id===stageId;});
+      if(match&&match.name)return match.name;
+    }
   }
 
   // Fallback: op.stage.name if present
@@ -1139,17 +1160,20 @@ function mapHLStage(stageName){
   // Handle direct ID lookup (prefixed by getStageNameFromPipeline)
   if(stageName.indexOf('__id__')===0){
     var id=stageName.replace('__id__','');
-    if(id in HL_STAGE_ID_MAP)return HL_STAGE_ID_MAP[id]; // may be null = drop
+    if(id in HL_STAGE_ID_MAP){
+      if(HL_STAGE_ID_MAP[id]===null)return null;
+      if(HL_STAGE_ID_MAP[id]!==undefined)return HL_STAGE_ID_MAP[id];
+    }
     return 'new';
   }
 
-  var key=stageName.toLowerCase().trim();
+  var key=normalizeHLStageKey(stageName);
   // Dead/lost stages are deliberately dropped from the CHS board.
   if(HL_DROP_STAGES.indexOf(key)!==-1)return null;
 
   var mapped=HL_STAGE_MAP[key];
   if(!mapped){
-    console.log('CHS: Unknown HL stage "'+stageName+'" — add to HL_STAGE_MAP to map it correctly. Defaulting to New Lead.');
+    console.log('CHS: Unknown HL stage (normalized "'+key+'", raw "'+stageName+'") — add to HL_STAGE_MAP. Defaulting to New Lead. Check the New Lead column; compare to app.redmondgrowth.com (HighLevel) list view for that opportunity\'s exact stage name.');
     return 'new';
   }
   return mapped;

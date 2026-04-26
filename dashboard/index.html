@@ -1038,6 +1038,10 @@ function saveKpi(){var v=document.getElementById('kpi-inp').value.trim();if(!v||
 var HL_LOC='lZ8L8FAf6K2niuHoFbaw';
 var HL_BASE='/api/hl';
 var HL_HEADERS={'Content-Type':'application/json'};
+// Polling while the tab is visible. HighLevel does not push to the browser, so
+// we re-fetch the pipeline on a short interval + when the window regains focus.
+// (A future upgrade would be GHL webhooks → Worker → SSE for sub-second updates.)
+var HL_PIPELINE_POLL_MS=15000;
 
 var COLS=[
   {id:'new',   label:'New Lead',              cls:'kbc-new',  icon:'🆕'},
@@ -1460,7 +1464,7 @@ function saveLead(){
 }
 
 fetchHLData();
-intervalWhenVisible(fetchHLData,5*60*1000);
+intervalWhenVisible(fetchHLData,HL_PIPELINE_POLL_MS);
 
 // ── TASKS ──────────────────────────────────────────────
 var tasks=JSON.parse(localStorage.getItem('chs_tasks')||'[]'),tFilter='all';
@@ -3207,15 +3211,19 @@ function startTasksPolling(){
   },30000);
 }
 
-// Instant refresh the moment you switch back to the tab
+// Instant refresh the moment you switch back to the tab, and when the browser
+// window is focused (e.g. you moved a deal in HighLevel in another window).
+function chsRefreshHLIfVisible(){
+  if(document.hidden)return;
+  try{fetchHLData();}catch(e){}
+}
 document.addEventListener('visibilitychange',function(){
   if(!document.hidden&&gTasksConnected){
     fetchTasksAndFlash();
   }
-  if(!document.hidden){
-    try{fetchHLData();}catch(e){}
-  }
+  chsRefreshHLIfVisible();
 });
+window.addEventListener('focus',chsRefreshHLIfVisible);
 
 function reAuthGoogle(){
   clearToken();

@@ -1204,6 +1204,43 @@ function getHLStageId(colId,pipelineId){
   return stage?stage.id:(stages[0]?stages[0].id:null);
 }
 
+/** GHL /opportunities/search returns at most 100 rows per call. Sub-accounts with
+ *  more than 100 total opportunities *silently* omit the rest on a single fetch —
+ *  a deal can show in HL but not in CHS until we paginate with startAfter + startAfterId. */
+var HL_OPP_SEARCH_MAX_PAGES=50;
+function hlFetchAllOpportunitiesSearch(){
+  var acc=[];
+  function onePage(startAfter, startAfterId, pageNum){
+    var u=HL_BASE+'/opportunities/search?location_id='+encodeURIComponent(HL_LOC)+'&limit=100&status=all';
+    if(startAfterId!=null&&String(startAfterId)!==''&&startAfter!=null&&!isNaN(Number(startAfter))){
+      u+='&startAfter='+String(Math.floor(Number(startAfter)))+'&startAfterId='+encodeURIComponent(String(startAfterId));
+    }
+    return fetch(u,{headers:HL_HEADERS})
+      .then(function(r){
+        if(!r.ok)return r.text().then(function(t){throw new Error('HL search HTTP '+r.status+': '+(t||'').slice(0,400));});
+        return r.json();
+      })
+      .then(function(d){
+        var batch=(d&&d.opportunities)||(d&&d.data)||(d&&d.results)||[];
+        var meta=(d&&d.meta)||{};
+        if(batch.length===0)return acc;
+        for(var i=0;i<batch.length;i++)acc.push(batch[i]);
+        var totalM=meta.total!=null?Number(meta.total):null;
+        console.log('CHS HL op search page '+pageNum+': +'+batch.length+' (running total '+acc.length+(totalM!=null&&!isNaN(totalM)?', API total '+totalM:'')+')');
+        var wantMore=(batch.length>=100)||(totalM!=null&&!isNaN(totalM)&&acc.length<totalM);
+        if(wantMore&&pageNum<HL_OPP_SEARCH_MAX_PAGES){
+          var last=batch[batch.length-1];
+          var ts=last.lastActionDate?Date.parse(last.lastActionDate):last.lastStatusChangeAt?Date.parse(last.lastStatusChangeAt):last.lastStageChangeAt?Date.parse(last.lastStageChangeAt):last.updatedAt?Date.parse(last.updatedAt):Date.now();
+          if(!ts||isNaN(ts))ts=Date.now();
+          return onePage(ts,last.id,pageNum+1);
+        }
+        if(pageNum>=HL_OPP_SEARCH_MAX_PAGES&&wantMore)console.warn('CHS HL: stopped at '+HL_OPP_SEARCH_MAX_PAGES+' pages ('+acc.length+' opps). Increase HL_OPP_SEARCH_MAX_PAGES if needed.');
+        return acc;
+      });
+  }
+  return onePage(null,null,1);
+}
+
 var _hlFetchInFlight=false,_hlFetchQueued=false;
 function fetchHLData(){
   if(_hlFetchInFlight){_hlFetchQueued=true;return;}
@@ -1226,13 +1263,10 @@ function fetchHLData(){
       }else{
         console.log('CHS HL pipeline fetch response:',JSON.stringify(Object.keys(d)));
       }
-      // status=all: default search often excludes won/lost so moves in HL never appeared; limit max 100 per API
-      return fetch(HL_BASE+'/opportunities/search?location_id='+encodeURIComponent(HL_LOC)+'&limit=100&status=all',{headers:HL_HEADERS});
+      return hlFetchAllOpportunitiesSearch();
     })
-    .then(function(r){return r.json();})
-    .then(function(d){
-      console.log('CHS HL response keys:',JSON.stringify(Object.keys(d)));
-      var ops=d.opportunities||d.data||d.results||[];
+    .then(function(ops){
+      console.log('CHS HL: loaded '+ops.length+' opportunities (all pages)');
       // DEBUG: log first opportunity to see exact API field names
       if(ops.length>0)console.log('CHS HL first op keys:',JSON.stringify(Object.keys(ops[0])),'\nstage field:',JSON.stringify({stage:ops[0].stage,pipelineStageId:ops[0].pipelineStageId,stageId:ops[0].stageId,pipelineStageName:ops[0].pipelineStageName,pipelineId:ops[0].pipelineId}));
       // Prefer the pipeline that actually holds your opportunities (avoids wrong stage IDs when create/sync used pipelines[0] only)
@@ -1267,7 +1301,7 @@ function fetchHLData(){
       });
       leads=localLeads.concat(hlLeads);
       saveLeads();renderKanban();
-      setHLBadge('HL Synced ✓','green');
+      setHLBadge('HL Synced ✓ · '+ops.length+' opps','green');
     })
     .catch(function(e){
       console.log('HL error:',e);

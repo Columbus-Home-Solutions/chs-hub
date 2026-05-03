@@ -16,6 +16,10 @@
 - **Sync button** — Not working as expected; trace UI handler → `/api/sync/*` or Sheets/WC paths and fix.
 - **Monthly revenue tile** — Often empty; **probably tied to sync / data fetch** (same pipeline as sync button or KPI sheet ranges); verify after sync works.
 - **Theme / CSS flash or missing styles** — Sometimes **white background** and wrong fonts/colors until **hard refresh**; affects **main dashboard and subpages** (`jobs.html`, `notes.html`, etc.). Suspects: `theme.css` load order, caching, service worker, or FOUC — reproduce and fix so first paint matches the dark scheme reliably.
+- **PDFs in the dashboard file system** — **Open / preview PDFs** from the hub file UI (inline viewer, new tab, or signed URL) instead of only download-or-unknown behavior.
+- **Spreadsheet-native flows for docs** — **Open compatible files in Google Sheets** (or similar): upload/import path, “Open with…” link, or explicit export so operational docs aren’t stuck as opaque blobs in R2-only workflows.
+- **External hard drive backup** — **Second-line backup** of the file corpus (and/or D1 export bundles) to a **local external drive** — operator-run script, scheduled Mac job, or documented rsync from existing R2/nightly NDJSON exports; complementary to cloud mirror + R2.
+- **Upload workflow / Finder on Mac** — **File-explorer-style** dashboard UX to speed up **document uploads**; include a path to **open Finder** at a standard local folder (drag-drop, `<input webkitdirectory>` where useful). *Browsers cannot spawn Finder directly* — document a **Shortcuts / AppleScript one-liner** or tiny local helper if needed.
 
 ---
 

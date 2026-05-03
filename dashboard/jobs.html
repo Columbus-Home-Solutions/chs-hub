@@ -951,7 +951,11 @@ td.jobnum{font-weight:700;color:var(--gold);}
       const origLabel = labelEl ? labelEl.textContent : 'Sync Now';
       if(labelEl) labelEl.textContent = 'Syncing…';
       try {
-        const r = await fetch(API + '/api/sync/now', { method: 'POST', cache: 'no-store' });
+        const r = await fetch(API + '/api/sync/now', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
         if(!r.ok){
           const body = await r.text().catch(() => '');
           throw new Error('HTTP ' + r.status + (body ? ' · ' + body.slice(0,80) : ''));

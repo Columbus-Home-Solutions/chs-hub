@@ -2,7 +2,7 @@
 // Caches the app shell so it loads instantly and works offline
 // Live data (KPIs, tasks, calendar) always fetches fresh from APIs
 
-const CACHE_NAME = 'chs-dashboard-v1';
+const CACHE_NAME = 'chs-dashboard-v2';
 const CACHE_URLS = [
   '/',
   '/index.html',
@@ -38,6 +38,14 @@ self.addEventListener('activate', function(event) {
 // Fetch — network first for API calls, cache first for app shell
 self.addEventListener('fetch', function(event) {
   var url = event.request.url;
+
+  // Never cache Worker API routes — POST /api/sync/now, KPI fetches, etc.
+  // must always hit the origin (cache-first below can swallow or mishandle
+  // non-GET requests on some browsers).
+  if (url.includes('/api/')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
   // Always go network-first for Google APIs and Jobber
   if (url.includes('googleapis.com') ||

@@ -130,6 +130,10 @@ Session 7 includes a one-time migration step:
 
 Migration runs in a background Queue so it doesn't block other hub usage.
 
+### Policy: optional ongoing mirror to Google Shared Drive (2026-04-26)
+
+**Locked decision:** In addition to R2 + D1 as the **canonical** system, CHS may maintain a **one-way, asynchronous** copy of new blobs to a **Google Shared Drive** for **insurance** (second copy in another provider) and **human access** (accountant, family, or anyone more comfortable in Drive than in CHS). Drive is **not** a second editor for the same files — no bidirectional sync; R2 + D1 remain source of truth. Implementation when scheduled: service account (or dedicated sync user) with write access to the Shared Drive, Worker cron or queue worker uploads **new** objects since last checkpoint (idempotent names), structured folders (e.g. by job and date), failures logged and retried without blocking PWA uploads.
+
 ---
 
 ## 6. Sharing files with clients

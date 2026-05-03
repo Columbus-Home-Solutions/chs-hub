@@ -12,7 +12,8 @@
 
 import type { Env } from "../env.js";
 
-const OPEN_JOB_STATUSES = [
+/** Normalized to lower-case in SQL. Used by `/api/jobs?status=open` and Files “All” to match active jobs only. */
+export const OPEN_JOB_STATUSES = [
   "late",
   "action_required",
   "requires_invoicing",
@@ -52,7 +53,7 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
   total: number;
   jobs: JobRow[];
 }> {
-  const status = url.searchParams.get("status"); // "open" | "archived" | specific status | null
+  const status = url.searchParams.get("status"); // "open" | "archived" | "closed" | specific status | null
   const sinceStr = url.searchParams.get("since"); // ISO date (created_at >=)
   const untilStr = url.searchParams.get("until"); // ISO date (created_at <)
   const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
@@ -171,6 +172,12 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
     );
   } else if (status === "archived") {
     jobs = jobs.filter((j) => String(j.status ?? "").toLowerCase() === "archived");
+  } else if (status === "closed") {
+    // Not in the active / pipeline set — e.g. completed, cancelled, closed (Hub Files tree “Archived”).
+    jobs = jobs.filter((j) => {
+      const s = String(j.status ?? "").toLowerCase();
+      return s.length > 0 && !OPEN_JOB_STATUSES.includes(s);
+    });
   } else if (status) {
     jobs = jobs.filter((j) => String(j.status ?? "").toLowerCase() === status.toLowerCase());
   }

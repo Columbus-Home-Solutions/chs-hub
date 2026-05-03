@@ -384,3 +384,114 @@ export async function handleActiveJobs(env: Env): Promise<Response> {
     jobs,
   });
 }
+
+async function r2Relocate(
+  env: Env,
+  fromKey: string,
+  toKey: string,
+): Promise<void> {
+  if (fromKey === toKey) return;
+  const o = await env.FILES.get(fromKey);
+  if (!o) throw new Error("r2_object_missing");
+  const ab = await o.arrayBuffer();
+  const ct = o.httpMetadata?.contentType ?? "image/jpeg";
+  await env.FILES.put(toKey, ab, { httpMetadata: { contentType: ct } });
+  await env.FILES.delete(fromKey);
+}
+
+// ── DELETE /api/photos/:id
+// ── PATCH  /api/photos/:id  body: { job_id?: string|null, category?: string }
+
+export async function handlePhotoDelete(env: Env, id: string): Promise<Response> {
+  const row = await env.DB.prepare(
+    "SELECT r2_key, thumb_key FROM photos WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ r2_key: string; thumb_key: string }>();
+  if (!row) return jsonErr(404, "not_found");
+  await env.FILES.delete(row.r2_key).catch(() => undefined);
+  await env.FILES.delete(row.thumb_key).catch(() => undefined);
+  await env.DB.prepare("DELETE FROM photos WHERE id = ?").bind(id).run();
+  return jsonResponse({ ok: true });
+}
+
+export async function handlePhotoPatch(
+  env: Env,
+  id: string,
+  request: Request,
+): Promise<Response> {
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return jsonErr(400, "invalid_json");
+  }
+  const row = await env.DB.prepare(
+    `SELECT id, job_id, category, taken_at, r2_key, thumb_key FROM photos WHERE id = ?`,
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      job_id: string | null;
+      category: string;
+      taken_at: string | null;
+      r2_key: string;
+      thumb_key: string;
+    }>();
+  if (!row) return jsonErr(404, "not_found");
+
+  let nextJob: string | null = row.job_id;
+  if (Object.prototype.hasOwnProperty.call(body, "job_id")) {
+    if (body.job_id === null || body.job_id === "") {
+      nextJob = null;
+    } else if (typeof body.job_id === "string" && body.job_id.trim()) {
+      const j = body.job_id.trim();
+      const jk = await env.DB.prepare("SELECT 1 AS o FROM jobs WHERE id = ?")
+        .bind(j)
+        .first<{ o: number }>();
+      if (!jk) return jsonErr(400, "unknown_job", "job_id is not a known Jobber job in D1");
+      nextJob = j;
+    } else {
+      return jsonErr(400, "invalid_job_id");
+    }
+  }
+
+  let nextCat = row.category;
+  if (Object.prototype.hasOwnProperty.call(body, "category")) {
+    if (typeof body.category === "string" && VALID_CATEGORIES.has(body.category)) {
+      nextCat = body.category;
+    } else {
+      return jsonErr(400, "invalid_category");
+    }
+  }
+
+  if (nextJob === row.job_id && nextCat === row.category) {
+    return jsonResponse({ ok: true, unchanged: true });
+  }
+
+  const bucket = dateBucket(row.taken_at);
+  const slug = nextJob ?? "general";
+  const newR2 = `photos/${slug}/${bucket}/${id}.jpg`;
+  const newTh = `photos-thumbs/${slug}/${bucket}/${id}.jpg`;
+
+  if (newR2 !== row.r2_key) {
+    try {
+      await r2Relocate(env, row.r2_key, newR2);
+      await r2Relocate(env, row.thumb_key, newTh);
+    } catch (e) {
+      return jsonErr(500, "r2_move_failed", (e as Error).message);
+    }
+  }
+
+  await env.DB.prepare(
+    `UPDATE photos SET job_id = ?, category = ?, r2_key = ?, thumb_key = ? WHERE id = ?`,
+  )
+    .bind(nextJob, nextCat, newR2, newTh, id)
+    .run();
+  return jsonResponse({
+    ok: true,
+    id,
+    job_id: nextJob,
+    category: nextCat,
+  });
+}

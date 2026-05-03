@@ -20,15 +20,23 @@ interface CachedToken {
   expiresAt: number;
 }
 
-let cached: CachedToken | null = null;
+// Tokens are per-scope-set so a caller that needs only Sheets does not reuse
+// a token minted for Drive (and vice versa).
+const tokenCache = new Map<string, CachedToken>();
+
+function tokenCacheKey(scopes: string[]): string {
+  return [...scopes].sort().join(" ");
+}
 
 export async function getGoogleAccessToken(
   serviceAccountJson: string,
   scopes: string[],
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  if (cached && cached.expiresAt > now + 60) {
-    return cached.token;
+  const cacheKeyStr = tokenCacheKey(scopes);
+  const hit = tokenCache.get(cacheKeyStr);
+  if (hit && hit.expiresAt > now + 60) {
+    return hit.token;
   }
 
   const sa = JSON.parse(serviceAccountJson) as ServiceAccount;
@@ -48,10 +56,10 @@ export async function getGoogleAccessToken(
   );
   const signingInput = `${header}.${claim}`;
 
-  const key = await importPrivateKey(sa.private_key);
+  const privateKey = await importPrivateKey(sa.private_key);
   const signatureBuf = await crypto.subtle.sign(
     { name: "RSASSA-PKCS1-v1_5" },
-    key,
+    privateKey,
     new TextEncoder().encode(signingInput),
   );
   const signature = base64urlBytes(new Uint8Array(signatureBuf));
@@ -70,11 +78,12 @@ export async function getGoogleAccessToken(
     throw new Error(`Google token exchange failed (${resp.status}): ${body}`);
   }
   const data = (await resp.json()) as { access_token: string; expires_in: number };
-  cached = {
+  const entry = {
     token: data.access_token,
     expiresAt: now + (data.expires_in ?? 3600),
   };
-  return cached.token;
+  tokenCache.set(cacheKeyStr, entry);
+  return entry.token;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────

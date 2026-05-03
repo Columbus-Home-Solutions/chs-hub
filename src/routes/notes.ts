@@ -55,14 +55,25 @@ function hydrate(row: RawNoteRow): NoteRow {
     category: row.category,
     raw_text: row.raw_text,
     summary: row.summary,
-    tags: safeJsonArray(row.tags),
-    tasks_extracted: safeJsonArray(row.tasks_extracted),
+    tags: safeJsonStringArray(row.tags),
+    tasks_extracted: safeJsonArray(row.tasks_extracted) as NoteRow["tasks_extracted"],
     task_count: row.task_count ?? 0,
     status: row.status === "archived" ? "archived" : "active",
     archived_at: row.archived_at,
     meeting_source: row.meeting_source,
     job_id: row.job_id,
   };
+}
+
+function safeJsonStringArray(s: string | null): string[] {
+  if (!s) return [];
+  try {
+    const parsed = JSON.parse(s);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((x) => String(x));
+  } catch {
+    return [];
+  }
 }
 
 function safeJsonArray(s: string | null): never[] | unknown[] {

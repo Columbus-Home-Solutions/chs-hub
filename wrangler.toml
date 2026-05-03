@@ -69,6 +69,10 @@ RESEND_DRY_RUN = "0"
 # Optional [vars] for the dashboard (do not commit real values here if you prefer
 # the Cloudflare UI): DASHBOARD_OAUTH_CLIENT_ID, DASHBOARD_GOOGLE_API_KEY,
 # JOB_TRACKER_SHEET_ID, WC_SHEET_ID — see docs/google-oauth-dashboard.md
+# Google Drive mirror (optional): DRIVE_SHARED_DRIVE_ID, DRIVE_MIRROR_ROOT_FOLDER_ID
+# Public file share links: `wrangler secret put FILE_LINK_SECRET` (32+ char random). Optional
+#   var HUB_FILE_LINK_ORIGIN = "https://chs-hub.<account>.workers.dev" so /api/f?t=… works
+#   for people without Cloudflare Access (the dashboard host may require Access).
 
 # ─── Scheduled jobs ────────────────────────────────────────────────────
 # All four schedules dispatch through src/index.ts → dispatchCron().

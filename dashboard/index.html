@@ -418,10 +418,9 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
           </div>
           <div class="qlsec">Google</div>
           <div class="qlg">
-            <a class="ql" href="googlegmail://" onclick="return mobAppLink(event,'googlegmail://','https://mail.google.com')"><span class="qi">📧</span><div><div>Gmail</div><div class="qs">Email</div></div></a>
-            <a class="ql" href="googledrive://" onclick="return mobAppLink(event,'googledrive://','https://drive.google.com')"><span class="qi">📁</span><div><div>Drive</div><div class="qs">Files & Docs</div></div></a>
+            <a class="ql" href="https://mail.google.com/mail/" onclick="return gmailQuickLink(event)"><span class="qi">📧</span><div><div>Gmail</div><div class="qs">Email</div></div></a>
+            <a class="ql" href="/files"><span class="qi">📁</span><div><div>Hub Files</div><div class="qs">Company docs</div></div></a>
             <a class="ql" href="https://contacts.google.com" target="_blank"><span class="qi">👥</span><div><div>Contacts</div><div class="qs">Customers</div></div></a>
-            <a class="ql" href="https://keep.google.com" target="_blank"><span class="qi">📌</span><div><div>Google Keep</div><div class="qs">Quick notes</div></div></a>
           </div>
           <div class="qlsec">Social & Reviews</div>
           <div class="qlg">
@@ -764,7 +763,7 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
       <div class="ma-actions">
         <a class="ma-act" href="jobber://home" onclick="return mobAppLink(event,'jobber://home','https://secure.getjobber.com/home')"><span class="big">🏗️</span>Jobber</a>
         <a class="ma-act" href="https://app.redmondgrowth.com/v2/location/lZ8L8FAf6K2niuHoFbaw/opportunities/list" target="_blank"><span class="big">⚡</span>HighLevel</a>
-        <a class="ma-act" href="googlegmail://" onclick="return mobAppLink(event,'googlegmail://','https://mail.google.com')"><span class="big">📧</span>Gmail</a>
+        <a class="ma-act" href="https://mail.google.com/mail/" onclick="return gmailQuickLink(event)"><span class="big">📧</span>Gmail</a>
       </div>
     </div>
     <div id="ma-pane-tasks" class="ma-pane">
@@ -822,7 +821,7 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
       <div class="ma-more-grid">
         <a class="ma-more-tile" href="googlecalendar://" onclick="return mobAppLink(event,'googlecalendar://','https://calendar.google.com')">📅 Calendar</a>
         <a class="ma-more-tile" href="https://tasks.google.com" target="_blank">✅ Tasks web</a>
-        <a class="ma-more-tile" href="https://drive.google.com" target="_blank">📁 Drive</a>
+        <a class="ma-more-tile" href="/files">📁 Hub Files</a>
         <a class="ma-more-tile" href="https://www.google.com/maps/search/@34.7695,-92.2671,13z" target="_blank">🗺️ Maps</a>
       </div>
       <div class="ma-section-h" style="margin-top:8px;">Trackers</div>
@@ -961,6 +960,23 @@ function mobAppLink(e, appUrl, webUrl){
   window.location.href=appUrl;
   window.addEventListener('blur',function(){clearTimeout(fallback);},{once:true});
   return false;
+}
+
+// Gmail: websites cannot force your OS to open a saved desktop *web app*; the browser
+// does not expose that. Optional override: set localStorage key chs_gmail_quick_url to
+// a full https URL (e.g. a bookmark, or a URL your PWA/shortcut opens) then reload the hub.
+function gmailQuickLink(e){
+  try{
+    var c=(localStorage.getItem('chs_gmail_quick_url')||'').replace(/^\s+|\s+$/g,'');
+    if(c && /^https?:\/\//i.test(c)){
+      e.preventDefault();
+      if(isMobile()){window.open(c,'_blank','noopener,noreferrer');return false;}
+      var w=window.open(c,'CHS_Gmail','noopener,noreferrer');
+      if(w)w.opener=null;
+      return false;
+    }
+  }catch(x){}
+  return mobAppLink(e,'googlegmail://','https://mail.google.com/mail/');
 }
 
 // ── WEATHER ──────────────────────────────────────────

@@ -46,13 +46,18 @@ import {
   handleBackupRun,
   handleDlqReplay,
   handleDlqSummary,
+  handleDriveMirrorRun,
+  handleDriveMirrorStatus,
   handleHeartbeatCheck,
   handleSummarySend,
 } from "./routes/ops.js";
+import { runDriveMirror } from "./lib/ops/drive-mirror.js";
 import {
   handleActiveJobs,
   handlePhotoCreate,
+  handlePhotoDelete,
   handlePhotoList,
+  handlePhotoPatch,
   handlePhotoStream,
 } from "./routes/photos.js";
 import {
@@ -63,11 +68,32 @@ import {
   handleSubPatch,
 } from "./routes/subs.js";
 import { handleSearch } from "./routes/search.js";
+import {
+  handleFilesBackupDelete,
+  handleFilesBackupDownload,
+  handleFilesList,
+} from "./routes/files.js";
+import {
+  handleCompanyDocumentCreate,
+  handleCompanyDocumentDelete,
+  handleCompanyDocumentFile,
+  handleCompanyDocumentList,
+  handleCompanyDocumentPatch,
+} from "./routes/company-documents.js";
+import {
+  handleJobFileCreate,
+  handleJobFileDelete,
+  handleJobFileList,
+  handleJobFilePatch,
+  handleJobFileStream,
+} from "./routes/job-files.js";
 import { handleSheetsInspect } from "./routes/sheets-debug.js";
 import { handleJobberSync, handleSyncNow } from "./routes/sync.js";
 import {
   handleExpenseCreate,
+  handleExpenseDelete,
   handleExpenseList,
+  handleExpensePatch,
   handleExpenseReceipt,
   handleExpensePush,
 } from "./routes/expenses.js";
@@ -77,6 +103,7 @@ import {
   handleJobberStatus,
 } from "./routes/oauth-jobber.js";
 import { handleWcSync } from "./routes/wc-sync.js";
+import { handleFileLinkCreate, handleFileLinkResolve } from "./routes/file-link.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -104,6 +131,58 @@ export default {
     if (url.pathname === "/api/search" && request.method === "GET") {
       const payload = await handleSearch(env, url);
       return jsonResponse({ results: payload });
+    }
+
+    if (url.pathname === "/api/files/backup") {
+      if (request.method === "GET" || request.method === "HEAD") {
+        return handleFilesBackupDownload(env, url, request.method);
+      }
+      if (request.method === "DELETE") {
+        return handleFilesBackupDelete(env, url);
+      }
+    }
+    if (url.pathname === "/api/files" && request.method === "GET") {
+      const items = await handleFilesList(env, url);
+      return jsonResponse({ items });
+    }
+
+    if (url.pathname === "/api/file-link" && request.method === "POST") {
+      return handleFileLinkCreate(env, request, url);
+    }
+    if (url.pathname === "/api/f") {
+      if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") {
+        return handleFileLinkResolve(env, request, url, request.method);
+      }
+    }
+
+    if (url.pathname === "/api/company-documents") {
+      if (request.method === "GET") return handleCompanyDocumentList(env, url);
+      if (request.method === "POST") return handleCompanyDocumentCreate(env, request);
+    }
+    const companyFile = url.pathname.match(/^\/api\/company-documents\/([^/]+)\/file$/);
+    if (companyFile && (request.method === "GET" || request.method === "HEAD")) {
+      return handleCompanyDocumentFile(env, decodeURIComponent(companyFile[1]), request.method);
+    }
+    const companyById = url.pathname.match(/^\/api\/company-documents\/([^/]+)$/);
+    if (companyById) {
+      const cid = decodeURIComponent(companyById[1]);
+      if (request.method === "DELETE") return handleCompanyDocumentDelete(env, cid);
+      if (request.method === "PATCH") return handleCompanyDocumentPatch(env, cid, request);
+    }
+
+    if (url.pathname === "/api/job-files") {
+      if (request.method === "GET") return handleJobFileList(env, url);
+      if (request.method === "POST") return handleJobFileCreate(env, request);
+    }
+    const jobFileStream = url.pathname.match(/^\/api\/job-files\/([^/]+)\/file$/);
+    if (jobFileStream && (request.method === "GET" || request.method === "HEAD")) {
+      return handleJobFileStream(env, decodeURIComponent(jobFileStream[1]), request.method);
+    }
+    const jobFileById = url.pathname.match(/^\/api\/job-files\/([^/]+)$/);
+    if (jobFileById) {
+      const jfid = decodeURIComponent(jobFileById[1]);
+      if (request.method === "DELETE") return handleJobFileDelete(env, jfid);
+      if (request.method === "PATCH") return handleJobFilePatch(env, jfid, request);
     }
 
     if (url.pathname === "/api/drill" && request.method === "GET") {
@@ -170,6 +249,12 @@ export default {
     if (url.pathname === "/api/ops/alert-test" && request.method === "POST") {
       return handleAlertTest(request, env);
     }
+    if (url.pathname === "/api/ops/drive-mirror" && request.method === "GET") {
+      return handleDriveMirrorStatus(request, env);
+    }
+    if (url.pathname === "/api/ops/drive-mirror" && request.method === "POST") {
+      return handleDriveMirrorRun(request, env);
+    }
 
     if (url.pathname === "/api/jobs" && request.method === "GET") {
       const payload = await handleJobsList(env, url);
@@ -209,8 +294,17 @@ export default {
       return handlePhotoStream(env, decodeURIComponent(photoThumb[1]), "thumb");
     }
     const photoDetail = url.pathname.match(/^\/api\/photos\/([^/]+)$/);
-    if (photoDetail && (request.method === "GET" || request.method === "HEAD")) {
-      return handlePhotoStream(env, decodeURIComponent(photoDetail[1]), "original");
+    if (photoDetail) {
+      const photoId = decodeURIComponent(photoDetail[1]);
+      if (request.method === "GET" || request.method === "HEAD") {
+        return handlePhotoStream(env, photoId, "original");
+      }
+      if (request.method === "DELETE") {
+        return handlePhotoDelete(env, photoId);
+      }
+      if (request.method === "PATCH") {
+        return handlePhotoPatch(env, photoId, request);
+      }
     }
 
     // ── Expenses (PWA capture) ───────────────────────────────────────
@@ -225,6 +319,12 @@ export default {
     const expensePush = url.pathname.match(/^\/api\/expenses\/([^/]+)\/push-to-jobber$/);
     if (expensePush && request.method === "POST") {
       return handleExpensePush(env, decodeURIComponent(expensePush[1]));
+    }
+    const expenseById = url.pathname.match(/^\/api\/expenses\/([^/]+)$/);
+    if (expenseById) {
+      const eid = decodeURIComponent(expenseById[1]);
+      if (request.method === "DELETE") return handleExpenseDelete(env, eid);
+      if (request.method === "PATCH") return handleExpensePatch(env, eid, request);
     }
 
     // ── Smart Notes ──────────────────────────────────────────────────
@@ -371,6 +471,24 @@ async function runHourly(env: Env): Promise<void> {
     }
   } catch (err) {
     console.error(`[cron 15 * * * *] dlq_replay failed:`, (err as Error).message);
+  }
+
+  try {
+    const dm = await runDriveMirror(env);
+    if (dm.skipped) {
+      console.log(
+        `[cron 15 * * * *] drive_mirror skipped: ${dm.reason ?? "unknown"}`,
+      );
+    } else if (dm.photos + dm.expenses + dm.company > 0 || dm.errors.length > 0) {
+      console.log(
+        `[cron 15 * * * *] drive_mirror: photos=${dm.photos} expenses=${dm.expenses} company=${dm.company} err=${dm.errors.length} ms=${dm.duration_ms}`,
+      );
+    }
+    if (dm.errors.length > 0) {
+      console.warn(`[cron 15 * * * *] drive_mirror errors:`, dm.errors);
+    }
+  } catch (err) {
+    console.error(`[cron 15 * * * *] drive_mirror failed:`, (err as Error).message);
   }
 }
 

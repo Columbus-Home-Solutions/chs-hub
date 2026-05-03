@@ -13,6 +13,7 @@ import { sendDailySummary } from "../lib/ops/daily-summary.js";
 import { getDlqSummary, replayDeadLetters } from "../lib/ops/dlq.js";
 import { checkHeartbeat } from "../lib/ops/heartbeat.js";
 import { notify } from "../lib/ops/notify.js";
+import { getDriveMirrorStatus, runDriveMirror } from "../lib/ops/drive-mirror.js";
 
 function requireSecret(request: Request, env: Env): Response | null {
   const url = new URL(request.url);
@@ -102,5 +103,25 @@ export async function handleAlertTest(
     subject: "Test notification",
     text: `Hello from chs-hub at ${new Date().toISOString()}.\n\nIf you're reading this, the notify pipeline is working.`,
   });
+  return jsonOk(result);
+}
+
+export async function handleDriveMirrorStatus(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+  const status = await getDriveMirrorStatus(env);
+  return jsonOk(status);
+}
+
+export async function handleDriveMirrorRun(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+  const result = await runDriveMirror(env);
   return jsonOk(result);
 }

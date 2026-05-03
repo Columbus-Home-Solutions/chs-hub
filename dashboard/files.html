@@ -1,0 +1,1910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#3D0C1F">
+<title>Files — Columbus Home Solutions</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='10' fill='%233D0C1F'/><path d='M32 10 L54 28 L54 54 L10 54 L10 28 Z' fill='none' stroke='%23F0A500' stroke-width='3.5'/></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+/* Match main dashboard (tasks / meetings / HL) scrollbars */
+*{scrollbar-width:thin;scrollbar-color:rgba(240,165,0,.28) transparent;}
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:rgba(240,165,0,.28);border-radius:3px;}
+::-webkit-scrollbar-horizontal{height:4px;}
+body{background:linear-gradient(160deg,var(--burg) 0%,#1a0508 55%,#0d0206 100%);min-height:100vh;color:var(--cream);font-family:'Nunito',sans-serif;}
+.list-thumb--pdf{object-fit:cover;background:rgba(0,0,0,.4);min-width:48px;min-height:48px;}
+.ex-thumb--pdf{object-fit:cover;background:rgba(0,0,0,.4);}
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:2px solid var(--gold);background:rgba(0,0,0,.25);flex-wrap:wrap;gap:8px;}
+.bn{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:2px;color:var(--gold);}
+.back{color:var(--gold);text-decoration:none;font-weight:700;border:1px solid rgba(240,165,0,.4);padding:8px 14px;border-radius:8px;font-size:13px;}
+.back:hover{background:rgba(240,165,0,.12);}
+main{max-width:1400px;margin:0 auto;padding:18px;}
+.card{background:var(--card);border:1px solid var(--bdr);border-radius:12px;padding:16px;margin-bottom:14px;backdrop-filter:blur(6px);}
+.ch{font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:1.5px;color:var(--gold);margin-bottom:10px;}
+.ch-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:8px;}
+.view-toggle{display:inline-flex;border:1px solid rgba(240,165,0,.3);border-radius:9px;overflow:hidden;}
+.view-toggle button{background:transparent;border:none;color:var(--muted);padding:7px 14px;font-size:11px;font-weight:800;letter-spacing:.08em;cursor:pointer;text-transform:uppercase;}
+.view-toggle button.on{background:rgba(240,165,0,.2);color:var(--gold);}
+.browse-hdr{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;}
+.f-input{flex:1;min-width:200px;max-width:420px;background:rgba(20,4,10,.75);border:1px solid rgba(240,165,0,.25);color:var(--cream);padding:8px 12px;border-radius:8px;font-size:14px;}
+.pill{border:1px solid rgba(240,165,0,.35);background:transparent;color:var(--cream);padding:5px 11px;border-radius:99px;font-size:11px;font-weight:700;cursor:pointer;}
+.pill.on{background:rgba(240,165,0,.2);border-color:var(--gold);color:var(--gold);}
+
+/* List vs Explorer visibility */
+.browse .list-only{display:none;}
+.view-list .browse .list-only{display:block;}
+.view-list .browse .ex-only{display:none !important;}
+.view-explorer .browse .list-only{display:none !important;}
+.view-explorer .browse .ex-only{display:block !important;}
+.table-wrap{overflow:auto;max-height:calc(100vh - 320px);border-radius:8px;border:1px solid rgba(240,165,0,.15);}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);background:rgba(0,0,0,.4);position:sticky;top:0;}
+td{padding:8px 10px;border-top:1px solid rgba(240,165,0,.08);vertical-align:middle;}
+tr:hover td{background:rgba(240,165,0,.05);}
+.td-thumb{width:56px;}
+.list-thumb{width:48px;height:48px;object-fit:cover;border-radius:6px;border:1px solid rgba(240,165,0,.2);background:rgba(0,0,0,.3);}
+.list-thumb-ph{width:48px;height:48px;border-radius:6px;border:1px dashed rgba(240,165,0,.2);display:flex;align-items:center;justify-content:center;font-size:20px;background:rgba(0,0,0,.25);}
+.kchip{display:inline-block;font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;text-transform:uppercase;letter-spacing:.04em;}
+.k-photo{background:rgba(91,192,235,.15);color:var(--blue);}
+.k-receipt{background:rgba(240,165,0,.15);color:var(--gold);}
+.k-company{background:rgba(82,192,122,.15);color:var(--green);}
+.k-backup{background:rgba(180,140,220,.18);color:#d4b8ff;}
+.k-jobfile{background:rgba(200,150,100,.2);color:#e8b896;}
+a.file-link{color:var(--gold-lt);font-weight:600;}
+a.file-link:hover{text-decoration:underline;}
+.hint{font-size:11px;color:var(--muted);margin-top:4px;}
+.sub-filters{display:none;flex-direction:column;align-items:flex-start;gap:6px;margin:0 0 14px 2px;max-width:100%;}
+.sub-filters .sf-lbl{width:100%;font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);}
+.sub-filters .sf-pills{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.upload-grid{display:grid;gap:10px;grid-template-columns:1fr 1fr;}
+@media(max-width:700px){.upload-grid{grid-template-columns:1fr;}}
+.files-page-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,380px);gap:16px;align-items:start;}
+.files-page-aside{min-width:0;}
+@media (min-width:1101px){
+  .files-page-aside{position:sticky;top:12px;align-self:start;}
+}
+@media (max-width:1100px){
+  .files-page-grid{grid-template-columns:1fr;}
+}
+.files-page-aside .upload-grid{grid-template-columns:1fr;}
+.upload-aside-top{display:flex;flex-direction:column;gap:10px;}
+.upload-aside-top .ch{font-size:15px;letter-spacing:1.2px;}
+.up-kind-sel{width:100%;font-size:13px;}
+.upload-aside-card .btn{width:100%;text-align:center;}
+.upload-aside-card .hint{font-size:11px;margin:8px 0 0;}
+.lbl{font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);}
+.inp,.sel{width:100%;background:rgba(20,4,10,.75);border:1px solid rgba(240,165,0,.25);color:var(--cream);padding:8px 10px;border-radius:8px;font-size:14px;}
+.btn{background:rgba(240,165,0,.2);border:1px solid var(--gold);color:var(--gold);padding:10px 16px;border-radius:8px;font-weight:800;cursor:pointer;font-size:13px;}
+.btn:disabled{opacity:.5;cursor:wait;}
+.err{color:var(--red);font-size:12px;margin-top:6px;}
+.ok{color:var(--green);font-size:12px;margin-top:6px;}
+
+.pill.pill-sub{font-size:10px;padding:4px 9px;opacity:.95;}
+.pill.pill-sub.on{font-weight:800;}
+
+/* Explorer */
+.ex-layout{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:0;min-height:420px;border-radius:8px;border:1px solid rgba(240,165,0,.15);overflow:hidden;}
+.view-explorer .list-only .table-wrap{border-radius:0;border:0;max-height:none;}
+.ex-tree{background:rgba(0,0,0,.28);border-right:1px solid rgba(240,165,0,.12);padding:10px 0 12px;overflow-y:auto;max-height:calc(100vh - 300px);}
+.ex-tree-lbl{padding:6px 14px 4px;font-size:9px;font-weight:800;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);}
+.ex-t1-row{display:flex;align-items:stretch;gap:0;margin:0;min-width:0;}
+.ex-chev{flex:0 0 30px;min-width:30px;border:none;background:transparent;color:var(--muted);font-size:11px;cursor:pointer;padding:6px 0;border-radius:6px;align-self:stretch;}
+.ex-chev:hover{color:var(--gold);background:rgba(240,165,0,.08);}
+.ex-t1{display:block;width:100%;text-align:left;padding:7px 12px 7px 6px;border:none;background:transparent;color:var(--cream);font-size:13px;cursor:pointer;border-left:3px solid transparent;flex:1;min-width:0;}
+.ex-t1:hover{background:rgba(240,165,0,.08);}
+.ex-t1.on{background:rgba(240,165,0,.1);border-left-color:var(--gold);color:var(--gold);font-weight:700;}
+.ex-t-group.is-collapsed .ex-t-subwrap{display:none;}
+.ex-all-tree-children .ex-t-group{margin-bottom:1px;}
+.ex-t-subwrap{margin:0 0 6px 0;padding:0 6px 0 8px;}
+.ex-t-subwrap .ex-t-sub{margin:0 0 0 8px;border-left:2px solid rgba(240,165,0,.12);padding:0 0 2px 0;}
+.ex-t2{display:block;width:100%;text-align:left;padding:5px 8px 5px 14px;border:none;background:transparent;color:rgba(255,248,236,.9);font-size:12px;cursor:pointer;border-left:2px solid transparent;margin-left:2px;}
+.ex-t2:hover{background:rgba(240,165,0,.07);}
+.ex-t2.on{background:rgba(240,165,0,.08);border-left-color:rgba(240,165,0,.5);color:var(--gold);font-weight:700;}
+.ex-t-group{margin-bottom:2px;}
+.ex-t-note{font-size:9px;color:var(--muted);padding:4px 14px 6px;letter-spacing:.02em;}
+.ex-t-jobname{display:block;width:100%;text-align:left;padding:5px 8px 5px 12px;border:none;background:transparent;color:rgba(255,248,236,.95);font-size:12.5px;font-weight:700;cursor:pointer;}
+.ex-t-jobname:hover{background:rgba(240,165,0,.1);}
+.ex-t-jobname.on{background:rgba(240,165,0,.1);color:var(--gold);}
+.ex-t-ttl{font-size:8px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:6px 12px 2px 14px;}
+.ex-main{padding:14px;overflow:hidden;display:flex;flex-direction:column;background:rgba(0,0,0,.12);}
+.ex-bc{font-size:12px;color:var(--muted);margin-bottom:10px;padding:6px 10px;border-radius:8px;background:rgba(0,0,0,.2);border:1px solid rgba(240,165,0,.1);}
+.ex-bc strong{color:var(--gold);font-weight:700;}
+.ex-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;overflow-y:auto;max-height:calc(100vh - 360px);padding:4px 2px 12px;align-content:start;}
+.ex-card{position:relative;display:flex;flex-direction:column;border:1px solid rgba(240,165,0,.15);border-radius:10px;overflow:hidden;background:rgba(0,0,0,.2);transition:box-shadow .15s, border-color .15s;}
+.ex-card:hover{border-color:rgba(240,165,0,.4);box-shadow:0 4px 20px rgba(0,0,0,.35);}
+.ex-card a{color:inherit;text-decoration:none;display:block;}
+.ex-thumb-wrap{aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);position:relative;overflow:hidden;}
+.ex-thumb{width:100%;height:100%;object-fit:cover;}
+.ex-ico{font-size:42px;opacity:.85;line-height:1;}
+.ex-ico.s{font-size:28px;opacity:.9;}
+.ex-meta{padding:8px 10px 10px;}
+.ex-title{font-size:12px;font-weight:700;line-height:1.25;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word;}
+.ex-sub{font-size:10px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ex-kind{position:absolute;top:6px;right:6px;font-size:9px;font-weight:800;padding:2px 6px;border-radius:4px;background:rgba(0,0,0,.55);text-transform:uppercase;letter-spacing:.04em;}
+.ex-card>a{flex:1;min-width:0;}
+.ex-card-actions{display:flex;flex-wrap:wrap;gap:6px;padding:6px 8px;border-top:1px solid rgba(240,165,0,.12);background:rgba(0,0,0,.2);}
+.ex-card-actions button{font-size:10px;font-weight:800;letter-spacing:.04em;padding:4px 8px;border-radius:6px;border:1px solid rgba(240,165,0,.4);background:rgba(240,165,0,.12);color:var(--gold);cursor:pointer;}
+.ex-card-actions button:hover{background:rgba(240,165,0,.2);}
+.ex-card-actions button.danger{border-color:rgba(255,100,100,.4);color:#ff9a9a;background:rgba(80,0,0,.2);}
+.td-actions{white-space:nowrap;}
+.row-act{font-size:10px;font-weight:800;letter-spacing:.04em;padding:4px 8px;border-radius:6px;border:1px solid rgba(240,165,0,.4);background:rgba(240,165,0,.1);color:var(--gold);cursor:pointer;margin-right:4px;}
+.row-act:hover{background:rgba(240,165,0,.2);}
+.row-act.danger{border-color:rgba(255,100,100,.45);color:#ffabab;background:rgba(60,0,0,.2);}
+.modal{position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;}
+.modal.on{display:flex;}
+.modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.55);cursor:pointer;}
+.modal-panel{position:relative;z-index:1;max-width:420px;width:100%;background:var(--card);border:1px solid var(--bdr);border-radius:12px;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);}
+.modal-title{font-family:'Bebas Neue',sans-serif;letter-spacing:.1em;color:var(--gold);margin:0 0 12px;}
+.modal-row{margin-bottom:10px;}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;}
+#move-err{margin-top:8px;}
+.view-explorer .browse-hdr .pill-row{display:none;}
+.view-list .browse-hdr .pill-row{display:flex;flex-wrap:wrap;gap:6px;}
+@media(max-width:900px){
+  .ex-layout{grid-template-columns:1fr;}
+  .ex-tree{max-height:min(50vh,320px);display:block;border-right:none;border-bottom:1px solid rgba(240,165,0,.12);}
+  .ex-t-subwrap .ex-t-sub{margin-left:4px;}
+}
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="/">← Dashboard</a>
+  <div class="bn">📁 HUB FILES</div>
+  <div style="width:120px"></div>
+</header>
+<main id="app-root" class="view-list">
+  <div class="files-page-grid">
+  <div class="files-page-main">
+  <div class="card browse" id="browse-card">
+    <div class="ch-row">
+      <div class="ch" style="margin:0">Search & browse</div>
+      <div class="view-toggle" id="view-toggle" title="List = table. Explorer = sidebar + thumbnails.">
+        <button type="button" data-v="explorer" id="v-exp">Explorer</button>
+        <button type="button" data-v="list" id="v-list">List</button>
+      </div>
+    </div>
+    <p class="hint" id="browse-hint">In Explorer, <strong>All files</strong> is the parent folder: expand it to see Company, Jobs, General photos, Receipts, and Backups. Subfolders (company categories, on-site photo types, project file types, job branches) work the same. Use <strong>Link</strong> on a row for a 24h shareable URL when <code>FILE_LINK_SECRET</code> is set on the worker.</p>
+    <div class="browse-hdr">
+      <input type="search" class="f-input" id="q" placeholder="Filter by title, job, type…" autocomplete="off">
+      <div class="pill-row" id="kinds"></div>
+    </div>
+    <div class="sub-filters" id="sub-filters" style="display:none"></div>
+
+    <div class="list-only">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="td-thumb">Preview</th><th>Kind</th><th>Title</th><th>When / detail</th><th>Open</th><th>Actions</th></tr></thead>
+          <tbody id="rows"><tr><td colspan="6" style="color:var(--muted)">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="ex-only">
+      <div class="ex-layout">
+        <nav class="ex-tree" id="ex-tree" aria-label="File folders"></nav>
+        <div class="ex-main">
+          <div class="ex-bc" id="ex-breadcrumb" aria-label="Current folder"></div>
+          <div class="ex-grid" id="ex-grid" role="list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <aside class="files-page-aside" aria-label="Upload files">
+  <div class="card upload-aside-card" id="upload-aside">
+    <div class="upload-aside-top">
+      <div class="ch" style="margin:0">Upload</div>
+      <div>
+        <label class="lbl" for="up-target-type" style="display:block;margin-bottom:4px">What are you uploading?</label>
+        <select id="up-target-type" class="sel up-kind-sel" autocomplete="off">
+          <option value="job">Job file (project)</option>
+          <option value="jobphoto">Job site photo (on job)</option>
+          <option value="company">Company document</option>
+        </select>
+      </div>
+    </div>
+    <p class="hint" id="up-unified-hint">Project files: pick a job and folder. They stay on that job in the tree.</p>
+
+    <form id="up-jf-form" style="margin-top:8px" aria-hidden="false">
+      <div class="upload-grid">
+        <div><div class="lbl">Job *</div>
+          <select class="sel" name="job_id" id="up-jf-job" required></select>
+        </div>
+        <div><div class="lbl">Title *</div><input class="inp" name="title" required placeholder="e.g. Roof scope PDF"></div>
+        <div><div class="lbl">Folder</div>
+          <select class="sel" name="doc_type" id="up-jf-doctype">
+            <option value="drawings">Drawings & plans</option>
+            <option value="notes">Field notes</option>
+            <option value="contracts">Contracts</option>
+            <option value="receipts">Project receipts</option>
+            <option value="pay_stub">Sub / pay records</option>
+            <option value="design">Design &amp; finishes</option>
+            <option value="other">Miscellaneous</option>
+          </select>
+        </div>
+        <div><div class="lbl">Notes (optional)</div><input class="inp" name="notes" placeholder="e.g. vendor, date, #"></div>
+        <div><div class="lbl">File *</div><input class="inp" name="file" type="file" required></div>
+      </div>
+      <div style="margin-top:12px">
+        <button type="submit" class="btn" id="up-jf-btn">Upload to job</button>
+        <span class="err" id="up-jf-err" style="display:none"></span>
+        <span class="ok" id="up-jf-ok" style="display:none"></span>
+      </div>
+    </form>
+
+    <form id="up-jp-form" style="display:none;margin-top:8px" aria-hidden="true" autocomplete="off" enctype="multipart/form-data">
+      <div class="upload-grid">
+        <div><div class="lbl">Job *</div>
+          <select class="sel" id="up-jp-job" name="job_id" required></select>
+        </div>
+        <div><div class="lbl">On-site category</div>
+          <select class="sel" name="category" id="up-jp-cat">
+            <option value="before">Before</option>
+            <option value="progress" selected>Progress</option>
+            <option value="final">Final</option>
+            <option value="issue">Issue</option>
+            <option value="marketing">Marketing</option>
+            <option value="safety">Safety</option>
+            <option value="incident">Incident</option>
+          </select>
+        </div>
+        <div style="grid-column:1/-1"><div class="lbl">Caption (optional)</div><input class="inp" id="up-jp-caption" name="caption" placeholder="e.g. Kitchen demo day 1" maxlength="500"></div>
+        <div style="grid-column:1/-1"><div class="lbl">Photo (JPG/PNG/WebP) *</div><input class="inp" name="file" type="file" accept="image/*" id="up-jp-file" required></div>
+      </div>
+      <div style="margin-top:12px">
+        <button type="submit" class="btn" id="up-jp-btn">Upload site photo</button>
+        <span class="err" id="up-jp-err" style="display:none"></span>
+        <span class="ok" id="up-jp-ok" style="display:none"></span>
+      </div>
+    </form>
+
+    <form id="up-form" style="display:none;margin-top:8px" aria-hidden="true" autocomplete="off">
+      <div class="upload-grid">
+        <div><div class="lbl">Title *</div><input class="inp" name="title" required placeholder="e.g. General liability COI 2026"></div>
+        <div><div class="lbl">Category</div>
+          <select class="sel" name="doc_type" id="doc_type">
+            <option value="sop">SOP / procedure</option>
+            <option value="insurance">Insurance (COI, policies)</option>
+            <option value="license">License & permits</option>
+            <option value="contract">Contracts & legal</option>
+            <option value="w9">W-9 & vendor tax</option>
+            <option value="safety">Safety & OSHA</option>
+            <option value="hr">HR & hiring</option>
+            <option value="tax">Tax & accounting</option>
+            <option value="marketing">Marketing assets</option>
+            <option value="legal">Legal (registered agent, etc.)</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div><div class="lbl">Effective (optional)</div><input class="inp" name="effective_date" type="date"></div>
+        <div><div class="lbl">Expires (optional)</div><input class="inp" name="expires_at" type="date"></div>
+        <div><div class="lbl">Notes (optional)</div><input class="inp" name="notes" placeholder="Policy #, carrier…"></div>
+        <div><div class="lbl">File *</div><input class="inp" name="file" type="file" required></div>
+      </div>
+      <div style="margin-top:12px">
+        <button type="submit" class="btn" id="up-btn">Upload company doc</button>
+        <span class="err" id="up-err" style="display:none"></span>
+        <span class="ok" id="up-ok" style="display:none"></span>
+      </div>
+    </form>
+  </div>
+  </aside>
+  </div>
+
+  <div class="modal" id="move-modal" aria-hidden="true">
+    <div class="modal-backdrop" id="move-backdrop" tabindex="-1"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="move-title">
+      <h3 class="modal-title" id="move-title">Move</h3>
+      <div id="move-body"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="move-cancel" style="background:transparent">Cancel</button>
+        <button type="button" class="btn" id="move-save">Save</button>
+      </div>
+      <p class="err" id="move-err" style="display:none"></p>
+    </div>
+  </div>
+</main>
+<script>
+(function(){
+  var ST_VIEW = 'hubFilesViewV1';
+  var state = {
+    kind: 'all',
+    q: '',
+    view: 'list',
+    companyDocType: null,
+    photoCategory: null,
+    jobFileCategory: null,
+    browseJobId: null,
+    browseJobLabel: null
+  };
+  var lastItems = [];
+  var moveItem = null;
+  var jobsOpenPromise = null;
+  var jobsClosedPromise = null;
+  var allJobsPickPromise = null;
+  var pdfThumbObserver = null;
+  var _pdfjsLoad = null;
+  var KINDS = [
+    { id: 'all', label: 'All files', short: 'All', icon: '📂' },
+    { id: 'company', label: 'Company', short: 'Company', icon: '🏢' },
+    { id: 'photo', label: 'General photos', short: 'General', icon: '📷' },
+    { id: 'receipt', label: 'Receipts', short: 'Receipts', icon: '🧾' },
+    { id: 'backup', label: 'Backups', short: 'Backups', icon: '💾' }
+  ];
+  var JOB_FILE_FOLDERS = [
+    { id: '', label: 'All types' },
+    { id: 'drawings', label: 'Drawings & plans' },
+    { id: 'notes', label: 'Field notes' },
+    { id: 'contracts', label: 'Contracts' },
+    { id: 'receipts', label: 'Project receipts' },
+    { id: 'pay_stub', label: 'Sub / pay records' },
+    { id: 'design', label: 'Design & finishes' },
+    { id: 'other', label: 'Miscellaneous' }
+  ];
+  /* Same values as the upload <select> (company) + on-site photo categories (PWA) */
+  var COMPANY_FOLDERS = [
+    { id: '', label: 'All in company' },
+    { id: 'sop', label: 'SOP / procedure' },
+    { id: 'insurance', label: 'Insurance' },
+    { id: 'license', label: 'License & permits' },
+    { id: 'contract', label: 'Contracts' },
+    { id: 'w9', label: 'W-9 & tax' },
+    { id: 'safety', label: 'Safety' },
+    { id: 'hr', label: 'HR' },
+    { id: 'tax', label: 'Tax' },
+    { id: 'marketing', label: 'Marketing' },
+    { id: 'legal', label: 'Legal' },
+    { id: 'other', label: 'Other' }
+  ];
+  var PHOTO_FOLDERS = [
+    { id: '', label: 'All categories' },
+    { id: 'before', label: 'Before' },
+    { id: 'progress', label: 'Progress' },
+    { id: 'final', label: 'Final' },
+    { id: 'issue', label: 'Issue' },
+    { id: 'marketing', label: 'Marketing' },
+    { id: 'safety', label: 'Safety' },
+    { id: 'incident', label: 'Incident' }
+  ];
+
+  try {
+    var sv = sessionStorage.getItem(ST_VIEW);
+    if (sv === 'explorer' || sv === 'list') state.view = sv;
+  } catch (e) {}
+
+  function kClass(k) {
+    if (k === 'photo') return 'k-photo';
+    if (k === 'receipt') return 'k-receipt';
+    if (k === 'company') return 'k-company';
+    if (k === 'job_file') return 'k-jobfile';
+    if (k === 'backup') return 'k-backup';
+    return '';
+  }
+
+  function kindLabel(k) {
+    if (k === 'job_file') return 'job';
+    return k;
+  }
+
+  function getTreeExp() {
+    try {
+      var s = sessionStorage.getItem('hubFilesTreeExpandV1');
+      if (s) {
+        var o = JSON.parse(s);
+        if (o.job_file != null) delete o.job_file;
+        if (o.jobs === undefined) o.jobs = true;
+        if (o.archived === undefined) o.archived = true;
+        if (o.all === undefined) o.all = true;
+        if (o.allRoot === undefined) o.allRoot = true;
+        if (o.company === undefined) o.company = true;
+        return o;
+      }
+    } catch (e) {}
+    return { all: true, allRoot: true, photo: true, company: true, jobs: true, archived: true };
+  }
+
+  function setTreeExp(key, val) {
+    var o = getTreeExp();
+    o[key] = val;
+    try { sessionStorage.setItem('hubFilesTreeExpandV1', JSON.stringify(o)); } catch (e) {}
+  }
+
+  function treeHasSub(ks) {
+    return ks.id === 'company';
+  }
+
+  function iconForItem(it) {
+    if (it.kind === 'backup') return { type: 'emoji', v: '💾' };
+    if (it.kind === 'photo' || it.kind === 'receipt') return { type: 'img', href: it.thumb_href };
+    if ((it.kind === 'company' || it.kind === 'job_file') && it.thumb_href) {
+      return { type: 'img', href: it.thumb_href };
+    }
+    var m = (it.mime_type || '').toLowerCase();
+    if (m === 'application/pdf') return { type: 'emoji', v: '📄' };
+    if (m.indexOf('word') >= 0 || m.indexOf('document') >= 0) return { type: 'emoji', v: '📝' };
+    if (m.indexOf('sheet') >= 0 || m.indexOf('excel') >= 0) return { type: 'emoji', v: '📊' };
+    if (m.indexOf('zip') >= 0 || m.indexOf('gzip') >= 0) return { type: 'emoji', v: '🗜️' };
+    if (it.kind === 'company' || it.kind === 'job_file') return { type: 'emoji', v: '📎' };
+    return { type: 'emoji', v: '📁' };
+  }
+
+  function applyView() {
+    var root = document.getElementById('app-root');
+    root.classList.remove('view-list', 'view-explorer');
+    root.classList.add(state.view === 'explorer' ? 'view-explorer' : 'view-list');
+    var exp = document.getElementById('v-exp');
+    var lst = document.getElementById('v-list');
+    exp.classList.toggle('on', state.view === 'explorer');
+    lst.classList.toggle('on', state.view === 'list');
+    try { sessionStorage.setItem(ST_VIEW, state.view); } catch (e) {}
+  }
+
+  document.getElementById('view-toggle').addEventListener('click', function(ev) {
+    var t = ev.target;
+    if (t.getAttribute('data-v')) {
+      state.view = t.getAttribute('data-v');
+      applyView();
+      renderSubFilters();
+      renderAll();
+    }
+  });
+
+  function clearBrowse() {
+    state.browseJobId = null;
+    state.browseJobLabel = null;
+  }
+
+  function isPillOn(ks) {
+    if (state.kind !== ks.id) return false;
+    if (ks.id === 'photo' && state.browseJobId) return false;
+    return true;
+  }
+
+  function goJobPhoto(jobId, jobLabel, cat) {
+    state.kind = 'photo';
+    state.browseJobId = jobId;
+    state.browseJobLabel = jobLabel;
+    state.photoCategory = cat || null;
+    state.jobFileCategory = null;
+    state.companyDocType = null;
+    renderKinds();
+    renderSubFilters();
+    renderExTree();
+    renderBreadcrumb();
+    load();
+  }
+
+  function goJobFileFolder(jobId, jobLabel, docT) {
+    state.kind = 'job_file';
+    state.browseJobId = jobId;
+    state.browseJobLabel = jobLabel;
+    state.jobFileCategory = docT || null;
+    state.photoCategory = null;
+    state.companyDocType = null;
+    renderKinds();
+    renderSubFilters();
+    renderExTree();
+    renderBreadcrumb();
+    load();
+  }
+
+  function isJobNodeOpen(gid) {
+    var o = getTreeExp();
+    return o['j:' + gid] !== false;
+  }
+
+  function appendOneJobUnderTree(jsub, j) {
+    var jid = j.id;
+    var jn = jobLabel(j);
+    var jOpen = isJobNodeOpen(jid);
+    var jobWrap = document.createElement('div');
+    jobWrap.className = 'ex-t-group' + (jOpen ? '' : ' is-collapsed');
+    var jobRow = document.createElement('div');
+    jobRow.className = 'ex-t1-row';
+    var c2 = document.createElement('button');
+    c2.type = 'button';
+    c2.className = 'ex-chev';
+    c2.textContent = jOpen ? '▾' : '▸';
+    c2.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      setTreeExp('j:' + jid, isJobNodeOpen(jid) ? false : true);
+      renderExTree();
+    });
+    var lab = document.createElement('button');
+    lab.type = 'button';
+    lab.className = 'ex-t-jobname' + (state.browseJobId === jid ? ' on' : '');
+    lab.textContent = jn;
+    lab.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+            goJobFileFolder(jid, jn, 'design');
+    });
+    jobRow.appendChild(c2);
+    jobRow.appendChild(lab);
+    jobWrap.appendChild(jobRow);
+    var jInner = document.createElement('div');
+    jInner.className = 'ex-t-subwrap';
+    var tSite = document.createElement('div');
+    tSite.className = 'ex-t-ttl';
+    tSite.textContent = 'Site photos';
+    jInner.appendChild(tSite);
+    var pRow = document.createElement('div');
+    pRow.className = 'ex-t-sub';
+    PHOTO_FOLDERS.forEach(function(f) {
+      if (!f.id) return;
+      var t2 = document.createElement('button');
+      t2.type = 'button';
+      t2.className =
+        'ex-t2' +
+        (state.kind === 'photo' && state.browseJobId === jid && f.id === (state.photoCategory || '') ? ' on' : '');
+      t2.textContent = f.label;
+      t2.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        goJobPhoto(jid, jn, f.id);
+      });
+      pRow.appendChild(t2);
+    });
+    jInner.appendChild(pRow);
+    var tF = document.createElement('div');
+    tF.className = 'ex-t-ttl';
+    tF.textContent = 'Project files';
+    jInner.appendChild(tF);
+    var fRow = document.createElement('div');
+    fRow.className = 'ex-t-sub';
+    JOB_FILE_FOLDERS.forEach(function(f) {
+      if (!f.id) return;
+      var t3 = document.createElement('button');
+      t3.type = 'button';
+      t3.className =
+        'ex-t2' +
+        (state.kind === 'job_file' && state.browseJobId === jid && f.id === (state.jobFileCategory || '') ? ' on' : '');
+      t3.textContent = f.label;
+      t3.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        goJobFileFolder(jid, jn, f.id);
+      });
+      fRow.appendChild(t3);
+    });
+    jInner.appendChild(fRow);
+    jobWrap.appendChild(jInner);
+    jsub.appendChild(jobWrap);
+  }
+
+  function appendJobTreeGroup(nav, expKey, blockTitle, jobList) {
+    var gOpen = getTreeExp()[expKey] !== false;
+    var jwrap = document.createElement('div');
+    jwrap.className = 'ex-t-group' + (!gOpen ? ' is-collapsed' : '');
+    var jrow = document.createElement('div');
+    jrow.className = 'ex-t1-row';
+    var jchev = document.createElement('button');
+    jchev.type = 'button';
+    jchev.className = 'ex-chev';
+    jchev.setAttribute('aria-expanded', gOpen ? 'true' : 'false');
+    jchev.textContent = gOpen ? '▾' : '▸';
+    jchev.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      var oj = getTreeExp();
+      setTreeExp(expKey, oj[expKey] === false);
+      renderExTree();
+    });
+    var jt = document.createElement('div');
+    jt.className = 'ex-t1';
+    jt.style.flex = '1';
+    jt.style.borderLeft = '3px solid transparent';
+    jt.style.padding = '7px 12px 7px 6px';
+    jt.style.color = 'var(--gold)';
+    jt.style.fontWeight = '800';
+    jt.textContent = blockTitle;
+    jrow.appendChild(jchev);
+    jrow.appendChild(jt);
+    jwrap.appendChild(jrow);
+    var jsub = document.createElement('div');
+    jsub.className = 'ex-t-subwrap';
+    if (jobList == null) {
+      var w0 = document.createElement('p');
+      w0.className = 'ex-t-note';
+      w0.style.padding = '6px 10px 12px 14px';
+      w0.textContent = 'Loading jobs…';
+      jsub.appendChild(w0);
+    } else if (!jobList.length) {
+      var w1 = document.createElement('p');
+      w1.className = 'ex-t-note';
+      w1.style.padding = '6px 10px 12px 14px';
+      w1.textContent =
+        expKey === 'jobs'
+          ? 'No active jobs in Hub — run a Jobber sync first.'
+          : 'No completed or closed jobs yet.';
+      jsub.appendChild(w1);
+    } else {
+      jobList.forEach(function(j) {
+        appendOneJobUnderTree(jsub, j);
+      });
+    }
+    jwrap.appendChild(jsub);
+    nav.appendChild(jwrap);
+  }
+
+  function renderBreadcrumb() {
+    var el = document.getElementById('ex-breadcrumb');
+    if (!el) return;
+    var sp = ' <span style="opacity:.35">›</span> ';
+    if (state.kind === 'all') {
+      el.innerHTML = '<strong>Hub</strong>' + sp + '<strong>All files</strong>';
+      return;
+    }
+    if (state.browseJobLabel && (state.kind === 'photo' || state.kind === 'job_file')) {
+      el.innerHTML =
+        '<strong>Hub</strong>' + sp + '<strong>Jobs</strong>' + sp + '<strong>' + state.browseJobLabel + '</strong>' +
+        (function() {
+          if (state.kind === 'photo' && state.photoCategory) {
+            var pf = PHOTO_FOLDERS.find(function(x) { return x.id === state.photoCategory; });
+            return sp + '<span>' + (pf ? pf.label : state.photoCategory) + '</span>';
+          }
+          if (state.kind === 'job_file' && state.jobFileCategory) {
+            var jf = JOB_FILE_FOLDERS.find(function(x) { return x.id === state.jobFileCategory; });
+            return sp + '<span>' + (jf ? jf.label : state.jobFileCategory) + '</span>';
+          }
+          return '';
+        })();
+      return;
+    }
+    var k = KINDS.find(function(x) { return x.id === state.kind; });
+    var h = '<strong>Hub</strong>' + sp + '<strong>' + (k ? k.label : state.kind) + '</strong>';
+    if (state.kind === 'company' && state.companyDocType) {
+      var cf = COMPANY_FOLDERS.find(function(x) { return x.id === state.companyDocType; });
+      h += sp + (cf ? cf.label : state.companyDocType);
+    }
+    if (state.kind === 'photo' && !state.browseJobId && state.photoCategory) {
+      var pf2 = PHOTO_FOLDERS.find(function(x) { return x.id === state.photoCategory; });
+      h += sp + (pf2 ? pf2.label : state.photoCategory);
+    }
+    el.innerHTML = h;
+  }
+
+  function renderSubFilters() {
+    var box = document.getElementById('sub-filters');
+    if (!box) return;
+    if (state.view !== 'list' || (state.kind !== 'company' && state.kind !== 'photo' && state.kind !== 'job_file')) {
+      box.style.display = 'none';
+      box.textContent = '';
+      return;
+    }
+    if (state.kind === 'job_file' && !state.browseJobId) {
+      box.style.display = 'none';
+      box.textContent = '';
+      return;
+    }
+    box.style.display = 'flex';
+    box.textContent = '';
+    var L = state.kind === 'company' ? COMPANY_FOLDERS : state.kind === 'job_file' ? JOB_FILE_FOLDERS : PHOTO_FOLDERS;
+    var lab = document.createElement('div');
+    lab.className = 'sf-lbl';
+    if (state.kind === 'company') {
+      lab.textContent = 'Company category (same as upload)';
+    } else if (state.kind === 'job_file') {
+      lab.textContent = 'Project file folder (under ' + (state.browseJobLabel || 'job') + ')';
+    } else {
+      lab.textContent = state.browseJobId
+        ? 'On-site type for ' + (state.browseJobLabel || 'this job')
+        : 'On-site type (not tied to a job in the list)';
+    }
+    box.appendChild(lab);
+    var row = document.createElement('div');
+    row.className = 'sf-pills';
+    L.forEach(function(f) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pill pill-sub';
+      var on =
+        state.kind === 'company' ? (f.id === (state.companyDocType || ''))
+        : state.kind === 'job_file' ? (f.id === (state.jobFileCategory || ''))
+        : (f.id === (state.photoCategory || ''));
+      if (on) b.className += ' on';
+      b.textContent = f.label;
+      b.addEventListener('click', function() {
+        if (state.kind === 'company') state.companyDocType = f.id || null;
+        else if (state.kind === 'job_file') state.jobFileCategory = f.id || null;
+        else state.photoCategory = f.id || null;
+        renderSubFilters();
+        renderExTree();
+        load();
+      });
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+  }
+
+  function renderKinds() {
+    var w = document.getElementById('kinds');
+    w.textContent = '';
+    KINDS.forEach(function(ks) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pill' + (isPillOn(ks) ? ' on' : '');
+      b.textContent = ks.short;
+      b.addEventListener('click', function() {
+        state.kind = ks.id;
+        if (ks.id !== 'company') state.companyDocType = null;
+        if (ks.id !== 'photo') { state.photoCategory = null; }
+        if (['all', 'receipt', 'company', 'backup', 'photo'].indexOf(ks.id) >= 0) {
+          clearBrowse();
+        }
+        if (ks.id === 'photo') { state.jobFileCategory = null; }
+        renderKinds();
+        renderSubFilters();
+        renderExTree();
+        load();
+      });
+      w.appendChild(b);
+    });
+  }
+
+  function exTreeT1(ks) {
+    if (ks.id === 'photo') {
+      return state.kind === 'photo' && !state.browseJobId;
+    }
+    if (ks.id === 'company') {
+      return state.kind === 'company' && !state.companyDocType;
+    }
+    return state.kind === ks.id;
+  }
+
+  function renderExTree() {
+    var nav = document.getElementById('ex-tree');
+    nav.textContent = '';
+    var lbl = document.createElement('div');
+    lbl.className = 'ex-tree-lbl';
+    lbl.textContent = 'Folders';
+    nav.appendChild(lbl);
+    var note = document.createElement('div');
+    note.className = 'ex-t-note';
+    note.textContent = '“All files” is the top folder — expand it to open Company, Jobs, General photos, and the rest. “General” = photos not on a job.';
+    nav.appendChild(note);
+    var exp = getTreeExp();
+    var jobsOpen = window._hubJobs;
+    var jobsArch = window._hubJobsArchived;
+
+    var allRootOpen = exp.allRoot !== false;
+    var allWrap = document.createElement('div');
+    allWrap.className = 'ex-t-group' + (!allRootOpen ? ' is-collapsed' : '');
+    var allRow = document.createElement('div');
+    allRow.className = 'ex-t1-row';
+    var allChev = document.createElement('button');
+    allChev.type = 'button';
+    allChev.className = 'ex-chev';
+    allChev.setAttribute('aria-expanded', allRootOpen ? 'true' : 'false');
+    allChev.textContent = allRootOpen ? '▾' : '▸';
+    allChev.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      var cur = getTreeExp();
+      setTreeExp('allRoot', cur.allRoot === false);
+      renderExTree();
+    });
+    var allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.className = 'ex-t1' + (state.kind === 'all' ? ' on' : '');
+    allBtn.textContent = '📂  All files';
+    allBtn.addEventListener('click', function() {
+      state.kind = 'all';
+      state.companyDocType = null;
+      state.photoCategory = null;
+      state.jobFileCategory = null;
+      clearBrowse();
+      renderKinds();
+      renderSubFilters();
+      renderExTree();
+      renderBreadcrumb();
+      load();
+    });
+    allRow.appendChild(allChev);
+    allRow.appendChild(allBtn);
+    allWrap.appendChild(allRow);
+
+    var treeInner = document.createElement('div');
+    treeInner.className = 'ex-t-subwrap ex-all-tree-children';
+
+    KINDS.filter(function(ks) { return ks.id !== 'all'; }).forEach(function(ks) {
+      if (ks.id === 'photo') {
+        appendJobTreeGroup(treeInner, 'jobs', '📁  Jobs (by project)', jobsOpen);
+        appendJobTreeGroup(treeInner, 'archived', '📂  Archived jobs', jobsArch);
+      }
+      var wrap = document.createElement('div');
+      var hasSub = treeHasSub(ks);
+      var ek = ks.id;
+      var open = hasSub && exp[ek] !== false;
+      wrap.className = 'ex-t-group' + (hasSub && !open ? ' is-collapsed' : '');
+
+      if (hasSub) {
+        var row = document.createElement('div');
+        row.className = 'ex-t1-row';
+        var chev = document.createElement('button');
+        chev.type = 'button';
+        chev.className = 'ex-chev';
+        chev.setAttribute('aria-expanded', open ? 'true' : 'false');
+        chev.textContent = open ? '▾' : '▸';
+        chev.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          var cur = getTreeExp();
+          setTreeExp(ek, cur[ek] === false);
+          renderExTree();
+        });
+        var t1 = document.createElement('button');
+        t1.type = 'button';
+        t1.className = 'ex-t1' + (exTreeT1(ks) ? ' on' : '');
+        t1.textContent = ks.icon + '  ' + ks.label;
+        t1.addEventListener('click', function() {
+          state.kind = ks.id;
+          if (ks.id === 'receipt' || ks.id === 'backup' || ks.id === 'company' || ks.id === 'photo') {
+            if (ks.id !== 'company') state.companyDocType = null;
+            if (ks.id !== 'photo') state.photoCategory = null;
+            if (['receipt', 'company', 'backup', 'photo'].indexOf(ks.id) >= 0) {
+              clearBrowse();
+            }
+            if (ks.id === 'photo') state.jobFileCategory = null;
+          }
+          renderKinds();
+          renderSubFilters();
+          renderExTree();
+          renderBreadcrumb();
+          load();
+        });
+        row.appendChild(chev);
+        row.appendChild(t1);
+        wrap.appendChild(row);
+      } else {
+        var t1only = document.createElement('button');
+        t1only.type = 'button';
+        t1only.className = 'ex-t1' + (exTreeT1(ks) ? ' on' : '');
+        t1only.style.paddingLeft = '14px';
+        t1only.textContent = ks.icon + '  ' + ks.label;
+        t1only.addEventListener('click', function() {
+          state.kind = ks.id;
+          clearBrowse();
+          if (ks.id !== 'company') state.companyDocType = null;
+          if (ks.id !== 'photo') { state.photoCategory = null; }
+          if (ks.id === 'photo') { state.jobFileCategory = null; }
+          renderKinds();
+          renderSubFilters();
+          renderExTree();
+          renderBreadcrumb();
+          load();
+        });
+        wrap.appendChild(t1only);
+      }
+
+      if (ks.id === 'company') {
+        var sc = document.createElement('div');
+        sc.className = 'ex-t-subwrap';
+        var in2 = document.createElement('div');
+        in2.className = 'ex-t-sub';
+        COMPANY_FOLDERS.forEach(function(f) {
+          var t2 = document.createElement('button');
+          t2.type = 'button';
+          t2.className = 'ex-t2' + (state.kind === 'company' && (f.id || null) === (state.companyDocType || null) ? ' on' : '');
+          t2.textContent = f.label;
+          t2.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            state.kind = 'company';
+            state.companyDocType = f.id || null;
+            state.photoCategory = null;
+            state.jobFileCategory = null;
+            clearBrowse();
+            renderKinds();
+            renderSubFilters();
+            renderExTree();
+            renderBreadcrumb();
+            load();
+          });
+          in2.appendChild(t2);
+        });
+        sc.appendChild(in2);
+        wrap.appendChild(sc);
+      }
+
+      treeInner.appendChild(wrap);
+    });
+
+    allWrap.appendChild(treeInner);
+    nav.appendChild(allWrap);
+
+    renderBreadcrumb();
+  }
+
+  function renderAll() {
+    renderTable(lastItems);
+    renderExplorerGrid(lastItems);
+  }
+
+  function ensureJobsOpen() {
+    if (jobsOpenPromise) return jobsOpenPromise;
+    jobsOpenPromise = fetch('/api/jobs?status=open', { credentials: 'same-origin' })
+      .then(function(r) {
+        return r.json();
+      })
+      .then(function(d) {
+        var j = d.jobs || [];
+        try {
+          window._hubJobs = j;
+        } catch (e) {}
+        return j;
+      })
+      .catch(function() {
+        try {
+          window._hubJobs = [];
+        } catch (e) {}
+        return [];
+      });
+    return jobsOpenPromise;
+  }
+
+  function ensureJobsClosed() {
+    if (jobsClosedPromise) return jobsClosedPromise;
+    jobsClosedPromise = fetch('/api/jobs?status=closed', { credentials: 'same-origin' })
+      .then(function(r) {
+        return r.json();
+      })
+      .then(function(d) {
+        var j = d.jobs || [];
+        try {
+          window._hubJobsArchived = j;
+        } catch (e) {}
+        return j;
+      })
+      .catch(function() {
+        try {
+          window._hubJobsArchived = [];
+        } catch (e) {}
+        return [];
+      });
+    return jobsClosedPromise;
+  }
+
+  function mergeJobsById(a, b) {
+    var seen = Object.create(null);
+    var out = [];
+    (a || []).forEach(function(j) {
+      if (!j || !j.id || seen[j.id]) return;
+      seen[j.id] = 1;
+      out.push(j);
+    });
+    (b || []).forEach(function(j) {
+      if (!j || !j.id || seen[j.id]) return;
+      seen[j.id] = 1;
+      out.push(j);
+    });
+    return out;
+  }
+
+  function ensureAllJobsForPick() {
+    if (allJobsPickPromise) return allJobsPickPromise;
+    allJobsPickPromise = Promise.all([ensureJobsOpen(), ensureJobsClosed()]).then(function(two) {
+      return mergeJobsById(two[0], two[1]);
+    });
+    return allJobsPickPromise;
+  }
+
+  function jobLabel(j) {
+    var num = j.job_number != null ? '#' + j.job_number : '';
+    var t = (j.title || j.id || '').trim();
+    var extra = j.client_name ? ' — ' + j.client_name : '';
+    return (num ? num + ' ' : '') + t + extra;
+  }
+
+  function canCopyShareableLink(it) {
+    return (
+      it.kind === 'job_file' || it.kind === 'company' || it.kind === 'photo' || it.kind === 'receipt'
+    );
+  }
+
+  function copyShareableFileLink(it) {
+    if (!canCopyShareableLink(it)) return;
+    fetch('/api/file-link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ kind: it.kind, id: it.id, ttl_sec: 86400 }),
+    })
+      .then(function(r) {
+        return (r.headers.get('content-type') || '').indexOf('json') >= 0
+          ? r.json().then(function(j) {
+              if (!r.ok) {
+                var msg2 = (j && (j.message || j.error)) || r.statusText || 'Failed to create link';
+                throw new Error(msg2);
+              }
+              return j;
+            })
+          : r.text().then(function(t) {
+              if (!r.ok) throw new Error(t || r.statusText);
+              throw new Error('Unexpected response');
+            });
+      })
+      .then(function(d) {
+        var u = d && d.url;
+        if (!u) throw new Error('No URL in response');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(u).then(function() {
+            window.alert('Link copied (24h). Paste in email, Slack, or an AI tool.');
+          });
+        }
+        window.prompt('Copy this URL (24h):', u);
+        return undefined;
+      })
+      .catch(function(e) {
+        window.alert((e && e.message) || 'Could not create link. Set FILE_LINK_SECRET on the worker, or check your session.');
+      });
+  }
+
+  function deleteItem(it) {
+    if (!it.deletable) return;
+    var msg = 'Delete this file? This cannot be undone.';
+    if (it.kind === 'backup') msg = 'Delete this D1 backup from storage? This cannot be undone.';
+    if (!window.confirm(msg)) return;
+    var url;
+    if (it.kind === 'photo') url = '/api/photos/' + encodeURIComponent(it.id);
+    else if (it.kind === 'company') url = '/api/company-documents/' + encodeURIComponent(it.id);
+    else if (it.kind === 'job_file') url = '/api/job-files/' + encodeURIComponent(it.id);
+    else if (it.kind === 'receipt') url = '/api/expenses/' + encodeURIComponent(it.id);
+    else if (it.kind === 'backup') url = '/api/files/backup?key=' + encodeURIComponent(it.id);
+    else return;
+    fetch(url, { method: 'DELETE', credentials: 'same-origin' })
+      .then(function(r) {
+        if (r.status === 409) {
+          return r.json().then(function(j) { throw new Error((j && j.message) || 'Not allowed'); });
+        }
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t || 'Delete failed'); });
+        load();
+      })
+      .catch(function(e) { window.alert((e && e.message) || 'Delete failed'); });
+  }
+
+  function closeMoveModal() {
+    var m = document.getElementById('move-modal');
+    m.classList.remove('on');
+    m.style.display = 'none';
+    m.setAttribute('aria-hidden', 'true');
+    moveItem = null;
+    var err = document.getElementById('move-err');
+    err.style.display = 'none';
+    err.textContent = '';
+  }
+
+  function openMoveModal(it) {
+    if (!it.movable) return;
+    moveItem = it;
+    var body = document.getElementById('move-body');
+    var title = document.getElementById('move-title');
+    body.textContent = '';
+    var err = document.getElementById('move-err');
+    err.style.display = 'none';
+    if (it.kind === 'photo') {
+      title.textContent = 'Move photo';
+      var p1 = document.createElement('div');
+      p1.className = 'modal-row';
+      p1.innerHTML = '<div class="lbl" style="margin-bottom:4px">Job</div>';
+      var selJ = document.createElement('select');
+      selJ.className = 'sel';
+      selJ.id = 'move-job';
+      var o0 = document.createElement('option');
+      o0.value = '';
+      o0.textContent = 'General (no job)';
+      selJ.appendChild(o0);
+      p1.appendChild(selJ);
+      body.appendChild(p1);
+      var p2 = document.createElement('div');
+      p2.className = 'modal-row';
+      p2.innerHTML = '<div class="lbl" style="margin-bottom:4px">On-site category</div>';
+      var selC = document.createElement('select');
+      selC.className = 'sel';
+      selC.id = 'move-cat';
+      PHOTO_FOLDERS.forEach(function(f) {
+        if (!f.id) return;
+        var o = document.createElement('option');
+        o.value = f.id;
+        o.textContent = f.label;
+        if (f.id === (it.category || '')) o.selected = true;
+        selC.appendChild(o);
+      });
+      p2.appendChild(selC);
+      body.appendChild(p2);
+      ensureAllJobsForPick().then(function(jobs) {
+        jobs.forEach(function(j) {
+          var o = document.createElement('option');
+          o.value = j.id;
+          o.textContent = jobLabel(j);
+          selJ.appendChild(o);
+        });
+        selJ.value = it.job_id || '';
+      });
+    } else if (it.kind === 'job_file') {
+      title.textContent = 'Move job file';
+      var p1 = document.createElement('div');
+      p1.className = 'modal-row';
+      p1.innerHTML = '<div class="lbl" style="margin-bottom:4px">Job</div>';
+      var selJ = document.createElement('select');
+      selJ.className = 'sel';
+      selJ.id = 'move-jf-job';
+      p1.appendChild(selJ);
+      body.appendChild(p1);
+      var p2 = document.createElement('div');
+      p2.className = 'modal-row';
+      p2.innerHTML = '<div class="lbl" style="margin-bottom:4px">Folder</div>';
+      var selD = document.createElement('select');
+      selD.className = 'sel';
+      selD.id = 'move-jf-doct';
+      JOB_FILE_FOLDERS.forEach(function(f) {
+        if (!f.id) return;
+        var o = document.createElement('option');
+        o.value = f.id;
+        o.textContent = f.label;
+        if (f.id === (it.doc_type || '')) o.selected = true;
+        selD.appendChild(o);
+      });
+      p2.appendChild(selD);
+      body.appendChild(p2);
+      ensureAllJobsForPick().then(function(jobs) {
+        jobs.forEach(function(j) {
+          var o = document.createElement('option');
+          o.value = j.id;
+          o.textContent = jobLabel(j);
+          selJ.appendChild(o);
+        });
+        if (it.job_id) selJ.value = it.job_id;
+      });
+    } else if (it.kind === 'company') {
+      title.textContent = 'Move to category';
+      var p = document.createElement('div');
+      p.className = 'modal-row';
+      p.innerHTML = '<div class="lbl" style="margin-bottom:4px">Company category</div>';
+      var sel = document.createElement('select');
+      sel.className = 'sel';
+      sel.id = 'move-doct';
+      COMPANY_FOLDERS.forEach(function(f) {
+        if (!f.id) return;
+        var o = document.createElement('option');
+        o.value = f.id;
+        o.textContent = f.label;
+        if (f.id === (it.doc_type || '')) o.selected = true;
+        sel.appendChild(o);
+      });
+      p.appendChild(sel);
+      body.appendChild(p);
+    } else if (it.kind === 'receipt') {
+      title.textContent = 'Move receipt to job';
+      var p1 = document.createElement('div');
+      p1.className = 'modal-row';
+      p1.innerHTML = '<div class="lbl" style="margin-bottom:4px">Job</div>';
+      var selJ = document.createElement('select');
+      selJ.className = 'sel';
+      selJ.id = 'move-job';
+      var o0 = document.createElement('option');
+      o0.value = '';
+      o0.textContent = 'General (no job)';
+      selJ.appendChild(o0);
+      p1.appendChild(selJ);
+      body.appendChild(p1);
+      ensureAllJobsForPick().then(function(jobs) {
+        jobs.forEach(function(j) {
+          var o = document.createElement('option');
+          o.value = j.id;
+          o.textContent = jobLabel(j);
+          selJ.appendChild(o);
+        });
+        selJ.value = it.job_id || '';
+      });
+    } else {
+      return;
+    }
+    var m = document.getElementById('move-modal');
+    m.style.display = 'flex';
+    m.classList.add('on');
+    m.setAttribute('aria-hidden', 'false');
+  }
+
+  function submitMove() {
+    var it = moveItem;
+    if (!it) return;
+    var err = document.getElementById('move-err');
+    err.style.display = 'none';
+    var url, payload;
+    if (it.kind === 'photo') {
+      url = '/api/photos/' + encodeURIComponent(it.id);
+      var jobSel = document.getElementById('move-job');
+      var catSel = document.getElementById('move-cat');
+      if (!jobSel || !catSel) return;
+      var jid = jobSel.value;
+      payload = { job_id: jid ? jid : null, category: catSel.value };
+    } else if (it.kind === 'company') {
+      url = '/api/company-documents/' + encodeURIComponent(it.id);
+      var dsel = document.getElementById('move-doct');
+      if (!dsel) return;
+      payload = { doc_type: dsel.value };
+    } else if (it.kind === 'receipt') {
+      url = '/api/expenses/' + encodeURIComponent(it.id);
+      var rj = document.getElementById('move-job');
+      if (!rj) return;
+      var rjid = rj.value;
+      payload = { job_id: rjid ? rjid : null };
+    } else if (it.kind === 'job_file') {
+      url = '/api/job-files/' + encodeURIComponent(it.id);
+      var mjj = document.getElementById('move-jf-job');
+      var mjd = document.getElementById('move-jf-doct');
+      if (!mjj || !mjd) return;
+      if (!mjj.value) {
+        err.textContent = 'Select a job';
+        err.style.display = 'block';
+        return;
+      }
+      payload = { job_id: mjj.value, doc_type: mjd.value };
+    } else {
+      return;
+    }
+    document.getElementById('move-save').disabled = true;
+    fetch(url, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'same-origin',
+    })
+      .then(function(r) {
+        if (r.status === 409) {
+          return r.json().then(function(j) { throw new Error((j && j.message) || 'Not allowed'); });
+        }
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t || 'Update failed'); });
+        closeMoveModal();
+        load();
+      })
+      .catch(function(e) {
+        err.textContent = (e && e.message) || 'Update failed';
+        err.style.display = 'block';
+      })
+      .then(function() {
+        document.getElementById('move-save').disabled = false;
+      });
+  }
+
+  var _pdfDataUrl = Object.create(null);
+  function pdfDocThumbKey(it) {
+    return String((it && it.id) || '') + '\0' + String((it && it.href) || '');
+  }
+
+  function shouldRenderPdfPageThumb(it) {
+    if (!it || !it.href) return false;
+    if (it.thumb_href) return false;
+    if (it.kind !== 'company' && it.kind !== 'job_file') return false;
+    return (it.mime_type || '').toLowerCase() === 'application/pdf';
+  }
+
+  function loadPdfJs() {
+    if (window.pdfjsLib && window.pdfjsLib.getDocument) return Promise.resolve(window.pdfjsLib);
+    if (_pdfjsLoad) return _pdfjsLoad;
+    _pdfjsLoad = new Promise(function(resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
+      s.async = true;
+      s.onload = function() {
+        var L = window.pdfjsLib;
+        if (L && L.GlobalWorkerOptions) {
+          L.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+        }
+        resolve(L);
+      };
+      s.onerror = function() {
+        reject(new Error('pdf.js'));
+      };
+      document.head.appendChild(s);
+    });
+    return _pdfjsLoad;
+  }
+
+  function paintPdfPageToImg(imgEl, it, isExGrid) {
+    var k = pdfDocThumbKey(it);
+    if (k && _pdfDataUrl[k]) {
+      imgEl.src = _pdfDataUrl[k];
+      imgEl.setAttribute('data-pdf-done', '1');
+      return Promise.resolve();
+    }
+    if (imgEl.getAttribute('data-pdf-done')) return Promise.resolve();
+    return loadPdfJs()
+      .then(function(pdfjsLib) {
+        return fetch(it.href, { credentials: 'same-origin' }).then(function(r) {
+          if (!r.ok) throw new Error('fetch');
+          return r.arrayBuffer();
+        }).then(function(buf) {
+          return pdfjsLib.getDocument({ data: buf }).promise;
+        });
+      })
+      .then(function(pdf) {
+        return pdf.getPage(1);
+      })
+      .then(function(page) {
+        var vp0 = page.getViewport({ scale: 1 });
+        var w = isExGrid ? 200 : 120;
+        var sc = w / vp0.width;
+        var vp = page.getViewport({ scale: sc });
+        var c = document.createElement('canvas');
+        var ctx = c.getContext('2d');
+        c.width = Math.max(1, Math.floor(vp.width));
+        c.height = Math.max(1, Math.floor(vp.height));
+        return page.render({ canvasContext: ctx, viewport: vp }).promise.then(function() {
+          return c;
+        });
+      })
+      .then(function(canvas) {
+        var u = canvas.toDataURL('image/jpeg', 0.86);
+        if (k) _pdfDataUrl[k] = u;
+        imgEl.src = u;
+        imgEl.setAttribute('data-pdf-done', '1');
+      })
+      .catch(function() {
+        var ph = document.createElement('div');
+        if (isExGrid) {
+          ph.className = 'ex-ico';
+          ph.setAttribute('aria-hidden', 'true');
+          ph.textContent = '📄';
+        } else {
+          ph.className = 'list-thumb-ph';
+          ph.textContent = '📄';
+        }
+        if (imgEl.parentNode) imgEl.parentNode.replaceChild(ph, imgEl);
+      });
+  }
+
+  function registerPdfPageThumbObserver(imgEl, it, isExGrid) {
+    if (imgEl.__pdfBound) return;
+    imgEl.__pdfBound = 1;
+    imgEl.__pdfItem = it;
+    imgEl.__pdfEx = !!isExGrid;
+    if (!pdfThumbObserver) {
+      pdfThumbObserver = new IntersectionObserver(
+        function(entries) {
+          entries.forEach(function(en) {
+            if (!en.isIntersecting) return;
+            var el = en.target;
+            var stub = el.__pdfItem;
+            if (!stub || el.getAttribute('data-pdf-done')) return;
+            pdfThumbObserver.unobserve(el);
+            paintPdfPageToImg(el, stub, el.__pdfEx);
+          });
+        },
+        { rootMargin: '120px' },
+      );
+    }
+    pdfThumbObserver.observe(imgEl);
+  }
+
+  function renderTable(items) {
+    var tb = document.getElementById('rows');
+    tb.textContent = '';
+    if (!items.length) {
+      var r0 = document.createElement('tr');
+      var d0 = document.createElement('td');
+      d0.colSpan = 6;
+      d0.textContent = 'No files match.';
+      d0.style.color = 'var(--muted)';
+      r0.appendChild(d0);
+      tb.appendChild(r0);
+      return;
+    }
+    items.forEach(function(it) {
+      var tr = document.createElement('tr');
+      var th = document.createElement('td');
+      th.className = 'td-thumb';
+      var ic = iconForItem(it);
+      if (shouldRenderPdfPageThumb(it)) {
+        var imp = document.createElement('img');
+        imp.className = 'list-thumb list-thumb--pdf';
+        imp.alt = '';
+        imp.width = 48;
+        imp.height = 48;
+        registerPdfPageThumbObserver(imp, it, false);
+        th.appendChild(imp);
+      } else if (ic.type === 'img') {
+        var im = document.createElement('img');
+        im.className = 'list-thumb';
+        im.alt = '';
+        im.loading = 'lazy';
+        im.src = ic.href;
+        im.referrerPolicy = 'no-referrer';
+        im.onerror = function() {
+          th.textContent = '';
+          var ph = document.createElement('div');
+          ph.className = 'list-thumb-ph';
+          ph.textContent = it.kind === 'photo' ? '🖼' : '📎';
+          th.appendChild(ph);
+        };
+        th.appendChild(im);
+      } else {
+        var ph = document.createElement('div');
+        ph.className = 'list-thumb-ph';
+        ph.textContent = ic.v;
+        th.appendChild(ph);
+      }
+      tr.appendChild(th);
+      var t1 = document.createElement('td');
+      var sp = document.createElement('span');
+      sp.className = 'kchip ' + kClass(it.kind);
+      sp.textContent = kindLabel(it.kind);
+      t1.appendChild(sp);
+      tr.appendChild(t1);
+      var t2 = document.createElement('td');
+      t2.textContent = it.title;
+      tr.appendChild(t2);
+      var t3 = document.createElement('td');
+      var when = (it.subtitle || '') + (it.created_at ? ' · ' + String(it.created_at).replace('T', ' ').slice(0, 19) : '');
+      t3.textContent = when.trim() || '—';
+      tr.appendChild(t3);
+      var t4 = document.createElement('td');
+      var a = document.createElement('a');
+      a.className = 'file-link';
+      a.href = it.href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = it.kind === 'backup' ? 'Download' : 'Open';
+      if (it.kind === 'backup') a.setAttribute('download', '');
+      t4.appendChild(a);
+      tr.appendChild(t4);
+      var t5 = document.createElement('td');
+      t5.className = 'td-actions';
+      if (canCopyShareableLink(it)) {
+        var bl = document.createElement('button');
+        bl.type = 'button';
+        bl.className = 'row-act';
+        bl.textContent = 'Link';
+        bl.title = 'Copy a 24h shareable URL (set FILE_LINK_SECRET on the worker)';
+        bl.addEventListener('click', function() { copyShareableFileLink(it); });
+        t5.appendChild(bl);
+      }
+      if (it.movable) {
+        var bm = document.createElement('button');
+        bm.type = 'button';
+        bm.className = 'row-act';
+        bm.textContent = 'Move';
+        bm.addEventListener('click', function() { openMoveModal(it); });
+        t5.appendChild(bm);
+      }
+      if (it.deletable) {
+        var bd = document.createElement('button');
+        bd.type = 'button';
+        bd.className = 'row-act danger';
+        bd.textContent = 'Delete';
+        bd.addEventListener('click', function() { deleteItem(it); });
+        t5.appendChild(bd);
+      }
+      if (!t5.firstChild) t5.textContent = '—';
+      tr.appendChild(t5);
+      tb.appendChild(tr);
+    });
+  }
+
+  function renderExplorerGrid(items) {
+    var grid = document.getElementById('ex-grid');
+    grid.textContent = '';
+    if (!items.length) {
+      var empty = document.createElement('p');
+      empty.style.cssText = 'color:var(--muted);font-size:13px;grid-column:1/-1';
+      empty.textContent = 'No files in this folder.';
+      grid.appendChild(empty);
+      return;
+    }
+    items.forEach(function(it) {
+      var card = document.createElement('article');
+      card.className = 'ex-card';
+      card.setAttribute('role', 'listitem');
+      var a = document.createElement('a');
+      a.href = it.href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      if (it.kind === 'backup') a.setAttribute('download', '');
+      var wrap = document.createElement('div');
+      wrap.className = 'ex-thumb-wrap';
+      var kindTag = document.createElement('span');
+      kindTag.className = 'ex-kind';
+      kindTag.textContent = kindLabel(it.kind);
+      wrap.appendChild(kindTag);
+      var ic = iconForItem(it);
+      if (shouldRenderPdfPageThumb(it)) {
+        var imp2 = document.createElement('img');
+        imp2.className = 'ex-thumb ex-thumb--pdf';
+        imp2.alt = '';
+        registerPdfPageThumbObserver(imp2, it, true);
+        wrap.appendChild(imp2);
+      } else if (ic.type === 'img') {
+        var im = document.createElement('img');
+        im.className = 'ex-thumb';
+        im.alt = '';
+        im.loading = 'lazy';
+        im.src = ic.href;
+        im.referrerPolicy = 'no-referrer';
+        im.onerror = function() {
+          im.replaceWith(fallbackPh(it));
+        };
+        wrap.appendChild(im);
+      } else {
+        var ph = document.createElement('div');
+        ph.className = 'ex-ico';
+        ph.setAttribute('aria-hidden', 'true');
+        if ((ic.v || '').length > 2) { ph.classList.add('s'); }
+        ph.textContent = ic.v;
+        wrap.appendChild(ph);
+      }
+      a.appendChild(wrap);
+      var meta = document.createElement('div');
+      meta.className = 'ex-meta';
+      var t = document.createElement('div');
+      t.className = 'ex-title';
+      t.textContent = it.title;
+      var s = document.createElement('div');
+      s.className = 'ex-sub';
+      s.textContent = (it.subtitle || '') + (it.created_at ? ' · ' + String(it.created_at).replace('T', ' ').slice(0, 16) : '');
+      meta.appendChild(t);
+      meta.appendChild(s);
+      a.appendChild(meta);
+      card.appendChild(a);
+      if (it.movable || it.deletable || canCopyShareableLink(it)) {
+        var act = document.createElement('div');
+        act.className = 'ex-card-actions';
+        if (canCopyShareableLink(it)) {
+          var bLink = document.createElement('button');
+          bLink.type = 'button';
+          bLink.textContent = 'Link';
+          bLink.title = 'Copy 24h shareable URL';
+          bLink.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            copyShareableFileLink(it);
+          });
+          act.appendChild(bLink);
+        }
+        if (it.movable) {
+          var bm = document.createElement('button');
+          bm.type = 'button';
+          bm.textContent = 'Move';
+          bm.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            openMoveModal(it);
+          });
+          act.appendChild(bm);
+        }
+        if (it.deletable) {
+          var bd = document.createElement('button');
+          bd.type = 'button';
+          bd.className = 'danger';
+          bd.textContent = 'Delete';
+          bd.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            deleteItem(it);
+          });
+          act.appendChild(bd);
+        }
+        card.appendChild(act);
+      }
+      grid.appendChild(card);
+    });
+  }
+
+  function fallbackPh(it) {
+    var d = document.createElement('div');
+    d.className = 'ex-ico';
+    d.textContent = it.kind === 'receipt' ? '🧾' : '📎';
+    return d;
+  }
+
+  var HUB_THUMB_MAX = 800;
+  var HUB_THUMB_Q = 0.85;
+
+  function generateHubPhotoThumb(file) {
+    return new Promise(function(resolve, reject) {
+      var img = new Image();
+      var url = URL.createObjectURL(file);
+      img.onload = function() {
+        try {
+          var w = img.width;
+          var h = img.height;
+          var longest = Math.max(w, h);
+          var scale = longest > HUB_THUMB_MAX ? HUB_THUMB_MAX / longest : 1;
+          var tw = Math.round(w * scale);
+          var th = Math.round(h * scale);
+          var c = document.createElement('canvas');
+          c.width = tw;
+          c.height = th;
+          var ctx = c.getContext('2d');
+          if (!ctx) {
+            URL.revokeObjectURL(url);
+            reject(new Error('Canvas'));
+            return;
+          }
+          ctx.drawImage(img, 0, 0, tw, th);
+          c.toBlob(
+            function(blob) {
+              URL.revokeObjectURL(url);
+              if (!blob) reject(new Error('Thumb'));
+              else resolve(blob);
+            },
+            'image/jpeg',
+            HUB_THUMB_Q,
+          );
+        } catch (e) {
+          URL.revokeObjectURL(url);
+          reject(e);
+        }
+      };
+      img.onerror = function() {
+        URL.revokeObjectURL(url);
+        reject(new Error('Not a loadable image (try JPG/PNG).'));
+      };
+      img.src = url;
+    });
+  }
+
+  function setUploadTargetType(kind) {
+    var fJf = document.getElementById('up-jf-form');
+    var fCo = document.getElementById('up-form');
+    var fJp = document.getElementById('up-jp-form');
+    var h = document.getElementById('up-unified-hint');
+    if (fJf) {
+      fJf.style.display = kind === 'job' ? 'block' : 'none';
+      fJf.setAttribute('aria-hidden', kind === 'job' ? 'false' : 'true');
+    }
+    if (fCo) {
+      fCo.style.display = kind === 'company' ? 'block' : 'none';
+      fCo.setAttribute('aria-hidden', kind === 'company' ? 'false' : 'true');
+    }
+    if (fJp) {
+      fJp.style.display = kind === 'jobphoto' ? 'block' : 'none';
+      fJp.setAttribute('aria-hidden', kind === 'jobphoto' ? 'false' : 'true');
+    }
+    if (h) {
+      if (kind === 'job') {
+        h.textContent = 'Project file: pick job + folder. Shown under that job’s Project files in the tree.';
+      } else if (kind === 'jobphoto') {
+        h.textContent = 'On-site photo: same storage as the Capture PWA (job’s Site photos, not project documents).';
+      } else {
+        h.textContent = 'Company doc: SOPs, insurance, W-9, tax, HR — your business library.';
+      }
+    }
+    if (kind === 'job') populateUploadJobs();
+    if (kind === 'jobphoto') populateJobPhotoSelect();
+  }
+
+  function initUploadTargetType() {
+    var t = document.getElementById('up-target-type');
+    if (!t) {
+      populateUploadJobs();
+      return;
+    }
+    function go() { setUploadTargetType(t.value); }
+    t.addEventListener('change', go);
+    go();
+  }
+
+  function fillJobSelect(selId) {
+    var sel = document.getElementById(selId);
+    if (!sel) return;
+    while (sel.firstChild) sel.removeChild(sel.lastChild);
+    ensureAllJobsForPick().then(function(jobs) {
+      if (!jobs.length) {
+        var o0 = document.createElement('option');
+        o0.value = '';
+        o0.textContent = 'No jobs in Hub — run Jobber sync first';
+        sel.appendChild(o0);
+        return;
+      }
+      jobs.forEach(function(j) {
+        var o = document.createElement('option');
+        o.value = j.id;
+        o.textContent = jobLabel(j);
+        sel.appendChild(o);
+      });
+      if (state.browseJobId) {
+        for (var i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === state.browseJobId) {
+            sel.selectedIndex = i;
+            break;
+          }
+        }
+      }
+    });
+  }
+
+  function populateUploadJobs() {
+    fillJobSelect('up-jf-job');
+  }
+
+  function populateJobPhotoSelect() {
+    fillJobSelect('up-jp-job');
+  }
+
+  function load() {
+    var u = new URL('/api/files', location.origin);
+    u.searchParams.set('kind', state.kind);
+    u.searchParams.set('q', state.q);
+    u.searchParams.set('limit', '300');
+    if (state.kind === 'company' && state.companyDocType) u.searchParams.set('doc_type', state.companyDocType);
+    if (state.kind === 'photo' && state.browseJobId) u.searchParams.set('job_id', state.browseJobId);
+    if (state.kind === 'photo' && state.photoCategory) u.searchParams.set('category', state.photoCategory);
+    if (state.kind === 'job_file' && state.browseJobId) u.searchParams.set('job_id', state.browseJobId);
+    if (state.kind === 'job_file' && state.jobFileCategory) u.searchParams.set('job_doc_type', state.jobFileCategory);
+    document.getElementById('rows').innerHTML = '<tr><td colspan="6" style="color:var(--muted)">Loading…</td></tr>';
+    document.getElementById('ex-grid').innerHTML = '<p style="color:var(--muted);grid-column:1/-1">Loading…</p>';
+    fetch(u.toString(), { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        lastItems = d.items || [];
+        renderBreadcrumb();
+        renderAll();
+      })
+      .catch(function() {
+        document.getElementById('rows').innerHTML = '<tr><td colspan="6" style="color:var(--red)">Failed to load.</td></tr>';
+        document.getElementById('ex-grid').innerHTML = '<p style="color:var(--red)">Failed to load.</p>';
+      });
+  }
+
+  document.getElementById('q').addEventListener('input', function(e) {
+    state.q = e.target.value.trim();
+    clearTimeout(window._fq);
+    window._fq = setTimeout(load, 220);
+  });
+
+  document.getElementById('up-jp-form').addEventListener('submit', function(ev) {
+    ev.preventDefault();
+    var btn = document.getElementById('up-jp-btn');
+    var err = document.getElementById('up-jp-err');
+    var ok = document.getElementById('up-jp-ok');
+    var fin = document.getElementById('up-jp-file');
+    err.style.display = 'none';
+    ok.style.display = 'none';
+    var file = fin && fin.files && fin.files[0];
+    if (!file || !file.size) {
+      err.textContent = 'Choose a photo';
+      err.style.display = 'inline';
+      return;
+    }
+    if (!file.type || file.type.indexOf('image/') !== 0) {
+      err.textContent = 'File must be an image (JPG, PNG, etc.)';
+      err.style.display = 'inline';
+      return;
+    }
+    var jobId = (document.getElementById('up-jp-job').value || '').trim();
+    if (!jobId) {
+      err.textContent = 'Choose a job';
+      err.style.display = 'inline';
+      return;
+    }
+    var cat = (document.getElementById('up-jp-cat').value || 'progress').trim() || 'progress';
+    var cap = (document.getElementById('up-jp-caption').value || '').trim() || null;
+    btn.disabled = true;
+    var selJ = document.getElementById('up-jp-job');
+    var lab = (selJ && selJ.options[selJ.selectedIndex] && selJ.options[selJ.selectedIndex].text) || null;
+    generateHubPhotoThumb(file)
+      .then(function(thumb) {
+        var meta = { job_id: jobId, category: cat };
+        if (cap) meta.caption = cap;
+        var fd = new FormData();
+        fd.append('original', file, file.name || 'upload.jpg');
+        fd.append('thumb', thumb, 'thumb.jpg');
+        fd.append('metadata', JSON.stringify(meta));
+        return fetch('/api/photos', { method: 'POST', body: fd, credentials: 'same-origin' });
+      })
+      .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t || r.statusText); });
+        return r.json();
+      })
+      .then(function() {
+        ok.textContent = 'Photo saved. Open the job in the tree → Site photos to see it.';
+        ok.style.display = 'inline';
+        if (fin) fin.value = '';
+        document.getElementById('up-jp-caption').value = '';
+        state.kind = 'photo';
+        state.browseJobId = jobId;
+        state.browseJobLabel = lab;
+        state.photoCategory = cat;
+        state.jobFileCategory = null;
+        renderKinds();
+        renderSubFilters();
+        renderExTree();
+        load();
+      })
+      .catch(function(e) {
+        err.textContent = (e && e.message) || 'Upload failed';
+        err.style.display = 'inline';
+      })
+      .then(function() { btn.disabled = false; });
+  });
+
+  document.getElementById('up-jf-form').addEventListener('submit', function(ev) {
+    ev.preventDefault();
+    var btn = document.getElementById('up-jf-btn');
+    var err = document.getElementById('up-jf-err');
+    var ok = document.getElementById('up-jf-ok');
+    err.style.display = 'none';
+    ok.style.display = 'none';
+    var fd = new FormData(ev.target);
+    if (!fd.get('job_id')) {
+      err.textContent = 'Choose a job';
+      err.style.display = 'inline';
+      return;
+    }
+    btn.disabled = true;
+    fetch('/api/job-files', { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+        return r.json();
+      })
+      .then(function() {
+        ok.textContent = 'Saved. Open Jobs → that project → Project files to see it.';
+        ok.style.display = 'inline';
+        var jid = (fd.get('job_id') && String(fd.get('job_id'))) || '';
+        var selJ = document.getElementById('up-jf-job');
+        var lab = (selJ && selJ.options[selJ.selectedIndex] && selJ.options[selJ.selectedIndex].text) || null;
+        ev.target.querySelector('input[name="file"]').value = '';
+        state.kind = 'job_file';
+        state.browseJobId = jid || null;
+        state.browseJobLabel = lab;
+        state.jobFileCategory = (fd.get('doc_type') && String(fd.get('doc_type'))) || 'design';
+        state.photoCategory = null;
+        renderKinds();
+        renderSubFilters();
+        renderExTree();
+        load();
+      })
+      .catch(function(e) {
+        err.textContent = (e && e.message) || 'Upload failed';
+        err.style.display = 'inline';
+      })
+      .then(function() { btn.disabled = false; });
+  });
+
+  document.getElementById('up-form').addEventListener('submit', function(ev) {
+    ev.preventDefault();
+    var btn = document.getElementById('up-btn');
+    var err = document.getElementById('up-err');
+    var ok = document.getElementById('up-ok');
+    err.style.display = 'none';
+    ok.style.display = 'none';
+    var fd = new FormData(ev.target);
+    btn.disabled = true;
+    fetch('/api/company-documents', { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+        return r.json();
+      })
+      .then(function() {
+        ok.textContent = 'Uploaded. It will appear in the list and in the next Drive mirror tick (if configured).';
+        ok.style.display = 'inline';
+        ev.target.reset();
+        load();
+      })
+      .catch(function(e) {
+        err.textContent = (e && e.message) || 'Upload failed';
+        err.style.display = 'inline';
+      })
+      .then(function() { btn.disabled = false; });
+  });
+
+  document.getElementById('move-cancel').addEventListener('click', closeMoveModal);
+  document.getElementById('move-save').addEventListener('click', submitMove);
+  document.getElementById('move-backdrop').addEventListener('click', closeMoveModal);
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && document.getElementById('move-modal').classList.contains('on')) {
+      closeMoveModal();
+    }
+  });
+
+  renderKinds();
+  applyView();
+  renderSubFilters();
+  initUploadTargetType();
+  load();
+  renderExTree();
+  Promise.all([ensureJobsOpen(), ensureJobsClosed()]).then(function() {
+    renderExTree();
+  });
+})();
+</script>
+</body>
+</html>

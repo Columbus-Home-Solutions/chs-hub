@@ -4,6 +4,11 @@
 
 > **For the next AI session:** This is the source of truth for project state as of **Apr 26, 2026**. Trust this over any older context. The previous chat (where the dashboard rebuild happened) was archived because it had become unwieldy. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
 
+### Next session — do in this order (Tony + agent)
+
+1. **Gmail quick link (first)** — In `dashboard/index.html`, the Gmail tile uses `gmailQuickLink` and optional `localStorage` key `chs_gmail_quick_url` (full `https://` URL; `setItem` returns `undefined` in the console — that is normal). Finish any follow-up: verify desktop/mobile behavior, document if we change anything, or close it out. **Do this before Drive mirror.**
+2. **Google Drive mirror (ground zero)** — After (1), follow **`docs/drive-mirror-resume.md`** (Worker secrets/vars, Google Shared Drive, then `GET` / `POST` `/api/ops/drive-mirror`).
+
 ---
 
 ## TL;DR — where we are
@@ -218,6 +223,13 @@ Items intentionally not done (lower priority Phase 6 carryovers):
 - ~~Append-only event log with `event_id` dedup~~ — overkill for current volume; DLQ covers the failure-recovery case
 - ~~SMS alerts~~ — email-only for v1; can add Twilio later if needed
 
+### Hub Files (`dashboard/files.html`) — desktop first, then mobile
+
+- **Current focus:** Keep tightening **desktop** — layout (upload beside browse, folder tree, PDF first-page thumbs, active vs archived jobs, etc.) until that experience feels “done.”
+- **On-site photos from /files:** Upload type **“Job site photo (on job)”** — client generates an 800px thumb and `POST /api/photos` (same as the Capture PWA). Shown under that job’s **Site photos**, not Project files.
+- **Legacy `README` stubs:** `migrations/0011_delete_legacy_job_readme_stubs.sql` removes old **“Project folder (auto)”** rows. They were never required for sync. Apply remote: `npm run db:migrate:remote`. New jobs no longer get a stub (sync no longer calls `ensureJobProjectStub` — **removed 2026-04-26**). Orphan R2 objects under `job-files/.../README` can be deleted in the bucket if you care.
+- **Deferred — mobile upload drawer (do after desktop):** On narrow / touch viewports, avoid making users scroll past the full file list to reach upload. Add a **fixed “Upload” control** (e.g. bottom bar or header) that opens a **bottom sheet / slide-up panel** with the same job-file vs company-document forms and endpoints — **behavior unchanged**, only presentation and reachability on small screens.
+
 ### ✅ Photos system (PWA Capture v1 — built 2026-04-25)
 
 > **Spec:** `docs/01-file-system.md` is the long-term roadmap (signed-URL sharing, EXIF stripping, full role matrix, video uploads). v1 of the capture path is now in production; the items below are deliberately deferred from v1 and remain in that spec.
@@ -338,32 +350,32 @@ The current refresh token was minted with read-only scopes. **Self-serve unblock
 
 This same flow is reusable for any future Jobber scope additions — toggle the scope in the Dev Center, visit `/oauth/jobber/start`, done.
 
-### 🟡 "Files" browser inside the dashboard (Drive-style quick access)
+### ✅ Hub Files browser + company documents (shipped 2026-04-26)
 
-> **Why:** Tony wants to grab any photo / receipt / voice note quickly without bouncing to the Cloudflare R2 dashboard. Today the only in-app surfaces are the per-job Photos tab, the General-Photos modal, and the per-expense receipt thumbnail. Good for "show me this job's photos" but bad for "where was that receipt from last Tuesday".
->
-> **Tony's preference (2026-04-25):** either a quicklink in the existing dashboard or a dedicated page — whichever is cleaner. Lean toward dedicated page so it has room to grow (search, filters, multi-select).
+- **UI:** `dashboard/files.html` at **`/files`**; quick link on the home dashboard **replaces the old Google Drive tile** ("Hub Files" — photos, receipts, company docs, D1 backups).
+- **API:** `GET /api/files?kind=&q=` (kinds: `photo` | `receipt` | `company` | `backup` | `all`). `GET /api/files/backup?key=` streams nightly **`backups/d1/…`** gzip exports (key prefix validated). **`company_documents`** table + `POST/GET /api/company-documents` and **`GET /api/company-documents/:id/file`**. Upload form on the same page (SOPs, insurance, licenses, W-9, tax, HR, etc.).
+- **Migrations:** `migrations/0009_company_docs_drive_mirror.sql` — add `company_documents`, `drive_mirror_folders`, `drive_mirrored_at` on `photos` + `expenses`. Apply remote: `npm run db:migrate:remote`.
+- **Nice-to-haves (still defer):** folder-tree UI, multi-select zip download, per-row share links (see item below).
 
-**Rough scope (~45-90 min):**
+### ✅ Google Shared Drive mirror — **insurance + human access** (v1 code 2026-04-26)
 
-- New `/files` route on the dashboard host (e.g. `dashboard/files.html` + a small route block in `src/index.ts`).
-- New `GET /api/files` aggregating across the existing tables/buckets:
-  - photos (D1 `photos` + R2 `photos/`)
-  - expense receipts (D1 `expenses` + R2 `expenses/`)
-  - voice notes (D1 `notes` + R2 `voice-notes/`)
-  - backups (R2 `backups/`)
-- UI: folder-tree on the left (by kind → by job → by date), grid/list on the right, search box on top (filename/job/vendor/transcript), click → lightbox or download.
-- Quicklink button on the main dashboard toolbar (alongside `🔄 Sync Now`) → "📁 Files" → opens `/files`.
-- Auth: zero new code — Cloudflare Access already gates `dashboard.homesolutionsar.com`.
+> R2 + D1 stay canonical. One-way async copy: **not** bidirectional.
 
-**Nice-to-haves (defer):**
-- Multi-select + bulk download (zip on the worker — easy with R2's streaming).
-- Drag-and-drop upload (less critical given the PWA capture path).
-- "Share link" button that mints a 24h signed URL for one file, useful for emailing a photo to a client. (See item below.)
+**Code:** `src/lib/google/drive.ts` + `src/lib/ops/drive-mirror.ts` — on the **`15 * * * *` hourly cron** (with heartbeat/DLQ), up to 5 new items each of **photos**, **expense receipts**, **company documents**; multipart upload to folders **`Photos`**, **`Expenses`**, **`Company/<doc_type>/`** under an operator-configured root. Row-level **`drive_mirrored_at`**; **`drive_mirror_folders`** caches created segment folder IDs. **Manual:** `POST /api/ops/drive-mirror` with sync secret. **No deletes** in Drive when CHS deletes (append-only v1). **`getGoogleAccessToken`** is now **per OAuth scope** so Drive + Sheets do not clobber each other.
 
-### 🟡 Signed-URL share button (~30 min, complement to /files)
+**You must (Cloudflare → Worker + Google):** (1) Enable **Google Drive API** for the same GCP project as the Sheets service account. (2) Add the service account to the **Shared Drive** (e.g. **Content manager**). (3) Set Worker vars: **`DRIVE_SHARED_DRIVE_ID`**, **`DRIVE_MIRROR_ROOT_FOLDER_ID`** (folder inside that drive for CHS-Hub uploads).
 
-When the Files browser lands, add a small `🔗` button next to each file → mints a short-lived signed URL (24h default), copies to clipboard. Lets Tony text/email a single photo or receipt to a client without making the bucket public. Implementation: new `POST /api/files/:kind/:id/share` returning `{ url, expires_at }`, signed via R2 presigned URL or via a simple HMAC param the worker validates on a `/share/:token` route (worker-side validation lets us keep R2 fully private).
+**If those vars are unset:** mirror is a no-op; core uploads are unaffected.
+
+**Follow-up — revisit and verify (2026-04-26, Tony: waiting + retest):** After the next **hourly** mirror window (or a manual `POST /api/ops/drive-mirror` with the sync secret on the real **`*.workers.dev`** host and `x-sync-token`), re-check: (1) test upload appears under **Shared drive** → configured root → **`Company/<doc_type>/`** (company docs) or **`Photos` / `Expenses`** for those kinds; (2) JSON response has **`skipped: false`**, `errors: []`, and non-zero counts when something was pending; (3) `wrangler tail chs-hub` if files still missing — look for `drive_mirror` and Google API error text. If D1 row has **`drive_mirrored_at` set** but nothing in Drive, treat as a bug to investigate (ID mismatch or wrong drive).
+
+---
+
+### ✅ Hub Files shareable links (2026-04-26)
+
+**Shipped:** `POST /api/file-link` (JSON `{ kind, id, "ttl_sec"? }` — `kind` = `job_file` | `company` | `photo` | `receipt`; requires CF Access session) returns `{ url, expires_at }`. **Public** `GET /api/f?t=<HMAC token>` serves the file (CORS `*`) until expiry. Set **`FILE_LINK_SECRET`** (≥16 chars) via `wrangler secret put`. Optional **`HUB_FILE_LINK_ORIGIN`** var = your **`*.workers.dev`** origin so pasted links work for people without Access; otherwise `url` uses the request host (may 302 to Access for anonymous). Hub Files UI: **Link** on list + explorer rows.
+
+**Project files:** New `doc_type` **`design`** (“Design & finishes”) — for finishes, inspiration boards, etc.; **`other`** remains “Miscellaneous.”
 
 ### 🟡 Receipt upload to Jobber (small follow-up after scope is fixed)
 

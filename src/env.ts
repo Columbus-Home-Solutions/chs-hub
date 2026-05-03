@@ -28,6 +28,11 @@ export interface Env {
   JOB_TRACKER_SHEET_ID?: string;
   WC_SHEET_ID?: string;
 
+  /** Google Shared Drive ID (API `driveId`) — optional; enables D1/R2 → Drive mirror. */
+  DRIVE_SHARED_DRIVE_ID?: string;
+  /** Folder ID inside the Shared Drive where CHS-Hub creates Photos / Expenses / Company. */
+  DRIVE_MIRROR_ROOT_FOLDER_ID?: string;
+
   // ─── Operational notifications (Resend) ─────────────────────────
   // All four reliability features (heartbeat, DLQ retry alerts, backup
   // verification, daily summary) flow through src/lib/ops/notify.ts.
@@ -37,4 +42,9 @@ export interface Env {
   ALERT_EMAIL_FROM: string;     // secret, must be a verified Resend sender
   ALERT_EMAIL_TO: string;       // secret, recipient (alias preferred)
   RESEND_DRY_RUN: string;       // var, "1" disables real sends (logs only)
+
+  /** HMAC for POST /api/file-link (shareable /api/f?t=… URLs). `wrangler secret put FILE_LINK_SECRET` — 32+ random bytes, hex or base64 ok. */
+  FILE_LINK_SECRET?: string;
+  /** Public origin for shared links, e.g. `https://chs-hub.<subdomain>.workers.dev` so links work without Cloudflare Access. Optional; defaults to the request host. */
+  HUB_FILE_LINK_ORIGIN?: string;
 }

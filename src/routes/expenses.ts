@@ -267,3 +267,113 @@ export async function handleExpenseReceipt(
   headers.set("cache-control", "private, max-age=300");
   return new Response(obj.body, { headers });
 }
+
+// DELETE /api/expenses/:id  — PWA rows only (protects Jobber-sourced expenses)
+export async function handleExpenseDelete(env: Env, id: string): Promise<Response> {
+  const row = await env.DB.prepare(
+    `SELECT receipt_r2_key, entered_via FROM expenses WHERE id = ?`,
+  )
+    .bind(id)
+    .first<{ receipt_r2_key: string | null; entered_via: string }>();
+  if (!row) return jsonErr(404, "expense_not_found");
+  if (row.entered_via !== "pwa") {
+    return jsonResponse(
+      {
+        error: "jobber_protected",
+        message:
+          "Only expenses created in CHS Capture (PWA) can be deleted here. Jobber-sourced rows stay in sync with Jobber.",
+      },
+      { status: 409 },
+    );
+  }
+  if (row.receipt_r2_key) {
+    await env.FILES.delete(row.receipt_r2_key).catch(() => undefined);
+  }
+  await env.DB.prepare("DELETE FROM expenses WHERE id = ?").bind(id).run();
+  return jsonResponse({ ok: true });
+}
+
+// PATCH /api/expenses/:id  body: { job_id: string | null } — move to another job bucket in R2; PWA only
+export async function handleExpensePatch(
+  env: Env,
+  id: string,
+  request: Request,
+): Promise<Response> {
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return jsonErr(400, "invalid_json");
+  }
+  if (!Object.prototype.hasOwnProperty.call(body, "job_id")) {
+    return jsonErr(400, "job_id_required");
+  }
+  const row = await env.DB.prepare(
+    `SELECT id, job_id, incurred_at, receipt_r2_key, entered_via FROM expenses WHERE id = ?`,
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      job_id: string | null;
+      incurred_at: string | null;
+      receipt_r2_key: string | null;
+      entered_via: string;
+    }>();
+  if (!row) return jsonErr(404, "expense_not_found");
+  if (row.entered_via !== "pwa") {
+    return jsonResponse(
+      {
+        error: "jobber_protected",
+        message: "Only PWA expenses can be re-assigned to another job from Hub Files.",
+      },
+      { status: 409 },
+    );
+  }
+  let nextJob: string | null = null;
+  if (body.job_id === null || body.job_id === "") {
+    nextJob = null;
+  } else if (typeof body.job_id === "string" && body.job_id.trim()) {
+    const j = body.job_id.trim();
+    const ok = await env.DB.prepare("SELECT 1 AS o FROM jobs WHERE id = ?")
+      .bind(j)
+      .first<{ o: number }>();
+    if (!ok) return jsonErr(400, "unknown_job");
+    nextJob = j;
+  } else {
+    return jsonErr(400, "invalid_job_id");
+  }
+  if (nextJob === row.job_id) {
+    return jsonResponse({ ok: true, unchanged: true });
+  }
+
+  if (!row.receipt_r2_key) {
+    await env.DB.prepare("UPDATE expenses SET job_id = ? WHERE id = ?")
+      .bind(nextJob, id)
+      .run();
+    return jsonResponse({ ok: true, job_id: nextJob });
+  }
+
+  const bucket = dateBucket(row.incurred_at);
+  const slug = nextJob ?? "general";
+  const newKey = `expenses/${slug}/${bucket}/${id}.jpg`;
+  if (newKey === row.receipt_r2_key) {
+    await env.DB.prepare("UPDATE expenses SET job_id = ? WHERE id = ?")
+      .bind(nextJob, id)
+      .run();
+    return jsonResponse({ ok: true, job_id: nextJob });
+  }
+  const o = await env.FILES.get(row.receipt_r2_key);
+  if (!o) return jsonErr(500, "receipt_missing_in_r2");
+  const ab = await o.arrayBuffer();
+  const ct = o.httpMetadata?.contentType || "image/jpeg";
+  await env.FILES.put(newKey, ab, { httpMetadata: { contentType: ct } });
+  if (row.receipt_r2_key !== newKey) {
+    await env.FILES.delete(row.receipt_r2_key).catch(() => undefined);
+  }
+  await env.DB.prepare(
+    `UPDATE expenses SET job_id = ?, receipt_r2_key = ? WHERE id = ?`,
+  )
+    .bind(nextJob, newKey, id)
+    .run();
+  return jsonResponse({ ok: true, job_id: nextJob, receipt_r2_key: newKey });
+}

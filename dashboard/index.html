@@ -913,6 +913,13 @@ function authHeaders(){return{'Authorization':'Bearer '+oauthToken,'Content-Type
 
 // Launch OAuth (implicit flow — token in URL hash on return to this exact origin)
 function connectGoogle(){
+  var cid=String(OAUTH_CLIENT_ID||'').trim();
+  if(!cid){
+    alert(
+      'Google sign-in is not configured for this deployment. The Worker needs the variable DASHBOARD_OAUTH_CLIENT_ID (OAuth Web client ID). Set it in Cloudflare → Workers → chs-hub → Settings → Variables, redeploy if needed, then reload. See docs/google-oauth-dashboard.md.'
+    );
+    return;
+  }
   var redirectUri=window.location.origin;
   var params=new URLSearchParams({
     client_id:OAUTH_CLIENT_ID,

@@ -2,13 +2,17 @@
  * Computation helpers for the Wealthy Contractor (WC) workbook sync.
  *
  * All numbers are CASH BASIS:
- *   - Income  = payments collected in period (payments.collected_at)
+ *   - Income  = payments collected in period (payments.collected_at =
+ *               Jobber payment createdAt when present, else legacy fallback)
  *   - Profit  = income − expenses incurred in period
  *                      − line-item costs attributed to the paid invoices
  *                        (weighted by payment_amount / invoice.total so that
  *                        partial payments only pull their pro-rata share of
  *                        the job's cost)
- *   - Sales   = invoices issued in period (invoices.issued_date)
+ *   - WC KBPI weekly column C (new_sales) = quote → job conversion dollars
+ *     that week (quotes.transitioned_at, COALESCE(quote.subtotal, job.total))
+ *   - WC KBPI weekly column D (collections) = sum of payments in period by
+ *     payments.collected_at (payment date from Jobber when synced)
  *
  * Exposed as two functions:
  *   - computeMonthly(env, year) → one row per month 1..12
@@ -29,8 +33,8 @@ export interface MonthlyRow {
 export interface WeeklyRow {
   week_start: string; // ISO date (Sunday)
   week_end: string; // ISO date (Saturday, inclusive)
-  new_sales: number; // invoices issued that week
-  collections: number; // payments received that week
+  new_sales: number; // quote converted to job that week ($)
+  collections: number; // payments received that week (by payment date)
   estimates: number; // quotes issued that week
   closed: number; // quotes approved (or converted to job) that week
   accounts_receivable: number; // running AR at week_end (unpaid invoices, end-of-week)
@@ -134,10 +138,12 @@ export async function computeWeekly(
 
   const newSales = await aggregateByWeek(
     env,
-    `SELECT issued_date AS d, total AS v
-     FROM invoices
-     WHERE issued_date >= ? AND issued_date < ?
-       AND UPPER(COALESCE(status, '')) != 'BAD_DEBT'`,
+    `SELECT substr(q.transitioned_at, 1, 10) AS d,
+            COALESCE(q.subtotal, j.total, 0) AS v
+     FROM quotes q
+     INNER JOIN jobs j ON j.id = q.job_id
+     WHERE q.transitioned_at >= ? AND q.transitioned_at < ?
+       AND q.transitioned_at IS NOT NULL`,
     year,
   );
 
@@ -145,7 +151,8 @@ export async function computeWeekly(
     env,
     `SELECT substr(collected_at, 1, 10) AS d, amount AS v
      FROM payments
-     WHERE collected_at >= ? AND collected_at < ?`,
+     WHERE collected_at IS NOT NULL
+       AND collected_at >= ? AND collected_at < ?`,
     year,
   );
 

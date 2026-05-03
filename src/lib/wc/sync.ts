@@ -11,8 +11,9 @@
  *
  *   Tab 2 — "Key Business Performance Indicators"
  *     Reads col A (week start as Sheets serial date) to find each
- *     pre-seeded weekly row, then fills only C (New Sales), D (Weekly
- *     Collections), F (Appointments/Estimates), and G (Closed) for weeks
+ *     pre-seeded weekly row, then fills only C (New Sales $ — quote converted
+ *     to a job that week), D (Weekly Collections — payment dates), F
+ *     (Appointments/Estimates), and G (Closed) for weeks
  *     that we have data for. Leaves E (Leads), H (Closed %, a formula),
  *     and I (Google Reviews) untouched — those come from HighLevel / GBP
  *     integrations we haven't built yet.

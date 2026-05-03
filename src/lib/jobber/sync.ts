@@ -94,6 +94,23 @@ interface JobberLineItem {
 interface JobberPayment {
   id: string;
   amount?: number | null;
+  /** ISO8601 — preferred source for payments.collected_at (cash received date). */
+  createdAt?: string | null;
+}
+
+/** YYYY-MM-DD for D1; falls back to invoice issuedDate when Jobber omits payment.createdAt. */
+function paymentCollectedAtDate(
+  payment: JobberPayment,
+  fallbackIso: string | null | undefined,
+): string | null {
+  const raw = payment.createdAt;
+  if (typeof raw === "string" && raw.length >= 10) {
+    return raw.slice(0, 10);
+  }
+  if (typeof fallbackIso === "string" && fallbackIso.length >= 10) {
+    return fallbackIso.slice(0, 10);
+  }
+  return fallbackIso ?? null;
 }
 
 interface JobberInvoice {
@@ -473,12 +490,12 @@ async function upsertJob(env: Env, job: JobberJob, stats: SyncStats): Promise<vo
     stats.invoices_written++;
   }
 
-  // Payments — Jobber's paymentRecord has no date field, so we use the
-  // invoice's issuedDate as the collected_at proxy (matching Python behavior)
+  // Payments — prefer Jobber paymentRecord.createdAt as collected_at (true
+  // paid date); fall back to invoice issuedDate when the API omits it.
   stmts.push(env.DB.prepare("DELETE FROM payments WHERE job_id = ?").bind(job.id));
   const payments = job.paymentRecords?.nodes ?? [];
-  const collectedAt = invoice?.issuedDate ?? null;
   for (const p of payments) {
+    const collectedAt = paymentCollectedAtDate(p, invoice?.issuedDate ?? null);
     stmts.push(
       env.DB.prepare(
         `INSERT INTO payments (id, job_id, invoice_id, amount, collected_at, synced_at)
@@ -721,8 +738,8 @@ async function upsertStandaloneInvoice(
     stmts.push(
       env.DB.prepare("DELETE FROM payments WHERE invoice_id = ?").bind(invoice.id),
     );
-    const collectedAt = invoice.issuedDate ?? null;
     for (const p of payments) {
+      const collectedAt = paymentCollectedAtDate(p, invoice.issuedDate ?? null);
       stmts.push(
         env.DB.prepare(
           `INSERT INTO payments (id, job_id, invoice_id, amount, collected_at, synced_at)

@@ -74,7 +74,7 @@ export const QUOTES_PAGE_QUERY = /* GraphQL */ `
  * different record — which is how we ended up missing ~$48k of YTD
  * collections in the initial backfill.
  *
- * We also pull paymentRecords (for collected_at + per-payment detail) and
+ * We also pull paymentRecords (id, amount, createdAt → payments.collected_at)
  * job.id so we can attach each invoice to the right job in D1.
  */
 export const INVOICES_PAGE_QUERY = /* GraphQL */ `
@@ -96,7 +96,11 @@ export const INVOICES_PAGE_QUERY = /* GraphQL */ `
           nodes { id }
         }
         paymentRecords(first: 20) {
-          nodes { id amount }
+          nodes {
+            id
+            amount
+            createdAt
+          }
         }
       }
     }
@@ -146,7 +150,11 @@ export const JOBS_PAGE_QUERY = /* GraphQL */ `
           nodes { id name quantity unitPrice unitCost }
         }
         paymentRecords(first: 10) {
-          nodes { id amount }
+          nodes {
+            id
+            amount
+            createdAt
+          }
         }
         invoices(first: 1) {
           nodes {

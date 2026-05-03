@@ -9,6 +9,14 @@
 1. **Gmail quick link (first)** — In `dashboard/index.html`, the Gmail tile uses `gmailQuickLink` and optional `localStorage` key `chs_gmail_quick_url` (full `https://` URL; `setItem` returns `undefined` in the console — that is normal). Finish any follow-up: verify desktop/mobile behavior, document if we change anything, or close it out. **Do this before Drive mirror.**
 2. **Google Drive mirror (ground zero)** — After (1), follow **`docs/drive-mirror-resume.md`** (Worker secrets/vars, Google Shared Drive, then `GET` / `POST` `/api/ops/drive-mirror`).
 
+### Backlog — dashboard polish & reliability (later)
+
+- **Worker vars / Google OAuth** — Confirm production **`DASHBOARD_OAUTH_CLIENT_ID`** (and related dashboard `[vars]`) are set so Connect Google works; see `docs/google-oauth-dashboard.md`. Empty injection ⇒ broken OAuth.
+- **Cloudflare Access friction** — Investigate having to complete an Access challenge (e.g. email OTP code) **on almost every page load**. Likely session duration, cookie settings, or multi-tab behavior; tune policy in Zero Trust (session length, “remember this device”, allowed IdPs).
+- **Sync button** — Not working as expected; trace UI handler → `/api/sync/*` or Sheets/WC paths and fix.
+- **Monthly revenue tile** — Often empty; **probably tied to sync / data fetch** (same pipeline as sync button or KPI sheet ranges); verify after sync works.
+- **Theme / CSS flash or missing styles** — Sometimes **white background** and wrong fonts/colors until **hard refresh**; affects **main dashboard and subpages** (`jobs.html`, `notes.html`, etc.). Suspects: `theme.css` load order, caching, service worker, or FOUC — reproduce and fix so first paint matches the dark scheme reliably.
+
 ---
 
 ## TL;DR — where we are

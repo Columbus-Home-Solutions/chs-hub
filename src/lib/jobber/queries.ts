@@ -74,8 +74,10 @@ export const QUOTES_PAGE_QUERY = /* GraphQL */ `
  * different record — which is how we ended up missing ~$48k of YTD
  * collections in the initial backfill.
  *
- * We also pull paymentRecords (id, amount, createdAt → payments.collected_at)
- * job.id so we can attach each invoice to the right job in D1.
+ * We also pull paymentRecords (id, amount). Jobber's PaymentRecord type has
+ * no payment-date field in GraphQL — we store invoice issuedDate on each
+ * payment row as collected_at (see sync.ts). Per-payment dates require a
+ * future API field or REST discovery.
  */
 export const INVOICES_PAGE_QUERY = /* GraphQL */ `
   query InvoicesPage($first: Int!, $after: String) {
@@ -96,11 +98,7 @@ export const INVOICES_PAGE_QUERY = /* GraphQL */ `
           nodes { id }
         }
         paymentRecords(first: 20) {
-          nodes {
-            id
-            amount
-            createdAt
-          }
+          nodes { id amount }
         }
       }
     }
@@ -150,11 +148,7 @@ export const JOBS_PAGE_QUERY = /* GraphQL */ `
           nodes { id name quantity unitPrice unitCost }
         }
         paymentRecords(first: 10) {
-          nodes {
-            id
-            amount
-            createdAt
-          }
+          nodes { id amount }
         }
         invoices(first: 1) {
           nodes {

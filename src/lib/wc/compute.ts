@@ -12,7 +12,8 @@
  *   - WC KBPI weekly column C (new_sales) = quote → job conversion dollars
  *     that week (quotes.transitioned_at, COALESCE(quote.subtotal, job.total))
  *   - WC KBPI weekly column D (collections) = sum of payments in period by
- *     payments.collected_at (payment date from Jobber when synced)
+ *     payments.collected_at (currently invoice issuedDate on each payment row —
+ *     Jobber GraphQL PaymentRecord has no payment date field)
  *
  * Exposed as two functions:
  *   - computeMonthly(env, year) → one row per month 1..12

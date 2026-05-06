@@ -94,23 +94,17 @@ interface JobberLineItem {
 interface JobberPayment {
   id: string;
   amount?: number | null;
-  /** ISO8601 — preferred source for payments.collected_at (cash received date). */
-  createdAt?: string | null;
 }
 
-/** YYYY-MM-DD for D1; falls back to invoice issuedDate when Jobber omits payment.createdAt. */
+/** YYYY-MM-DD for D1. Jobber GraphQL PaymentRecord has no timestamp — use invoice issuedDate. */
 function paymentCollectedAtDate(
-  payment: JobberPayment,
-  fallbackIso: string | null | undefined,
+  _payment: JobberPayment,
+  invoiceIssuedDate: string | null | undefined,
 ): string | null {
-  const raw = payment.createdAt;
-  if (typeof raw === "string" && raw.length >= 10) {
-    return raw.slice(0, 10);
+  if (typeof invoiceIssuedDate === "string" && invoiceIssuedDate.length >= 10) {
+    return invoiceIssuedDate.slice(0, 10);
   }
-  if (typeof fallbackIso === "string" && fallbackIso.length >= 10) {
-    return fallbackIso.slice(0, 10);
-  }
-  return fallbackIso ?? null;
+  return invoiceIssuedDate ?? null;
 }
 
 interface JobberInvoice {
@@ -490,8 +484,8 @@ async function upsertJob(env: Env, job: JobberJob, stats: SyncStats): Promise<vo
     stats.invoices_written++;
   }
 
-  // Payments — prefer Jobber paymentRecord.createdAt as collected_at (true
-  // paid date); fall back to invoice issuedDate when the API omits it.
+  // Payments — Jobber PaymentRecord has no payment-date field in GraphQL;
+  // use the invoice issuedDate as collected_at (same as legacy Python sync).
   stmts.push(env.DB.prepare("DELETE FROM payments WHERE job_id = ?").bind(job.id));
   const payments = job.paymentRecords?.nodes ?? [];
   for (const p of payments) {

@@ -8,6 +8,8 @@
 
 1. **Gmail quick link (first)** — In `dashboard/index.html`, the Gmail tile uses `gmailQuickLink` and optional `localStorage` key `chs_gmail_quick_url` (full `https://` URL; `setItem` returns `undefined` in the console — that is normal). Finish any follow-up: verify desktop/mobile behavior, document if we change anything, or close it out. **Do this before Drive mirror.**
 2. **Google Drive mirror (ground zero)** — After (1), follow **`docs/drive-mirror-resume.md`** (Worker secrets/vars, Google Shared Drive, then `GET` / `POST` `/api/ops/drive-mirror`).
+3. **Dashboard “Connect Google” (in-app OAuth)** — Set **`DASHBOARD_OAUTH_CLIENT_ID`** on the **chs-hub** Worker (**Settings → Variables**); add **`DASHBOARD_GOOGLE_API_KEY`**, **`JOB_TRACKER_SHEET_ID`**, **`WC_SHEET_ID`** as needed per **`docs/google-oauth-dashboard.md`**. In Google Cloud, OAuth **Web client**: authorized JS origin + redirect **`https://dashboard.homesolutionsar.com`**. Redeploy if required, hard refresh; **View Source** should show a real `*.apps.googleusercontent.com`, not empty/`%%…%%`.
+4. **Cloudflare Access — Google sign-in + sessions** — Reduce OTP/email-code friction: Zero Trust → **Integrations → Identity providers** → add **Google** (OAuth client + redirect `https://<team-name>.cloudflareaccess.com/cdn-cgi/access/callback`). Tune **global session duration** under Access/session settings so codes aren’t needed every day or two. **Note:** This is separate from (3); (3) is for Calendar/Tasks/Gmail/Sheets inside the dashboard.
 
 ### Backlog — dashboard polish & reliability (later)
 

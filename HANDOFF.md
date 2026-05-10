@@ -26,6 +26,8 @@ The dashboard **Sync Now** / **`POST /api/sync/now`** path was failing for many 
 - **Spreadsheet-native flows for docs** — **Open compatible files in Google Sheets** (or similar): upload/import path, “Open with…” link, or explicit export so operational docs aren’t stuck as opaque blobs in R2-only workflows.
 - **External hard drive backup** — **Second-line backup** of the file corpus (and/or D1 export bundles) to a **local external drive** — operator-run script, scheduled Mac job, or documented rsync from existing R2/nightly NDJSON exports; complementary to cloud mirror + R2.
 - **Upload workflow / Finder on Mac** — **File-explorer-style** dashboard UX to speed up **document uploads**; include a path to **open Finder** at a standard local folder (drag-drop, `<input webkitdirectory>` where useful). *Browsers cannot spawn Finder directly* — document a **Shortcuts / AppleScript one-liner** or tiny local helper if needed.
+- **CHS Capture PWA** (`/capture/`) — **Test, harden, and clean up:** real-device QA (iOS install, multi-job uploads, offline/Background Sync drain, expense + voice flows), fix rough edges and duplicate/confusing UX, align with **`docs/01-file-system.md`** deferred items; see TL;DR **Photos system** / native expense **Remaining follow-up** for Jobber write-back gaps.
+- **Social media product** — **Implement the planned social workflow** (monthly plan generation, dashboard surfacing, copy-to-Metricool handoff, later phases per **`docs/03-social-media.md`** and architecture **Session 8a+** in **`docs/00-architecture.md`**). Photos/PWA foundation is already in production; remaining blockers are mostly **product choices + API keys + build time**.
 
 ---
 

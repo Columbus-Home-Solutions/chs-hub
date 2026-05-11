@@ -9,7 +9,8 @@
 1. **Gmail quick link (first)** — In `dashboard/index.html`, the Gmail tile uses `gmailQuickLink` and optional `localStorage` key `chs_gmail_quick_url` (full `https://` URL; `setItem` returns `undefined` in the console — that is normal). Finish any follow-up: verify desktop/mobile behavior, document if we change anything, or close it out. **Do this before Drive mirror.**
 2. **Google Drive mirror (ground zero)** — After (1), follow **`docs/drive-mirror-resume.md`** (Worker secrets/vars, Google Shared Drive, then `GET` / `POST` `/api/ops/drive-mirror`).
 3. **Dashboard “Connect Google” (in-app OAuth)** — Set **`DASHBOARD_OAUTH_CLIENT_ID`** on the **chs-hub** Worker (**Settings → Variables**); add **`DASHBOARD_GOOGLE_API_KEY`**, **`JOB_TRACKER_SHEET_ID`**, **`WC_SHEET_ID`** as needed per **`docs/google-oauth-dashboard.md`**. In Google Cloud, OAuth **Web client**: authorized JS origin + redirect **`https://dashboard.homesolutionsar.com`**. Redeploy if required, hard refresh; **View Source** should show a real `*.apps.googleusercontent.com`, not empty/`%%…%%`.
-4. **Cloudflare Access — Google sign-in + sessions** — Reduce OTP/email-code friction: Zero Trust → **Integrations → Identity providers** → add **Google** (OAuth client + redirect `https://<team-name>.cloudflareaccess.com/cdn-cgi/access/callback`). Tune **global session duration** under Access/session settings so codes aren’t needed every day or two. **Note:** This is separate from (3); (3) is for Calendar/Tasks/Gmail/Sheets inside the dashboard.
+
+**Optional Access polish is deliberately last** — see the final bullet under **Backlog** (global session is already **30 days**).
 
 ### Recently fixed — dashboard “Sync Now” (May 2026)
 
@@ -18,7 +19,6 @@ The dashboard **Sync Now** / **`POST /api/sync/now`** path was failing for many 
 ### Backlog — dashboard polish & reliability (later)
 
 - **Worker vars / Google OAuth** — Confirm production **`DASHBOARD_OAUTH_CLIENT_ID`** (and related dashboard `[vars]`) are set so Connect Google works; see `docs/google-oauth-dashboard.md`. Empty injection ⇒ broken OAuth.
-- **Cloudflare Access friction** — Investigate having to complete an Access challenge (e.g. email OTP code) **on almost every page load**. Likely session duration, cookie settings, or multi-tab behavior; tune policy in Zero Trust (session length, “remember this device”, allowed IdPs).
 - **Monthly revenue tile** — Often empty; **probably tied to data freshness / KPI fetch** (D1, `/api/kpis`, or sheet-backed ranges); verify after a successful Jobber sync and WC sync (see **Recently fixed — Sync Now** above).
 - **Live KPI tiles + Business Pulse** — **Numbers not populating** (or stuck blank/spinners); investigate **`GET /api/kpis`**, D1 freshness after Jobber sync, dashboard **`chsFetchKpis`** / local cache, Cloudflare Access / SW interception, and any **Sheets-backed** pulse sections vs API-backed tiles.
 - **Theme / CSS flash or missing styles** — Sometimes **white background** and wrong fonts/colors until **hard refresh**; affects **main dashboard and subpages** (`jobs.html`, `notes.html`, etc.). Suspects: `theme.css` load order, caching, service worker, or FOUC — reproduce and fix so first paint matches the dark scheme reliably.
@@ -28,6 +28,7 @@ The dashboard **Sync Now** / **`POST /api/sync/now`** path was failing for many 
 - **Upload workflow / Finder on Mac** — **File-explorer-style** dashboard UX to speed up **document uploads**; include a path to **open Finder** at a standard local folder (drag-drop, `<input webkitdirectory>` where useful). *Browsers cannot spawn Finder directly* — document a **Shortcuts / AppleScript one-liner** or tiny local helper if needed.
 - **CHS Capture PWA** (`/capture/`) — **Test, harden, and clean up:** real-device QA (iOS install, multi-job uploads, offline/Background Sync drain, expense + voice flows), fix rough edges and duplicate/confusing UX, align with **`docs/01-file-system.md`** deferred items; see TL;DR **Photos system** / native expense **Remaining follow-up** for Jobber write-back gaps.
 - **Social media product** — **Implement the planned social workflow** (monthly plan generation, dashboard surfacing, copy-to-Metricool handoff, later phases per **`docs/03-social-media.md`** and architecture **Session 8a+** in **`docs/00-architecture.md`**). Photos/PWA foundation is already in production; remaining blockers are mostly **product choices + API keys + build time**.
+- **Cloudflare Access — optional polish (tackle last, after everything else)** — **Global session duration is already 30 days** (Tony; email/OTP re-auth at most about monthly unless cookies cleared or multi-device edge cases). **Defer:** add **Google** as an IdP if OTP alone is still annoying (separate from in-app **Connect Google**); revisit app/policy **session overrides**, cookie blockers, or a **crew-only** Access app for `/capture/*` (see TL;DR **Open decisions**).
 
 ---
 

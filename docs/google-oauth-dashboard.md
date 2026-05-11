@@ -46,7 +46,7 @@ Redeploy after adding variables, or they apply on the next request depending on 
 |--------|--------|
 | `invalid_client` | Client ID string wrong or not injected — Variables missing in Worker. |
 | `redirect_uri_mismatch` | Redirect URI in Google Cloud must be exactly `https://dashboard.homesolutionsar.com` (no path, no `/oauth`, unless you change the code). |
-| **Hash lost / always disconnected** | Rare: extensions or a proxy strips `#access_token=...`. Try incognito, another browser, or another network. |
+| **Empty `OAUTH_CLIENT_ID` after you set the Worker var** | The dashboard **service worker** may have **cache-first** HTML from before the var existed. **Deploy** latest `dashboard/sw.js` (documents are network-first), then hard-refresh; or **DevTools → Application → Service Workers → Unregister** and clear site data for the dashboard origin. |
 | Scopes / verification | If Gmail scope is blocked, remove it from `OAUTH_SCOPES` in `dashboard/index.html` temporarily. |
 
 ## 5. Code references

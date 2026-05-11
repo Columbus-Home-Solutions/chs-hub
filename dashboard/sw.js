@@ -2,7 +2,9 @@
 // Caches the app shell so it loads instantly and works offline
 // Live data (KPIs, tasks, calendar) always fetches fresh from APIs
 
-const CACHE_NAME = 'chs-dashboard-v2';
+// Bump when shell or inject behavior changes — old caches can hold HTML from
+// before Worker env (e.g. DASHBOARD_OAUTH_CLIENT_ID) was set, which breaks OAuth.
+const CACHE_NAME = 'chs-dashboard-v3';
 const CACHE_URLS = [
   '/',
   '/index.html',
@@ -35,7 +37,7 @@ self.addEventListener('activate', function(event) {
   self.clients.claim();
 });
 
-// Fetch — network first for API calls, cache first for app shell
+// Fetch — network-first for documents & APIs; cache-first for other shell assets
 self.addEventListener('fetch', function(event) {
   var url = event.request.url;
 
@@ -61,7 +63,28 @@ self.addEventListener('fetch', function(event) {
     return;
   }
 
-  // Cache-first for the app shell (HTML, fonts)
+  // HTML documents must be network-first: index.html is **injected** at the edge
+  // (OAuth client ID, sheet IDs). Cache-first would freeze an old shell with
+  // empty `OAUTH_CLIENT_ID` forever until the user clears site data.
+  if (event.request.mode === 'navigate' ||
+      (event.request.destination === 'document') ) {
+    event.respondWith(
+      fetch(event.request).then(function(fresh) {
+        if (fresh && fresh.ok) {
+          var clone = fresh.clone();
+          caches.open(CACHE_NAME).then(function(cache) {
+            cache.put(event.request, clone);
+          });
+        }
+        return fresh;
+      }).catch(function() {
+        return caches.match(event.request);
+      })
+    );
+    return;
+  }
+
+  // Cache-first for non-document shell (fonts, etc.)
   event.respondWith(
     caches.match(event.request).then(function(cached) {
       if (cached) {

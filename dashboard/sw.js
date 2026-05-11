@@ -4,7 +4,7 @@
 
 // Bump when shell or inject behavior changes — old caches can hold HTML from
 // before Worker env (e.g. DASHBOARD_OAUTH_CLIENT_ID) was set, which breaks OAuth.
-const CACHE_NAME = 'chs-dashboard-v3';
+const CACHE_NAME = 'chs-dashboard-v4';
 const CACHE_URLS = [
   '/',
   '/index.html',
@@ -67,7 +67,8 @@ self.addEventListener('fetch', function(event) {
   // (OAuth client ID, sheet IDs). Cache-first would freeze an old shell with
   // empty `OAUTH_CLIENT_ID` forever until the user clears site data.
   if (event.request.mode === 'navigate' ||
-      (event.request.destination === 'document') ) {
+      event.request.destination === 'document' ||
+      event.request.destination === 'manifest') {
     event.respondWith(
       fetch(event.request).then(function(fresh) {
         if (fresh && fresh.ok) {
@@ -78,7 +79,15 @@ self.addEventListener('fetch', function(event) {
         }
         return fresh;
       }).catch(function() {
-        return caches.match(event.request);
+        return caches.match(event.request).then(function(c) {
+          return (
+            c ||
+            new Response('Offline', {
+              status: 503,
+              headers: {'Content-Type': 'text/plain; charset=UTF-8'},
+            })
+          );
+        });
       })
     );
     return;
@@ -102,6 +111,18 @@ self.addEventListener('fetch', function(event) {
           cache.put(event.request, clone);
         });
         return fresh;
+      }).catch(function() {
+        // Avoid "FetchEvent resulted in a network error" when offline or request
+        // fails (e.g. transient CORS/redirect quirks); fall back to cache if any.
+        return caches.match(event.request).then(function(c) {
+          return (
+            c ||
+            new Response('', {
+              status: 504,
+              statusText: 'Gateway Timeout',
+            })
+          );
+        });
       });
     })
   );

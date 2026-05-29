@@ -104,6 +104,11 @@ import {
 } from "./routes/oauth-jobber.js";
 import { handleWcSync } from "./routes/wc-sync.js";
 import { handleFileLinkCreate, handleFileLinkResolve } from "./routes/file-link.js";
+import {
+  handleSettingGet,
+  handleSettingUpdate,
+  handleSettingsList,
+} from "./routes/settings.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -121,6 +126,10 @@ export default {
 
     if (url.pathname === "/health") {
       return handleHealth(env);
+    }
+
+    if (url.pathname === "/api/health/heartbeat" && request.method === "GET") {
+      return handleHeartbeat(env);
     }
 
     if (url.pathname === "/api/kpis" && request.method === "GET") {
@@ -360,6 +369,17 @@ export default {
       return handleHLProxy(env, request, url);
     }
 
+    // ── System settings ──────────────────────────────────────────────
+    if (url.pathname === "/api/settings" && request.method === "GET") {
+      return handleSettingsList(env);
+    }
+    const settingByKey = url.pathname.match(/^\/api\/settings\/([^/]+)$/);
+    if (settingByKey) {
+      const key = decodeURIComponent(settingByKey[1]);
+      if (request.method === "GET") return handleSettingGet(env, key);
+      if (request.method === "PUT") return handleSettingUpdate(request, env, key);
+    }
+
     if (url.pathname.startsWith("/api/")) {
       return jsonResponse({ error: "not_found", path: url.pathname }, { status: 404 });
     }
@@ -559,6 +579,50 @@ async function handleHealth(env: Env): Promise<Response> {
     status: checks.ok ? 200 : 503,
     headers: { "x-total-ms": String(Date.now() - startedAt) },
   });
+}
+
+// GET /api/health/heartbeat — lightweight readiness probe for the CHS
+// platform. Confirms D1 connectivity, reports how many of the 40 unified-schema
+// tables are present, and the number of seeded system settings.
+const PLATFORM_TABLES = [
+  "users", "system_settings", "audit_logs", "integration_connections",
+  "clients", "properties", "communications",
+  "estimate_requests", "estimates", "estimate_line_items", "estimate_sub_items",
+  "payment_schedules", "estimate_templates", "saved_reviews",
+  "jobs", "tasks", "daily_logs", "change_orders", "schedule_entries", "permits", "warranties",
+  "invoices", "payments", "expenses", "time_entries", "billing_cycles", "mileage",
+  "lien_waivers", "vendor_materials",
+  "photos", "receipt_photos", "documents", "document_templates",
+  "notification_templates", "notification_logs",
+  "social_posts", "content_schedules",
+  "subcontractors", "smart_notes", "dead_letter_queue",
+];
+
+async function handleHeartbeat(env: Env): Promise<Response> {
+  try {
+    const placeholders = PLATFORM_TABLES.map(() => "?").join(",");
+    const tableRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`,
+    )
+      .bind(...PLATFORM_TABLES)
+      .first<{ n: number }>();
+    const settingsRow = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM system_settings",
+    ).first<{ n: number }>();
+
+    return jsonResponse({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      tables: tableRow?.n ?? 0,
+      tables_expected: PLATFORM_TABLES.length,
+      settings: settingsRow?.n ?? 0,
+    });
+  } catch (err) {
+    return jsonResponse(
+      { status: "error", timestamp: new Date().toISOString(), error: (err as Error).message },
+      { status: 503 },
+    );
+  }
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {

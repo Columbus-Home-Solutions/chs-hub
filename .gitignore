@@ -20,6 +20,9 @@ __pycache__/
 .venv/
 venv/
 
+# D1 backups / rollback safety nets (kept locally, never committed)
+backup_pre_sprint1*.sql
+
 # OS
 .DS_Store
 Thumbs.db

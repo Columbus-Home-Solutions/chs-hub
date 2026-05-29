@@ -31,3 +31,7 @@ scripts/**
 .dev.vars
 *.log
 .DS_Store
+
+# Database dumps / backups — must never be served publicly (contain PII)
+*.sql
+backup_pre_sprint1*.sql

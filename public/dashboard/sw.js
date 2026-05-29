@@ -4,7 +4,7 @@
 
 // Bump when shell or inject behavior changes — old caches can hold HTML from
 // before Worker env (e.g. DASHBOARD_OAUTH_CLIENT_ID) was set, which breaks OAuth.
-const CACHE_NAME = 'chs-dashboard-v8';
+const CACHE_NAME = 'chs-dashboard-v9';
 const CACHE_URLS = [
   '/',
   '/index.html',
@@ -40,6 +40,12 @@ self.addEventListener('activate', function(event) {
 // Fetch — network-first for documents & APIs; cache-first for other shell assets
 self.addEventListener('fetch', function(event) {
   var url = event.request.url;
+  var path = new URL(url).pathname;
+
+  // Sprint 2+ Preact app at /app — do not intercept; it has its own assets and router.
+  if (path === '/app' || path.startsWith('/app/')) {
+    return;
+  }
 
   // Never cache Worker API routes — POST /api/sync/now, KPI fetches, etc.
   // must always hit the origin (cache-first below can swallow or mishandle

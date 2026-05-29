@@ -1,7 +1,7 @@
 # Cloudflare Worker configuration for chs-hub
 #
-# Single Worker strategy (see docs/00-architecture.md §6 and chat):
-#   - Static docs site is served from the repo root via [assets]
+# Single Worker strategy (see public/docs/00-architecture.md §6 and chat):
+#   - All served web assets live under ./public (docs site, dashboard, /app).
 #   - API routes (/health, /api/*) are handled by src/index.ts
 #   - Cloudflare's asset pipeline serves matching files directly; unmatched
 #     requests fall through to the Worker, which either answers or delegates
@@ -17,13 +17,26 @@ workers_dev = true
 preview_urls = true
 
 # ─── Static assets ─────────────────────────────────────────────────────
-# `directory = "./"` serves everything in the repo that isn't listed in
-# .assetsignore. We intentionally do NOT set `not_found_handling` here —
-# the Worker itself decides what to do with unmatched paths (either answer
-# as an API route, or proxy back to env.ASSETS for docs-style content).
+# `directory = "./public"` serves only the deployable web assets:
+#   public/index.html + public/README.md + public/docs/  → docs viewer site
+#   public/dashboard/                                     → dashboard (via host rewrite)
+#   public/app/                                           → Preact app at /app (Vite build output)
+# We intentionally do NOT set `not_found_handling` here — the Worker itself
+# decides what to do with unmatched paths (either answer as an API route, or
+# proxy back to env.ASSETS for docs-style content). Served URL paths are
+# unchanged by the move (e.g. /dashboard/*, /app/*, /docs/*.md, /) because the
+# asset binding treats `directory` as the web root.
+#
+# WHY ./public AND NOT ./ : with the assets root at the repo root, `wrangler dev`'s
+# asset watcher watched the whole tree — including `.wrangler/state` (local D1/R2
+# sqlite). Those WAL files churn on every request and retriggered the watcher,
+# putting dev into an endless "Reloading local server" loop (cloudflare/workers-sdk#6881;
+# the asset watcher has no ignore list and does not honor .assetsignore). Scoping
+# the assets root to ./public keeps `.wrangler`, src/, frontend/, node_modules/
+# OUT of the watched tree, so `wrangler dev` settles. Do NOT move it back to "./".
 
 [assets]
-directory = "./"
+directory = "./public"
 binding = "ASSETS"
 # Worker code runs FIRST so we can route by hostname (dash.* vs docs.*)
 # before assets are served. Without this, Cloudflare would serve /index.html

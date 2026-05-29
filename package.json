@@ -10,6 +10,7 @@
     "db:create": "wrangler d1 create chs-hub-db",
     "db:migrate:local": "wrangler d1 migrations apply chs-hub-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply chs-hub-db --remote",
+    "db:execute:local": "wrangler d1 execute chs-hub-db --local --command",
     "db:execute": "wrangler d1 execute chs-hub-db --remote --command",
     "r2:create": "wrangler r2 bucket create chs-hub-files",
     "tail": "wrangler tail",

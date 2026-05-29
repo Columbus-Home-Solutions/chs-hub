@@ -248,7 +248,7 @@ UPDATE users SET role = 'owner', is_active = 1 WHERE email = 'tony@homesolutions
 
 -- If no record exists, insert
 INSERT OR IGNORE INTO users (id, email, first_name, last_name, phone, role, is_active, created_at, updated_at)
-VALUES ('00000000-0000-0000-0000-000000000001', 'tony@homesolutionsar.com', 'Tony', 'Whitaker', '5015511814', 'owner', 1, datetime('now'), datetime('now'));
+VALUES ('00000000-0000-0000-0000-000000000001', 'tony@homesolutionsar.com', 'Tony', 'Columbus', '5015511814', 'owner', 1, datetime('now'), datetime('now'));
 ```
 
 ### 6c: Notification Templates

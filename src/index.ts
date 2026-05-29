@@ -109,6 +109,25 @@ import {
   handleSettingUpdate,
   handleSettingsList,
 } from "./routes/settings.js";
+import { handleMe } from "./routes/me.js";
+import {
+  handleClientCreate,
+  handleClientGet,
+  handleClientList,
+  handleClientSummary,
+  handleClientUpdate,
+  handleCommunicationCreate,
+  handleCommunicationList,
+  handlePropertyCreate,
+  handlePropertyList,
+  handlePropertyUpdate,
+} from "./routes/clients.js";
+import {
+  handleSubcontractorCreate,
+  handleSubcontractorGet,
+  handleSubcontractorList,
+  handleSubcontractorUpdate,
+} from "./routes/subcontractors.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -369,6 +388,61 @@ export default {
       return handleHLProxy(env, request, url);
     }
 
+    // ── Current user ─────────────────────────────────────────────────
+    // /api/me and /api/users/me both resolve the Cloudflare Access identity.
+    if (
+      (url.pathname === "/api/me" || url.pathname === "/api/users/me") &&
+      request.method === "GET"
+    ) {
+      return handleMe(request, env);
+    }
+
+    // ── Clients, properties, communications ──────────────────────────
+    // Nested/sub-resource patterns must be tested before the bare :id route.
+    if (url.pathname === "/api/clients") {
+      if (request.method === "GET") return handleClientList(env, url);
+      if (request.method === "POST") return handleClientCreate(request, env);
+    }
+    const clientProps = url.pathname.match(/^\/api\/clients\/([^/]+)\/properties$/);
+    if (clientProps) {
+      const cid = decodeURIComponent(clientProps[1]);
+      if (request.method === "GET") return handlePropertyList(env, cid);
+      if (request.method === "POST") return handlePropertyCreate(request, env, cid);
+    }
+    const clientComms = url.pathname.match(/^\/api\/clients\/([^/]+)\/communications$/);
+    if (clientComms && request.method === "GET") {
+      return handleCommunicationList(env, decodeURIComponent(clientComms[1]), url);
+    }
+    const clientSummary = url.pathname.match(/^\/api\/clients\/([^/]+)\/summary$/);
+    if (clientSummary && request.method === "GET") {
+      return handleClientSummary(env, decodeURIComponent(clientSummary[1]));
+    }
+    const clientById = url.pathname.match(/^\/api\/clients\/([^/]+)$/);
+    if (clientById) {
+      const cid = decodeURIComponent(clientById[1]);
+      if (request.method === "GET") return handleClientGet(env, cid);
+      if (request.method === "PUT") return handleClientUpdate(request, env, cid);
+    }
+    const propertyById = url.pathname.match(/^\/api\/properties\/([^/]+)$/);
+    if (propertyById && request.method === "PUT") {
+      return handlePropertyUpdate(request, env, decodeURIComponent(propertyById[1]));
+    }
+    if (url.pathname === "/api/communications" && request.method === "POST") {
+      return handleCommunicationCreate(request, env);
+    }
+
+    // ── Subcontractors (CHS platform schema; coexists with /api/subs) ─
+    if (url.pathname === "/api/subcontractors") {
+      if (request.method === "GET") return handleSubcontractorList(env, url);
+      if (request.method === "POST") return handleSubcontractorCreate(request, env);
+    }
+    const subcontractorById = url.pathname.match(/^\/api\/subcontractors\/([^/]+)$/);
+    if (subcontractorById) {
+      const sid = decodeURIComponent(subcontractorById[1]);
+      if (request.method === "GET") return handleSubcontractorGet(env, sid);
+      if (request.method === "PUT") return handleSubcontractorUpdate(request, env, sid);
+    }
+
     // ── System settings ──────────────────────────────────────────────
     if (url.pathname === "/api/settings" && request.method === "GET") {
       return handleSettingsList(env);
@@ -382,6 +456,15 @@ export default {
 
     if (url.pathname.startsWith("/api/")) {
       return jsonResponse({ error: "not_found", path: url.pathname }, { status: 404 });
+    }
+
+    // ── New Preact app (Sprint 2+) ───────────────────────────────────
+    // Built by Vite into ./app and served at /app. Handled before the
+    // dashboard-host rewrite so it resolves on every host. Deep links
+    // (e.g. /app/clients/123) fall back to the app's index.html so the
+    // client-side router can take over.
+    if (url.pathname === "/app" || url.pathname.startsWith("/app/")) {
+      return serveApp(env, request, url);
     }
 
     // Hostname-based routing:
@@ -630,4 +713,23 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   headers.set("content-type", "application/json; charset=utf-8");
   headers.set("cache-control", "no-store");
   return new Response(JSON.stringify(body, null, 2), { ...init, headers });
+}
+
+/**
+ * Serve the Vite-built Preact app (public/app, served at /app). Tries the requested asset first;
+ * for navigations that don't map to a real file (SPA deep links) it falls back
+ * to /app/index.html so preact-router can resolve the route client-side.
+ */
+async function serveApp(env: Env, request: Request, url: URL): Promise<Response> {
+  const direct = await env.ASSETS.fetch(request);
+  if (direct.status !== 404) return direct;
+
+  // Only fall back for navigation requests (no file extension in the last
+  // path segment) — missing JS/CSS/images should keep their 404.
+  const lastSegment = url.pathname.split("/").pop() ?? "";
+  if (lastSegment.includes(".")) return direct;
+
+  const indexUrl = new URL(request.url);
+  indexUrl.pathname = "/app/index.html";
+  return env.ASSETS.fetch(new Request(indexUrl.toString(), { method: "GET" }));
 }

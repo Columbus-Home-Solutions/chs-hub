@@ -51,7 +51,7 @@ VALUES (
   '00000000-0000-0000-0000-000000000001',
   'tony@homesolutionsar.com',
   'Tony',
-  'Whitaker',
+  'Columbus',
   '5015511814',
   'owner',
   1,

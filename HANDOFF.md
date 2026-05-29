@@ -10,6 +10,15 @@
 2. **Drive mirror** — **`docs/drive-mirror-resume.md`**: new **SITE PHOTOS / PROJECT FILES** paths; stub queue drains **4 jobs/hour** from empty-tree pass (raise batch later if needed and limits allow).
 3. **Jobber financial PDFs** — GraphiQL → real PDF/signed URL → implement **`financial-pdfs-ingest.ts`** (`contracts` / `pay_stub`).
 
+**⚠️ PENDING REMOTE (run during the next remote/deploy step):** The owner user was seeded with the wrong last name (`Whitaker`). It's been fixed on **local D1** and in the seed sources (`migrations/0024_seed_data.sql`, `docs/CHS-Seed-Data.md`), but the **remote** `users` row still says Whitaker (the seed `UPDATE` uses `COALESCE`, so re-running the migration will NOT overwrite it). Run this once against remote:
+
+```bash
+npx wrangler d1 execute chs-hub-db --remote \
+  --command "UPDATE users SET last_name = 'Columbus', name = 'Tony Columbus' WHERE email = 'tony@homesolutionsar.com';"
+```
+
+**Local dev:** Start the Worker with **`npm run dev`** (or bare `wrangler dev` — both work now). All served web assets live under **`public/`** (`public/dashboard/`, `public/docs/`, `public/index.html`, `public/README.md`, and the Vite build output `public/app/`), and `wrangler.toml` sets **`[assets] directory = "./public"`**. Scoping the assets root to `public/` keeps `.wrangler/state` (local D1 sqlite) out of the dev asset-watcher's tree, which is what previously caused the endless "Reloading local server" loop (the watcher has no ignore list and ignores `.assetsignore`). Local D1 lives in the default `.wrangler/state`; use **`npm run db:migrate:local`** / **`npm run db:execute:local "<sql>"`**. Frontend dev server (with `/api` proxy): **`npm --prefix frontend run dev`**; the Preact build emits to `public/app` via `npm --prefix frontend run build`.
+
 **Done (May 2026) — do not re-queue:** **Gmail quick link** — Dashboard tile uses **`gmailQuickLink`** in **`dashboard/index.html`** (optional **`localStorage`** key **`chs_gmail_quick_url`** for a custom **`https://`** inbox URL). **Verified working** (opens Gmail) May 2026.
 
 **Also done (May 2026):** Dashboard **Connect Google** — **Google Identity Services** token client, scopes **Calendar (readonly)** + **Tasks** only; **`DASHBOARD_OAUTH_CLIENT_ID`** in **`wrangler.toml` `[vars]`** (must match **Web application** Client ID in Google Cloud **exactly**). Legacy browser **Sheets** reads removed; KPIs = **`/api/kpis`**, notes = **`/api/notes`**. See **`docs/google-oauth-dashboard.md`** and **Recently fixed — Dashboard OAuth, Sheets cleanup & header (May 2026)** below.
@@ -139,20 +148,26 @@ chs-hub/
 ├── README.md
 ├── wrangler.toml ......................... Worker config (D1 binding, vars, cron)
 ├── package.json .......................... npm scripts (db:migrate:remote, deploy, tail, etc.)
-├── dashboard/
-│   ├── theme.css ......................... 🎨 brand source of truth (palette + base + page wash). Edit :root here to recolor everything.
-│   ├── index.html ........................ main dashboard (KPIs, quick launch, kanban)
-│   ├── jobs.html ......................... native Job Tracker
-│   ├── notes.html ........................ native Smart Notes
-│   ├── subs.html ......................... native Subcontractor Reference List
-│   ├── manifest.json + sw.js ............. dashboard PWA basics ("CHS Command")
-│   └── capture/ .......................... 🆕 CHS Capture PWA (photos + voice notes)
-│       ├── index.html .................... single-page shell (Home/Camera/Review/Voice/Switch/Pending)
-│       ├── manifest.json ................. distinct icon, scope=/capture/, installed as separate PWA
-│       ├── styles.css .................... mobile-first; pulls palette from /theme.css
-│       ├── app.js ........................ camera + canvas thumb + voice + queue UI
-│       ├── queue.js ...................... shared IndexedDB queue (loaded by both app.js and sw.js)
-│       └── sw.js ......................... service worker: drains queue on Background Sync / message
+├── public/ ............................... static-assets root (wrangler.toml [assets] directory = "./public")
+│   ├── index.html ....................... docs viewer (fetches /README.md + /docs/*.md at runtime)
+│   ├── README.md ........................ served copy for the docs viewer (repo-root README.md is the canonical source)
+│   ├── docs/ ............................ all project docs/specs (served at /docs/*.md)
+│   ├── app/ ............................. 🆕 Preact app build output (Vite), served at /app — gitignored, rebuilt
+│   └── dashboard/
+│       ├── theme.css ................... 🎨 brand source of truth (palette + base + page wash). Edit :root here to recolor everything.
+│       ├── index.html .................. main dashboard (KPIs, quick launch, kanban)
+│       ├── jobs.html ................... native Job Tracker
+│       ├── notes.html .................. native Smart Notes
+│       ├── subs.html ................... native Subcontractor Reference List
+│       ├── manifest.json + sw.js ....... dashboard PWA basics ("CHS Command")
+│       └── capture/ .................... 🆕 CHS Capture PWA (photos + voice notes)
+│           ├── index.html .............. single-page shell (Home/Camera/Review/Voice/Switch/Pending)
+│           ├── manifest.json ........... distinct icon, scope=/capture/, installed as separate PWA
+│           ├── styles.css .............. mobile-first; pulls palette from /theme.css
+│           ├── app.js ................. camera + canvas thumb + voice + queue UI
+│           ├── queue.js ............... shared IndexedDB queue (loaded by both app.js and sw.js)
+│           └── sw.js .................. service worker: drains queue on Background Sync / message
+├── frontend/ ............................ Preact app SOURCE (Vite); builds into ../public/app
 ├── migrations/
 │   ├── 0001_init.sql ..................... jobs/invoices/line_items/payments/expenses/quotes
 │   ├── 0002_quote_client.sql

@@ -1,0 +1,13 @@
+# Files under the assets root (public/) that must NOT be uploaded/served.
+# Same syntax as .gitignore. NOTE: this file must live at the root of the
+# assets directory (public/), not the repo root — Wrangler only reads it here.
+#
+# Everything that is NOT meant to be public (src/, migrations/, scripts/,
+# frontend/, node_modules/, wrangler.toml, *.sql backups, .env, .wrangler/) now
+# lives OUTSIDE public/, so it is never part of the asset upload set at all.
+
+.DS_Store
+
+# Defensive: never serve DB dumps / backups (contain PII) if one is ever
+# accidentally dropped under public/.
+*.sql

@@ -47,16 +47,16 @@ UPDATE users
 SET role = 'owner',
     is_active = 1,
     first_name = COALESCE(first_name, 'Tony'),
-    last_name = COALESCE(last_name, 'Whitaker')
+    last_name = COALESCE(last_name, 'Columbus')
 WHERE email = 'tony@homesolutionsar.com';
 
 INSERT INTO users (id, email, name, first_name, last_name, phone, role, is_active, created_at, updated_at)
 SELECT
   '00000000-0000-0000-0000-000000000001',
   'tony@homesolutionsar.com',
-  'Tony Whitaker',
+  'Tony Columbus',
   'Tony',
-  'Whitaker',
+  'Columbus',
   '5015511814',
   'owner',
   1,

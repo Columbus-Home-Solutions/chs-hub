@@ -1,6 +1,6 @@
 # Google OAuth on the CHS dashboard
 
-The dashboard uses the **OAuth 2.0 implicit flow** (`response_type=token`) so the access token is returned in the URL **hash** and stored in `localStorage` for Calendar, Tasks, Gmail (read), Sheets, and Drive read scopes. The Worker **injects** your public config into `dashboard/index.html` at request time so the repo does not need hard-coded client IDs.
+The dashboard uses **Google Identity Services** (`accounts.google.com/gsi/client`) with the OAuth 2.0 **token client** (`initTokenClient`) so access tokens are issued in a **popup** (Google’s supported browser flow). Scopes are **Calendar (readonly)** and **Tasks** only — **not** Gmail, Sheets, or Drive, so Google is less likely to block unverified apps.
 
 ## Why it was broken
 
@@ -16,24 +16,23 @@ If the HTML still contained the literal string `%%OAUTH_CLIENT_ID%%`, Google rec
 4. **Authorized redirect URIs**
    - `https://dashboard.homesolutionsar.com`  
    - (Optional) `https://chs-hub.tony-bc5.workers.dev` — must list each origin you use; the app sets `redirect_uri` to `window.location.origin` (no path, no trailing slash).
-5. Enable any APIs you use: **Google Sheets API**, **Calendar API**, **Tasks API**, **Gmail API** (readonly), **Drive API** (readonly), as needed.
+5. Enable **Calendar API** and **Tasks API**. (Drive API is optional; Drive meeting import is disabled until you verify the app and add `drive.readonly` again.)
 
-If Google shows **"Access blocked"** for sensitive scopes (e.g. Gmail), the app may need [verification](https://support.google.com/cloud/answer/9110914) for external users, or you can use **Internal** (Workspace-only) for testing.
+If Google shows **"Access blocked"** or **`access_denied`**: open **Google Cloud → APIs & services → OAuth consent screen**. If **Publishing status** is **Testing**, add every user who will sign in under **Test users** (including `tony@homesolutionsar.com`). External + Testing + user not listed ⇒ Google blocks. Alternatively set **User type** to **Internal** (Google Workspace only) or complete **verification** to publish. Also confirm **Authorized JavaScript origins** and **Authorized redirect URIs** include `https://dashboard.homesolutionsar.com` (exactly, no trailing path).
 
 ## 2. Cloudflare Worker environment variables
 
-In **Workers & Pages → chs-hub → Settings → Variables**, add (all are non-secret; plain text is fine for `OAUTH_CLIENT_ID` and API key in `[vars]`):
+In **Workers & Pages → chs-hub → Settings → Variables**, add:
 
 | Variable | Example / notes |
 |----------|-----------------|
-| `DASHBOARD_OAUTH_CLIENT_ID` | `123456789-xxxxx.apps.googleusercontent.com` |
-| `DASHBOARD_GOOGLE_API_KEY` | Browser API key, **Application restrictions** = HTTP referrers, add `https://dashboard.homesolutionsar.com/*` and `https://*.homesolutionsar.com/*` if needed. **API restrictions** = limit to the APIs the dashboard uses. |
-| `JOB_TRACKER_SHEET_ID` | ID of the Job Tracker / KPI spreadsheet (from the sheet URL). |
-| `WC_SHEET_ID` | Wealthy Contractor / workbook sheet id if the dashboard references it. |
+| `DASHBOARD_OAUTH_CLIENT_ID` | `123456789-xxxxx.apps.googleusercontent.com` (non-secret; plain text in `[vars]` is fine) |
+
+Older deployments may still have `DASHBOARD_GOOGLE_API_KEY`, `JOB_TRACKER_SHEET_ID`, or `WC_SHEET_ID`; those are **no longer read** by the dashboard HTML injector — you can remove them from the Worker when convenient.
 
 Redeploy after adding variables, or they apply on the next request depending on your plan (usually immediate for Workers).
 
-**Alternative:** add the same keys under `[vars]` in `wrangler.toml` locally. Do not commit real values if the repo is shared; use the Cloudflare UI instead.
+**Alternative:** set `DASHBOARD_OAUTH_CLIENT_ID` under `[vars]` in `wrangler.toml` locally. Do not commit real values if the repo is shared; use the Cloudflare UI instead.
 
 ## 3. Verify
 
@@ -47,7 +46,7 @@ Redeploy after adding variables, or they apply on the next request depending on 
 | `invalid_client` | Client ID string wrong or not injected — Variables missing in Worker. |
 | `redirect_uri_mismatch` | Redirect URI in Google Cloud must be exactly `https://dashboard.homesolutionsar.com` (no path, no `/oauth`, unless you change the code). |
 | **Empty `OAUTH_CLIENT_ID` after you set the Worker var** | The dashboard **service worker** may have **cache-first** HTML from before the var existed. **Deploy** latest `dashboard/sw.js` (documents are network-first), then hard-refresh; or **DevTools → Application → Service Workers → Unregister** and clear site data for the dashboard origin. |
-| Scopes / verification | If Gmail scope is blocked, remove it from `OAUTH_SCOPES` in `dashboard/index.html` temporarily. |
+| Scopes / verification | Consent screen in **Testing**? Add your account under **Test users**. **Internal** user type only allows your Google Workspace org. `redirect_uri_mismatch` → origin + redirect URI must match **`window.location.origin`** exactly. |
 
 ## 5. Code references
 

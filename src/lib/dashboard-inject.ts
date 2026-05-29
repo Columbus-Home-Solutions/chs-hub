@@ -1,10 +1,9 @@
 /**
  * Injects public dashboard config into `dashboard/index.html` at the edge.
  *
- * The HTML on disk still contains `%%PLACEHOLDER%%` strings so the repo never
- * needs to commit OAuth client IDs or sheet IDs. At deploy time, set
- * DASHBOARD_OAUTH_CLIENT_ID, DASHBOARD_GOOGLE_API_KEY, JOB_TRACKER_SHEET_ID,
- * and WC_SHEET_ID in wrangler [vars] (or the Cloudflare dashboard).
+ * The HTML on disk still contains `%%OAUTH_CLIENT_ID%%` so the repo never
+ * needs to commit the OAuth client id. At deploy time, set
+ * DASHBOARD_OAUTH_CLIENT_ID in wrangler [vars] (or the Cloudflare dashboard).
  */
 
 import type { Env } from "../env.js";
@@ -49,15 +48,8 @@ export async function maybeInjectDashboardHtml(
   }
 
   const ocid = env.DASHBOARD_OAUTH_CLIENT_ID ?? "";
-  const gak = env.DASHBOARD_GOOGLE_API_KEY ?? "";
-  const jt = env.JOB_TRACKER_SHEET_ID ?? "";
-  const wc = env.WC_SHEET_ID ?? "";
 
-  const out = text
-    .split("%%OAUTH_CLIENT_ID%%").join(ocid)
-    .split("%%GOOGLE_API_KEY%%").join(gak)
-    .split("%%JOB_TRACKER_SHEET_ID%%").join(jt)
-    .split("%%WC_SHEET_ID%%").join(wc);
+  const out = text.split("%%OAUTH_CLIENT_ID%%").join(ocid);
 
   const headers = new Headers(response.headers);
   headers.set("content-type", "text/html; charset=utf-8");

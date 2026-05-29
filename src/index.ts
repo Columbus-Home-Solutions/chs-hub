@@ -18,8 +18,8 @@
  *   env.SYNC_TRIGGER_SECRET
  *
  * Public dashboard vars (Cloudflare → Worker → Settings, optional in wrangler [vars]):
- *   DASHBOARD_OAUTH_CLIENT_ID, DASHBOARD_GOOGLE_API_KEY, JOB_TRACKER_SHEET_ID, WC_SHEET_ID
- *   (injected into dashboard/index.html — see src/lib/dashboard-inject.ts, docs/google-oauth-dashboard.md)
+ *   DASHBOARD_OAUTH_CLIENT_ID (injected into dashboard/index.html — see
+ *   src/lib/dashboard-inject.ts, docs/google-oauth-dashboard.md)
  */
 
 import type { Env } from "./env.js";
@@ -430,7 +430,7 @@ async function runJobberTick(cron: string, env: Env): Promise<void> {
   try {
     const stats = await syncJobberToD1(env);
     console.log(
-      `[cron ${cron}] jobber_full: ${stats.jobs_written} jobs in ${stats.duration_ms}ms`,
+      `[cron ${cron}] jobber_full: ${stats.jobs_written} jobs, ${stats.jobber_job_files_written} jobber files, ${stats.duration_ms}ms`,
     );
   } catch (err) {
     console.error(`[cron ${cron}] jobber_full failed:`, (err as Error).message);
@@ -479,9 +479,12 @@ async function runHourly(env: Env): Promise<void> {
       console.log(
         `[cron 15 * * * *] drive_mirror skipped: ${dm.reason ?? "unknown"}`,
       );
-    } else if (dm.photos + dm.expenses + dm.company > 0 || dm.errors.length > 0) {
+    } else if (
+      dm.photos + dm.expenses + dm.job_files + dm.company + dm.job_folder_stubs > 0 ||
+      dm.errors.length > 0
+    ) {
       console.log(
-        `[cron 15 * * * *] drive_mirror: photos=${dm.photos} expenses=${dm.expenses} company=${dm.company} err=${dm.errors.length} ms=${dm.duration_ms}`,
+        `[cron 15 * * * *] drive_mirror: stubs=${dm.job_folder_stubs} photos=${dm.photos} expenses=${dm.expenses} job_files=${dm.job_files} company=${dm.company} err=${dm.errors.length} ms=${dm.duration_ms}`,
       );
     }
     if (dm.errors.length > 0) {
@@ -519,12 +522,17 @@ async function handleHealth(env: Env): Promise<Response> {
     timestamp: string;
     d1: { status: "connected" | "error"; latency_ms?: number; error?: string };
     r2: { status: "connected" | "error"; latency_ms?: number; error?: string };
+    /** True when Worker has a non-empty DASHBOARD_OAUTH_CLIENT_ID (dashboard Connect Google). */
+    dashboard_oauth_client_id_configured: boolean;
     version: string;
   } = {
     ok: true,
     timestamp: new Date().toISOString(),
     d1: { status: "error" },
     r2: { status: "error" },
+    dashboard_oauth_client_id_configured: Boolean(
+      env.DASHBOARD_OAUTH_CLIENT_ID && String(env.DASHBOARD_OAUTH_CLIENT_ID).trim() !== "",
+    ),
     version: "0.1.0",
   };
 

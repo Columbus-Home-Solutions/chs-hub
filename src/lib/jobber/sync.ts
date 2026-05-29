@@ -20,12 +20,25 @@ import {
   JOBS_PAGE_QUERY,
   QUOTES_PAGE_QUERY,
 } from "./queries.js";
+import {
+  flattenJobNoteAttachments,
+  ingestJobberNoteAttachmentsForJob,
+} from "./job-files-ingest.js";
+
+type JobberTokenRef = { current: string };
 
 const JOBS_PAGE_SIZE = 25;
 const INVOICES_PAGE_SIZE = 50;
 const QUOTES_PAGE_SIZE = 50;
 const EXPENSES_PAGE_SIZE = 50;
 const MAX_PAGES = 200; // 200 × 25 = 5000 jobs ceiling; safety stop for runaway loops
+
+/** Pause between GraphQL pages so Jobber's cost bucket can refill (limits THROTTLED). */
+const JOBBER_INTER_PAGE_MS = 450;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ─── GraphQL response shapes ────────────────────────────────────────
 
@@ -53,6 +66,15 @@ interface JobberJob {
   lineItems?: { nodes: JobberLineItem[] } | null;
   paymentRecords?: { nodes: JobberPayment[] } | null;
   invoices?: { nodes: JobberInvoice[] } | null;
+  noteAttachments?: {
+    nodes: Array<{
+      id: string;
+      fileName?: string | null;
+      mimeType?: string | null;
+      url?: string | null;
+    } | null> | null;
+  } | null;
+  notes?: { nodes: unknown[] | null } | null;
 }
 
 interface JobberClient {
@@ -174,6 +196,7 @@ export interface SyncStats {
   expenses_written: number;
   expense_pages: number;
   expenses_seen: number;
+  jobber_job_files_written: number;
   started_at: string;
   finished_at: string;
   duration_ms: number;
@@ -200,6 +223,7 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
     expenses_written: 0,
     expense_pages: 0,
     expenses_seen: 0,
+    jobber_job_files_written: 0,
     started_at: startedAt.toISOString(),
     finished_at: "",
     duration_ms: 0,
@@ -209,14 +233,18 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
   await logSyncStart(env, "jobber_full", startedAt);
 
   try {
-    const accessToken = await getAccessToken(env);
+    const tokenRef: JobberTokenRef = { current: await getAccessToken(env) };
     let cursor: string | null = null;
 
     for (let page = 1; page <= MAX_PAGES; page++) {
       const result: JobsPageResult = await jobberQuery<JobsPageResult>(
-        accessToken,
+        tokenRef.current,
         JOBS_PAGE_QUERY,
-        { variables: { first: JOBS_PAGE_SIZE, after: cursor } },
+        {
+          variables: { first: JOBS_PAGE_SIZE, after: cursor },
+          env,
+          tokenOut: tokenRef,
+        },
       );
 
       const nodes: JobberJob[] = result.jobs?.nodes ?? [];
@@ -225,7 +253,7 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
 
       for (const job of nodes) {
         try {
-          await upsertJob(env, job, stats);
+          await upsertJob(env, job, stats, tokenRef);
         } catch (err) {
           const msg = (err as Error).message;
           stats.errors.push(`Job ${job.id}: ${msg}`);
@@ -242,22 +270,23 @@ export async function syncJobberToD1(env: Env): Promise<SyncStats> {
       const pageInfo: JobsPageResult["jobs"]["pageInfo"] | undefined = result.jobs?.pageInfo;
       if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
       cursor = pageInfo.endCursor;
+      await sleep(JOBBER_INTER_PAGE_MS);
     }
 
     // Standalone quotes pass — captures pipeline quotes (awaiting_response,
     // changes_requested, approved-not-yet-job) that the per-job pass never
     // sees because they haven't converted to jobs.
-    await syncAllQuotes(env, accessToken, stats);
+    await syncAllQuotes(env, tokenRef, stats);
 
     // Standalone invoices pass — captures invoices the per-job loop missed
     // (change orders, re-issues, invoices whose parent job ordering buried
     // them behind the `first: 1` limit on jobs.invoices).
-    await syncAllInvoices(env, accessToken, stats);
+    await syncAllInvoices(env, tokenRef, stats);
 
     // Standalone expenses pass — captures ALL expenses (not just those linked
     // to jobs), including Overhead / Vehicle / Office / Apparel / Tools
     // categories which are typically entered without a job link.
-    await syncAllExpenses(env, accessToken, stats);
+    await syncAllExpenses(env, tokenRef, stats);
 
     const finishedAt = new Date();
     stats.finished_at = finishedAt.toISOString();
@@ -293,7 +322,8 @@ export async function upsertJobFromPayload(
     throw new Error("job payload missing id");
   }
   const throwawayStats = makeEmptyStats();
-  await upsertJob(env, job, throwawayStats);
+  const tokenRef: JobberTokenRef = { current: await getAccessToken(env) };
+  await upsertJob(env, job, throwawayStats, tokenRef);
 }
 
 function makeEmptyStats(): SyncStats {
@@ -314,6 +344,7 @@ function makeEmptyStats(): SyncStats {
     expenses_written: 0,
     expense_pages: 0,
     expenses_seen: 0,
+    jobber_job_files_written: 0,
     started_at: now,
     finished_at: now,
     duration_ms: 0,
@@ -323,7 +354,12 @@ function makeEmptyStats(): SyncStats {
 
 // ─── Per-job upsert ────────────────────────────────────────────────
 
-async function upsertJob(env: Env, job: JobberJob, stats: SyncStats): Promise<void> {
+async function upsertJob(
+  env: Env,
+  job: JobberJob,
+  stats: SyncStats,
+  tokenRef: JobberTokenRef,
+): Promise<void> {
   const syncedAt = new Date().toISOString();
   const stmts: D1PreparedStatement[] = [];
 
@@ -500,6 +536,9 @@ async function upsertJob(env: Env, job: JobberJob, stats: SyncStats): Promise<vo
   }
 
   await env.DB.batch(stmts);
+
+  const attachmentNodes = flattenJobNoteAttachments(job);
+  await ingestJobberNoteAttachmentsForJob(env, tokenRef, job.id, attachmentNodes, stats);
 }
 
 // ─── Standalone quotes sync ────────────────────────────────────────
@@ -529,16 +568,20 @@ interface StandaloneQuote {
 
 async function syncAllQuotes(
   env: Env,
-  accessToken: string,
+  tokenRef: JobberTokenRef,
   stats: SyncStats,
 ): Promise<void> {
   let cursor: string | null = null;
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     const result: QuotesPageResult = await jobberQuery<QuotesPageResult>(
-      accessToken,
+      tokenRef.current,
       QUOTES_PAGE_QUERY,
-      { variables: { first: QUOTES_PAGE_SIZE, after: cursor } },
+      {
+        variables: { first: QUOTES_PAGE_SIZE, after: cursor },
+        env,
+        tokenOut: tokenRef,
+      },
     );
 
     const nodes: StandaloneQuote[] = result.quotes?.nodes ?? [];
@@ -644,6 +687,7 @@ async function syncAllQuotes(
     const pageInfo = result.quotes?.pageInfo;
     if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
     cursor = pageInfo.endCursor;
+    await sleep(JOBBER_INTER_PAGE_MS);
   }
 }
 
@@ -651,16 +695,20 @@ async function syncAllQuotes(
 
 async function syncAllInvoices(
   env: Env,
-  accessToken: string,
+  tokenRef: JobberTokenRef,
   stats: SyncStats,
 ): Promise<void> {
   let cursor: string | null = null;
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     const result: InvoicesPageResult = await jobberQuery<InvoicesPageResult>(
-      accessToken,
+      tokenRef.current,
       INVOICES_PAGE_QUERY,
-      { variables: { first: INVOICES_PAGE_SIZE, after: cursor } },
+      {
+        variables: { first: INVOICES_PAGE_SIZE, after: cursor },
+        env,
+        tokenOut: tokenRef,
+      },
     );
 
     const nodes: StandaloneInvoice[] = result.invoices?.nodes ?? [];
@@ -686,6 +734,7 @@ async function syncAllInvoices(
     const pageInfo = result.invoices?.pageInfo;
     if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
     cursor = pageInfo.endCursor;
+    await sleep(JOBBER_INTER_PAGE_MS);
   }
 }
 
@@ -757,7 +806,7 @@ async function upsertStandaloneInvoice(
 
 async function syncAllExpenses(
   env: Env,
-  accessToken: string,
+  tokenRef: JobberTokenRef,
   stats: SyncStats,
 ): Promise<void> {
   // Full refresh: wipe Jobber-sourced expenses and re-insert from Jobber's
@@ -785,9 +834,13 @@ async function syncAllExpenses(
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     const result: ExpensesPageResult = await jobberQuery<ExpensesPageResult>(
-      accessToken,
+      tokenRef.current,
       EXPENSES_PAGE_QUERY,
-      { variables: { first: EXPENSES_PAGE_SIZE, after: cursor } },
+      {
+        variables: { first: EXPENSES_PAGE_SIZE, after: cursor },
+        env,
+        tokenOut: tokenRef,
+      },
     );
 
     const nodes: StandaloneExpense[] = result.expenses?.nodes ?? [];
@@ -872,6 +925,7 @@ async function syncAllExpenses(
     const pageInfo = result.expenses?.pageInfo;
     if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
     cursor = pageInfo.endCursor;
+    await sleep(JOBBER_INTER_PAGE_MS);
   }
 }
 
@@ -904,7 +958,8 @@ async function logSyncFinish(
     stats.line_items_written +
     stats.invoices_written +
     stats.payments_written +
-    stats.expenses_written;
+    stats.expenses_written +
+    stats.jobber_job_files_written;
 
   await env.DB.prepare(
     `UPDATE sync_log

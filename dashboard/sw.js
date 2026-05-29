@@ -4,7 +4,7 @@
 
 // Bump when shell or inject behavior changes — old caches can hold HTML from
 // before Worker env (e.g. DASHBOARD_OAUTH_CLIENT_ID) was set, which breaks OAuth.
-const CACHE_NAME = 'chs-dashboard-v4';
+const CACHE_NAME = 'chs-dashboard-v8';
 const CACHE_URLS = [
   '/',
   '/index.html',
@@ -49,6 +49,13 @@ self.addEventListener('fetch', function(event) {
     return;
   }
 
+  // PWA manifest: do not intercept. A manual fetch() here follows Cloudflare Access
+  // login redirects to another origin without CORS → console CORS errors and a
+  // bogus 503 from our offline fallback. Browser default handling keeps cookies.
+  if (event.request.destination === 'manifest') {
+    return;
+  }
+
   // Always go network-first for Google APIs and Jobber
   if (url.includes('googleapis.com') ||
       url.includes('getjobber.com') ||
@@ -67,8 +74,7 @@ self.addEventListener('fetch', function(event) {
   // (OAuth client ID, sheet IDs). Cache-first would freeze an old shell with
   // empty `OAUTH_CLIENT_ID` forever until the user clears site data.
   if (event.request.mode === 'navigate' ||
-      event.request.destination === 'document' ||
-      event.request.destination === 'manifest') {
+      event.request.destination === 'document') {
     event.respondWith(
       fetch(event.request).then(function(fresh) {
         if (fresh && fresh.ok) {

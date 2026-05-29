@@ -5,7 +5,7 @@
 
 import type { Env } from "../env.js";
 import { OPEN_JOB_STATUSES } from "./jobs.js";
-import { JOB_FILE_TYPES } from "./job-files.js";
+import { JOB_FILE_DOC_TYPES_KNOWN } from "./job-files.js";
 
 const JOB_FILE_DOC_LABEL: Record<string, string> = {
   drawings: "Drawings & plans",
@@ -14,7 +14,7 @@ const JOB_FILE_DOC_LABEL: Record<string, string> = {
   receipts: "Project receipts",
   pay_stub: "Sub / pay records",
   design: "Design & finishes",
-  other: "Other",
+  other: "Miscellaneous",
 };
 
 /** Matches `src/routes/company-documents.ts` — filter for Explorer subfolders */
@@ -32,15 +32,7 @@ const COMPANY_DOC_TYPES = new Set([
   "other",
 ]);
 
-const PHOTO_CATEGORIES = new Set([
-  "before",
-  "progress",
-  "final",
-  "issue",
-  "marketing",
-  "safety",
-  "incident",
-]);
+const PHOTO_CATEGORIES = new Set(["before", "progress", "final"]);
 
 export interface FileIndexItem {
   kind: "photo" | "receipt" | "company" | "backup" | "job_file";
@@ -72,7 +64,7 @@ export async function handleFilesList(env: Env, url: URL): Promise<FileIndexItem
   const scopeJobId = (url.searchParams.get("job_id") ?? "").trim() || null;
   const jobFileDocTypeParam = url.searchParams.get("job_doc_type");
   const jobFileDocTypeFilter =
-    kind === "job_file" && jobFileDocTypeParam && JOB_FILE_TYPES.has(jobFileDocTypeParam) ?
+    kind === "job_file" && jobFileDocTypeParam && JOB_FILE_DOC_TYPES_KNOWN.has(jobFileDocTypeParam) ?
       jobFileDocTypeParam
     : null;
   const docTypeFilter =
@@ -269,7 +261,7 @@ export async function handleFilesList(env: Env, url: URL): Promise<FileIndexItem
       jfBinds.push(jobFileDocTypeFilter);
     }
     const jfSql = `SELECT jf.id, jf.job_id, jf.created_at, jf.title, jf.doc_type, jf.filename, jf.mime_type,
-         jf.notes, j.title AS job_title, j.job_number
+         jf.notes, jf.source, j.title AS job_title, j.job_number
        FROM job_files jf
        LEFT JOIN jobs j ON j.id = jf.job_id
        WHERE ${jfWhere.join(" AND ")}
@@ -287,6 +279,7 @@ export async function handleFilesList(env: Env, url: URL): Promise<FileIndexItem
         filename: string;
         mime_type: string;
         notes: string | null;
+        source: string;
         job_title: string | null;
         job_number: number | null;
       }>();
@@ -296,11 +289,12 @@ export async function handleFilesList(env: Env, url: URL): Promise<FileIndexItem
           `#${r.job_number} ${r.job_title}`
         : r.job_title || r.job_id;
       const typeLine = JOB_FILE_DOC_LABEL[r.doc_type] ?? r.doc_type;
+      const srcTag = r.source === "jobber" ? "Jobber" : null;
       const item: FileIndexItem = {
         kind: "job_file",
         id: r.id,
         title: r.title,
-        subtitle: [jobLine, typeLine, r.filename, r.notes].filter(Boolean).join(" · "),
+        subtitle: [srcTag, jobLine, typeLine, r.filename, r.notes].filter(Boolean).join(" · "),
         created_at: r.created_at,
         href: `/api/job-files/${encodeURIComponent(r.id)}/file`,
         thumb_href: r.mime_type.startsWith("image/") ? `/api/job-files/${encodeURIComponent(r.id)}/file` : null,

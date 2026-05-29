@@ -10,6 +10,7 @@
 
 import type { Env } from "../env.js";
 
+/** Allowed for new uploads and PATCH. (Legacy rows may still have `other`.) */
 export const JOB_FILE_TYPES = new Set([
   "drawings",
   "notes",
@@ -17,8 +18,10 @@ export const JOB_FILE_TYPES = new Set([
   "receipts",
   "pay_stub",
   "design",
-  "other",
 ]);
+
+/** Includes `other` for list filters and Explorer (legacy Miscellaneous). */
+export const JOB_FILE_DOC_TYPES_KNOWN = new Set([...JOB_FILE_TYPES, "other"]);
 
 function jsonErr(status: number, code: string, message?: string): Response {
   return new Response(JSON.stringify({ error: code, message: message ?? code }), {
@@ -55,7 +58,7 @@ export async function handleJobFileList(env: Env, url: URL): Promise<Response> {
     where.push("jf.job_id = ?");
     binds.push(jobId);
   }
-  if (type && JOB_FILE_TYPES.has(type)) {
+  if (type && JOB_FILE_DOC_TYPES_KNOWN.has(type)) {
     where.push("jf.doc_type = ?");
     binds.push(type);
   }
@@ -65,7 +68,9 @@ export async function handleJobFileList(env: Env, url: URL): Promise<Response> {
     binds.push(p, p, p, p);
   }
   const sql = `SELECT jf.id, jf.job_id, jf.created_at, jf.updated_at, jf.title, jf.doc_type,
-        jf.filename, jf.mime_type, jf.size_bytes, jf.notes, jf.r2_key, j.title AS job_title, j.job_number
+        jf.filename, jf.mime_type, jf.size_bytes, jf.notes, jf.r2_key,
+        jf.source, jf.jobber_attachment_id,
+        j.title AS job_title, j.job_number
      FROM job_files jf
      LEFT JOIN jobs j ON j.id = jf.job_id
      WHERE ${where.join(" AND ")}
@@ -86,6 +91,8 @@ export async function handleJobFileList(env: Env, url: URL): Promise<Response> {
       size_bytes: number;
       notes: string | null;
       r2_key: string;
+      source: string;
+      jobber_attachment_id: string | null;
       job_title: string | null;
       job_number: number | null;
     }>();
@@ -115,8 +122,9 @@ export async function handleJobFileCreate(env: Env, request: Request): Promise<R
     typeof getEntry(form, "title") === "string" ? (getEntry(form, "title") as string).trim() : "";
   if (!title) return jsonErr(400, "title_required");
   const rawType =
-    typeof getEntry(form, "doc_type") === "string" ? (getEntry(form, "doc_type") as string).trim() : "other";
-  const docType = JOB_FILE_TYPES.has(rawType) ? rawType : "other";
+    typeof getEntry(form, "doc_type") === "string" ? (getEntry(form, "doc_type") as string).trim() : "";
+  if (!JOB_FILE_TYPES.has(rawType)) return jsonErr(400, "invalid_doc_type");
+  const docType = rawType;
   const notes =
     typeof getEntry(form, "notes") === "string" ? (getEntry(form, "notes") as string).trim() || null : null;
 
@@ -137,8 +145,8 @@ export async function handleJobFileCreate(env: Env, request: Request): Promise<R
   try {
     await env.DB.prepare(
       `INSERT INTO job_files
-        (id, job_id, created_at, updated_at, title, doc_type, r2_key, filename, mime_type, size_bytes, notes, uploaded_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, job_id, created_at, updated_at, title, doc_type, r2_key, filename, mime_type, size_bytes, notes, uploaded_by, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dashboard')`,
     )
       .bind(
         id,

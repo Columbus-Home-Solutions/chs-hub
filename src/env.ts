@@ -22,11 +22,8 @@ export interface Env {
   // Location ID. Not secret — appears in HL URLs — lives in wrangler.toml [vars].
   HL_LOCATION_ID: string;
 
-  // Dashboard `index.html` — replace %%…%% at the edge (wrangler [vars]).
+  // Dashboard `index.html` — replace %%OAUTH_CLIENT_ID%% at the edge (wrangler [vars]).
   DASHBOARD_OAUTH_CLIENT_ID?: string;
-  DASHBOARD_GOOGLE_API_KEY?: string;
-  JOB_TRACKER_SHEET_ID?: string;
-  WC_SHEET_ID?: string;
 
   /** Google Shared Drive ID (API `driveId`) — optional; enables D1/R2 → Drive mirror. */
   DRIVE_SHARED_DRIVE_ID?: string;

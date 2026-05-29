@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#3D0C1F">
+<style>html{background-color:#1A0508;}body{background-color:#1A0508;color:#FFF8EC;}</style>
 <title>Files — Columbus Home Solutions</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='10' fill='%233D0C1F'/><path d='M32 10 L54 28 L54 54 L10 54 L10 28 Z' fill='none' stroke='%23F0A500' stroke-width='3.5'/></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
@@ -225,7 +226,6 @@ a.file-link:hover{text-decoration:underline;}
             <option value="receipts">Project receipts</option>
             <option value="pay_stub">Sub / pay records</option>
             <option value="design">Design &amp; finishes</option>
-            <option value="other">Miscellaneous</option>
           </select>
         </div>
         <div><div class="lbl">Notes (optional)</div><input class="inp" name="notes" placeholder="e.g. vendor, date, #"></div>
@@ -248,10 +248,6 @@ a.file-link:hover{text-decoration:underline;}
             <option value="before">Before</option>
             <option value="progress" selected>Progress</option>
             <option value="final">Final</option>
-            <option value="issue">Issue</option>
-            <option value="marketing">Marketing</option>
-            <option value="safety">Safety</option>
-            <option value="incident">Incident</option>
           </select>
         </div>
         <div style="grid-column:1/-1"><div class="lbl">Caption (optional)</div><input class="inp" id="up-jp-caption" name="caption" placeholder="e.g. Kitchen demo day 1" maxlength="500"></div>
@@ -321,7 +317,9 @@ a.file-link:hover{text-decoration:underline;}
     photoCategory: null,
     jobFileCategory: null,
     browseJobId: null,
-    browseJobLabel: null
+    browseJobLabel: null,
+    browseJobYear: null,
+    browseClientLabel: null
   };
   var lastItems = [];
   var moveItem = null;
@@ -344,8 +342,7 @@ a.file-link:hover{text-decoration:underline;}
     { id: 'contracts', label: 'Contracts' },
     { id: 'receipts', label: 'Project receipts' },
     { id: 'pay_stub', label: 'Sub / pay records' },
-    { id: 'design', label: 'Design & finishes' },
-    { id: 'other', label: 'Miscellaneous' }
+    { id: 'design', label: 'Design & finishes' }
   ];
   /* Same values as the upload <select> (company) + on-site photo categories (PWA) */
   var COMPANY_FOLDERS = [
@@ -366,11 +363,7 @@ a.file-link:hover{text-decoration:underline;}
     { id: '', label: 'All categories' },
     { id: 'before', label: 'Before' },
     { id: 'progress', label: 'Progress' },
-    { id: 'final', label: 'Final' },
-    { id: 'issue', label: 'Issue' },
-    { id: 'marketing', label: 'Marketing' },
-    { id: 'safety', label: 'Safety' },
-    { id: 'incident', label: 'Incident' }
+    { id: 'final', label: 'Final' }
   ];
 
   try {
@@ -458,6 +451,128 @@ a.file-link:hover{text-decoration:underline;}
   function clearBrowse() {
     state.browseJobId = null;
     state.browseJobLabel = null;
+    state.browseJobYear = null;
+    state.browseClientLabel = null;
+  }
+
+  function jobHubYearFromRow(j) {
+    if (!j) return String(new Date().getUTCFullYear());
+    var raw =
+      (j.start_at && j.start_at.length >= 4) ? j.start_at
+      : (j.created_at && j.created_at.length >= 4) ? j.created_at
+      : (j.synced_at && j.synced_at.length >= 4) ? j.synced_at
+      : '';
+    var y = raw.slice(0, 4);
+    if (/^\d{4}$/.test(y)) return y;
+    return String(new Date().getUTCFullYear());
+  }
+
+  function findJobInHubCaches(jobId) {
+    if (!jobId) return null;
+    var lists = [window._hubJobs, window._hubJobsArchived];
+    for (var i = 0; i < lists.length; i++) {
+      var L = lists[i];
+      if (!L || !L.length) continue;
+      for (var k = 0; k < L.length; k++) {
+        if (L[k].id === jobId) return L[k];
+      }
+    }
+    return null;
+  }
+
+  function groupJobsByYearDesc(jobList) {
+    var m = {};
+    (jobList || []).forEach(function(j) {
+      var y = jobHubYearFromRow(j);
+      if (!m[y]) m[y] = [];
+      m[y].push(j);
+    });
+    return Object.keys(m)
+      .sort(function(a, b) { return b.localeCompare(a); })
+      .map(function(y) { return { year: y, jobs: m[y] }; });
+  }
+
+  function hubShortTail(rawId, len) {
+    var id = rawId || '';
+    var alnum = id.replace(/[^a-zA-Z0-9]/g, '');
+    if (alnum.length >= len) return alnum.slice(-len);
+    var stripped = id.replace(/[^a-zA-Z0-9]/g, '');
+    if (stripped.length >= 1) return stripped.slice(-Math.min(len, stripped.length));
+    return 'id';
+  }
+
+  function hubClientFolderLabel(j) {
+    if (!j || !j.client_id) return 'Unassigned clients';
+    var human = (j.client_name || '')
+      .normalize('NFKC')
+      .replace(/[^\p{L}\p{N}\s.'&-]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 88);
+    var t = hubShortTail(j.client_id, 6);
+    if (t && t !== 'id') {
+      var suf = ' (' + t + ')';
+      if (human.endsWith(suf)) human = human.slice(0, -suf.length).trim();
+    }
+    if (!human) return 'Unknown client';
+    return human;
+  }
+
+  function hubClientTreeKey(j) {
+    return j && j.client_id ? String(j.client_id) : '_none';
+  }
+
+  function groupJobsByClientSorted(jobs) {
+    var m = {};
+    (jobs || []).forEach(function(j) {
+      var k = hubClientTreeKey(j);
+      if (!m[k]) m[k] = { key: k, label: hubClientFolderLabel(j), jobs: [] };
+      m[k].jobs.push(j);
+    });
+    return Object.keys(m)
+      .map(function(k) { return m[k]; })
+      .sort(function(a, b) {
+        return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+      })
+      .map(function(g) {
+        g.jobs.sort(function(a, b) {
+          var na = a.job_number != null ? Number(a.job_number) : -1;
+          var nb = b.job_number != null ? Number(b.job_number) : -1;
+          if (nb !== na) return nb - na;
+          return (a.title || '').localeCompare(b.title || '');
+        });
+        return g;
+      });
+  }
+
+  function isClientTreeOpen(expKey, year, clientKey) {
+    return getTreeExp()['c:' + expKey + ':' + year + ':' + clientKey] !== false;
+  }
+
+  /** Same rules as `jobSubfolderLabel` in `drive-mirror.ts` (Drive folder name = hub job label). */
+  function hubJobMirrorLabel(j) {
+    if (!j) return 'Job';
+    var rawTitle = (j.title || '')
+      .normalize('NFKC')
+      .replace(/[^\p{L}\p{N}\s.'-]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 82);
+    var hasNum = j.job_number != null && Number.isFinite(Number(j.job_number));
+    var n = hasNum ? Math.trunc(Number(j.job_number)) : null;
+    var tail = hubShortTail(j.id, 6);
+    if (n != null && rawTitle) return ('#' + n + ' ' + rawTitle).slice(0, 100);
+    if (n != null) return ('#' + n).slice(0, 100);
+    if (rawTitle) return (rawTitle + ' (' + tail + ')').slice(0, 100);
+    return ('Job ' + tail).slice(0, 100);
+  }
+
+  function jobTreeRowLabel(j) {
+    return hubJobMirrorLabel(j);
+  }
+
+  function isYearTreeOpen(expKey, year) {
+    return getTreeExp()['y:' + expKey + ':' + year] !== false;
   }
 
   function isPillOn(ks) {
@@ -466,10 +581,16 @@ a.file-link:hover{text-decoration:underline;}
     return true;
   }
 
-  function goJobPhoto(jobId, jobLabel, cat) {
+  function goJobPhoto(jobId, jobLabel, cat, jobYearOpt) {
     state.kind = 'photo';
     state.browseJobId = jobId;
     state.browseJobLabel = jobLabel;
+    var jPick = findJobInHubCaches(jobId);
+    state.browseJobYear =
+      jobYearOpt != null && jobYearOpt !== ''
+        ? String(jobYearOpt)
+        : (jPick ? jobHubYearFromRow(jPick) : String(new Date().getUTCFullYear()));
+    state.browseClientLabel = jPick ? hubClientFolderLabel(jPick) : null;
     state.photoCategory = cat || null;
     state.jobFileCategory = null;
     state.companyDocType = null;
@@ -480,10 +601,16 @@ a.file-link:hover{text-decoration:underline;}
     load();
   }
 
-  function goJobFileFolder(jobId, jobLabel, docT) {
+  function goJobFileFolder(jobId, jobLabel, docT, jobYearOpt) {
     state.kind = 'job_file';
     state.browseJobId = jobId;
     state.browseJobLabel = jobLabel;
+    var jPick = findJobInHubCaches(jobId);
+    state.browseJobYear =
+      jobYearOpt != null && jobYearOpt !== ''
+        ? String(jobYearOpt)
+        : (jPick ? jobHubYearFromRow(jPick) : String(new Date().getUTCFullYear()));
+    state.browseClientLabel = jPick ? hubClientFolderLabel(jPick) : null;
     state.jobFileCategory = docT || null;
     state.photoCategory = null;
     state.companyDocType = null;
@@ -501,7 +628,8 @@ a.file-link:hover{text-decoration:underline;}
 
   function appendOneJobUnderTree(jsub, j) {
     var jid = j.id;
-    var jn = jobLabel(j);
+    var jn = jobTreeRowLabel(j);
+    var yr = jobHubYearFromRow(j);
     var jOpen = isJobNodeOpen(jid);
     var jobWrap = document.createElement('div');
     jobWrap.className = 'ex-t-group' + (jOpen ? '' : ' is-collapsed');
@@ -522,7 +650,7 @@ a.file-link:hover{text-decoration:underline;}
     lab.textContent = jn;
     lab.addEventListener('click', function(ev) {
       ev.stopPropagation();
-            goJobFileFolder(jid, jn, 'design');
+      goJobFileFolder(jid, jn, 'design', yr);
     });
     jobRow.appendChild(c2);
     jobRow.appendChild(lab);
@@ -545,7 +673,7 @@ a.file-link:hover{text-decoration:underline;}
       t2.textContent = f.label;
       t2.addEventListener('click', function(ev) {
         ev.stopPropagation();
-        goJobPhoto(jid, jn, f.id);
+        goJobPhoto(jid, jn, f.id, yr);
       });
       pRow.appendChild(t2);
     });
@@ -566,7 +694,7 @@ a.file-link:hover{text-decoration:underline;}
       t3.textContent = f.label;
       t3.addEventListener('click', function(ev) {
         ev.stopPropagation();
-        goJobFileFolder(jid, jn, f.id);
+        goJobFileFolder(jid, jn, f.id, yr);
       });
       fRow.appendChild(t3);
     });
@@ -621,8 +749,68 @@ a.file-link:hover{text-decoration:underline;}
           : 'No completed or closed jobs yet.';
       jsub.appendChild(w1);
     } else {
-      jobList.forEach(function(j) {
-        appendOneJobUnderTree(jsub, j);
+      groupJobsByYearDesc(jobList).forEach(function(grp) {
+        var y = grp.year;
+        var yOpen = isYearTreeOpen(expKey, y);
+        var yWrap = document.createElement('div');
+        yWrap.className = 'ex-t-group' + (yOpen ? '' : ' is-collapsed');
+        var yRow = document.createElement('div');
+        yRow.className = 'ex-t1-row';
+        var yChev = document.createElement('button');
+        yChev.type = 'button';
+        yChev.className = 'ex-chev';
+        yChev.textContent = yOpen ? '▾' : '▸';
+        yChev.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          setTreeExp('y:' + expKey + ':' + y, isYearTreeOpen(expKey, y) ? false : true);
+          renderExTree();
+        });
+        var yLab = document.createElement('div');
+        yLab.className = 'ex-t1';
+        yLab.style.flex = '1';
+        yLab.style.padding = '7px 12px 7px 6px';
+        yLab.style.fontWeight = '700';
+        yLab.textContent = y;
+        yRow.appendChild(yChev);
+        yRow.appendChild(yLab);
+        yWrap.appendChild(yRow);
+        var yInner = document.createElement('div');
+        yInner.className = 'ex-t-subwrap';
+        groupJobsByClientSorted(grp.jobs).forEach(function(cg) {
+          var cKey = cg.key;
+          var cOpen = isClientTreeOpen(expKey, y, cKey);
+          var cWrap = document.createElement('div');
+          cWrap.className = 'ex-t-group' + (cOpen ? '' : ' is-collapsed');
+          var cRow = document.createElement('div');
+          cRow.className = 'ex-t1-row';
+          var cChev = document.createElement('button');
+          cChev.type = 'button';
+          cChev.className = 'ex-chev';
+          cChev.textContent = cOpen ? '▾' : '▸';
+          cChev.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            setTreeExp('c:' + expKey + ':' + y + ':' + cKey, isClientTreeOpen(expKey, y, cKey) ? false : true);
+            renderExTree();
+          });
+          var cLab = document.createElement('div');
+          cLab.className = 'ex-t1';
+          cLab.style.flex = '1';
+          cLab.style.padding = '7px 12px 7px 6px';
+          cLab.style.fontWeight = '600';
+          cLab.textContent = cg.label;
+          cRow.appendChild(cChev);
+          cRow.appendChild(cLab);
+          cWrap.appendChild(cRow);
+          var cInner = document.createElement('div');
+          cInner.className = 'ex-t-subwrap';
+          cg.jobs.forEach(function(j) {
+            appendOneJobUnderTree(cInner, j);
+          });
+          cWrap.appendChild(cInner);
+          yInner.appendChild(cWrap);
+        });
+        yWrap.appendChild(yInner);
+        jsub.appendChild(yWrap);
       });
     }
     jwrap.appendChild(jsub);
@@ -638,8 +826,16 @@ a.file-link:hover{text-decoration:underline;}
       return;
     }
     if (state.browseJobLabel && (state.kind === 'photo' || state.kind === 'job_file')) {
+      var ySeg =
+        state.browseJobYear ?
+          sp + '<strong>' + state.browseJobYear + '</strong>'
+        : '';
+      var cSeg =
+        state.browseClientLabel ?
+          sp + '<strong>' + state.browseClientLabel + '</strong>'
+        : '';
       el.innerHTML =
-        '<strong>Hub</strong>' + sp + '<strong>Jobs</strong>' + sp + '<strong>' + state.browseJobLabel + '</strong>' +
+        '<strong>Hub</strong>' + sp + '<strong>Jobs</strong>' + ySeg + cSeg + sp + '<strong>' + state.browseJobLabel + '</strong>' +
         (function() {
           if (state.kind === 'photo' && state.photoCategory) {
             var pf = PHOTO_FOLDERS.find(function(x) { return x.id === state.photoCategory; });
@@ -763,7 +959,8 @@ a.file-link:hover{text-decoration:underline;}
     nav.appendChild(lbl);
     var note = document.createElement('div');
     note.className = 'ex-t-note';
-    note.textContent = '“All files” is the top folder — expand it to open Company, Jobs, General photos, and the rest. “General” = photos not on a job.';
+    note.textContent =
+      '“All files” is the top folder — expand it to open Company, Jobs (by year → customer → #job number), General photos, and the rest. Matches the Drive mirror under Jobs/. “General” = photos not on a job.';
     nav.appendChild(note);
     var exp = getTreeExp();
     var jobsOpen = window._hubJobs;
@@ -989,10 +1186,7 @@ a.file-link:hover{text-decoration:underline;}
   }
 
   function jobLabel(j) {
-    var num = j.job_number != null ? '#' + j.job_number : '';
-    var t = (j.title || j.id || '').trim();
-    var extra = j.client_name ? ' — ' + j.client_name : '';
-    return (num ? num + ' ' : '') + t + extra;
+    return hubJobMirrorLabel(j);
   }
 
   function canCopyShareableLink(it) {
@@ -1802,6 +1996,8 @@ a.file-link:hover{text-decoration:underline;}
         state.kind = 'photo';
         state.browseJobId = jobId;
         state.browseJobLabel = lab;
+        state.browseJobYear = jobHubYearFromRow(findJobInHubCaches(state.browseJobId));
+        state.browseClientLabel = hubClientFolderLabel(findJobInHubCaches(state.browseJobId));
         state.photoCategory = cat;
         state.jobFileCategory = null;
         renderKinds();
@@ -1845,6 +2041,8 @@ a.file-link:hover{text-decoration:underline;}
         state.kind = 'job_file';
         state.browseJobId = jid || null;
         state.browseJobLabel = lab;
+        state.browseJobYear = jobHubYearFromRow(findJobInHubCaches(state.browseJobId));
+        state.browseClientLabel = hubClientFolderLabel(findJobInHubCaches(state.browseJobId));
         state.jobFileCategory = (fd.get('doc_type') && String(fd.get('doc_type'))) || 'design';
         state.photoCategory = null;
         renderKinds();

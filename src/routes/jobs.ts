@@ -33,6 +33,7 @@ export interface JobRow {
   source: string | null;
   created_at: string | null;
   start_at: string | null;
+  synced_at: string | null;
   completed_at: string | null;
   total: number; // job.total from Jobber
   invoiced: number; // SUM(invoices.total) excluding BAD_DEBT
@@ -71,6 +72,7 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
        j.source,
        j.created_at,
        j.start_at,
+       j.synced_at,
        j.completed_at,
        COALESCE(j.total, 0) AS total,
        COALESCE((
@@ -123,6 +125,7 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
     source: string | null;
     created_at: string | null;
     start_at: string | null;
+    synced_at: string | null;
     completed_at: string | null;
     total: number;
     invoiced: number;
@@ -149,6 +152,7 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
       source: r.source,
       created_at: r.created_at,
       start_at: r.start_at,
+      synced_at: r.synced_at,
       completed_at: r.completed_at,
       total: round2(r.total),
       invoiced: round2(r.invoiced),

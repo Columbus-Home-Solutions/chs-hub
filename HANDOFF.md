@@ -2,15 +2,44 @@
 
 > **For Tony:** Open Cursor on `~/projects/chs-hub`, start a brand new chat, and paste the contents of this file as your first message. Then say _"Read HANDOFF.md and confirm you're caught up. I want to work on **&lt;X&gt;** today."_
 
-> **For the next AI session:** This is the source of truth for project state as of **Apr 26, 2026**. Trust this over any older context. The previous chat (where the dashboard rebuild happened) was archived because it had become unwieldy. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
+> **For the next AI session:** This is the source of truth for project state as of **May 11, 2026**. Trust this over any older context. The previous chat (where the dashboard rebuild happened) was archived because it had become unwieldy. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
 
 ### Next session — do in this order (Tony + agent)
 
-1. **Gmail quick link (first)** — In `dashboard/index.html`, the Gmail tile uses `gmailQuickLink` and optional `localStorage` key `chs_gmail_quick_url` (full `https://` URL; `setItem` returns `undefined` in the console — that is normal). Finish any follow-up: verify desktop/mobile behavior, document if we change anything, or close it out. **Do this before Drive mirror.**
-2. **Google Drive mirror (ground zero)** — After (1), follow **`docs/drive-mirror-resume.md`** (Worker secrets/vars, Google Shared Drive, then `GET` / `POST` `/api/ops/drive-mirror`).
-3. **Dashboard “Connect Google” (in-app OAuth)** — Set **`DASHBOARD_OAUTH_CLIENT_ID`** on the **chs-hub** Worker (**Settings → Variables**); add **`DASHBOARD_GOOGLE_API_KEY`**, **`JOB_TRACKER_SHEET_ID`**, **`WC_SHEET_ID`** as needed per **`docs/google-oauth-dashboard.md`**. In Google Cloud, OAuth **Web client**: authorized JS origin + redirect **`https://dashboard.homesolutionsar.com`**. Redeploy if required, hard refresh; **View Source** should show a real `*.apps.googleusercontent.com`, not empty/`%%…%%`.
+1. **Confirm production Worker** — After **May 11** changes: **`npm run deploy`** so **`[limits]`** (`cpu_ms`, `subrequests`) and Drive stub batch = **4** are live. Inspect **`sync_log`** / **`npm run tail`** after **`*/30`** or manual **`POST /api/sync/jobber`** (Jobber attachments, throttle retries, no **`Exceeded CPU Limit`** / **`Too many subrequests`** storm).
+2. **Drive mirror** — **`docs/drive-mirror-resume.md`**: new **SITE PHOTOS / PROJECT FILES** paths; stub queue drains **4 jobs/hour** from empty-tree pass (raise batch later if needed and limits allow).
+3. **Jobber financial PDFs** — GraphiQL → real PDF/signed URL → implement **`financial-pdfs-ingest.ts`** (`contracts` / `pay_stub`).
+
+**Done (May 2026) — do not re-queue:** **Gmail quick link** — Dashboard tile uses **`gmailQuickLink`** in **`dashboard/index.html`** (optional **`localStorage`** key **`chs_gmail_quick_url`** for a custom **`https://`** inbox URL). **Verified working** (opens Gmail) May 2026.
+
+**Also done (May 2026):** Dashboard **Connect Google** — **Google Identity Services** token client, scopes **Calendar (readonly)** + **Tasks** only; **`DASHBOARD_OAUTH_CLIENT_ID`** in **`wrangler.toml` `[vars]`** (must match **Web application** Client ID in Google Cloud **exactly**). Legacy browser **Sheets** reads removed; KPIs = **`/api/kpis`**, notes = **`/api/notes`**. See **`docs/google-oauth-dashboard.md`** and **Recently fixed — Dashboard OAuth, Sheets cleanup & header (May 2026)** below.
+
+**Also done (May 2026):** **Hub Files** (`/files`, **`dashboard/files.html`**) — **Upload from computer** via the sidebar: **job project files** (`POST /api/job-files`), **company documents**, and **on-site photos** (image file picker). List + Explorer browse, shareable links when **`FILE_LINK_SECRET`** is set.
+
+### Shipped — evening **May 11, 2026** (Jobber attachments, Hub Files tree, Drive mirror, Worker limits)
+
+- **Jobber → Hub note attachments:** GraphQL uses **`JobNote.fileAttachments`** and **`JobNoteFile`** fields **`id` / `fileName` / `url`** (not `noteAttachments` / `name` / `mimeType`). Downloads → R2 → **`job_files`** (`source = jobber`, **`jobber_attachment_id`**). **`src/lib/jobber/job-files-ingest.ts`**, **`queries.ts`**, **`sync.ts`** (`jobber_job_files_written`, **`upsertJob`** passes token). Cron log includes **`jobber_full: … jobber files …`** (`src/index.ts`).
+- **Jobber client:** Throttle retries now match **message** **“Throttled”**, not only `extensions.code`; more retries + backoff; **~450ms** pause between GraphQL pages (`src/lib/jobber/client.ts`, **`sync.ts`**).
+- **Hub Files / Capture:** Job folders drop **Issue, Marketing, Safety, Incident** (photos) and **Miscellaneous** (project files). API: **`photos`** categories = **before | progress | final**; **`job_files`** uploads no longer accept **`other`** (legacy rows still list). **Capture PWA** category grid matches (**`dashboard/capture/index.html`**).
+- **Drive mirror:** Per-job layout under **`Jobs/<year>/<client>/<#N title>/`** now uses **`SITE PHOTOS/`** (Before, Progress, Final) and **`PROJECT FILES/`** (hub-aligned subfolders). Job-linked **expense receipts** → **Project receipts**. **`mirrorJobFolderStubsBatch`** = **4 jobs/run** to avoid **“Too many subrequests”** during bursts (`src/lib/ops/drive-mirror.ts`).
+- **`wrangler.toml` `[limits]`:** **`subrequests = 10000`**, **`cpu_ms = 300000`** (5 min CPU cap) — addresses **drive_mirror** subrequest errors and **`*/30` cron `Exceeded CPU Limit`** during heavy **Jobber + WC** runs. **Requires deploy**; limits apply per account usage model (see Cloudflare docs).
+- **Docs:** **`docs/drive-mirror-resume.md`** updated for new tree + Jobber PDF caveat; **`docs/ops-post-session-checklist.md`** — ops steps after a long sync.
+- **Jobber quote/invoice PDFs → contracts / pay_stub:** **`src/lib/jobber/financial-pdfs-ingest.ts`** is a **stub** — **`previewUrl`** removed from API; needs **GraphiQL**-confirmed PDF URL field before wiring.
+
+**Still to verify after deploy (Tony):** **`npm run deploy`**, optional **`SYNC_TRIGGER_SECRET`** rotation if exposed, **`POST …/api/sync/jobber`** on **`*.workers.dev`**, check **`sync_log`** / **`npm run tail`** (throttle lines OK; watch for CPU/subrequest errors). **Very long** interactive **`curl`** can hit **HTTP/proxy timeouts** at the edge even when the Worker is busy — if the client gives up, prefer **`*/30`** cron or rerun **`curl`**; confirm with **`sync_log`** what finished.
 
 **Optional Access polish is deliberately last** — see the final bullet under **Backlog** (global session is already **30 days**).
+
+### Recently fixed — Dashboard OAuth, Sheets cleanup & header (May 2026)
+
+- **Removed legacy dashboard → Google Sheets usage in the browser:** Job Tracker / WC KPI ranges / Smart Notes tab reads and related **`sheets.googleapis.com`** calls were deleted from **`dashboard/index.html`**. **Business Pulse + KPI tiles** use **`window.chsFetchKpis` → `GET /api/kpis`** (D1/Jobber path). **Smart Notes** use **`/api/notes`** (D1). Server-side **WC workbook export** (`src/lib/wc/sync.ts` + service account) is unchanged.
+- **Worker injection:** **`src/lib/dashboard-inject.ts`** only replaces **`%%OAUTH_CLIENT_ID%%`** from **`DASHBOARD_OAUTH_CLIENT_ID`**. Removed optional env bindings **`DASHBOARD_GOOGLE_API_KEY`**, **`JOB_TRACKER_SHEET_ID`**, **`WC_SHEET_ID`** from **`src/env.ts`** (dashboard no longer uses them). **`wrangler deploy`** should carry **`DASHBOARD_OAUTH_CLIENT_ID`** in **`wrangler.toml` `[vars]`** so production never injects an empty client ID.
+- **OAuth flow:** **Google Identity Services** (`accounts.google.com/gsi/client`, **`initTokenClient`** / popup). Scopes: **`calendar.readonly`** + **`tasks`** only (no Gmail/Sheets browser scopes; **Drive** removed from OAuth for simpler consent — **meeting import from Drive** stays **403** until **`drive.readonly`** is re-added after verification). **`loadMeetingFile`** uses **`oauthToken`** (fixed broken **`chs_google_token`**).
+- **Client ID:** **`401 invalid_client`** was a **wrong/mistyped** Web Client ID vs **`wrangler.toml`**; production ID must match **Google Cloud → chs-hub → Clients → Web application** character-for-character.
+- **Cloudflare Access + PWA:** Service worker does **not** intercept **`manifest`** requests (avoids Access redirect → CORS → bogus **503**). **`dashboard/sw.js`** cache id evolves with fixes (**`chs-dashboard-v8`** as of May 2026).
+- **Header UX:** OAuth control stays **32×32**; connected = **green circle + ✓** (desktop + mobile shell).
+- **FOUC:** **`theme.css`** sets **`html`** background + **`color-scheme: dark`**; critical inline dark **`html`/`body`** before **`theme.css`** on main dashboard pages (see **Backlog**).
+- **Health:** **`GET /health`** includes **`dashboard_oauth_client_id_configured`** (boolean).
 
 ### Recently fixed — dashboard “Sync Now” (May 2026)
 
@@ -18,14 +47,14 @@ The dashboard **Sync Now** / **`POST /api/sync/now`** path was failing for many 
 
 ### Backlog — dashboard polish & reliability (later)
 
-- **Worker vars / Google OAuth** — Confirm production **`DASHBOARD_OAUTH_CLIENT_ID`** (and related dashboard `[vars]`) are set so Connect Google works; see `docs/google-oauth-dashboard.md`. Empty injection ⇒ broken OAuth.
-- **Monthly revenue tile** — Often empty; **probably tied to data freshness / KPI fetch** (D1, `/api/kpis`, or sheet-backed ranges); verify after a successful Jobber sync and WC sync (see **Recently fixed — Sync Now** above).
-- **Live KPI tiles + Business Pulse** — **Numbers not populating** (or stuck blank/spinners); investigate **`GET /api/kpis`**, D1 freshness after Jobber sync, dashboard **`chsFetchKpis`** / local cache, Cloudflare Access / SW interception, and any **Sheets-backed** pulse sections vs API-backed tiles.
-- **Theme / CSS flash or missing styles** — Sometimes **white background** and wrong fonts/colors until **hard refresh**; affects **main dashboard and subpages** (`jobs.html`, `notes.html`, etc.). Suspects: `theme.css` load order, caching, service worker, or FOUC — reproduce and fix so first paint matches the dark scheme reliably.
+- **OAuth client ID hygiene** — Keep **`DASHBOARD_OAUTH_CLIENT_ID`** in **`wrangler.toml`** in sync with **Google Cloud → Clients → Web application** (copy/paste). After **`wrangler deploy`**, **View Source** should show the same **`*.apps.googleusercontent.com`**. Details: **`docs/google-oauth-dashboard.md`**.
+- **Monthly revenue tile** — Often empty; **probably tied to data freshness / KPI fetch** (D1, `/api/kpis`); verify after a successful Jobber sync and WC server-side sync (see **Recently fixed — Sync Now** above).
+- **Live KPI tiles + Business Pulse** — **Numbers not populating** (or stuck blank/spinners); investigate **`GET /api/kpis`**, D1 freshness after Jobber sync, dashboard **`chsFetchKpis`** / local cache, Cloudflare Access / SW interception.
+- **Theme / CSS flash or missing styles** — Mitigated May 2026: `dashboard/theme.css` sets `html` background + `color-scheme: dark`; critical inline dark `html`/`body` in `index.html`, `jobs.html`, `notes.html`, `subs.html`, `files.html` before `theme.css` to cut white FOUC. Report if any route still flashes.
 - **PDFs in the dashboard file system** — **Open / preview PDFs** from the hub file UI (inline viewer, new tab, or signed URL) instead of only download-or-unknown behavior.
 - **Spreadsheet-native flows for docs** — **Open compatible files in Google Sheets** (or similar): upload/import path, “Open with…” link, or explicit export so operational docs aren’t stuck as opaque blobs in R2-only workflows.
 - **External hard drive backup** — **Second-line backup** of the file corpus (and/or D1 export bundles) to a **local external drive** — operator-run script, scheduled Mac job, or documented rsync from existing R2/nightly NDJSON exports; complementary to cloud mirror + R2.
-- **Upload workflow / Finder on Mac** — **File-explorer-style** dashboard UX to speed up **document uploads**; include a path to **open Finder** at a standard local folder (drag-drop, `<input webkitdirectory>` where useful). *Browsers cannot spawn Finder directly* — document a **Shortcuts / AppleScript one-liner** or tiny local helper if needed.
+- **Bulk / Finder-centric upload (optional)** — **Multi-file or whole-folder** picks from the desktop (`<input webkitdirectory>` or multi-select), **open Finder** at a standard “inbox” folder, or a documented **Shortcuts / AppleScript** helper. *Basic single-file upload from computer is already on* **`/files`** *— this item is only for heavier drag-drop / bulk workflows.*
 - **CHS Capture PWA** (`/capture/`) — **Test, harden, and clean up:** real-device QA (iOS install, multi-job uploads, offline/Background Sync drain, expense + voice flows), fix rough edges and duplicate/confusing UX, align with **`docs/01-file-system.md`** deferred items; see TL;DR **Photos system** / native expense **Remaining follow-up** for Jobber write-back gaps.
 - **Social media product** — **Implement the planned social workflow** (monthly plan generation, dashboard surfacing, copy-to-Metricool handoff, later phases per **`docs/03-social-media.md`** and architecture **Session 8a+** in **`docs/00-architecture.md`**). Photos/PWA foundation is already in production; remaining blockers are mostly **product choices + API keys + build time**.
 - **Cloudflare Access — optional polish (tackle last, after everything else)** — **Global session duration is already 30 days** (Tony; email/OTP re-auth at most about monthly unless cookies cleared or multi-device edge cases). **Defer:** add **Google** as an IdP if OTP alone is still annoying (separate from in-app **Connect Google**); revisit app/policy **session overrides**, cookie blockers, or a **crew-only** Access app for `/capture/*` (see TL;DR **Open decisions**).
@@ -38,7 +67,7 @@ We are deep into **Phase 7** of the original migration playbook (the "dashboard 
 
 - The Cloudflare Worker backend (Jobber sync + KPIs + drill routes + WC workbook auto-export + HighLevel proxy + Smart Notes API + Jobs API + Subcontractor API)
 - The D1 database (jobs, invoices, line_items, payments, expenses, quotes, notes, subcontractors, sync_dead_letters)
-- The static dashboard frontend (vanilla HTML/CSS/JS served from Cloudflare Pages at `dashboard.homesolutionsar.com`)
+- The static dashboard frontend (vanilla HTML/CSS/JS served from the **`chs-hub`** Worker as static assets at `dashboard.homesolutionsar.com`)
 - The Cloudflare Pages docs site (`docs.homesolutionsar.com`)
 - A reliability subsystem (heartbeat alerts, dead-letter queue, nightly D1→R2 backup, daily summary email — see "Reliability subsystem" below)
 
@@ -67,9 +96,9 @@ The dashboard is **live, in daily use, and stable**. The Jobber → D1 pipeline 
                   every 30 min   │         │  every request
                                  ▼         ▼
                        ┌──────────────┐  ┌──────────────────────┐
-                       │ Wealthy      │  │ Dashboard frontend   │
-                       │ Contractor   │  │ (Cloudflare Pages)   │
-                       │ Google Sheet │  │ dashboard.homesol... │
+                       │ Wealthy      │  │ Dashboard (HTML/CSS/ │
+                       │ Contractor   │  │ JS via chs-hub       │
+                       │ Google Sheet │  │ dashboard.homesol…   │
                        └──────────────┘  └──────────────────────┘
 
                        ┌──────────────────────┐
@@ -92,7 +121,7 @@ The dashboard is **live, in daily use, and stable**. The Jobber → D1 pipeline 
 - Dashboard: `https://dashboard.homesolutionsar.com`
 - Worker (raw, not behind Access): `https://chs-hub.tony-bc5.workers.dev`
 - Docs: `https://docs.homesolutionsar.com`
-- Wealthy Contractor sheet: hardcoded in `dashboard/index.html`
+- Wealthy Contractor Google Sheet: updated by **Worker cron / sync** (`src/lib/wc/sync.ts` + service account), **not** by the browser dashboard
 - HighLevel location ID: `lZ8L8FAf6K2niuHoFbaw`
 - Resend dashboard: `https://resend.com/domains` (sending domain `send.homesolutionsar.com`)
 

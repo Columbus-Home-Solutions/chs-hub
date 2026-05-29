@@ -26,15 +26,7 @@
 
 import type { Env } from "../env.js";
 
-const VALID_CATEGORIES = new Set([
-  "before",
-  "progress",
-  "final",
-  "issue",
-  "marketing",
-  "safety",
-  "incident",
-]);
+const VALID_CATEGORIES = new Set(["before", "progress", "final"]);
 
 // Keep in sync with OPEN_JOB_STATUSES in src/routes/jobs.ts. Duplicated
 // here (and not imported) because that file's list lives next to a much

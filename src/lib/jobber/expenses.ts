@@ -128,7 +128,7 @@ export async function pushExpenseToJobber(
     result = await jobberQuery<ExpenseCreateResult>(
       token,
       EXPENSE_CREATE_MUTATION,
-      { variables: { input } },
+      { variables: { input }, env },
     );
   } catch (err) {
     return { ok: false, error: (err as Error).message };

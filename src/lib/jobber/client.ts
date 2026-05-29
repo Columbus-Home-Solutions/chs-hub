@@ -1,9 +1,14 @@
+import type { Env } from "../../env.js";
+import { getAccessToken } from "./auth.js";
+
 /**
  * Low-level Jobber GraphQL client with throttle-aware retries.
  *
  * Mirrors the retry strategy from chs-dashboard/jobber_sync.py:
- *   - On THROTTLED errors, prefer Jobber's own throttleStatus hint to compute
- *     the exact wait time (requestedQueryCost - currentlyAvailable) / restoreRate
+ *   - Detect throttle by `extensions.code` and/or message text (Jobber often
+ *     returns `"Throttled"` without `THROTTLED` in extensions).
+ *   - On throttle, prefer Jobber's `throttleStatus` hint:
+ *     (requestedQueryCost - currentlyAvailable) / restoreRate
  *   - Fall back to exponential backoff when hints aren't present
  *   - Cap waits at 5 min to avoid runaway loops
  */
@@ -61,9 +66,23 @@ function computeThrottleWaitMs(errors: JobberError[], fallbackMs: number): numbe
   return fallbackMs;
 }
 
+/** Jobber sometimes returns message "Throttled" without `extensions.code === "THROTTLED"`. */
+function isThrottledError(e: JobberError): boolean {
+  const code = e.extensions?.code?.toUpperCase();
+  if (code === "THROTTLED") return true;
+  return /\bthrottl/i.test(e.message ?? "");
+}
+
 interface QueryOptions {
   variables?: Record<string, unknown>;
   maxRetries?: number;
+  /**
+   * When set, HTTP 401 from GraphQL (expired access token mid-sync) triggers
+   * `getAccessToken(env)` and retries. Long full syncs exceed ~60m JWT TTL.
+   */
+  env?: Env;
+  /** If set, `current` is overwritten whenever a fresh token is obtained. */
+  tokenOut?: { current: string };
 }
 
 export async function jobberQuery<T>(
@@ -71,14 +90,18 @@ export async function jobberQuery<T>(
   query: string,
   opts: QueryOptions = {},
 ): Promise<T> {
-  const { variables, maxRetries = 5 } = opts;
-  let backoffMs = 15_000;
+  const { variables, maxRetries = 12, env, tokenOut } = opts;
+  let token = accessToken;
+  if (tokenOut) tokenOut.current = token;
+  let backoffMs = 20_000;
+  let authRefreshAttempts = 0;
+  const maxAuthRefresh = 4;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const res = await fetch(JOBBER_API, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${accessToken}`,
+        authorization: `Bearer ${token}`,
         "content-type": "application/json",
         "x-jobber-graphql-version": API_VERSION,
       },
@@ -87,6 +110,20 @@ export async function jobberQuery<T>(
 
     if (!res.ok) {
       const body = await res.text();
+      if (
+        res.status === 401 &&
+        env &&
+        authRefreshAttempts < maxAuthRefresh &&
+        /expired|invalid|unauthorized|access token/i.test(body)
+      ) {
+        authRefreshAttempts++;
+        console.log(
+          `[jobber] HTTP ${res.status} — refreshing access token (auth retry ${authRefreshAttempts}/${maxAuthRefresh})`,
+        );
+        token = await getAccessToken(env);
+        if (tokenOut) tokenOut.current = token;
+        continue;
+      }
       throw new JobberClientError(
         `Jobber HTTP ${res.status}: ${body.slice(0, 300)}`,
       );
@@ -94,7 +131,7 @@ export async function jobberQuery<T>(
 
     const payload = (await res.json()) as JobberResponse<T>;
     const errors = payload.errors ?? [];
-    const throttled = errors.some((e) => e.extensions?.code === "THROTTLED");
+    const throttled = errors.some(isThrottledError);
 
     if (throttled && attempt < maxRetries) {
       const waitMs = computeThrottleWaitMs(errors, backoffMs);
@@ -120,5 +157,7 @@ export async function jobberQuery<T>(
     return payload.data;
   }
 
-  throw new JobberClientError("Jobber query exhausted retries while throttled");
+  throw new JobberClientError(
+    "Jobber rate limit: still throttled after retries — wait a few minutes and run sync again",
+  );
 }

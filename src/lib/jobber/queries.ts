@@ -161,6 +161,27 @@ export const JOBS_PAGE_QUERY = /* GraphQL */ `
             amounts { depositAmount }
           }
         }
+        noteAttachments(first: 25) {
+          nodes {
+            id
+            fileName
+            url
+          }
+        }
+        notes(first: 12) {
+          nodes {
+            __typename
+            ... on JobNote {
+              fileAttachments(first: 15) {
+                nodes {
+                  id
+                  fileName
+                  url
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

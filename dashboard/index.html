@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+  <!-- Critical shell colors before theme.css — reduces white flash (FOUC) on slow/cache misses -->
+  <style>html{background-color:#1A0508;}body{background-color:#1A0508;color:#FFF8EC;}</style>
   <meta http-equiv="cache-control" content="no-cache">
   <meta http-equiv="expires" content="0">
   <meta http-equiv="pragma" content="no-cache">
@@ -20,6 +22,7 @@
 <title>Columbus Home Solutions — Command Center</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='10' fill='%233D0C1F'/><path d='M32 10 L54 28 L54 54 L10 54 L10 28 Z' fill='none' stroke='%23F0A500' stroke-width='3.5'/><path d='M32 10 L58 30' stroke='%23F0A500' stroke-width='3' stroke-linecap='round'/><path d='M32 10 L6 30' stroke='%23F0A500' stroke-width='3' stroke-linecap='round'/><rect x='24' y='36' width='16' height='18' rx='2' fill='%23F0A500'/></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="stylesheet" href="/theme.css">
 <style>
 /* HEADER */
@@ -28,8 +31,45 @@ header{position:relative;z-index:10;background:linear-gradient(135deg,var(--burg
 .logo{height:54px;width:54px;object-fit:contain;}
 .bn{font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:2px;color:var(--gold);text-shadow:0 0 18px rgba(240,165,0,.4);}
 .bt{font-size:10px;color:var(--orange-lt);letter-spacing:3px;text-transform:uppercase;font-weight:700;}
-.hr{display:flex;align-items:center;gap:18px;}
+.hr{display:flex;align-items:center;gap:18px;flex-wrap:nowrap;}
 #clk-t{font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--gold);letter-spacing:2px;text-align:right;}
+/* Header — Google OAuth: 32px circle; Google icon when disconnected, green ✓ when connected */
+.oauth-btn{
+  flex-shrink:0;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  box-sizing:border-box;
+  background:rgba(66,133,244,.12);
+  border:1px solid rgba(66,133,244,.4);
+  padding:0;
+  width:32px;
+  height:32px;
+  border-radius:50%;
+  cursor:pointer;
+  transition:background .2s,border-color .2s;
+  font-family:'Nunito',sans-serif;
+  line-height:1;
+  color:#8ab4f8;
+}
+.oauth-btn:hover{background:rgba(66,133,244,.28);}
+.oauth-btn .oauth-btn-glogo{display:flex;align-items:center;justify-content:center;}
+.oauth-btn .oauth-btn-glogo svg{display:block;}
+.oauth-btn.oauth-connected{
+  background:rgba(82,192,122,.22)!important;
+  border-color:rgba(82,192,122,.5)!important;
+  color:var(--green)!important;
+}
+.oauth-btn.oauth-connected:hover{background:rgba(82,192,122,.34)!important;}
+.oauth-btn.oauth-connected .oauth-check{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:16px;
+  font-weight:800;
+  line-height:1;
+}
+.oauth-btn.oauth-connected .oauth-btn-glogo{display:none;}
 #clk-d{font-size:11px;color:var(--muted);text-align:right;}
 .rfb{background:rgba(240,165,0,.14);border:1px solid rgba(240,165,0,.4);color:var(--gold);padding:7px 14px;border-radius:8px;cursor:pointer;font-family:'Nunito',sans-serif;font-size:12px;font-weight:700;transition:all .2s;}
 .rfb:hover{background:rgba(240,165,0,.28);}
@@ -245,8 +285,7 @@ main{position:relative;z-index:1;padding:14px 18px 20px;max-width:1800px;width:1
   .hr{gap:8px;}
   #clk-t{font-size:20px;}
   #clk-d{font-size:9px;}
-  #oauth-connect-btn span:not(svg){display:none;}
-  #oauth-connect-btn{padding:6px 10px;}
+  .oauth-btn{width:32px;height:32px;}
 
   /* Weather bar — compact */
   .wbar{padding:5px 14px;gap:10px;flex-wrap:wrap;}
@@ -369,8 +408,8 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
   </div>
   <div class="hr">
     <div><div id="clk-t">--:--:--</div><div id="clk-d">Loading...</div></div>
-    <button id="oauth-connect-btn" onclick="connectGoogle()" title="Connect Google" aria-label="Connect Google" style="background:rgba(66,133,244,.12);border:1px solid rgba(66,133,244,.4);padding:0;border-radius:50%;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center;transition:all .2s;" onmouseover="this.style.background='rgba(66,133,244,.28)'" onmouseout="this.style.background='rgba(66,133,244,.12)'">
-      <svg width="15" height="15" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+    <button type="button" id="oauth-connect-btn" class="oauth-btn" onclick="connectGoogle()" title="Connect Google" aria-label="Connect Google">
+      <span class="oauth-btn-glogo" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg></span>
     </button>
     <button class="hub-sync" id="hub-sync-now" title="Sync Now — pull the latest jobs/invoices/payments from Jobber (instead of waiting for the next 30-min cron)" aria-label="Sync Now"><span class="syni">🔄</span></button>
     <button class="rfb" onclick="refreshAll()" title="Refresh" aria-label="Refresh" style="padding:0;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;">⟳</button>
@@ -732,7 +771,9 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
     </div>
     <div class="ma-clock"><div id="ma-clk-t">--:--</div><div id="ma-clk-d">—</div></div>
     <div class="ma-top-actions">
-      <button id="oauth-connect-btn-ma" onclick="connectGoogle()" style="background:rgba(66,133,244,.15);border:1px solid rgba(66,133,244,.4);color:#6ab0f5;padding:6px 10px;border-radius:8px;cursor:pointer;font-weight:700;font-size:11px;">Google</button>
+      <button type="button" id="oauth-connect-btn-ma" class="oauth-btn" onclick="connectGoogle()" title="Connect Google" aria-label="Connect Google">
+        <span class="oauth-btn-glogo" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg></span>
+      </button>
       <button class="rfb" onclick="refreshAll()">⟳</button>
     </div>
   </header>
@@ -868,14 +909,14 @@ document.addEventListener('DOMContentLoaded',function(){tick();});
 
 <script>
 var OAUTH_CLIENT_ID='%%OAUTH_CLIENT_ID%%';
+// Calendar + Tasks only. (drive.readonly is “sensitive” and Google often blocks unverified apps;
+// meeting import from Drive needs that scope — use paste-in / file until OAuth app is verified.)
 var OAUTH_SCOPES=[
   'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/tasks',
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/drive.readonly'
+  'https://www.googleapis.com/auth/tasks'
 ].join(' ');
 
+var _chsTokenClient=null;
 var oauthToken=null;
 var oauthExpiry=null;
 
@@ -902,6 +943,7 @@ function saveToken(token,expiresIn){
 
 function clearToken(){
   oauthToken=null;oauthExpiry=null;
+  _chsTokenClient=null;
   localStorage.removeItem('chs_oauth');
 }
 
@@ -911,7 +953,7 @@ function isAuthenticated(){return oauthToken&&Date.now()<oauthExpiry;}
 // Auth headers for all Google API calls
 function authHeaders(){return{'Authorization':'Bearer '+oauthToken,'Content-Type':'application/json'};}
 
-// Launch OAuth (implicit flow — token in URL hash on return to this exact origin)
+// Google sign-in via Identity Services (token client). Avoids legacy implicit redirect issues.
 function connectGoogle(){
   var cid=String(OAUTH_CLIENT_ID||'').trim();
   if(!cid){
@@ -920,17 +962,51 @@ function connectGoogle(){
     );
     return;
   }
-  var redirectUri=window.location.origin;
-  var params=new URLSearchParams({
-    client_id:OAUTH_CLIENT_ID,
-    redirect_uri:redirectUri,
-    response_type:'token',
-    scope:OAUTH_SCOPES,
-    include_granted_scopes:'true',
-    prompt:'consent'
-  });
-  // Full page redirect instead of popup — bypasses all popup blockers
-  window.location.href='https://accounts.google.com/o/oauth2/v2/auth?'+params.toString();
+  if(cid.indexOf('%%')!==-1){
+    alert(
+      'OAuth client ID was not injected (placeholder still in the page). Set DASHBOARD_OAUTH_CLIENT_ID on the chs-hub Worker, deploy, hard-refresh. If it persists: DevTools → Application → Service Workers → Unregister, reload, then View Source and search for OAUTH_CLIENT_ID — it should be your *.apps.googleusercontent.com value, not %%…%%.'
+    );
+    return;
+  }
+  function runGsi(){
+    if(typeof google==='undefined'||!google.accounts||!google.accounts.oauth2){
+      alert('Google sign-in script is still loading. Wait a few seconds and try again.');
+      return;
+    }
+    if(!_chsTokenClient){
+      _chsTokenClient=google.accounts.oauth2.initTokenClient({
+        client_id:cid,
+        scope:OAUTH_SCOPES,
+        callback:function(resp){
+          if(resp.error){
+            if(resp.error==='popup_closed_by_user')return;
+            alert('Google sign-in: '+(resp.error_description||resp.error)+'\n\nIf it says Access blocked: in Google Cloud → OAuth consent screen, add your email under Test users (Testing), or publish the app. See docs/google-oauth-dashboard.md.');
+            return;
+          }
+          if(resp.access_token){
+            saveToken(resp.access_token,parseInt(String(resp.expires_in||3600),10));
+            onOAuthConnected();
+          }
+        }
+      });
+    }
+    _chsTokenClient.requestAccessToken({prompt:'consent'});
+  }
+  if(typeof google!=='undefined'&&google.accounts&&google.accounts.oauth2){
+    runGsi();
+    return;
+  }
+  var tries=0;
+  var t=setInterval(function(){
+    tries++;
+    if(typeof google!=='undefined'&&google.accounts&&google.accounts.oauth2){
+      clearInterval(t);
+      runGsi();
+    }else if(tries>80){
+      clearInterval(t);
+      alert('Could not load Google sign-in (accounts.google.com/gsi/client). Check ad blockers or network, then reload.');
+    }
+  },50);
 }
 
 
@@ -951,7 +1027,7 @@ window.onerror=function(msg,src,line,col,err){
   }
   // Also update the connect button if it's still in its default state
   var btn=document.getElementById('oauth-connect-btn');
-  if(btn&&(btn.textContent.indexOf('Connect')!==-1||btn.textContent.indexOf('Google')!==-1)){
+  if(btn&&!btn.classList.contains('oauth-connected')){
     btn.title='JS Error at line '+line+': '+msg+'\nOpen DevTools (F12) → Console for details';
     btn.style.borderColor='rgba(224,82,82,.7)';
   }
@@ -987,7 +1063,6 @@ function gmailQuickLink(e){
 }
 
 // ── WEATHER ──────────────────────────────────────────
-var WC_SHEET_ID='%%WC_SHEET_ID%%';
 var WI={0:'☀️',1:'🌤',2:'⛅',3:'☁️',45:'🌫',48:'🌫',51:'🌦',53:'🌦',55:'🌧',61:'🌧',63:'🌧',65:'🌧',71:'❄️',73:'❄️',75:'❄️',77:'🌨',80:'🌦',81:'🌧',82:'⛈',85:'🌨',86:'🌨',95:'⛈',96:'⛈',99:'⛈'};
 var WD={0:'Clear Sky',1:'Mainly Clear',2:'Partly Cloudy',3:'Overcast',45:'Foggy',48:'Icy Fog',51:'Light Drizzle',53:'Drizzle',55:'Heavy Drizzle',61:'Light Rain',63:'Rain',65:'Heavy Rain',71:'Light Snow',73:'Snow',75:'Heavy Snow',80:'Showers',81:'Heavy Showers',82:'Violent Showers',95:'Thunderstorm',96:'Thunderstorm w/ Hail',99:'Heavy Thunderstorm'};
 var NLR_LAT=34.7695,NLR_LON=-92.2671;
@@ -1831,6 +1906,12 @@ async function importMeetingNotes(){
     var query=encodeURIComponent("name contains 'Notes from' or name contains 'Meeting notes' or name contains 'meeting notes'");
     var url='https://www.googleapis.com/drive/v3/files?q='+query+'&orderBy=createdTime desc&pageSize=5&fields=files(id,name,createdTime,mimeType)';
     var r=await fetch(url,{headers:{'Authorization':'Bearer '+token}});
+    if(r.status===401||r.status===403){
+      status.textContent='Drive is not enabled for this sign-in (only Calendar + Tasks). Paste meeting notes into Smart Notes, or after your OAuth app is verified we can add Drive import again.';
+      btn.textContent='⬇️ Import Latest Meeting';
+      btn.disabled=false;
+      return;
+    }
     var data=await r.json();
     var files=data.files||[];
 
@@ -1859,7 +1940,8 @@ async function importMeetingNotes(){
 
 async function loadMeetingFile(fileId, fileName){
   var status=document.getElementById('meeting-import-status');
-  var token=localStorage.getItem('chs_google_token');
+  var token=oauthToken;
+  if(!token){alert('Session expired. Connect Google again.');return;}
   status.textContent='Loading '+fileName+'...';
 
   try{
@@ -1887,8 +1969,6 @@ async function loadMeetingFile(fileId, fileName){
     status.textContent='Error loading file: '+e.message;
   }
 }
-var SN_SHEET_ID='%%JOB_TRACKER_SHEET_ID%%';
-var SN_TAB='Smart Notes';
 var snHistoryVisible=false;
 var snNotes=JSON.parse(localStorage.getItem('chs_smart_notes')||'[]');
 
@@ -2083,8 +2163,7 @@ function saveNoteOnly(){
   document.getElementById('sn-cat').value='';
 }
 
-// ── SMART NOTES SHEET SETUP ───────────────────────────────────
-// Category colour palette (light pastel backgrounds for data rows)
+// ── Smart Notes card colours (notes are D1-backed via /api/notes) ──
 var SN_CAT_COLORS={
   'Job':         {red:.82, green:.91, blue:.98},   // sky blue
   'Admin':       {red:.91, green:.84, blue:.98},   // soft purple
@@ -2096,164 +2175,8 @@ var SN_CAT_COLORS={
   'General':     {red:.95, green:.95, blue:.95}    // light grey
 };
 
-// Called before every append — only runs once per session (or after recreate)
-var SN_SHEET_READY=false;
-async function ensureSmartNotesReady(){
-  if(SN_SHEET_READY)return true;
-  if(!oauthToken)return false;
-  // Lightweight check: does A1 say "Date"?
-  try{
-    var r=await fetch('https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID+'/values/'+encodeURIComponent('Smart Notes!A1'),{headers:{'Authorization':'Bearer '+oauthToken}});
-    var d=await r.json();
-    var a1=(((d.values||[[]])[0])||[])[0]||'';
-    if(a1==='Date'){SN_SHEET_READY=true;return true;}
-    // Not set up — run full recreate silently
-    return await recreateSmartNotesSheet(true);
-  }catch(e){return false;}
-}
-
-// Full sheet rebuild — reads existing data, wipes, rewrites with full formatting
-async function recreateSmartNotesSheet(silent){
-  if(!oauthToken){alert('Connect Google first.');return false;}
-  var badge=document.getElementById('sn-sheet-badge');
-  if(!silent&&badge)badge.innerHTML='<div class="spin" style="width:10px;height:10px;display:inline-block;margin-right:4px;"></div>Rebuilding sheet...';
-
-  try{
-    var base='https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID;
-
-    // 1 ─ Get numeric tab ID
-    var metaR=await fetch(base+'?fields=sheets.properties',{headers:sheetsWriteHeaders()});
-    var metaD=await metaR.json();
-    var tabId=null;
-    (metaD.sheets||[]).forEach(function(s){if(s.properties&&s.properties.title==='Smart Notes')tabId=s.properties.sheetId;});
-    if(tabId===null){
-      if(!silent)alert('Tab "Smart Notes" not found. Create it in your Job Tracker sheet first.');
-      return false;
-    }
-
-    // 2 ─ Read all existing data (skip any existing header row)
-    // Use OAuth token only — don't mix ?key= with Authorization header (causes 400)
-    var dataR=await fetch(base+'/values/'+encodeURIComponent('Smart Notes!A1:I500'),{headers:{'Authorization':'Bearer '+oauthToken}});
-    var dataD=await dataR.json();
-    var allRows=(dataD.values||[]);
-    // Strip any header rows (where A = "Date")
-    var dataRows=allRows.filter(function(r){return r[0]&&r[0]!=='Date'&&r[0]!=='date';});
-
-    // 3 ─ Clear sheet
-    await fetch(base+'/values/'+encodeURIComponent('Smart Notes!A:I')+':clear',{method:'POST',headers:sheetsWriteHeaders(),body:'{}'});
-
-    // 4 ─ Write header + data rows back
-    var writeValues=[['Date','Time','Category','Raw Note','AI Summary','Tags','Tasks Extracted','Task Count','Status']].concat(dataRows);
-    await fetch(base+'/values/'+encodeURIComponent('Smart Notes!A1:I'+(writeValues.length))+'?valueInputOption=RAW',
-      {method:'PUT',headers:sheetsWriteHeaders(),body:JSON.stringify({values:writeValues,majorDimension:'ROWS'})});
-
-    // 5 ─ Build batchUpdate: layout + header style + data row colours + wrapping
-    var requests=[];
-
-    // Freeze row 1
-    requests.push({updateSheetProperties:{properties:{sheetId:tabId,gridProperties:{frozenRowCount:1}},fields:'gridProperties.frozenRowCount'}});
-
-    // Header row style — burgundy bg, bold gold text, centred
-    requests.push({repeatCell:{
-      range:{sheetId:tabId,startRowIndex:0,endRowIndex:1},
-      cell:{userEnteredFormat:{
-        backgroundColor:{red:.239,green:.047,blue:.122},
-        textFormat:{bold:true,fontSize:10,foregroundColor:{red:.941,green:.647,blue:0}},
-        horizontalAlignment:'CENTER',verticalAlignment:'MIDDLE'
-      }},
-      fields:'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)'
-    }});
-
-    // Header row height
-    requests.push({updateDimensionProperties:{range:{sheetId:tabId,dimension:'ROWS',startIndex:0,endIndex:1},properties:{pixelSize:30},fields:'pixelSize'}});
-
-    // Column widths: Date, Time, Category, Raw Note, AI Summary, Tags, Tasks Extracted, Count, Status
-    [90,72,100,310,250,150,210,68,100].forEach(function(w,i){
-      requests.push({updateDimensionProperties:{range:{sheetId:tabId,dimension:'COLUMNS',startIndex:i,endIndex:i+1},properties:{pixelSize:w},fields:'pixelSize'}});
-    });
-
-    // Status dropdown validation on col I (index 8), rows 2+
-    requests.push({setDataValidation:{range:{sheetId:tabId,startRowIndex:1,startColumnIndex:8,endColumnIndex:9},
-      rule:{condition:{type:'ONE_OF_LIST',values:[
-        {userEnteredValue:'Needs Processing'},
-        {userEnteredValue:'In Progress'},
-        {userEnteredValue:'Done'},
-        {userEnteredValue:'Archived'}
-      ]},showCustomUi:true,strict:false}}});
-
-    // Conditional formatting: grey out Done rows (col I = "Done")
-    requests.push({addConditionalFormatRule:{rule:{
-      ranges:[{sheetId:tabId,startRowIndex:1,startColumnIndex:0,endColumnIndex:9}],
-      booleanRule:{
-        condition:{type:'CUSTOM_FORMULA',values:[{userEnteredValue:'=$I2="Done"'}]},
-        format:{backgroundColor:{red:.85,green:.85,blue:.85},textFormat:{foregroundColor:{red:.6,green:.6,blue:.6}}}
-      }
-    },index:Object.keys(SN_CAT_COLORS).length+2}});
-
-    // Wrap text in Raw Note (col D=3) and AI Summary (col E=4)
-    requests.push({repeatCell:{
-      range:{sheetId:tabId,startRowIndex:1,startColumnIndex:3,endColumnIndex:5},
-      cell:{userEnteredFormat:{wrapStrategy:'WRAP'}},
-      fields:'userEnteredFormat.wrapStrategy'
-    }});
-
-    // Data row height for wrapped columns
-    if(dataRows.length>0){
-      requests.push({updateDimensionProperties:{range:{sheetId:tabId,dimension:'ROWS',startIndex:1,endIndex:dataRows.length+1},properties:{pixelSize:60},fields:'pixelSize'}});
-    }
-
-    // Conditional formatting — colour entire row by category (col C = index 2)
-    // Using CUSTOM_FORMULA so it highlights the whole row
-    var cfRules=Object.keys(SN_CAT_COLORS).map(function(cat,idx){
-      return{addConditionalFormatRule:{rule:{
-        ranges:[{sheetId:tabId,startRowIndex:1,startColumnIndex:0,endColumnIndex:9}],
-        booleanRule:{
-          condition:{type:'CUSTOM_FORMULA',values:[{userEnteredValue:'=$C2="'+cat+'"'}]},
-          format:{backgroundColor:SN_CAT_COLORS[cat]}
-        }
-      },index:idx}};
-    });
-    requests=requests.concat(cfRules);
-
-    // Alternating light grey stripe for even rows
-    requests.push({addConditionalFormatRule:{rule:{
-      ranges:[{sheetId:tabId,startRowIndex:1,startColumnIndex:0,endColumnIndex:9}],
-      booleanRule:{
-        condition:{type:'CUSTOM_FORMULA',values:[{userEnteredValue:'=ISEVEN(ROW())'}]},
-        format:{backgroundColor:{red:.91,green:.91,blue:.91}}
-      }
-    },index:Object.keys(SN_CAT_COLORS).length}});
-
-    // Thin bottom border on every data row
-    requests.push({repeatCell:{
-      range:{sheetId:tabId,startRowIndex:1,startColumnIndex:0,endColumnIndex:9},
-      cell:{userEnteredFormat:{borders:{bottom:{style:'SOLID',color:{red:.3,green:.1,blue:.15},width:1}}}},
-      fields:'userEnteredFormat.borders'
-    }});
-
-    await fetch(base+':batchUpdate',{method:'POST',headers:sheetsWriteHeaders(),body:JSON.stringify({requests:requests})});
-
-    SN_SHEET_READY=true;
-    if(!silent&&badge){
-      badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Sheet rebuilt ✓ ('+(dataRows.length)+' notes)';
-      setTimeout(function(){badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Synced';},4000);
-    }
-    console.log('Smart Notes sheet rebuilt: '+dataRows.length+' rows');
-    return true;
-
-  }catch(e){
-    console.error('Smart Notes rebuild error:',e);
-    if(!silent&&badge)badge.innerHTML='<span style="color:#e05252;">⚠ Rebuild failed — see console</span>';
-    return false;
-  }
-}
-
-// Expose the "Fix Sheet" button action
 // ── Smart Notes: D1-backed API client ────────────────────────────
-// Replaces the Google Sheets writers that ran during the sheet era.
 var NOTES_API = '/api/notes';
-
-async function fixSmartNotesSheet(){ /* legacy no-op — sheet retired */ }
 
 // Persists a note record to D1. `note` is the same shape the old sheet
 // writer expected (date/time/category/rawNote/summary/tags/tasksExtracted/taskCount)
@@ -2401,57 +2324,6 @@ async function restoreNote(noteId, btn){
     console.error('Restore error:',e);
     btn.textContent='↩ Restore';btn.disabled=false;
   }
-}
-
-var _archiveTabReady=false;
-async function ensureArchiveTab(){
-  // Always re-verify tab exists (don't cache across sessions)
-  var base='https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID;
-
-  // Check if tab already exists
-  var metaResp=await fetch(base+'?fields=sheets.properties',{headers:sheetsWriteHeaders()});
-  var metaData=await metaResp.json();
-  var archTabId=null;
-  (metaData.sheets||[]).forEach(function(s){if(s.properties&&s.properties.title==='Archived Notes')archTabId=s.properties.sheetId;});
-
-  if(archTabId===null){
-    // Create the tab
-    var addResp=await fetch(base+':batchUpdate',{method:'POST',headers:sheetsWriteHeaders(),body:JSON.stringify({requests:[{
-      addSheet:{properties:{title:'Archived Notes',tabColor:{red:.239,green:.047,blue:.122}}}
-    }]})});
-    var addData=await addResp.json();
-    archTabId=((addData.replies||[])[0]||{}).addSheet&&addData.replies[0].addSheet.properties.sheetId;
-  }
-
-  // Write header row
-  var checkResp=await fetch(base+'/values/'+encodeURIComponent('Archived Notes!A1'),{headers:{'Authorization':'Bearer '+oauthToken}});
-  var checkData=await checkResp.json();
-  var a1=((checkData.values||[[]])[0]||[])[0]||'';
-  if(a1!=='Date'){
-    await fetch(base+'/values/'+encodeURIComponent('Archived Notes!A1:I1')+'?valueInputOption=RAW',
-      {method:'PUT',headers:sheetsWriteHeaders(),body:JSON.stringify({values:[['Date','Time','Category','Raw Note','AI Summary','Tags','Tasks Extracted','Task Count','Archived On']]})});
-  }
-
-  // Format if we have the tab ID
-  if(archTabId){
-    var fmtReqs=[
-      {repeatCell:{range:{sheetId:archTabId,startRowIndex:0,endRowIndex:1},cell:{userEnteredFormat:{
-        backgroundColor:{red:.15,green:.15,blue:.15},
-        textFormat:{bold:true,fontSize:10,foregroundColor:{red:.6,green:.6,blue:.6}},
-        horizontalAlignment:'CENTER'
-      }},fields:'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)'}},
-      {updateSheetProperties:{properties:{sheetId:archTabId,gridProperties:{frozenRowCount:1}},fields:'gridProperties.frozenRowCount'}},
-      // Col widths matching Smart Notes
-      ...[90,72,100,310,250,150,210,68,100].map(function(w,i){return{updateDimensionProperties:{range:{sheetId:archTabId,dimension:'COLUMNS',startIndex:i,endIndex:i+1},properties:{pixelSize:w},fields:'pixelSize'}};}),
-      // Wrap Raw Note + AI Summary
-      {repeatCell:{range:{sheetId:archTabId,startRowIndex:1,startColumnIndex:3,endColumnIndex:5},cell:{userEnteredFormat:{wrapStrategy:'WRAP'}},fields:'userEnteredFormat.wrapStrategy'}},
-      // Grey out all data rows (archived = inactive)
-      {repeatCell:{range:{sheetId:archTabId,startRowIndex:1},cell:{userEnteredFormat:{textFormat:{foregroundColor:{red:.5,green:.5,blue:.5}}}},fields:'userEnteredFormat.textFormat'}}
-    ];
-    await fetch(base+':batchUpdate',{method:'POST',headers:sheetsWriteHeaders(),body:JSON.stringify({requests:fmtReqs})});
-  }
-
-  _archiveTabReady=true;
 }
 
 // ── Archive panel toggle ──────────────────────────────────────
@@ -2605,21 +2477,6 @@ function openMod(id){document.getElementById(id).classList.add('open');}
 function closeMod(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.mov').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m)m.classList.remove('open');});});
 
-// ── LIVE KPI FROM GOOGLE SHEETS ───────────────────────────
-var SHEET_ID='%%JOB_TRACKER_SHEET_ID%%';
-var API_KEY='%%GOOGLE_API_KEY%%';
-
-// For reading sheets — always use API key (sheets are shared publicly)
-// OAuth token is used for write operations only
-function sheetsAuth(){
-  return {headers:{},qs:'?key='+API_KEY};
-}
-// For write operations that need OAuth
-function sheetsWriteHeaders(){
-  if(oauthToken) return {'Authorization':'Bearer '+oauthToken,'Content-Type':'application/json'};
-  return {'Content-Type':'application/json'};
-}
-
 // ── OAUTH CONFIGURATION ────────────────────────────────
 var _oauthMeetInterval=null,_oauthCalInterval=null;
 // Handle token from redirect (implicit flow — token in URL hash)
@@ -2652,23 +2509,33 @@ function onOAuthConnected(){
   _oauthMeetInterval=intervalWhenVisible(fetchGoogleMeetings,5*60*1000);
   _oauthCalInterval=intervalWhenVisible(fetchOAuthCalendar,10*60*1000);
   updateSyncBadge();
-  // Update sheet badge to show write access
-  var snBadge=document.getElementById('sn-sheet-badge');
-  if(snBadge)snBadge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Google Sheets: Connected';
   // Update Meet badge
   var mBadge=document.getElementById('meet-cal-badge');
   if(mBadge){mBadge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>Calendar Synced';mBadge.style.background='rgba(82,192,122,.12)';mBadge.style.color='var(--green)';mBadge.style.borderColor='rgba(82,192,122,.3)';}
   // Update connect button
   var btn=document.getElementById('oauth-connect-btn');
-  if(btn){btn.textContent='✓ Google Connected';btn.style.background='rgba(82,192,122,.2)';btn.style.color='var(--green)';btn.style.borderColor='rgba(82,192,122,.35)';btn.onclick=function(){if(confirm('Disconnect Google account?')){clearToken();location.reload();}}}
-  // Re-fetch all Google data with OAuth token
-  fetchSheetKPIs();
-  fetchWCData();
+  if(btn){
+    btn.classList.add('oauth-connected');
+    btn.innerHTML='<span class="oauth-check" aria-hidden="true">✓</span>';
+    btn.title='Google Connected — click to disconnect';
+    btn.setAttribute('aria-label','Google Connected — disconnect');
+    btn.onclick=function(){if(confirm('Disconnect Google account?')){clearToken();location.reload();}};
+  }
+  // KPIs + Business Pulse: loaded via /api/kpis (second script). Defer so chsFetchKpis exists.
+  setTimeout(function(){
+    if(typeof window.chsFetchKpis==='function')window.chsFetchKpis();
+  },0);
   // Reload note history so Done buttons appear with new OAuth token
   if(snHistoryVisible)loadNoteHistory();
   // Update mobile OAuth button and task badge
   var mobBtnMa=document.getElementById('oauth-connect-btn-ma');
-  if(mobBtnMa){mobBtnMa.textContent='✓ Connected';mobBtnMa.style.background='rgba(82,192,122,.2)';mobBtnMa.style.color='var(--green)';mobBtnMa.style.borderColor='rgba(82,192,122,.35)';mobBtnMa.onclick=function(){if(confirm('Disconnect Google account?')){clearToken();location.reload();}};}
+  if(mobBtnMa){
+    mobBtnMa.classList.add('oauth-connected');
+    mobBtnMa.innerHTML='<span class="oauth-check" aria-hidden="true">✓</span>';
+    mobBtnMa.title='Google Connected — click to disconnect';
+    mobBtnMa.setAttribute('aria-label','Google Connected — disconnect');
+    mobBtnMa.onclick=function(){if(confirm('Disconnect Google account?')){clearToken();location.reload();}};
+  }
 }
 
 // Initialise on load
@@ -2676,225 +2543,6 @@ checkOAuthRedirect();
 if(loadSavedToken()){
   onOAuthConnected();
 }
-
-function fetchSheetKPIs(){
-  // Fetch Job Tracker data rows 5-54 (all columns A-R)
-  var range='Job Tracker!A5:R54';
-  var auth=sheetsAuth();
-  var url='https://sheets.googleapis.com/v4/spreadsheets/'+SHEET_ID+'/values/'+range.replace(/ /g,'%20')+auth.qs;
-  fetch(url,{headers:auth.headers}).then(function(r){return r.json();}).then(function(d){
-    var rows=d.values||[];
-    var today=new Date();
-    today.setHours(0,0,0,0);
-
-    // Week boundaries (Sun-Sat)
-    var weekStart=new Date(today);
-    weekStart.setDate(today.getDate()-today.getDay());
-    var weekEnd=new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate()+7);
-
-    // Month boundaries
-    var monthStart=new Date(today.getFullYear(),today.getMonth(),1);
-    var monthEnd=new Date(today.getFullYear(),today.getMonth()+1,1);
-
-    var jobsInProgress=0, revenueWeek=0, unpaidInvoices=0;
-    var pymtScheduled=0, monthlyCollected=0, monthlyCosts=0, openLeads=0;
-
-    rows.forEach(function(row){
-      // Col indices (0-based): A=0,B=1,C=2,D=3,E=4,F=5,G=6,H=7,I=8,J=9,K=10,L=11,M=12,N=13,O=14,P=15
-      var status=(row[11]||'').trim();
-      var jobTotal=parseFloat((row[10]||'0').toString().replace(/[$,]/g,''))||0;
-      var totalCosts=parseFloat((row[8]||'0').toString().replace(/[$,]/g,''))||0;
-      var pymtCollectedStr=(row[15]||'').trim();
-      var pymtScheduledStr=(row[14]||'').trim();
-
-      // Parse dates — handles both MM/DD/YYYY and YYYY-MM-DD formats
-      function parseDate(s){
-        if(!s)return null;
-        // ISO format: YYYY-MM-DD
-        if(s.match(/^\d{4}-\d{2}-\d{2}$/)){
-          var p=s.split('-');
-          return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2]));
-        }
-        // US format: MM/DD/YYYY
-        var p=s.split('/');
-        if(p.length===3)return new Date(parseInt(p[2]),parseInt(p[0])-1,parseInt(p[1]));
-        return null;
-      }
-      var pymtCollected=parseDate(pymtCollectedStr);
-      var pymtScheduledDate=parseDate(pymtScheduledStr);
-
-      // Jobs In Progress
-      if(status==='In Progress')jobsInProgress++;
-
-      // Open Leads (Pending Estimate or Need to Schedule or Quote given but not approved)
-      if(status==='Pending Estimate'||status==='Need to Schedule')openLeads++;
-
-      // Revenue This Week (payment collected this week)
-      if(pymtCollected&&pymtCollected>=weekStart&&pymtCollected<weekEnd)revenueWeek+=jobTotal;
-
-      // Unpaid Invoices — only count jobs where invoice has been sent but not paid
-      if(jobTotal>0&&!pymtCollectedStr&&(status==='Awaiting Payment'))unpaidInvoices+=jobTotal;
-
-      // Upcoming Payments Scheduled (scheduled date in future, not yet collected)
-      if(pymtScheduledDate&&pymtScheduledDate>=today&&!pymtCollectedStr)pymtScheduled+=jobTotal;
-
-      // Monthly collections & costs for net profit
-      if(pymtCollected&&pymtCollected>=monthStart&&pymtCollected<monthEnd){
-        monthlyCollected+=jobTotal;
-        monthlyCosts+=totalCosts;
-      }
-    });
-
-    var monthlyProfit=monthlyCollected-monthlyCosts;
-
-    // Format currency
-    function fmt(n){return n===0?'$0':'$'+n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});}
-
-    document.getElementById('kv-ji').textContent=jobsInProgress;
-    document.getElementById('kv-wr').textContent=fmt(revenueWeek);
-    document.getElementById('kv-ui').textContent=fmt(unpaidInvoices);
-    document.getElementById('kv-ps').textContent=fmt(pymtScheduled);
-    document.getElementById('kv-mp').textContent=fmt(monthlyCollected);
-    // openLeads count stored internally (not displayed in KPI strip)
-
-    // ── Also populate Business Pulse from Job Tracker data ──
-    // This Month Income = all payments collected this month
-    document.getElementById('wc-mo-income').textContent=fmt(monthlyCollected);
-    // This Month Profit = monthly collected minus costs
-    document.getElementById('wc-mo-profit').textContent=fmt(monthlyProfit);
-    // Wk Collections = revenue this week
-    document.getElementById('wc-wk-coll').textContent=fmt(revenueWeek);
-
-    // YTD calculations
-    var ytdIncome=0, ytdProfit=0;
-    rows.forEach(function(row){
-      var jobTotal=parseFloat((row[10]||'0').toString().replace(/[$,]/g,''))||0;
-      var totalCosts=parseFloat((row[8]||'0').toString().replace(/[$,]/g,''))||0;
-      var pymtCollectedStr=(row[15]||'').trim();
-      function parseDate2(s){
-        if(!s)return null;
-        if(s.match(/^\d{4}-\d{2}-\d{2}$/)){var p=s.split('-');return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2]));}
-        var p=s.split('/');if(p.length===3)return new Date(parseInt(p[2]),parseInt(p[0])-1,parseInt(p[1]));return null;
-      }
-      var pymtDate=parseDate2(pymtCollectedStr);
-      var yearStart=new Date(today.getFullYear(),0,1);
-      if(pymtDate&&pymtDate>=yearStart){
-        ytdIncome+=jobTotal;
-        ytdProfit+=(jobTotal-totalCosts);
-      }
-    });
-    document.getElementById('wc-ytd-income').textContent=fmt(ytdIncome);
-    document.getElementById('wc-ytd-profit').textContent=fmt(ytdProfit);
-    document.getElementById('kv-ol').textContent=fmt(ytdIncome);
-
-    // Show last updated time
-    var now=new Date();
-    var timeStr=now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
-    var badge=document.getElementById('kpi-updated');
-    if(badge)badge.textContent='Updated '+timeStr;
-
-  }).catch(function(e){console.log('Sheets API error:',e);});
-}
-
-// Auto-refresh KPIs every 5 minutes
-fetchSheetKPIs();
-intervalWhenVisible(fetchSheetKPIs,5*60*1000);
-
-function fetchWCData(){
-  var today=new Date();
-  var currentMonth=today.getMonth(); // 0=Jan
-  // Monthly Net Profits: rows 4-16, cols A-D. Row 4=Jan(index 0)... Row 15=Dec(index 11), Row 16=Totals
-  var mnpRange='Monthly Net Profits!A4:D16';
-  var kbpiRange='Key Business Performance Indicators!A3:I60';
-
-  var baseUrl='https://sheets.googleapis.com/v4/spreadsheets/'+WC_SHEET_ID+'/values/';
-  var auth=sheetsAuth();
-  var qs=auth.qs;
-
-  function fmt(v){
-    if(!v&&v!==0)return'--';
-    var s=String(v).trim();
-    if(!s||s==='-'||s==='$ -'||s==='$  -')return'--';
-    if(s.includes('%')){var pct=parseFloat(s.replace(/[^0-9.]/g,''));return isNaN(pct)?s:pct.toFixed(1)+'%';}
-    var n=parseFloat(s.replace(/[^0-9.-]/g,''));
-    if(isNaN(n))return'--';
-    return n===0?'$0':'$'+n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
-  }
-
-  // Fetch Monthly Net Profits
-  fetch(baseUrl+mnpRange.replace(/ /g,'%20')+qs)
-    .then(function(r){return r.json();})
-    .then(function(d){
-      var rows=d.values||[];
-      // rows[0]=Jan(row4), rows[11]=Dec(row15), rows[12]=Totals(row16)
-      var moRow=rows[currentMonth]||[];
-      var ytdRow=rows[12]||[];
-
-      // Only update from WC sheet if it has actual data (not empty/dashes)
-      function hasData(v){return v&&String(v).trim()&&String(v).trim()!=='-'&&String(v).trim()!=='--'&&String(v).trim()!=='$0';}
-      if(hasData(moRow[1]))document.getElementById('wc-mo-income').textContent=fmt(moRow[1]);
-      if(hasData(moRow[2]))document.getElementById('wc-mo-profit').textContent=fmt(moRow[2]);
-      if(hasData(ytdRow[1]))document.getElementById('wc-ytd-income').textContent=fmt(ytdRow[1]);
-      if(hasData(ytdRow[2]))document.getElementById('wc-ytd-profit').textContent=fmt(ytdRow[2]);
-
-      // Also update Yearly Gross Revenue KPI card
-      var ytdIncome=parseFloat(String(ytdRow[1]||'0').replace(/[$,]/g,''))||0;
-      if(ytdIncome>0)document.getElementById('kv-ol').textContent='$'+ytdIncome.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
-    }).catch(function(){});
-
-  // Fetch Key Business Performance Indicators (weekly sales data)
-  fetch(baseUrl+kbpiRange.replace(/ /g,'%20')+qs)
-    .then(function(r){return r.json();})
-    .then(function(d){
-      var rows=d.values||[];
-      // Find the row where today falls within the weekly period
-      // Col A = week start (e.g. "3/29"), Col B = week end (e.g. "4/4")
-      // Find most recent row with data in col C (New Sales) or closest to today
-      var todayMo=today.getMonth()+1, todayDay=today.getDate();
-
-      var bestRow=null;
-      rows.forEach(function(row){
-        if(!row[0])return;
-        // Parse "M/D" date, assume current year
-        function parseShortDate(s){
-          if(!s)return null;
-          var p=s.trim().split('/');
-          if(p.length<2)return null;
-          return new Date(today.getFullYear(),parseInt(p[0])-1,parseInt(p[1]));
-        }
-        var wStart=parseShortDate(row[0]);
-        var wEnd=parseShortDate(row[1]);
-        if(!wStart||!wEnd)return;
-        // Check if today falls in this week range
-        if(today>=wStart&&today<=wEnd){bestRow=row;}
-      });
-
-      // If no exact match, use most recent row with any data
-      if(!bestRow){
-        for(var i=rows.length-1;i>=0;i--){
-          if(rows[i]&&(rows[i][2]||rows[i][3])){bestRow=rows[i];break;}
-        }
-      }
-
-      if(bestRow){
-        document.getElementById('wc-wk-sales').textContent=fmt(bestRow[2])||'$0';
-        document.getElementById('wc-wk-coll').textContent=fmt(bestRow[3])||'$0';
-        document.getElementById('wc-wk-leads').textContent=bestRow[4]||'0';
-        document.getElementById('wc-wk-close').textContent=bestRow[7]?bestRow[7]:'0%';
-      }
-
-      var now=new Date();
-      var badge=document.getElementById('wc-updated');
-      if(badge)badge.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>'+now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
-    }).catch(function(){
-      var badge=document.getElementById('wc-updated');
-      if(badge)badge.textContent='Offline';
-    });
-}
-
-fetchWCData();
-intervalWhenVisible(fetchWCData,5*60*1000);
 
 // ── REFRESH ──────────────────────────────────────────────
 // ── CUSTOM OAUTH CALENDAR ────────────────────────────────
@@ -3158,43 +2806,8 @@ function buildTicker(){
   if(t2)t2.innerHTML=html;
 }
 
-// ── BUSINESS PULSE — JOBBER DIRECT DATA ──────────────────────
-// jobber_sync writes KPI_Sync!B2:G2 every 2 hours:
-// B=YTD Rev  C=Monthly Rev  D=Weekly Coll  E=YTD Profit  F=Monthly Profit  G=Job Count
-function fetchJobberMetrics(){
-  var auth=sheetsAuth();
-  var url='https://sheets.googleapis.com/v4/spreadsheets/'+SHEET_ID+'/values/'+encodeURIComponent('KPI_Sync!B2:G2')+auth.qs;
-  fetch(url,{headers:auth.headers})
-    .then(function(r){return r.json();})
-    .then(function(d){
-      var row=(d.values||[[]])[0]||[];
-      function fmtK(v){
-        var n=parseFloat(String(v||'0').replace(/[$,]/g,''))||0;
-        if(!n)return null;
-        return'$'+n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
-      }
-      var ytdRev    =fmtK(row[0]);
-      var moRev     =fmtK(row[1]);
-      var wkColl    =fmtK(row[2]);
-      var ytdProfit =fmtK(row[3]);
-      var moProfit  =fmtK(row[4]);
+// Business Pulse / Jobber KPIs: see second script — window.chsFetchKpis → /api/kpis
 
-      if(ytdRev)   {document.getElementById('kv-ol').textContent=ytdRev; document.getElementById('wc-ytd-income').textContent=ytdRev;}
-      if(moRev)    {document.getElementById('kv-mp').textContent=moRev;  document.getElementById('wc-mo-income').textContent=moRev;}
-      if(wkColl)    document.getElementById('wc-wk-coll').textContent=wkColl;
-      if(ytdProfit) document.getElementById('wc-ytd-profit').textContent=ytdProfit;
-      if(moProfit)  document.getElementById('wc-mo-profit').textContent=moProfit;
-
-      // Update last-synced badge
-      var badge=document.getElementById('wc-updated');
-      if(badge&&(ytdRev||moRev)){
-        var now=new Date();
-        badge.innerHTML='<span style="width:5px;height:5px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;margin-right:4px;"></span>'+now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
-      }
-    }).catch(function(){});
-}
-setTimeout(fetchJobberMetrics,2000);
-intervalWhenVisible(fetchJobberMetrics,10*60*1000);
 // ── GOOGLE TASKS LIVE SYNC ────────────────────────────────────
 // Polls every 30 s when tab is active; fires instantly on tab focus.
 var _tasksInterval=null;
@@ -3565,33 +3178,33 @@ function renderMobCalendar(){
 function loadMobNoteHistory(){
   var list=document.getElementById('sn-history-list-mob');
   if(!list)return;
-  // Re-use same sheet data as desktop history
   list.innerHTML='<div class="empty"><div class="spin" style="margin:0 auto 6px;"></div>Loading...</div>';
-  if(!oauthToken){list.innerHTML='<div class="empty">Connect Google to view notes</div>';return;}
-  fetch('https://sheets.googleapis.com/v4/spreadsheets/'+SN_SHEET_ID+'/values/'+encodeURIComponent('Smart Notes!A2:I50'),
-    {headers:{'Authorization':'Bearer '+oauthToken}})
+  fetch(NOTES_API+'?status=active&limit=100')
     .then(function(r){return r.json();})
     .then(function(d){
-      var rows=(d.values||[]).filter(function(r){return r[0]&&r[0]!=='Date';}).reverse();
-      if(!rows.length){list.innerHTML='<div class="empty">No notes yet</div>';return;}
-      list.innerHTML=rows.map(function(r,idx){
-        var status=r[8]||'';
-        var summary=r[4]&&r[4]!=='(Not processed)'?r[4]:(r[3]||'').substring(0,80);
-        return'<div style="background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:10px 12px;">'+
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'+
-            '<span style="font-size:9px;font-weight:800;background:rgba(240,165,0,.15);color:var(--gold);padding:2px 8px;border-radius:20px;">'+(r[2]||'General')+'</span>'+
-            '<span style="font-size:10px;color:var(--muted);">'+r[0]+' '+r[1]+'</span>'+
-          '</div>'+
-          '<div style="font-size:13px;color:var(--cream);line-height:1.4;">'+summary+'</div>'+
-          (status?'<div style="font-size:10px;color:var(--muted);margin-top:4px;">Status: '+status+'</div>':'')+
+      var notes=(d && d.notes) || [];
+      if(!notes.length){list.innerHTML='<div class="empty">No notes yet</div>';return;}
+      list.innerHTML=notes.map(function(n){
+        var summary=n.summary?n.summary:(n.raw_text||'').substring(0,80)+((n.raw_text||'').length>80?'...':'');
+        var date=_notesFmtDate(n.created_at);
+        var time=_notesFmtTime(n.created_at);
+        var doneBtn='<button onclick="archiveNote(\''+n.id+'\',this)" class="sn-done-btn" style="flex-shrink:0;">✓ Done</button>';
+        var statusTxt=n.summary?'Processed':'Needs Processing';
+        var statusColor=n.summary?'var(--muted)':'rgba(224,82,82,.7)';
+        return'<div style="background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:9px 11px;margin-bottom:2px;" data-note-id="'+n.id+'">'+
+          buildNoteCard(summary,n.category||'General',date,time,n.task_count||0,n.raw_text||'',
+            '<div style="display:flex;gap:5px;align-items:center;flex-shrink:0;">'+
+            '<span style="font-size:9px;color:'+statusColor+';font-weight:700;">'+statusTxt+'</span>'+
+            doneBtn+'</div>')+
         '</div>';
       }).join('');
-    }).catch(function(){list.innerHTML='<div class="empty">Could not load notes</div>';});
+    })
+    .catch(function(){list.innerHTML='<div class="empty">Could not load notes</div>';});
 }
 
 // Update mobile OAuth button when connected
 function refreshAll(){
-  renderCalendar();fetchWeather();fetchSheetKPIs();fetchWCData();fetchJobberMetrics();fetchHLData();
+  renderCalendar();fetchWeather();fetchSheetKPIs();fetchHLData();
   if(oauthToken){fetchGoogleTasks();fetchGoogleMeetings();fetchOAuthCalendar();}
   if(isAppMobile()){syncMobKPIs();renderMobTasks();renderMobileAgenda();renderMobileLeads();}
 }

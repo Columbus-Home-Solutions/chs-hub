@@ -128,6 +128,15 @@ import {
   handleSubcontractorList,
   handleSubcontractorUpdate,
 } from "./routes/subcontractors.js";
+import {
+  handleEstimateRequestList,
+  handleEstimateRequestPipeline,
+  handleEstimateRequestGet,
+  handleEstimateRequestCreate,
+  handleEstimateRequestUpdate,
+  handleEstimateRequestAppointment,
+  handleEstimateRequestLost,
+} from "./routes/estimate-requests.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -441,6 +450,30 @@ export default {
       const sid = decodeURIComponent(subcontractorById[1]);
       if (request.method === "GET") return handleSubcontractorGet(env, sid);
       if (request.method === "PUT") return handleSubcontractorUpdate(request, env, sid);
+    }
+
+    // ── Estimate requests (Estimating Pipeline — Sprint 3) ───────────
+    // Sub-resource / fixed paths must be tested before the bare :id route.
+    if (url.pathname === "/api/estimate-requests") {
+      if (request.method === "GET") return handleEstimateRequestList(env, url);
+      if (request.method === "POST") return handleEstimateRequestCreate(request, env);
+    }
+    if (url.pathname === "/api/estimate-requests/pipeline" && request.method === "GET") {
+      return handleEstimateRequestPipeline(env);
+    }
+    const erAppointment = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/appointment$/);
+    if (erAppointment && request.method === "PUT") {
+      return handleEstimateRequestAppointment(request, env, decodeURIComponent(erAppointment[1]));
+    }
+    const erLost = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/lost$/);
+    if (erLost && request.method === "PUT") {
+      return handleEstimateRequestLost(request, env, decodeURIComponent(erLost[1]));
+    }
+    const erById = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)$/);
+    if (erById) {
+      const erid = decodeURIComponent(erById[1]);
+      if (request.method === "GET") return handleEstimateRequestGet(env, erid);
+      if (request.method === "PUT") return handleEstimateRequestUpdate(request, env, erid);
     }
 
     // ── System settings ──────────────────────────────────────────────

@@ -35,9 +35,9 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", path: "/", icon: "🏠", enabled: true },
   { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: false },
-  { label: "Estimates", path: "/estimates", icon: "📋", enabled: false },
   { label: "Financial", path: "/financial", icon: "💰", enabled: false },
   { label: "Clients", path: "/clients", icon: "👥", enabled: true },
+  { label: "Estimating", path: "/estimating", icon: "📋", enabled: true },
   { label: "Subcontractors", path: "/subcontractors", icon: "🔧", enabled: true },
   { label: "Photos", path: "/photos", icon: "📸", enabled: false },
   { label: "Documents", path: "/documents", icon: "📄", enabled: false },
@@ -49,6 +49,7 @@ export const NAV_ITEMS: NavItem[] = [
 export const MOBILE_TABS: NavItem[] = [
   { label: "Home", path: "/", icon: "🏠", enabled: true },
   { label: "Clients", path: "/clients", icon: "👥", enabled: true },
+  { label: "Estimating", path: "/estimating", icon: "📋", enabled: true },
   { label: "Subs", path: "/subcontractors", icon: "🔧", enabled: true },
   { label: "Settings", path: "/settings", icon: "⚙️", enabled: true },
 ];

@@ -37,4 +37,5 @@ Thumbs.db
 .idea/
 *.swp
 scripts/dev-seed-sprint2.local.sql
+scripts/dev-seed-sprint3.local.sql
 backup_pre_sprint2_remote_*.sql

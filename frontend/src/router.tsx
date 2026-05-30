@@ -6,6 +6,9 @@ import { ClientList } from "./views/clients/ClientList";
 import { ClientDetail } from "./views/clients/ClientDetail";
 import { SubcontractorList } from "./views/subcontractors/SubcontractorList";
 import { Settings } from "./views/settings/Settings";
+import { EstimateRequestPipeline } from "./views/estimating/EstimateRequestPipeline";
+import { EstimateRequestForm } from "./views/estimating/EstimateRequestForm";
+import { EstimateRequestDetail } from "./views/estimating/EstimateRequestDetail";
 import { Placeholder } from "./views/Placeholder";
 
 export function AppRouter() {
@@ -17,8 +20,10 @@ export function AppRouter() {
       <ClientDetail path={`${BASE}/clients/:id`} />
       <SubcontractorList path={`${BASE}/subcontractors`} />
       <Settings path={`${BASE}/settings`} />
+      <EstimateRequestPipeline path={`${BASE}/estimating`} />
+      <EstimateRequestForm path={`${BASE}/estimating/new`} />
+      <EstimateRequestDetail path={`${BASE}/estimating/:id`} />
       <Placeholder path={`${BASE}/jobs`} title="Jobs" />
-      <Placeholder path={`${BASE}/estimates`} title="Estimates" />
       <Placeholder path={`${BASE}/financial`} title="Financial" />
       <Placeholder path={`${BASE}/photos`} title="Photos" />
       <Placeholder path={`${BASE}/documents`} title="Documents" />

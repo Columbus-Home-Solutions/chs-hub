@@ -12,10 +12,14 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatDateTime, formatStatus } from "../../lib/format";
+import { formatCurrency } from "../../lib/format";
+import { MarkWonModal } from "./MarkWonModal";
 import {
+  ESTIMATE_SENT_TOOLTIP,
   LOST_REASONS,
   PIPELINE_STAGES,
   type ActivityEntry,
+  type Estimate,
   type EstimateRequest,
   type EstimateRequestStatus,
 } from "../../types";
@@ -50,10 +54,15 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   );
   const toast = useToast();
   const r = data?.request;
+  const { data: estData } = useApi<{ estimate: Estimate }>(
+    r?.estimate_id ? `/api/estimates/${r.estimate_id}` : null,
+  );
+  const estimate = estData?.estimate;
 
   const [notes, setNotes] = useState("");
   const [apptOpen, setApptOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
+  const [wonOpen, setWonOpen] = useState(false);
 
   useEffect(() => {
     setNotes(r?.visit_notes ?? "");
@@ -223,16 +232,40 @@ export function EstimateRequestDetail({ id }: DetailProps) {
           </Card>
 
           <Card title="Estimate">
-            <div class="flex items-center justify-between gap-sm">
-              <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-                {r.estimate_id ? "Estimate started." : "No estimate built yet."}
-              </span>
-              <Button
-                variant="primary"
-                onClick={() => go(`/estimating/${r.id}/estimate`)}
-                title="Estimate builder ships in Sprint 4"
-              >
-                Build Estimate
+            <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
+              {estimate ? (
+                <div>
+                  <div class="flex items-center gap-sm">
+                    <span style={{ fontWeight: "var(--weight-semibold)" }}>
+                      EST-{String(estimate.estimate_number ?? 0).padStart(3, "0")}
+                      {estimate.version > 1 ? ` · v${estimate.version}` : ""}
+                    </span>
+                    <Badge
+                      tone={
+                        estimate.status === "sent"
+                          ? "info"
+                          : estimate.status === "approved"
+                            ? "success"
+                            : "neutral"
+                      }
+                    >
+                      {formatStatus(estimate.status)}
+                    </Badge>
+                  </div>
+                  <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+                    {formatCurrency(estimate.total)}
+                    {estimate.deposit_amount
+                      ? ` · deposit ${formatCurrency(estimate.deposit_amount)}`
+                      : ""}
+                  </div>
+                </div>
+              ) : (
+                <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+                  {r.estimate_id ? "Estimate started." : "No estimate built yet."}
+                </span>
+              )}
+              <Button variant="primary" onClick={() => go(`/estimating/${r.id}/estimate`)}>
+                {estimate || r.estimate_id ? "Open Estimate" : "Build Estimate"}
               </Button>
             </div>
           </Card>
@@ -257,9 +290,29 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                 </FormField>
               )}
               {!terminal && (
+                <span
+                  style={{ display: "block" }}
+                  title={r.estimate_sent ? undefined : ESTIMATE_SENT_TOOLTIP}
+                >
+                  <Button
+                    variant="primary"
+                    block
+                    disabled={!r.estimate_sent}
+                    onClick={() => setWonOpen(true)}
+                  >
+                    Mark as Won
+                  </Button>
+                </span>
+              )}
+              {!terminal && (
                 <Button variant="danger" block onClick={() => setLostOpen(true)}>
                   Mark Lost
                 </Button>
+              )}
+              {r.status === "won" && (
+                <div class="text--secondary" style={{ fontSize: "var(--text-sm)" }}>
+                  Won — converted to a job. This request is closed on the estimating board.
+                </div>
               )}
               {r.status === "lost" && r.lost_reason && (
                 <div class="text--secondary" style={{ fontSize: "var(--text-sm)" }}>
@@ -310,6 +363,15 @@ export function EstimateRequestDetail({ id }: DetailProps) {
         onSave={(reason, lostNotes) => {
           setLostOpen(false);
           void markLost(reason, lostNotes);
+        }}
+      />
+
+      <MarkWonModal
+        request={wonOpen ? r : null}
+        onClose={() => setWonOpen(false)}
+        onWon={() => {
+          setWonOpen(false);
+          refetch();
         }}
       />
     </div>

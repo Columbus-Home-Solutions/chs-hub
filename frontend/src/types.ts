@@ -160,6 +160,9 @@ export interface EstimateRequest {
   visit_notes: string | null;
   visit_photo_ids: string | null;
   estimate_id: string | null;
+  estimate_status: EstimateStatus | null;
+  estimate_sent: boolean;
+  estimate_deposit: number | null;
   sent_date: string | null;
   follow_up_count: number;
   last_follow_up_date: string | null;
@@ -179,6 +182,19 @@ export interface ActivityEntry {
   details: string | null;
   created_at: string;
 }
+
+// Manual deposit payment methods for "Mark as Won" (Module-Spec §4.10).
+// Stripe is intentionally excluded — Stripe deposits auto-convert without the modal.
+export const WON_PAYMENT_METHODS: { value: string; label: string }[] = [
+  { value: "check", label: "Check" },
+  { value: "cash", label: "Cash" },
+  { value: "venmo", label: "Venmo" },
+  { value: "zelle", label: "Zelle" },
+  { value: "other", label: "Other" },
+];
+
+export const ESTIMATE_SENT_TOOLTIP =
+  "Estimate must be sent to the client before marking as won.";
 
 // Pipeline stage columns, left → right (matches the API status order).
 export const PIPELINE_STAGES: { key: EstimateRequestStatus; label: string }[] = [
@@ -221,3 +237,161 @@ export const LOST_REASONS = [
   "timing",
   "other",
 ];
+
+// ─── Estimate Builder (Sprint 4) ────────────────────────────────────────────
+
+export type EstimateMode = "lump_sum" | "trade_by_trade";
+export type BillingModel = "fixed_price" | "trade_by_trade" | "cost_plus";
+export type EstimateStatus = "draft" | "sent" | "viewed" | "approved" | "expired" | "revised";
+
+export const SUB_ITEM_CATEGORIES = [
+  "material",
+  "labor",
+  "subcontractor",
+  "permit",
+  "equipment",
+  "other",
+];
+
+export const PAYMENT_TRIGGERS = [
+  "contract_signing",
+  "milestone",
+  "trade_completion",
+  "bi_weekly_cycle",
+  "completion",
+];
+
+export interface EstimateSubItem {
+  id: string;
+  parent_line_item_id: string;
+  sort_order: number;
+  description: string;
+  category: string;
+  vendor: string | null;
+  quantity: number | null;
+  unit: string | null;
+  unit_cost: number | null;
+  total_cost: number;
+  material_id: string | null;
+  notes: string | null;
+}
+
+export interface EstimateLineItem {
+  id: string;
+  estimate_id: string;
+  sort_order: number;
+  product_service: string;
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  total: number;
+  internal_cost: number;
+  includes_note: string | null;
+  sub_items: EstimateSubItem[];
+}
+
+export interface PaymentMilestone {
+  id: string;
+  estimate_id: string;
+  sort_order: number;
+  description: string;
+  percentage: number | null;
+  fixed_amount: number | null;
+  amount: number;
+  is_deposit: boolean;
+  trigger: string | null;
+  notes: string | null;
+}
+
+export interface Estimate {
+  id: string;
+  estimate_number: number | null;
+  request_id: string | null;
+  client_id: string | null;
+  client_name: string | null;
+  client_phone: string | null;
+  client_email: string | null;
+  request_number: number | null;
+  property_address: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  property_zip: string | null;
+  job_type: string | null;
+  title: string | null;
+  estimate_mode: EstimateMode | null;
+  billing_model: BillingModel | null;
+  status: EstimateStatus;
+  subtotal: number;
+  tax_amount: number;
+  total: number;
+  internal_cost: number;
+  margin_percent: number;
+  deposit_amount: number | null;
+  deposit_type: string | null;
+  deposit_percentage: number | null;
+  valid_days: number;
+  expiration_date: string | null;
+  portal_token: string | null;
+  include_reviews: boolean;
+  review_ids: string | null;
+  include_contract: boolean;
+  contract_template_id: string | null;
+  notes: string | null;
+  version: number;
+  revised_from_id: string | null;
+  sent_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  line_items: EstimateLineItem[];
+  payment_schedule: PaymentMilestone[];
+}
+
+export interface EstimateTemplate {
+  id: string;
+  name: string;
+  job_type: string;
+  description: string | null;
+  default_billing_model: string | null;
+  is_active: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  line_items?: unknown[];
+  default_payment_schedule?: unknown;
+}
+
+export interface SavedReview {
+  id: string;
+  reviewer_name: string;
+  review_date: string | null;
+  rating: number;
+  review_text: string;
+  source: string;
+  is_active: boolean;
+  sort_order: number | null;
+  created_at: string | null;
+}
+
+export interface VendorMaterial {
+  id: string;
+  vendor_name: string;
+  material_name: string;
+  category: string;
+  unit: string;
+  last_price: number;
+  average_price: number | null;
+  last_purchased_date: string | null;
+}
+
+export const ESTIMATE_MODES: { value: EstimateMode; label: string }[] = [
+  { value: "lump_sum", label: "Lump Sum" },
+  { value: "trade_by_trade", label: "Trade-by-Trade" },
+];
+
+export const BILLING_MODELS: { value: BillingModel; label: string }[] = [
+  { value: "fixed_price", label: "Fixed Price" },
+  { value: "trade_by_trade", label: "Trade-by-Trade" },
+  { value: "cost_plus", label: "Cost-Plus" },
+];
+
+export const REVIEW_SOURCES = ["google", "facebook", "manual"];

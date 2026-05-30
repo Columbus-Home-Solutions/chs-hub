@@ -3,6 +3,7 @@ import { useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
+import { MarkWonModal } from "./MarkWonModal";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
@@ -28,6 +29,7 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<EstimateRequestStatus | null>(null);
   const [activeStage, setActiveStage] = useState<EstimateRequestStatus>("new_request");
+  const [wonTarget, setWonTarget] = useState<EstimateRequest | null>(null);
 
   const moveTo = async (id: string, status: EstimateRequestStatus) => {
     try {
@@ -47,6 +49,13 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
     if (!id) return;
     const current = findStatus(data, id);
     if (!current || current === stage) return;
+    // Won runs the quote-to-job conversion — always go through the modal, which
+    // captures the deposit payment and fires POST /win.
+    if (stage === "won") {
+      const req = findRequest(data, id);
+      if (req) setWonTarget(req);
+      return;
+    }
     void moveTo(id, stage);
   };
 
@@ -60,6 +69,9 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
           </p>
         </div>
         <div class="view-header__right">
+          <button class="btn btn--secondary" onClick={() => go("/estimating/templates")}>
+            Templates
+          </button>
           <button class="btn btn--primary" onClick={() => go("/estimating/new")}>
             + New Request
           </button>
@@ -135,6 +147,15 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
           </button>
         </>
       )}
+
+      <MarkWonModal
+        request={wonTarget}
+        onClose={() => setWonTarget(null)}
+        onWon={() => {
+          setWonTarget(null);
+          refetch();
+        }}
+      />
     </div>
   );
 }
@@ -191,6 +212,15 @@ function findStatus(
   if (!data) return null;
   for (const stage of PIPELINE_STAGES) {
     if ((data.pipeline[stage.key] ?? []).some((r) => r.id === id)) return stage.key;
+  }
+  return null;
+}
+
+function findRequest(data: PipelineResponse | null, id: string): EstimateRequest | null {
+  if (!data) return null;
+  for (const stage of PIPELINE_STAGES) {
+    const hit = (data.pipeline[stage.key] ?? []).find((r) => r.id === id);
+    if (hit) return hit;
   }
   return null;
 }

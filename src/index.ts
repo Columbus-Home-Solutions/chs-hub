@@ -136,7 +136,36 @@ import {
   handleEstimateRequestUpdate,
   handleEstimateRequestAppointment,
   handleEstimateRequestLost,
+  handleEstimateRequestWin,
 } from "./routes/estimate-requests.js";
+import {
+  handleEstimateList,
+  handleEstimateGet,
+  handleEstimateCreate,
+  handleEstimateUpdate,
+  handleEstimateSend,
+  handleEstimateRevise,
+  handleLineItemList,
+  handleLineItemCreate,
+  handleLineItemUpdate,
+  handleLineItemDelete,
+  handleLineItemReorder,
+  handleSubItemCreate,
+  handleSubItemUpdate,
+  handleSubItemDelete,
+  handlePaymentScheduleGet,
+  handlePaymentScheduleReplace,
+  handleTemplateList,
+  handleTemplateGet,
+  handleTemplateCreate,
+  handleTemplateUpdate,
+  handleApplyTemplate,
+  handleReviewList,
+  handleReviewCreate,
+  handleReviewUpdate,
+  handleReviewDelete,
+  handleMaterialSearch,
+} from "./routes/estimates.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -469,11 +498,112 @@ export default {
     if (erLost && request.method === "PUT") {
       return handleEstimateRequestLost(request, env, decodeURIComponent(erLost[1]));
     }
+    const erWin = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/win$/);
+    if (erWin && request.method === "POST") {
+      return handleEstimateRequestWin(request, env, decodeURIComponent(erWin[1]));
+    }
     const erById = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)$/);
     if (erById) {
       const erid = decodeURIComponent(erById[1]);
       if (request.method === "GET") return handleEstimateRequestGet(env, erid);
       if (request.method === "PUT") return handleEstimateRequestUpdate(request, env, erid);
+    }
+
+    // ── Estimate Builder (Sprint 4) ──────────────────────────────────
+    // Sub-resource / fixed paths must be tested before the bare :id routes.
+
+    // Estimate templates (tested before /api/estimates to avoid prefix clashes).
+    if (url.pathname === "/api/estimate-templates") {
+      if (request.method === "GET") return handleTemplateList(env, url);
+      if (request.method === "POST") return handleTemplateCreate(request, env);
+    }
+    const templateById = url.pathname.match(/^\/api\/estimate-templates\/([^/]+)$/);
+    if (templateById) {
+      const tid = decodeURIComponent(templateById[1]);
+      if (request.method === "GET") return handleTemplateGet(env, tid);
+      if (request.method === "PUT") return handleTemplateUpdate(request, env, tid);
+    }
+
+    // Saved reviews.
+    if (url.pathname === "/api/reviews") {
+      if (request.method === "GET") return handleReviewList(env, url);
+      if (request.method === "POST") return handleReviewCreate(request, env);
+    }
+    const reviewById = url.pathname.match(/^\/api\/reviews\/([^/]+)$/);
+    if (reviewById) {
+      const rid = decodeURIComponent(reviewById[1]);
+      if (request.method === "PUT") return handleReviewUpdate(request, env, rid);
+      if (request.method === "DELETE") return handleReviewDelete(request, env, rid);
+    }
+
+    // Material/vendor search (read-only this sprint).
+    if (url.pathname === "/api/materials/search" && request.method === "GET") {
+      return handleMaterialSearch(env, url);
+    }
+
+    // Estimates: nested paths first, bare :id last.
+    if (url.pathname === "/api/estimates") {
+      if (request.method === "GET") return handleEstimateList(env, url);
+      if (request.method === "POST") return handleEstimateCreate(request, env);
+    }
+    const estLineReorder = url.pathname.match(/^\/api\/estimates\/([^/]+)\/line-items\/reorder$/);
+    if (estLineReorder && request.method === "PUT") {
+      return handleLineItemReorder(request, env, decodeURIComponent(estLineReorder[1]));
+    }
+    const estLineItems = url.pathname.match(/^\/api\/estimates\/([^/]+)\/line-items$/);
+    if (estLineItems) {
+      const eid = decodeURIComponent(estLineItems[1]);
+      if (request.method === "GET") return handleLineItemList(env, eid);
+      if (request.method === "POST") return handleLineItemCreate(request, env, eid);
+    }
+    const estSchedule = url.pathname.match(/^\/api\/estimates\/([^/]+)\/payment-schedule$/);
+    if (estSchedule) {
+      const eid = decodeURIComponent(estSchedule[1]);
+      if (request.method === "GET") return handlePaymentScheduleGet(env, eid);
+      if (request.method === "PUT") return handlePaymentScheduleReplace(request, env, eid);
+    }
+    const estSend = url.pathname.match(/^\/api\/estimates\/([^/]+)\/send$/);
+    if (estSend && request.method === "POST") {
+      return handleEstimateSend(request, env, decodeURIComponent(estSend[1]));
+    }
+    const estRevise = url.pathname.match(/^\/api\/estimates\/([^/]+)\/revise$/);
+    if (estRevise && request.method === "POST") {
+      return handleEstimateRevise(request, env, decodeURIComponent(estRevise[1]));
+    }
+    const estApplyTemplate = url.pathname.match(
+      /^\/api\/estimates\/([^/]+)\/apply-template\/([^/]+)$/,
+    );
+    if (estApplyTemplate && request.method === "POST") {
+      return handleApplyTemplate(
+        request,
+        env,
+        decodeURIComponent(estApplyTemplate[1]),
+        decodeURIComponent(estApplyTemplate[2]),
+      );
+    }
+    const estById = url.pathname.match(/^\/api\/estimates\/([^/]+)$/);
+    if (estById) {
+      const eid = decodeURIComponent(estById[1]);
+      if (request.method === "GET") return handleEstimateGet(env, eid);
+      if (request.method === "PUT") return handleEstimateUpdate(request, env, eid);
+    }
+
+    // Line item sub-resources (sub-items) before the bare line-item :id route.
+    const lineSubItems = url.pathname.match(/^\/api\/line-items\/([^/]+)\/sub-items$/);
+    if (lineSubItems && request.method === "POST") {
+      return handleSubItemCreate(request, env, decodeURIComponent(lineSubItems[1]));
+    }
+    const lineItemById = url.pathname.match(/^\/api\/line-items\/([^/]+)$/);
+    if (lineItemById) {
+      const lid = decodeURIComponent(lineItemById[1]);
+      if (request.method === "PUT") return handleLineItemUpdate(request, env, lid);
+      if (request.method === "DELETE") return handleLineItemDelete(request, env, lid);
+    }
+    const subItemById = url.pathname.match(/^\/api\/sub-items\/([^/]+)$/);
+    if (subItemById) {
+      const sid = decodeURIComponent(subItemById[1]);
+      if (request.method === "PUT") return handleSubItemUpdate(request, env, sid);
+      if (request.method === "DELETE") return handleSubItemDelete(request, env, sid);
     }
 
     // ── System settings ──────────────────────────────────────────────

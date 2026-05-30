@@ -9,6 +9,8 @@ import { Settings } from "./views/settings/Settings";
 import { EstimateRequestPipeline } from "./views/estimating/EstimateRequestPipeline";
 import { EstimateRequestForm } from "./views/estimating/EstimateRequestForm";
 import { EstimateRequestDetail } from "./views/estimating/EstimateRequestDetail";
+import { EstimateBuilder } from "./views/estimating/EstimateBuilder";
+import { EstimateTemplates } from "./views/estimating/EstimateTemplates";
 import { Placeholder } from "./views/Placeholder";
 
 export function AppRouter() {
@@ -22,6 +24,8 @@ export function AppRouter() {
       <Settings path={`${BASE}/settings`} />
       <EstimateRequestPipeline path={`${BASE}/estimating`} />
       <EstimateRequestForm path={`${BASE}/estimating/new`} />
+      <EstimateTemplates path={`${BASE}/estimating/templates`} />
+      <EstimateBuilder path={`${BASE}/estimating/:requestId/estimate`} />
       <EstimateRequestDetail path={`${BASE}/estimating/:id`} />
       <Placeholder path={`${BASE}/jobs`} title="Jobs" />
       <Placeholder path={`${BASE}/financial`} title="Financial" />

@@ -18,7 +18,8 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
-import { triggerLeadCreated, triggerAppointmentSet } from "../lib/wc/triggers.js";
+import { triggerLeadCreated, triggerAppointmentSet, triggerDealWon } from "../lib/wc/triggers.js";
+import { convertQuoteToJob, type DepositMethod } from "../lib/quote-to-job.js";
 
 // Write roles match the app-wide convention (clients/subs): owner, PM, and
 // office_admin — office_admin managing the pipeline is the realistic workflow.
@@ -27,7 +28,8 @@ const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
 // Linear forward-only pipeline. won/lost are terminal and handled specially:
 //   - lost is always reachable from any non-terminal stage
-//   - won is never set via this API (quote→job conversion owns it — Sprint 5)
+//   - won can be set manually from sent/follow_up (deposit-paid quote→job
+//     conversion will set it automatically via the same path in Sprint 5)
 const PROGRESSION = [
   "new_request",
   "appointment_set",
@@ -114,15 +116,21 @@ interface RequestRow {
   c_phone: string | null;
   c_email: string | null;
   c_is_repeat: number | null;
+  // joined estimate fields
+  e_status: string | null;
+  e_sent_at: string | null;
+  e_deposit: number | null;
 }
 
 const SELECT = `
   SELECT er.*,
     c.first_name AS c_first, c.last_name AS c_last, c.name AS c_name,
     c.phone AS c_phone, c.email AS c_email,
-    COALESCE(c.is_repeat_client, 0) AS c_is_repeat
+    COALESCE(c.is_repeat_client, 0) AS c_is_repeat,
+    e.status AS e_status, e.sent_at AS e_sent_at, e.deposit_amount AS e_deposit
   FROM estimate_requests er
   LEFT JOIN clients c ON c.id = er.client_id
+  LEFT JOIN estimates e ON e.id = er.estimate_id
 `;
 
 function clientName(row: RequestRow): string {
@@ -160,6 +168,9 @@ function shape(row: RequestRow) {
     visit_notes: row.visit_notes,
     visit_photo_ids: row.visit_photo_ids,
     estimate_id: row.estimate_id,
+    estimate_status: row.e_status,
+    estimate_sent: !!row.e_sent_at || (row.e_status != null && row.e_status !== "draft"),
+    estimate_deposit: row.e_deposit,
     sent_date: row.sent_date,
     follow_up_count: row.follow_up_count ?? 0,
     last_follow_up_date: row.last_follow_up_date,
@@ -187,12 +198,16 @@ function validateTransition(current: string, next: string): string | null {
   if (!ALL_STATUSES.includes(next as Status)) {
     return `Unknown status "${next}"`;
   }
-  if (next === "won") {
-    return "Cannot set status to 'won' directly — won is set by quote-to-job conversion.";
-  }
-  // Terminal states cannot transition onward (lost is final; won is set elsewhere).
+  // Terminal states cannot transition onward (won and lost are both final).
   if (current === "won" || current === "lost") {
     return `Cannot move a '${current}' request to '${next}'.`;
+  }
+  // Won can be set manually, but only once a quote has actually gone out — you
+  // can't win a job you never sent. Once the Sprint 5 quote-to-job conversion
+  // (deposit paid) lands, it will set won automatically via the same path.
+  if (next === "won") {
+    if (current === "sent" || current === "follow_up") return null;
+    return "A request can only be marked 'won' from 'Estimate Sent' or 'Follow-Up'.";
   }
   if (next === "lost") return null; // always allowed from any active stage
   const ci = PROGRESSION.indexOf(current as (typeof PROGRESSION)[number]);
@@ -201,6 +216,7 @@ function validateTransition(current: string, next: string): string | null {
   if (ni < ci) return `Backward status moves are not allowed (${current} → ${next}).`;
   return null;
 }
+
 
 // ─── GET /api/estimate-requests ──────────────────────────────────────────────
 
@@ -397,10 +413,10 @@ export async function handleEstimateRequestUpdate(
   const { user } = guarded;
 
   const existing = await env.DB.prepare(
-    "SELECT id, status FROM estimate_requests WHERE id = ?",
+    "SELECT id, status, estimate_id FROM estimate_requests WHERE id = ?",
   )
     .bind(id)
-    .first<{ id: string; status: string }>();
+    .first<{ id: string; status: string; estimate_id: string | null }>();
   if (!existing) return err(404, "not_found", "Estimate request not found");
 
   const body = await readJson(request);
@@ -415,6 +431,16 @@ export async function handleEstimateRequestUpdate(
   // Status transition (validated state machine).
   if ("status" in body) {
     const target = str(body.status) ?? "";
+    // Won is never set through the generic update — it must run the quote-to-job
+    // conversion, which records the deposit payment (Module-Spec §4.10). A direct
+    // PATCH/PUT status=won (no payment record) is rejected with 400.
+    if (target === "won" && target !== existing.status) {
+      return err(
+        400,
+        "won_requires_conversion",
+        "Marking a request won requires recording the deposit payment. Use the Mark as Won action (POST /api/estimate-requests/:id/win).",
+      );
+    }
     const problem = validateTransition(existing.status, target);
     if (problem) return err(400, "bad_request", problem);
     if (target !== existing.status) {
@@ -578,4 +604,65 @@ export async function handleEstimateRequestLost(
 
   const updated = await loadShaped(env, id);
   return json({ request: updated });
+}
+
+// ─── POST /api/estimate-requests/:id/win ─────────────────────────────────────
+// Manual "Mark as Won" (Module-Spec §4.10). The modal posts the deposit payment;
+// this runs the quote-to-job conversion. Won is set ONLY through this path.
+
+const MANUAL_PAYMENT_METHODS: ReadonlySet<DepositMethod> = new Set([
+  "check",
+  "cash",
+  "venmo",
+  "zelle",
+  "other",
+]);
+
+export async function handleEstimateRequestWin(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  const method = (str(body.payment_method) ?? "").toLowerCase() as DepositMethod;
+  if (!MANUAL_PAYMENT_METHODS.has(method)) {
+    return err(
+      400,
+      "bad_request",
+      "A payment method is required: check, cash, venmo, zelle, or other.",
+    );
+  }
+  const amount = Number(body.deposit_amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return err(400, "bad_request", "A deposit amount greater than zero is required.");
+  }
+  const reference = str(body.reference);
+
+  const outcome = await convertQuoteToJob(env, id, { amount, method, reference }, user.id);
+  if (!outcome.ok) return err(outcome.status, outcome.error, outcome.details);
+
+  await logAudit(env, user.email, "estimate_request_won", id, {
+    job_id: outcome.jobId,
+    job_number: outcome.jobNumber,
+    payment_id: outcome.paymentId,
+    payment_method: method,
+    deposit_amount: amount,
+  });
+
+  // WC closed-deal count + New Sales value track the contract total, not deposit.
+  triggerDealWon(env, outcome.jobId, outcome.total);
+
+  const updated = await loadShaped(env, id);
+  return json({
+    request: updated,
+    job_id: outcome.jobId,
+    job_number: outcome.jobNumber,
+    payment_id: outcome.paymentId,
+  });
 }

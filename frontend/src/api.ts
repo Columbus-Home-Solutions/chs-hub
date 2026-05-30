@@ -43,4 +43,7 @@ export const api = {
       await fetch(url, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(body ?? {}) }),
     );
   },
+  async del<T>(url: string): Promise<T> {
+    return parse<T>(await fetch(url, { method: "DELETE", headers: { Accept: "application/json" } }));
+  },
 };

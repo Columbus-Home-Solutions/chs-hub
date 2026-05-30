@@ -38,4 +38,4 @@ Thumbs.db
 *.swp
 scripts/dev-seed-sprint2.local.sql
 scripts/dev-seed-sprint3.local.sql
-backup_pre_sprint2_remote_*.sql
+backup_pre_sprint*_remote_*.sql

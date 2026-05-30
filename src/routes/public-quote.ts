@@ -29,7 +29,7 @@ import {
   createPaymentIntent,
   getStripeConfig,
   isConfigured,
-  verifyWebhook,
+  verifyWebhookDetailed,
 } from "../lib/stripe.js";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -546,20 +546,42 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
   const payload = await request.text();
   const sig = request.headers.get("stripe-signature");
 
-  const event = await verifyWebhook(payload, sig, cfg.webhookSecret);
-  if (!event) {
-    return err(400, "invalid_signature", "Webhook signature verification failed.");
+  const verified = await verifyWebhookDetailed(payload, sig, cfg.webhookSecret);
+  if (!verified.ok) {
+    // Safe to log: reason only, never the secret or full signature.
+    await logPublicAudit(env, "", null, "stripe_webhook_verify_failed", "stripe", {
+      reason: verified.reason,
+      has_sig_header: !!sig,
+      has_webhook_secret: !!cfg.webhookSecret,
+      payload_bytes: payload.length,
+    });
+    const details =
+      verified.reason === "timestamp_outside_tolerance"
+        ? "Webhook timestamp is outside the allowed window (5 minutes). Use a fresh delivery or check server clock skew."
+        : verified.reason === "missing_header_or_secret"
+          ? "Missing Stripe-Signature header or STRIPE_WEBHOOK_SECRET on the Worker."
+          : verified.reason === "signature_mismatch"
+            ? "Webhook signature verification failed. Confirm the endpoint signing secret matches STRIPE_WEBHOOK_SECRET (Dashboard → Webhooks → Reveal secret, not the CLI listen secret)."
+            : "Webhook signature verification failed.";
+    return err(400, "invalid_signature", details);
   }
+  const event = verified.event;
 
   const type = String(event.type ?? "");
   // Only deposit PaymentIntents drive conversion. Everything else is ack'd 200.
   if (type !== "payment_intent.succeeded") {
+    await logPublicAudit(env, "", null, "stripe_webhook_ignored", "stripe", { ignored: type });
     return json({ received: true, ignored: type });
   }
 
   const obj = ((event.data as Record<string, unknown>)?.object ?? {}) as Record<string, unknown>;
   const metadata = (obj.metadata ?? {}) as Record<string, string>;
   if (metadata.kind !== "deposit") {
+    await logPublicAudit(env, "", null, "stripe_webhook_ignored", "stripe", {
+      ignored: "non_deposit_intent",
+      payment_intent_id: obj.id ?? null,
+      metadata_keys: Object.keys(metadata),
+    });
     return json({ received: true, ignored: "non_deposit_intent" });
   }
 
@@ -572,6 +594,12 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
 
   if (!requestId || !Number.isFinite(deposit) || deposit <= 0) {
     // Ack so Stripe stops retrying a malformed intent, but record nothing.
+    await logPublicAudit(env, token, null, "stripe_webhook_ignored", estimateId ?? "stripe", {
+      ignored: "missing_metadata",
+      payment_intent_id: stripePaymentId,
+      request_id: requestId || null,
+      deposit: metadata.deposit ?? null,
+    });
     return json({ received: true, ignored: "missing_metadata" });
   }
 
@@ -604,6 +632,10 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
 
   if (!outcome.ok) {
     if (outcome.error === "already_won") {
+      await logPublicAudit(env, token, null, "stripe_webhook_idempotent", estimateId ?? requestId, {
+        payment_intent_id: stripePaymentId,
+        request_id: requestId,
+      });
       return json({ received: true, idempotent: true });
     }
     // Log and ack (200) — returning non-2xx makes Stripe retry indefinitely.

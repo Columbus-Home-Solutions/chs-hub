@@ -141,10 +141,42 @@ export async function createPaymentIntent(
   };
 }
 
+/** Parsed Stripe-Signature header (`t=…,v1=…[,v1=…]`). */
+function parseStripeSignatureHeader(sigHeader: string): { timestamp: string; v1Signatures: string[] } | null {
+  let timestamp: string | null = null;
+  const v1Signatures: string[] = [];
+  for (const part of sigHeader.split(",")) {
+    const eq = part.indexOf("=");
+    if (eq <= 0) continue;
+    const prefix = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (prefix === "t") timestamp = value;
+    else if (prefix === "v1") v1Signatures.push(value);
+    // Ignore v0 and any future schemes (Stripe spec).
+  }
+  if (!timestamp || v1Signatures.length === 0) return null;
+  return { timestamp, v1Signatures };
+}
+
+export type WebhookVerifyFailure =
+  | "missing_header_or_secret"
+  | "malformed_header"
+  | "timestamp_outside_tolerance"
+  | "signature_mismatch"
+  | "invalid_json";
+
+export type WebhookVerifyResult =
+  | { ok: true; event: Record<string, unknown> }
+  | { ok: false; reason: WebhookVerifyFailure };
+
 /**
  * Verify a Stripe webhook signature (the `Stripe-Signature` header: `t=…,v1=…`).
- * Uses HMAC-SHA256 over `${t}.${payload}` and a constant-time compare. Returns
- * the parsed event on success, or null on any failure.
+ * Uses Web Crypto HMAC-SHA256 over `${t}.${payload}` (same algorithm as stripe-node's
+ * SubtleCryptoProvider — no Node `crypto`, no Stripe SDK required).
+ *
+ * Stripe may send **multiple `v1=` entries** (secret roll overlap, or one per active
+ * secret). We must accept the event if **any** v1 matches — Object.fromEntries
+ * on duplicate keys kept only the last v1 and broke verification after a roll.
  */
 export async function verifyWebhook(
   payload: string,
@@ -152,31 +184,36 @@ export async function verifyWebhook(
   secret: string | null,
   toleranceSeconds = 300,
 ): Promise<Record<string, unknown> | null> {
-  if (!sigHeader || !secret) return null;
+  const result = await verifyWebhookDetailed(payload, sigHeader, secret, toleranceSeconds);
+  return result.ok ? result.event : null;
+}
 
-  const parts = Object.fromEntries(
-    sigHeader.split(",").map((kv) => {
-      const i = kv.indexOf("=");
-      return [kv.slice(0, i).trim(), kv.slice(i + 1).trim()];
-    }),
-  ) as Record<string, string>;
-  const t = parts.t;
-  const v1 = parts.v1;
-  if (!t || !v1) return null;
-
-  // Reject stale timestamps (replay protection).
-  const ts = Number(t);
-  if (Number.isFinite(ts) && Math.abs(Date.now() / 1000 - ts) > toleranceSeconds) {
-    return null;
+export async function verifyWebhookDetailed(
+  payload: string,
+  sigHeader: string | null,
+  secret: string | null,
+  toleranceSeconds = 300,
+): Promise<WebhookVerifyResult> {
+  if (!sigHeader || !secret) {
+    return { ok: false, reason: "missing_header_or_secret" };
   }
 
-  const expected = await hmacSha256Hex(secret, `${t}.${payload}`);
-  if (!timingSafeEqual(expected, v1)) return null;
+  const parsed = parseStripeSignatureHeader(sigHeader);
+  if (!parsed) return { ok: false, reason: "malformed_header" };
+
+  const ts = Number(parsed.timestamp);
+  if (Number.isFinite(ts) && Math.abs(Date.now() / 1000 - ts) > toleranceSeconds) {
+    return { ok: false, reason: "timestamp_outside_tolerance" };
+  }
+
+  const expected = await hmacSha256Hex(secret, `${parsed.timestamp}.${payload}`);
+  const matched = parsed.v1Signatures.some((sig) => timingSafeEqual(expected, sig));
+  if (!matched) return { ok: false, reason: "signature_mismatch" };
 
   try {
-    return JSON.parse(payload) as Record<string, unknown>;
+    return { ok: true, event: JSON.parse(payload) as Record<string, unknown> };
   } catch {
-    return null;
+    return { ok: false, reason: "invalid_json" };
   }
 }
 

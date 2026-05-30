@@ -28,6 +28,12 @@ export interface DepositPayment {
   amount: number;
   method: DepositMethod;
   reference?: string | null;
+  /** Electronic-only: the 3.5% convenience fee the client paid on top (revenue). */
+  convenienceFee?: number | null;
+  /** Electronic-only: Stripe's own processing fee (cost). net = amount - stripeFee. */
+  stripeFee?: number | null;
+  /** Stripe PaymentIntent id, for reconciliation (electronic only). */
+  stripePaymentId?: string | null;
 }
 
 export type ConversionOutcome =
@@ -114,6 +120,12 @@ export async function convertQuoteToJob(
   const today = nowIso.slice(0, 10);
   const total = round2(row.e_total ?? 0);
   const deposit = round2(payment.amount);
+  // Fees are tracked separately: the convenience fee is CHS revenue, the Stripe
+  // fee is a cost. net_amount = amount - stripe_fee (the deposit applied to the
+  // contract, minus what the processor took). Manual methods carry no fees.
+  const convenienceFee = payment.convenienceFee != null ? round2(payment.convenienceFee) : null;
+  const stripeFee = payment.stripeFee != null ? round2(payment.stripeFee) : null;
+  const netAmount = round2(deposit - (stripeFee ?? 0));
 
   const jobId = crypto.randomUUID();
   const paymentId = crypto.randomUUID();
@@ -163,17 +175,22 @@ export async function convertQuoteToJob(
 
   await env.DB.prepare(
     `INSERT INTO payments (
-       id, job_id, client_id, amount, net_amount, payment_method,
+       id, job_id, estimate_id, client_id, amount, convenience_fee, stripe_fee,
+       net_amount, payment_method, stripe_payment_id,
        received_date, collected_at, notes, synced_at, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       paymentId,
       jobId,
+      row.e_id,
       row.client_id,
       deposit,
-      deposit,
+      convenienceFee,
+      stripeFee,
+      netAmount,
       payment.method,
+      payment.stripePaymentId ?? null,
       today,
       nowIso,
       payment.reference ?? null,
@@ -189,9 +206,14 @@ export async function convertQuoteToJob(
     .run();
 
   await env.DB.prepare(
-    "UPDATE estimates SET status = 'approved', signed_date = ?, updated_at = ? WHERE id = ?",
+    `UPDATE estimates
+     SET status = 'approved',
+         signed_date = COALESCE(signed_date, ?),
+         approved_date = ?,
+         updated_at = ?
+     WHERE id = ?`,
   )
-    .bind(today, nowIso, row.e_id)
+    .bind(today, today, nowIso, row.e_id)
     .run();
 
   return { ok: true, jobId, jobNumber, paymentId, total };

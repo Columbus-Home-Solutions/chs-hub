@@ -1,6 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
 import { Modal } from "../../components/ui/Modal";
-import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";

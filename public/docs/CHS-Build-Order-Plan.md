@@ -136,12 +136,14 @@ The core loop: leads come in → estimates go out → jobs get created → work 
 8. Quote expiration handling (7-day default).
 9. Lost quote tracking: mark as lost with reason.
 10. Estimate revision flow: revise → re-send → new version.
+11. Google Reviews bulk import (part A of the sync — see Social Media spec §7.1): one-time paged import of all existing Google reviews into the shared Saved Review table so the quote page shows real reviews at launch. Ongoing polling + auto-post enhancements deferred to Sprint 16. **Prerequisite: GBP API access request must be submitted well ahead of this sprint — approval is gated (verified profile 60+ days, formal request) and can take weeks.**
 
 **Tests:**
 - Client receives estimate link, views quote page, signs, and pays deposit via Stripe.
 - Convenience fee calculated and disclosed correctly.
 - Contract generated with correct client/job data.
 - Quote follow-up reminders fire at configured intervals.
+- Google reviews import populates the Saved Review table; 4–5 star reviews default active; de-dupe by `google_review_id` prevents duplicates on re-run.
 
 **Done when:** The full estimate-to-signed-contract flow works end to end.
 
@@ -448,12 +450,14 @@ External integrations, document management, social media, and polish.
 8. Facebook and Instagram publishing via Graph API.
 9. Published post history with platform links.
 10. Post editor: edit caption, regenerate, change timing.
+11. Google Reviews ongoing sync (part B — see Social Media spec §7.1): scheduled polling on the existing cron diffs against stored reviews and inserts new ones (no webhook exists). New-review notification (ties to Sprint 7 engine) and auto-suggesting a 5-star review as a review-highlight post. (Bulk import already done in Sprint 5.)
 
 **Tests:**
 - Monthly schedule generates appropriate mix of content.
 - Job completion post uses social-ready photos with AI caption.
 - Approval → publish flow works for both platforms.
 - Failed publish retries 3x then marks as failed.
+- New Google review appears in the Saved Review table on the next cron tick without duplicating existing ones.
 
 **Done when:** Social media runs semi-autonomously: AI generates, user approves, system publishes.
 

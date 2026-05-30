@@ -14,6 +14,7 @@ import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
 import {
   BILLING_MODELS,
   ESTIMATE_MODES,
+  LOST_REASONS,
   PAYMENT_TRIGGERS,
   SUB_ITEM_CATEGORIES,
   type Estimate,
@@ -154,8 +155,13 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
               Revise
             </Button>
           )}
+          {sent && e.status !== "approved" && (
+            <MarkLostButton estimate={e} mutate={mutate} />
+          )}
         </div>
       </div>
+
+      {sent && <SentStatusCard estimate={e} />}
 
       {/* ── Top bar ─────────────────────────────────────────────── */}
       <Card>
@@ -1128,6 +1134,136 @@ function ClientPreview({ estimate, reviews }: { estimate: Estimate; reviews: Sav
   );
 }
 
+// ─── Sent status: client link + progress (Sprint 5) ───────────────────────────
+
+function SentStatusCard({ estimate }: { estimate: Estimate }) {
+  const toast = useToast();
+  const [copied, setCopied] = useState(false);
+  const link = estimate.portal_path
+    ? `${window.location.origin}${estimate.portal_path}`
+    : null;
+
+  const copy = async () => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      toast.push("success", "Client link copied");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.push("error", "Couldn't copy — select and copy manually.");
+    }
+  };
+
+  // Progress: Sent → Viewed → Signed → Deposit Paid (approved).
+  const steps = [
+    { label: "Sent", done: true, when: estimate.sent_at },
+    { label: "Viewed", done: !!estimate.viewed_date || ["viewed", "approved"].includes(estimate.status), when: estimate.viewed_date },
+    { label: "Signed", done: estimate.signed, when: estimate.signed_date },
+    { label: "Deposit Paid", done: estimate.status === "approved", when: estimate.approved_date },
+  ];
+
+  return (
+    <Card title="Client Quote Link">
+      <div class="stack">
+        <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
+          <input
+            class="form-input"
+            style={{ flex: "1", minWidth: "240px" }}
+            readOnly
+            value={link ?? "Link will appear once the quote is sent."}
+            onFocus={(ev) => (ev.target as HTMLInputElement).select()}
+          />
+          <Button variant="secondary" disabled={!link} onClick={copy}>
+            {copied ? "Copied ✓" : "Copy link"}
+          </Button>
+          {link && (
+            <Button variant="tertiary" onClick={() => window.open(link, "_blank")}>
+              Open
+            </Button>
+          )}
+        </div>
+        <div class="quote-progress">
+          {steps.map((s, i) => (
+            <div key={i} class={`quote-progress__step${s.done ? " is-done" : ""}`}>
+              <span class="quote-progress__dot">{s.done ? "✓" : i + 1}</span>
+              <span class="quote-progress__label">
+                {s.label}
+                {s.when ? <span class="quote-progress__when"> · {formatDate(s.when)}</span> : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+          Automated email/SMS delivery of this link arrives with the Notification engine (Sprint 7).
+          For now, copy and send it to the client.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
+function MarkLostButton({
+  estimate,
+  mutate,
+}: {
+  estimate: Estimate;
+  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [notes, setNotes] = useState("");
+
+  return (
+    <>
+      <Button variant="danger" onClick={() => setOpen(true)}>
+        Mark Lost
+      </Button>
+      <Modal
+        open={open}
+        title="Mark estimate as lost"
+        onClose={() => setOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={!reason}
+              onClick={() => {
+                setOpen(false);
+                void mutate(
+                  () => api.post(`/api/estimates/${estimate.id}/lost`, { reason, notes: notes || null }),
+                  "Marked as lost",
+                );
+              }}
+            >
+              Mark Lost
+            </Button>
+          </>
+        }
+      >
+        <FormField label="Reason" required>
+          <Select
+            value={reason}
+            placeholder="Select a reason…"
+            options={LOST_REASONS.map((x) => ({ value: x, label: formatStatus(x) }))}
+            onChange={setReason}
+          />
+        </FormField>
+        <FormField label="Notes">
+          <textarea
+            class="form-textarea"
+            value={notes}
+            onInput={(e) => setNotes((e.target as HTMLTextAreaElement).value)}
+          />
+        </FormField>
+      </Modal>
+    </>
+  );
+}
+
 // ─── Save-as-template + Send ────────────────────────────────────────────────────
 
 function SaveTemplate({
@@ -1247,8 +1383,9 @@ function SendButton({
           <li class={pctOk ? "ok" : "bad"}>{pctOk ? "✓" : "✕"} Percentage milestones total 100%</li>
         </ul>
         <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-          Marks the estimate as sent and starts the validity clock. (Client delivery, Stripe and the
-          signature page ship in Sprint 5.)
+          Marks the estimate as sent, freezes the contract text, and makes the secure client quote
+          link live (sign + pay deposit). Copy the link to the client from the card above — automated
+          email/SMS delivery arrives with the Notification engine (Sprint 7).
         </p>
       </Modal>
     </>

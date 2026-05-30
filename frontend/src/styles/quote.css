@@ -1,0 +1,341 @@
+/* Public client quote page (Sprint 5). Standalone — no app shell. Reuses the
+   design tokens + the .preview* classes from the builder for body fidelity. */
+
+.quote-shell {
+  min-height: 100vh;
+  background: var(--color-bg, #f6f7f9);
+  color: var(--color-text, #0b0f1a);
+  font-family: var(--font-sans, "DM Sans", system-ui, sans-serif);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-lg, 24px) var(--space-md, 16px) var(--space-2xl, 48px);
+}
+
+.quote-loading,
+.quote-empty {
+  margin-top: 18vh;
+  text-align: center;
+  color: var(--color-text-muted, #5b6472);
+}
+.quote-empty__icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+.quote-empty h1 {
+  font-family: var(--font-display, "Outfit", sans-serif);
+  margin: 0 0 8px;
+}
+
+.quote-header {
+  width: 100%;
+  max-width: 1040px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: var(--space-lg, 24px);
+}
+.quote-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.quote-header__logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display, "Outfit", sans-serif);
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+}
+.quote-header__company {
+  font-family: var(--font-display, "Outfit", sans-serif);
+  font-weight: 700;
+  font-size: 18px;
+}
+.quote-header__est {
+  font-size: 13px;
+  color: var(--color-text-muted, #5b6472);
+}
+.quote-status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #e8eefc;
+  color: #2455d6;
+  white-space: nowrap;
+}
+.quote-status--viewed {
+  background: #e8eefc;
+  color: #2455d6;
+}
+.quote-status--sent {
+  background: #eef1f5;
+  color: #50607a;
+}
+.quote-status--approved {
+  background: #e6f6ec;
+  color: #1d8a4f;
+}
+.quote-status--expired {
+  background: #fdeaea;
+  color: #c0392b;
+}
+
+.quote-body {
+  width: 100%;
+  max-width: 1040px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(320px, 1fr);
+  gap: var(--space-lg, 24px);
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .quote-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.quote-card {
+  background: #fff;
+  border: 1px solid var(--color-border, #e4e7ec);
+  border-radius: 16px;
+  padding: var(--space-lg, 24px);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+.quote-main-col {
+  padding: var(--space-xl, 32px);
+}
+.quote-card__title {
+  font-family: var(--font-display, "Outfit", sans-serif);
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 14px;
+}
+.quote-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg, 24px);
+}
+.quote-muted {
+  color: var(--color-text-muted, #5b6472);
+  font-size: 13px;
+}
+
+/* Approve & pay */
+.quote-action {
+  position: sticky;
+  top: var(--space-lg, 24px);
+}
+.quote-deposit-callout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  background: #fff8ec;
+  border: 1px solid #f6e2b8;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.quote-deposit-callout strong {
+  font-family: var(--font-display, "Outfit", sans-serif);
+  font-size: 24px;
+  color: #b9770a;
+}
+
+.quote-step__label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--color-text-muted, #5b6472);
+  margin-bottom: 10px;
+}
+.quote-field {
+  display: block;
+  margin: 12px 0;
+}
+.quote-field > span {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.quote-input,
+.quote-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  border: 1px solid var(--color-border, #d6dae1);
+  border-radius: 10px;
+  font: inherit;
+  background: #fff;
+}
+.quote-textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+.quote-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+  margin: 12px 0;
+  line-height: 1.4;
+}
+.quote-check input {
+  margin-top: 2px;
+}
+
+.quote-btn {
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transition: filter 0.15s ease, opacity 0.15s ease;
+}
+.quote-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.quote-btn--primary {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+}
+.quote-btn--primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.quote-btn--secondary {
+  background: #f1f3f7;
+  color: #1f2a3a;
+}
+.quote-btn__sub {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+.quote-pay-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.quote-link-btn {
+  background: none;
+  border: none;
+  color: #2455d6;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 8px 0 0;
+  text-decoration: underline;
+}
+
+.quote-signed-note {
+  background: #e6f6ec;
+  border: 1px solid #bfe6cd;
+  color: #1d6f43;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.quote-error {
+  background: #fdeaea;
+  border: 1px solid #f3c6c6;
+  color: #b3261e;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin: 10px 0;
+}
+.quote-fee-disclosure {
+  background: #f1f3f7;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  text-align: center;
+}
+.quote-stripe-element {
+  margin: 10px 0 14px;
+}
+.quote-contract {
+  max-height: 280px;
+  overflow: auto;
+  background: #f8f9fb;
+  border: 1px solid var(--color-border, #e4e7ec);
+  border-radius: 10px;
+  padding: 14px;
+  font-family: var(--font-sans, "DM Sans", sans-serif);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  margin: 10px 0;
+}
+.quote-check-box {
+  background: #f8f9fb;
+  border: 1px solid var(--color-border, #e4e7ec);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 8px 0;
+}
+
+.quote-review {
+  border-top: 1px solid var(--color-border, #eef0f3);
+  padding: 12px 0;
+}
+.quote-review:first-of-type {
+  border-top: none;
+}
+.quote-review__stars {
+  color: #f59e0b;
+  letter-spacing: 2px;
+}
+.quote-review__text {
+  font-size: 14px;
+  margin: 4px 0;
+  line-height: 1.5;
+}
+.quote-review__by {
+  font-size: 12px;
+  color: var(--color-text-muted, #5b6472);
+}
+
+.quote-expired,
+.quote-approved {
+  text-align: center;
+}
+.quote-approved__check {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #e6f6ec;
+  color: #1d8a4f;
+  font-size: 30px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 12px;
+}
+
+.quote-footer {
+  margin-top: var(--space-xl, 32px);
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-text-muted, #5b6472);
+}

@@ -337,6 +337,12 @@ export interface Estimate {
   review_ids: string | null;
   include_contract: boolean;
   contract_template_id: string | null;
+  client_signature: string | null;
+  signed: boolean;
+  signed_date: string | null;
+  viewed_date: string | null;
+  approved_date: string | null;
+  portal_path: string | null;
   notes: string | null;
   version: number;
   revised_from_id: string | null;

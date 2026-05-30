@@ -19,6 +19,16 @@ export default defineConfig({
   build: {
     outDir: "../public/app",
     emptyOutDir: true,
+    rollupOptions: {
+      // Two entries share the same assets/ dir and /app/ base:
+      //   index.html → the authenticated app (served at /app)
+      //   quote.html → the standalone public client quote page (served at
+      //                 /quote/:token by the Worker; no app shell, no auth)
+      input: {
+        app: "index.html",
+        quote: "quote.html",
+      },
+    },
   },
   server: {
     proxy: {

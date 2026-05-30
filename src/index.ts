@@ -145,6 +145,7 @@ import {
   handleEstimateUpdate,
   handleEstimateSend,
   handleEstimateRevise,
+  handleEstimateLost,
   handleLineItemList,
   handleLineItemCreate,
   handleLineItemUpdate,
@@ -166,6 +167,14 @@ import {
   handleReviewDelete,
   handleMaterialSearch,
 } from "./routes/estimates.js";
+import {
+  handlePublicQuoteGet,
+  handlePublicQuoteSign,
+  handlePublicQuoteRequestChanges,
+  handlePublicQuotePayIntent,
+  handlePublicQuotePayCheck,
+  handleStripeWebhook,
+} from "./routes/public-quote.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -187,6 +196,34 @@ export default {
 
     if (url.pathname === "/api/health/heartbeat" && request.method === "GET") {
       return handleHeartbeat(env);
+    }
+
+    // ── Public quote delivery + Stripe webhook (Sprint 5) ────────────
+    // UNAUTHENTICATED on purpose: gated only by the estimate's portal_token
+    // (or, for the webhook, the Stripe signature). No guard()/Access here.
+    // Matched early so the token paths never fall through to auth'd routes.
+    if (url.pathname === "/api/webhooks/stripe" && request.method === "POST") {
+      return handleStripeWebhook(request, env);
+    }
+    const pqSign = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/sign$/);
+    if (pqSign && request.method === "POST") {
+      return handlePublicQuoteSign(request, env, decodeURIComponent(pqSign[1]));
+    }
+    const pqChanges = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/request-changes$/);
+    if (pqChanges && request.method === "POST") {
+      return handlePublicQuoteRequestChanges(request, env, decodeURIComponent(pqChanges[1]));
+    }
+    const pqPayIntent = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/pay\/intent$/);
+    if (pqPayIntent && request.method === "POST") {
+      return handlePublicQuotePayIntent(request, env, decodeURIComponent(pqPayIntent[1]));
+    }
+    const pqPayCheck = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/pay\/check$/);
+    if (pqPayCheck && request.method === "POST") {
+      return handlePublicQuotePayCheck(request, env, decodeURIComponent(pqPayCheck[1]));
+    }
+    const pqGet = url.pathname.match(/^\/api\/public\/quote\/([^/]+)$/);
+    if (pqGet && request.method === "GET") {
+      return handlePublicQuoteGet(env, decodeURIComponent(pqGet[1]));
     }
 
     if (url.pathname === "/api/kpis" && request.method === "GET") {
@@ -570,6 +607,10 @@ export default {
     if (estRevise && request.method === "POST") {
       return handleEstimateRevise(request, env, decodeURIComponent(estRevise[1]));
     }
+    const estLost = url.pathname.match(/^\/api\/estimates\/([^/]+)\/lost$/);
+    if (estLost && request.method === "POST") {
+      return handleEstimateLost(request, env, decodeURIComponent(estLost[1]));
+    }
     const estApplyTemplate = url.pathname.match(
       /^\/api\/estimates\/([^/]+)\/apply-template\/([^/]+)$/,
     );
@@ -619,6 +660,16 @@ export default {
 
     if (url.pathname.startsWith("/api/")) {
       return jsonResponse({ error: "not_found", path: url.pathname }, { status: 404 });
+    }
+
+    // ── Public client quote page (Sprint 5) ──────────────────────────
+    // /quote/:token is a STANDALONE, no-auth, no-app-shell page (its own Vite
+    // entry, built to public/app/quote.html). The page reads the token from the
+    // URL and calls /api/public/quote/:token. Served on every host; no Access.
+    if (url.pathname === "/quote" || url.pathname.startsWith("/quote/")) {
+      const quoteHtmlUrl = new URL(request.url);
+      quoteHtmlUrl.pathname = "/app/quote.html";
+      return env.ASSETS.fetch(new Request(quoteHtmlUrl.toString(), { method: "GET" }));
     }
 
     // ── New Preact app (Sprint 2+) ───────────────────────────────────

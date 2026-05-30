@@ -268,6 +268,9 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                 {estimate || r.estimate_id ? "Open Estimate" : "Build Estimate"}
               </Button>
             </div>
+            {estimate && estimate.portal_path && (
+              <EstimateClientProgress estimate={estimate} />
+            )}
           </Card>
         </div>
 
@@ -487,5 +490,58 @@ function LostModal({
         />
       </FormField>
     </Modal>
+  );
+}
+
+// Compact client-link + progress shown on the request detail's Estimate card.
+function EstimateClientProgress({ estimate }: { estimate: Estimate }) {
+  const toast = useToast();
+  const [copied, setCopied] = useState(false);
+  const link = estimate.portal_path ? `${window.location.origin}${estimate.portal_path}` : null;
+
+  const copy = async () => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      toast.push("success", "Client link copied");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.push("error", "Couldn't copy — select and copy manually.");
+    }
+  };
+
+  const steps = [
+    { label: "Sent", done: ["sent", "viewed", "approved"].includes(estimate.status) },
+    { label: "Viewed", done: !!estimate.viewed_date || ["viewed", "approved"].includes(estimate.status) },
+    { label: "Signed", done: estimate.signed },
+    { label: "Deposit Paid", done: estimate.status === "approved" },
+  ];
+
+  return (
+    <div class="stack" style={{ marginTop: "var(--space-md)" }}>
+      <div class="quote-progress">
+        {steps.map((s, i) => (
+          <div key={i} class={`quote-progress__step${s.done ? " is-done" : ""}`}>
+            <span class="quote-progress__dot">{s.done ? "✓" : i + 1}</span>
+            <span class="quote-progress__label">{s.label}</span>
+          </div>
+        ))}
+      </div>
+      {link && (
+        <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
+          <input
+            class="form-input"
+            style={{ flex: "1", minWidth: "220px", fontSize: "var(--text-sm)" }}
+            readOnly
+            value={link}
+            onFocus={(ev) => (ev.target as HTMLInputElement).select()}
+          />
+          <Button variant="secondary" onClick={copy}>
+            {copied ? "Copied ✓" : "Copy link"}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

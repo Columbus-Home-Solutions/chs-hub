@@ -40,6 +40,14 @@ export interface Env {
   ALERT_EMAIL_TO: string;       // secret, recipient (alias preferred)
   RESEND_DRY_RUN: string;       // var, "1" disables real sends (logs only)
 
+  // ─── Stripe (Sprint 5 — deposit payments) ──────────────────────
+  // Test keys locally. Prefer Worker secrets; falls back to system_settings
+  // (stripe_secret_key / stripe_webhook_secret / stripe_publishable_key).
+  // The publishable key is the only one safe to expose to the client.
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_PUBLISHABLE_KEY?: string;
+
   /** HMAC for POST /api/file-link (shareable /api/f?t=… URLs). `wrangler secret put FILE_LINK_SECRET` — 32+ random bytes, hex or base64 ok. */
   FILE_LINK_SECRET?: string;
   /** Public origin for shared links, e.g. `https://chs-hub.<subdomain>.workers.dev` so links work without Cloudflare Access. Optional; defaults to the request host. */

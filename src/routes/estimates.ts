@@ -46,6 +46,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerQuoteSent } from "../lib/wc/triggers.js";
+import { renderContract } from "../lib/contracts.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -92,6 +93,11 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+function formatUsd(n: number | null | undefined): string {
+  if (n == null) return "$0.00";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+}
+
 async function logAudit(
   env: Env,
   userEmail: string,
@@ -132,6 +138,10 @@ interface EstimateRow {
   review_ids: string | null;
   include_contract: number | null;
   contract_template_id: string | null;
+  client_signature: string | null;
+  signed_date: string | null;
+  viewed_date: string | null;
+  approved_date: string | null;
   notes: string | null;
   version: number | null;
   revised_from_id: string | null;
@@ -356,6 +366,12 @@ function shapeEstimateHeader(r: EstimateRow, totals: Totals) {
     review_ids: r.review_ids,
     include_contract: (r.include_contract ?? 1) === 1,
     contract_template_id: r.contract_template_id,
+    client_signature: r.client_signature,
+    signed: !!r.client_signature,
+    signed_date: r.signed_date,
+    viewed_date: r.viewed_date,
+    approved_date: r.approved_date,
+    portal_path: r.portal_token ? `/quote/${r.portal_token}` : null,
     notes: r.notes,
     version: r.version ?? 1,
     revised_from_id: r.revised_from_id,
@@ -815,12 +831,61 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
   const expiration = new Date(now.getTime() + validDays * 86_400_000);
   const portalToken = est.portal_token ?? crypto.randomUUID().replace(/-/g, "");
 
+  // Freeze the contract text from the right template so the public page and the
+  // signature both reference the exact words agreed to (legal review pending).
+  let contractText: string | null = null;
+  if ((est.include_contract ?? 1) === 1) {
+    const ctx = await env.DB.prepare(
+      `SELECT c.name AS client_name, c.first_name AS c_first, c.last_name AS c_last,
+              er.property_address, er.property_city, er.property_state, er.property_zip
+       FROM estimates e
+       LEFT JOIN clients c ON c.id = e.client_id
+       LEFT JOIN estimate_requests er ON er.id = e.request_id
+       WHERE e.id = ?`,
+    )
+      .bind(id)
+      .first<Record<string, unknown>>();
+    const clientName =
+      [ctx?.c_first, ctx?.c_last].filter(Boolean).join(" ").trim() ||
+      (ctx?.client_name as string) ||
+      null;
+    const propertyAddress =
+      [ctx?.property_address, ctx?.property_city, ctx?.property_state, ctx?.property_zip]
+        .filter(Boolean)
+        .join(", ") || null;
+    const scheduleLines = schedule
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((p) => {
+        const amt = shapePayment(p, totals.total).amount;
+        const pct = p.percentage != null && p.fixed_amount == null ? ` (${p.percentage}%)` : "";
+        const dep = (p.is_deposit ?? 0) === 1 ? " — deposit" : "";
+        return `${p.description}: ${formatUsd(amt)}${pct}${dep}`;
+      });
+    contractText = await renderContract(env, {
+      client_name: clientName,
+      property_address: propertyAddress,
+      job_title: est.title,
+      total: totals.total,
+      deposit_amount: est.deposit_amount,
+      billing_model: est.billing_model,
+      payment_schedule_lines: scheduleLines,
+    });
+  }
+
   await env.DB.prepare(
     `UPDATE estimates
-     SET status = 'sent', sent_at = ?, expiration_date = ?, portal_token = ?, updated_at = ?
+     SET status = 'sent', sent_at = ?, expiration_date = ?, portal_token = ?,
+         contract_text = ?, viewed_date = NULL, updated_at = ?
      WHERE id = ?`,
   )
-    .bind(now.toISOString(), expiration.toISOString().slice(0, 10), portalToken, now.toISOString(), id)
+    .bind(
+      now.toISOString(),
+      expiration.toISOString().slice(0, 10),
+      portalToken,
+      contractText,
+      now.toISOString(),
+      id,
+    )
     .run();
 
   // Move the linked request to "sent" and stamp its sent_date.
@@ -845,7 +910,71 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
   triggerQuoteSent(env, id, totals.total);
 
   const estimate = await loadFullEstimate(env, id);
-  return json({ estimate });
+  // The public link is live now. Actual email/SMS delivery is the Notification
+  // engine (Sprint 7); for now we surface a copyable link in the app.
+  const publicUrl = `/quote/${portalToken}`;
+  return json({ estimate, public_url: publicUrl, public_path: publicUrl });
+}
+
+// ─── POST /api/estimates/:id/lost ───────────────────────────────────────────────
+// Marks the estimate's linked request lost with a reason (§4.8). Internal/auth.
+
+const LOST_REASONS = new Set([
+  "price_too_high",
+  "went_with_competitor",
+  "project_cancelled",
+  "no_response",
+  "timing",
+  "other",
+]);
+
+export async function handleEstimateLost(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const est = await env.DB.prepare("SELECT id, request_id FROM estimates WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; request_id: string | null }>();
+  if (!est) return err(404, "not_found", "Estimate not found");
+  if (!est.request_id) return err(400, "bad_request", "Estimate has no linked request to mark lost.");
+
+  const body = (await readJson(request)) ?? {};
+  const reason = str(body.reason) ?? str(body.lost_reason);
+  if (!reason || !LOST_REASONS.has(reason)) {
+    return err(
+      400,
+      "bad_request",
+      "A valid reason is required: price_too_high, went_with_competitor, project_cancelled, no_response, timing, or other.",
+    );
+  }
+  const notes = str(body.notes) ?? str(body.lost_notes);
+
+  const reqRow = await env.DB.prepare("SELECT id, status FROM estimate_requests WHERE id = ?")
+    .bind(est.request_id)
+    .first<{ id: string; status: string }>();
+  if (!reqRow) return err(404, "not_found", "Linked request not found");
+  if (reqRow.status === "won") {
+    return err(400, "bad_request", "Cannot mark a 'won' request as lost.");
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE estimate_requests
+     SET status = 'lost', lost_reason = ?, lost_notes = ?, updated_at = ?
+     WHERE id = ?`,
+  )
+    .bind(reason, notes, now, est.request_id)
+    .run();
+
+  await logAudit(env, user.email, "estimate_lost", "estimate", id, {
+    request_id: est.request_id,
+    status_from: reqRow.status,
+    lost_reason: reason,
+  });
+
+  const estimate = await loadFullEstimate(env, id);
+  return json({ estimate, request_id: est.request_id, lost_reason: reason });
 }
 
 // ─── POST /api/estimates/:id/revise ─────────────────────────────────────────────
@@ -1000,12 +1129,26 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
       .run();
   }
 
-  // Preserve the original; mark it revised, and point the request at the new version.
+  // Preserve the original; mark it revised, and point the request at the new
+  // version. The clone above intentionally omits portal_token / sent_at /
+  // expiration_date / signature, so the new draft gets a FRESH portal_token on
+  // its next send. Reset the request's follow-up timers (count, last follow-up,
+  // sent_date) and walk it back to "building" so the §4.6 follow-up clock
+  // restarts for the revised quote rather than carrying the old one forward.
   await env.DB.prepare("UPDATE estimates SET status = 'revised', updated_at = ? WHERE id = ?")
     .bind(now, id)
     .run();
   if (orig.request_id) {
-    await env.DB.prepare("UPDATE estimate_requests SET estimate_id = ?, updated_at = ? WHERE id = ?")
+    await env.DB.prepare(
+      `UPDATE estimate_requests
+       SET estimate_id = ?,
+           follow_up_count = 0,
+           last_follow_up_date = NULL,
+           sent_date = NULL,
+           status = CASE WHEN status IN ('sent','follow_up') THEN 'building' ELSE status END,
+           updated_at = ?
+       WHERE id = ?`,
+    )
       .bind(newId, now, orig.request_id)
       .run();
   }

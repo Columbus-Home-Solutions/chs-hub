@@ -1154,3 +1154,44 @@
     font-size: 1.2rem;
   }
 }
+
+/* ── Sprint 5: client quote progress (builder "Client Quote Link" card) ──── */
+.quote-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+.quote-progress__step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+.quote-progress__step:not(:last-child)::after {
+  content: "→";
+  margin-left: var(--space-sm);
+  color: var(--color-text-muted, var(--color-text-secondary));
+}
+.quote-progress__step.is-done {
+  color: var(--color-text);
+  font-weight: var(--weight-semibold);
+}
+.quote-progress__dot {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  background: var(--color-surface-2, rgba(255, 255, 255, 0.06));
+  color: var(--color-text-secondary);
+}
+.quote-progress__step.is-done .quote-progress__dot {
+  background: var(--color-success, #1d8a4f);
+  color: #fff;
+}
+.quote-progress__when {
+  color: var(--color-text-muted, var(--color-text-secondary));
+  font-weight: 400;
+}

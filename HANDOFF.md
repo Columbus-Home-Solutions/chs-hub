@@ -2,7 +2,45 @@
 
 > **For Tony:** Open Cursor on `~/projects/chs-hub`, start a brand new chat, and paste the contents of this file as your first message. Then say _"Read HANDOFF.md and confirm you're caught up. I want to work on **&lt;X&gt;** today."_
 
-> **For the next AI session:** This is the source of truth for project state as of **May 11, 2026**. Trust this over any older context. The previous chat (where the dashboard rebuild happened) was archived because it had become unwieldy. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
+> **For the next AI session:** **`CHS-Session-Handoff.md`** (maintained outside this repo) is the **canonical planning doc** — priorities, sprint queue, operator decisions. **`HANDOFF.md`** (this file) is the **repo-side code-state reference** — what shipped, what's deployed, migration tags, local dev URLs. Keep both aligned; when they conflict, **`CHS-Session-Handoff.md` wins on planning**; **`HANDOFF.md` wins on what's actually in git/production**. Code state as of **May 30, 2026** (Sprint 5 deployed). Trust this over any older context in this file below the Sprint 5 section. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
+
+### Shipped — Sprint 5 (May 30, 2026) — Quote Delivery & Client Approval
+
+**Tags:** `v0.5.0-sprint5` (code on `main`), `v0.5.0-sprint5-deployed` (production infra).
+
+**Production:** Worker version **`b8ee7a83-b733-4993-898e-14bded5e4c01`** on `https://chs-hub.tony-bc5.workers.dev` + `dashboard.homesolutionsar.com`. Migration **`migrations/0028_quote_delivery.sql`** applied remote (new: `estimates.viewed_date`, `estimates.approved_date`, `estimates.contract_text`, `payments.estimate_id`, `idx_estimates_portal_token`). Backup before migrate: **`backup_pre_sprint5_remote_20260530.sql`** (local, gitignored) + R2 **`chs-backups/`**. Rollback tag if needed: **`v0.4.0-sprint4-deployed`**.
+
+**What works in production now:**
+- Public client quote page **`/quote/:token`** — standalone, no Cloudflare Access (verified: HTML serves; bogus token loads page, not login wall).
+- Public API **`/api/public/quote/*`** and Stripe webhook **`/api/webhooks/stripe`** — unauthenticated, Access-bypass verified (404 JSON / 400 signature, not Access redirect).
+- Authenticated app: send quote (freezes contract + portal link), Mark Lost, Revise, client progress (viewed/signed/paid), copyable link.
+- Client flow in prod: **view → sign → pay by check** (mailing instructions, intent logged, does **not** auto-convert).
+- Stripe deposit path is **deployed but not configured** — no `STRIPE_*` Worker secrets yet; card pay gracefully falls back to check instructions (same as local without keys).
+
+**Local dev URLs (Sprint 5 — do not mix these up):**
+- **Internal app (auth writes):** `http://localhost:5173/app/` — Vite dev server; proxies `/api` → `:8787` and injects **`Cf-Access-Authenticated-User-Email: tony@homesolutionsar.com`** so guarded writes work. **Do not use `:8787/app` for builder/send/lost/revise** — those POSTs 401 without Access.
+- **Client portal (no auth):** `http://localhost:8787/quote/:token` — Worker serves built **`public/app/quote.html`**. Vite (`:5173`) does **not** serve `/quote/*` (its `base` is `/app/`).
+- **Dashboard:** `http://localhost:8787/` → legacy CHS COMMAND shell.
+
+**Local seed (gitignored):** `scripts/dev-seed-sprint5.local.sql`. Test tokens: **`sprint5seedtokenpublicquote000000001`** (already approved from E2E test), **`sprint5seedtokenpublicquote000000002`** (clean sent — full sign → pay flow).
+
+**Key new files:** `src/routes/public-quote.ts`, `src/lib/stripe.ts`, `src/lib/contracts.ts`, `frontend/src/views/public/QuotePage.tsx`, `frontend/quote.html`. Deposit webhook calls the **same** `convertQuoteToJob()` as the manual Mark-as-Won modal (`src/lib/quote-to-job.ts`).
+
+### Carry-forwards (Sprint 5 → next work)
+
+**Also record these in `CHS-Session-Handoff.md`** — keep in sync; do not let planning and code-state diverge.
+
+1. **Stripe production wiring (infra deployed; keys not set)** — When ready: `npx wrangler secret put STRIPE_SECRET_KEY`, **`STRIPE_PUBLISHABLE_KEY`** (required for Stripe.js Elements — runbook Step 4 omitted this; code reads `env.STRIPE_PUBLISHABLE_KEY` or `system_settings.stripe_publishable_key`), register webhook at `https://chs-hub.tony-bc5.workers.dev/api/webhooks/stripe` subscribing to **`payment_intent.succeeded` only**, then `npx wrangler secret put STRIPE_WEBHOOK_SECRET` + **`npm run deploy`**. Recommended: **test keys first** (`sk_test_…`), full prod E2E with card `4242…`, then live keys only after attorney contract review. Deploy runbook: **`CHS-Sprint-5-Remote-Deploy.md`**.
+
+2. **Google Reviews bulk import — not built in Sprint 5** — Out of scope; Sprint 5 uses manual **`saved_reviews`** (Sprint 4). Bulk import from Google still carries forward to a future sprint. Confirm scope in **`CHS-Session-Handoff.md`** before starting.
+
+3. **KBPI quotes-sent cutover — due Sprint 6** — Deferred twice. Native sends log via `triggerQuoteSent` (Sprint 4); WC KBPI still reads Jobber `quotes` in **`src/lib/wc/compute.ts`**. Sprint 6 should implement date-boundary cutover (native on/after cutover date + Jobber before — never both). Pick cutover date in planning doc before coding.
+
+4. **Contract legal review — blocking real client use** — Contracts render from embedded TS strings in **`src/lib/contracts.ts`** (not parsed `.docx` at runtime). Service vs cost-plus auto-selected by billing model. Rendered text includes "pending legal review" — **Arkansas attorney must review before any real client signs and pays a live deposit.** Live Stripe keys + unreviewed contracts = do not send to real clients.
+
+**Sprint 6 prep (from Sprint 5 report — detail in `CHS-Session-Handoff.md`):** extend **`convertQuoteToJob()`** for full conversion depth (task groups, budget baseline, billing activation, portal activation); confirm job entry status **`deposit_paid`**; check-deposit Won stays manual after funds clear.
+
+**Dev ergonomics (optional, not blocking):** wire **`quote.html`** under Vite dev for hot-reload on the public quote page styling (production path unchanged).
 
 ### Next session — do in this order (Tony + agent)
 

@@ -332,12 +332,14 @@ function PropertyModal({
 
 // ─── Communication log modal ──────────────────────────────────────────────────
 
-function CommunicationModal({
+export function CommunicationModal({
   clientId,
+  jobId,
   onClose,
   onSaved,
 }: {
   clientId: string;
+  jobId?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -357,6 +359,7 @@ function CommunicationModal({
     try {
       await api.post("/api/communications", {
         client_id: clientId,
+        job_id: jobId,
         channel,
         direction,
         summary,

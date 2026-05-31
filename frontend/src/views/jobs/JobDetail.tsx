@@ -9,6 +9,7 @@ import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { Timeline } from "../../components/Timeline";
+import { CommunicationModal } from "../clients/ClientDetail";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
@@ -114,7 +115,9 @@ export function JobDetail({ id }: DetailProps) {
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
-      {tab === "activity" && <ActivityTab activity={data.activity} jobId={id} />}
+      {tab === "activity" && (
+        <ActivityTab activity={data.activity} jobId={id} clientId={data.job.client_id} />
+      )}
       {(tab === "schedule" || tab === "daily_logs" || tab === "change_orders" || tab === "files") && (
         <StubTab tab={tab} />
       )}
@@ -532,19 +535,51 @@ function AddTaskModal({
 
 // ─── Activity ──────────────────────────────────────────────────────────────────
 
-function ActivityTab({ activity, jobId }: { activity: JobDetailResponse["activity"]; jobId?: string }) {
+function ActivityTab({
+  activity,
+  jobId,
+  clientId,
+}: {
+  activity: JobDetailResponse["activity"];
+  jobId?: string;
+  clientId?: string | null;
+}) {
+  const toast = useToast();
+  const [logModal, setLogModal] = useState(false);
   const comms = useApi<{ communications: Communication[] }>(
     jobId ? `/api/jobs/${jobId}/communications` : null,
   );
   return (
     <div class="stack">
-      <Card title="Communication timeline">
+      <Card
+        title="Communication timeline"
+        actions={
+          clientId ? (
+            <Button size="sm" variant="secondary" onClick={() => setLogModal(true)}>
+              + Log
+            </Button>
+          ) : undefined
+        }
+      >
         {comms.loading ? (
           <Spinner />
         ) : (
           <Timeline entries={comms.data?.communications ?? []} />
         )}
       </Card>
+
+      {logModal && clientId && jobId && (
+        <CommunicationModal
+          clientId={clientId}
+          jobId={jobId}
+          onClose={() => setLogModal(false)}
+          onSaved={() => {
+            setLogModal(false);
+            comms.refetch();
+            toast.push("success", "Communication logged");
+          }}
+        />
+      )}
 
       <Card title="Activity Log">
         {activity.length === 0 ? (

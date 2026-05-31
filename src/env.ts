@@ -72,4 +72,17 @@ export interface Env {
 
   /** Client-facing "from" address for notification emails. Falls back to ALERT_EMAIL_FROM. Pre-Launch: a verified Resend sender. */
   NOTIFICATIONS_EMAIL_FROM?: string;
+
+  // ─── Claude / Anthropic (Sprint 8 — receipt + smart-note AI) ─────
+  // Two ways to reach Claude, checked in this order by src/lib/claude.ts:
+  //   1. ANTHROPIC_API_KEY (secret) → call api.anthropic.com directly.
+  //   2. CLAUDE_PROXY_URL (var)     → POST the Messages body to the existing
+  //      chs-claude-proxy worker, which holds the key server-side (this is the
+  //      path the dashboard + capture PWA already use client-side).
+  // If NEITHER is set (or the call fails), receipt/note AI degrades gracefully:
+  // the photo/note row still persists, marked pending/failed, and manual entry
+  // works — mirroring the Sprint 7 simulate discipline so local dev never needs
+  // a key. Defaulted in code to the known proxy URL when unset.
+  ANTHROPIC_API_KEY?: string;
+  CLAUDE_PROXY_URL?: string;
 }

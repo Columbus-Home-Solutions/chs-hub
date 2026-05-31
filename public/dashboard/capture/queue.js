@@ -143,10 +143,17 @@
   async function send(item) {
     if (item.kind === 'photo') {
       const p = item.payload;
+      // Idempotency (Sprint 8 rule #5): the stable queue-item id becomes the
+      // server-side photo id (capture_uuid). A re-fired sync after a dropped
+      // response is then a no-op server-side instead of a duplicate photo.
+      const metadata = Object.assign({}, p.metadata || {}, {
+        capture_uuid: item.id,
+        synced_from_offline: true,
+      });
       const form = new FormData();
       form.append('original', p.original, p.filename || 'capture.jpg');
       form.append('thumb', p.thumb, 'thumb.jpg');
-      form.append('metadata', JSON.stringify(p.metadata || {}));
+      form.append('metadata', JSON.stringify(metadata));
       const res = await fetch(PHOTOS_URL, {
         method: 'POST',
         body: form,

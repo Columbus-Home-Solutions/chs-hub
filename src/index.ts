@@ -66,11 +66,33 @@ import { runDriveMirror } from "./lib/ops/drive-mirror.js";
 import {
   handleActiveJobs,
   handlePhotoCreate,
+  handlePhotoBatch,
   handlePhotoDelete,
   handlePhotoList,
   handlePhotoPatch,
+  handlePhotoPut,
+  handlePhotoMeta,
   handlePhotoStream,
+  handlePhotoAnnotate,
+  handleJobPhotos,
+  handleReceiptCreate,
+  handleReceiptGet,
+  handleReceiptConfirm,
 } from "./routes/photos.js";
+import {
+  handleSmartNoteCreate,
+  handleSmartNoteList,
+  handleSmartNoteGet,
+  handleSmartNoteProcess,
+  handleSmartNoteAcceptTask,
+  handleSmartNoteAcceptExpense,
+  handleSmartNoteAcceptChangeOrder,
+} from "./routes/smart-notes.js";
+import {
+  handleDailyLogList,
+  handleDailyLogCreate,
+  handleDailyLogUpdate,
+} from "./routes/daily-logs.js";
 import {
   handleSubCreate,
   handleSubDelete,
@@ -442,6 +464,18 @@ export default {
     if (jobComms && request.method === "GET") {
       return handleJobCommunicationList(env, decodeURIComponent(jobComms[1]), url);
     }
+    // Photo timeline per job (Sprint 8).
+    const jobPhotos = url.pathname.match(/^\/api\/jobs\/([^/]+)\/photos$/);
+    if (jobPhotos && request.method === "GET") {
+      return handleJobPhotos(env, decodeURIComponent(jobPhotos[1]), url);
+    }
+    // Daily logs per job (Sprint 8).
+    const jobDailyLogs = url.pathname.match(/^\/api\/jobs\/([^/]+)\/daily-logs$/);
+    if (jobDailyLogs) {
+      const jid = decodeURIComponent(jobDailyLogs[1]);
+      if (request.method === "GET") return handleDailyLogList(env, jid);
+      if (request.method === "POST") return handleDailyLogCreate(env, request, jid);
+    }
     const jobById = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (jobById) {
       const jid = decodeURIComponent(jobById[1]);
@@ -457,17 +491,33 @@ export default {
       return handleTaskComplete(request, env, decodeURIComponent(taskComplete[1]));
     }
 
-    // ── Photos (PWA capture) ─────────────────────────────────────────
+    // ── Photos (PWA capture + Sprint 8 timeline/receipts) ────────────
+    // Fixed sub-paths (batch, receipt) must match BEFORE /api/photos/:id.
+    if (url.pathname === "/api/photos/batch" && request.method === "POST") {
+      return handlePhotoBatch(env, request);
+    }
+    if (url.pathname === "/api/photos/receipt" && request.method === "POST") {
+      return handleReceiptCreate(env, request);
+    }
     if (url.pathname === "/api/photos") {
       if (request.method === "POST") return handlePhotoCreate(env, request);
       if (request.method === "GET") return handlePhotoList(env, url);
     }
-    // /thumb suffix must match BEFORE the bare :id pattern.
+    // /thumb + /meta + /annotate suffixes must match BEFORE the bare :id pattern.
     // HEAD is accepted alongside GET so probing tools (curl -I, SW caches)
     // get the right status; Workers auto-strips the body on HEAD responses.
     const photoThumb = url.pathname.match(/^\/api\/photos\/([^/]+)\/thumb$/);
     if (photoThumb && (request.method === "GET" || request.method === "HEAD")) {
       return handlePhotoStream(env, decodeURIComponent(photoThumb[1]), "thumb");
+    }
+    const photoMeta = url.pathname.match(/^\/api\/photos\/([^/]+)\/meta$/);
+    if (photoMeta && request.method === "GET") {
+      return handlePhotoMeta(env, decodeURIComponent(photoMeta[1]));
+    }
+    // Deferred seam (Sprint 18) — returns 501 so callers know it's not wired.
+    const photoAnnotate = url.pathname.match(/^\/api\/photos\/([^/]+)\/annotate$/);
+    if (photoAnnotate && request.method === "PUT") {
+      return handlePhotoAnnotate(env, decodeURIComponent(photoAnnotate[1]));
     }
     const photoDetail = url.pathname.match(/^\/api\/photos\/([^/]+)$/);
     if (photoDetail) {
@@ -475,12 +525,58 @@ export default {
       if (request.method === "GET" || request.method === "HEAD") {
         return handlePhotoStream(env, photoId, "original");
       }
+      if (request.method === "PUT") {
+        return handlePhotoPut(env, request, photoId);
+      }
       if (request.method === "DELETE") {
-        return handlePhotoDelete(env, photoId);
+        return handlePhotoDelete(env, request, photoId);
       }
       if (request.method === "PATCH") {
         return handlePhotoPatch(env, photoId, request);
       }
+    }
+
+    // ── Receipt photos (Sprint 8) ────────────────────────────────────
+    const receiptConfirm = url.pathname.match(/^\/api\/receipt-photos\/([^/]+)\/confirm$/);
+    if (receiptConfirm && request.method === "POST") {
+      return handleReceiptConfirm(env, request, decodeURIComponent(receiptConfirm[1]));
+    }
+    const receiptById = url.pathname.match(/^\/api\/receipt-photos\/([^/]+)$/);
+    if (receiptById && request.method === "GET") {
+      return handleReceiptGet(env, decodeURIComponent(receiptById[1]));
+    }
+
+    // ── Daily logs (Sprint 8) — bare :id update ──────────────────────
+    const dailyLogById = url.pathname.match(/^\/api\/daily-logs\/([^/]+)$/);
+    if (dailyLogById && request.method === "PUT") {
+      return handleDailyLogUpdate(env, request, decodeURIComponent(dailyLogById[1]));
+    }
+
+    // ── Smart notes (Sprint 8) — new smart_notes table ───────────────
+    // NOTE: distinct from legacy /api/notes (the `notes` table).
+    if (url.pathname === "/api/smart-notes") {
+      if (request.method === "POST") return handleSmartNoteCreate(env, request);
+      if (request.method === "GET") return handleSmartNoteList(env, url);
+    }
+    const snAcceptTask = url.pathname.match(/^\/api\/smart-notes\/([^/]+)\/accept-task$/);
+    if (snAcceptTask && request.method === "POST") {
+      return handleSmartNoteAcceptTask(env, request, decodeURIComponent(snAcceptTask[1]));
+    }
+    const snAcceptExpense = url.pathname.match(/^\/api\/smart-notes\/([^/]+)\/accept-expense$/);
+    if (snAcceptExpense && request.method === "POST") {
+      return handleSmartNoteAcceptExpense(env, request, decodeURIComponent(snAcceptExpense[1]));
+    }
+    const snAcceptCO = url.pathname.match(/^\/api\/smart-notes\/([^/]+)\/accept-change-order$/);
+    if (snAcceptCO && request.method === "POST") {
+      return handleSmartNoteAcceptChangeOrder(env, request, decodeURIComponent(snAcceptCO[1]));
+    }
+    const snProcess = url.pathname.match(/^\/api\/smart-notes\/([^/]+)\/process$/);
+    if (snProcess && request.method === "POST") {
+      return handleSmartNoteProcess(env, request, decodeURIComponent(snProcess[1]));
+    }
+    const snById = url.pathname.match(/^\/api\/smart-notes\/([^/]+)$/);
+    if (snById && request.method === "GET") {
+      return handleSmartNoteGet(env, decodeURIComponent(snById[1]));
     }
 
     // ── Expenses (PWA capture) ───────────────────────────────────────

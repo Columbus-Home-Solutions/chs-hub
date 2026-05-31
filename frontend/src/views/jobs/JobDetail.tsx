@@ -10,6 +10,10 @@ import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { Timeline } from "../../components/Timeline";
 import { CommunicationModal } from "../clients/ClientDetail";
+import { PhotosTab } from "./PhotosTab";
+import { DailyLogsTab } from "./DailyLogsTab";
+import { SmartNotesPanel } from "./SmartNotesPanel";
+import { QuickCaptureBar } from "./QuickCaptureBar";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
@@ -29,16 +33,25 @@ interface DetailProps extends RoutableProps {
   id?: string;
 }
 
-type TabKey = "overview" | "tasks" | "activity" | "schedule" | "daily_logs" | "change_orders" | "files";
+type TabKey =
+  | "overview"
+  | "tasks"
+  | "photos"
+  | "daily_logs"
+  | "notes"
+  | "activity"
+  | "schedule"
+  | "change_orders";
 
 const TABS: { key: TabKey; label: string; stub?: boolean }[] = [
   { key: "overview", label: "Overview" },
   { key: "tasks", label: "Tasks" },
+  { key: "photos", label: "Photos" },
+  { key: "daily_logs", label: "Daily Logs" },
+  { key: "notes", label: "Field Notes" },
   { key: "activity", label: "Activity" },
   { key: "schedule", label: "Schedule", stub: true },
-  { key: "daily_logs", label: "Daily Logs", stub: true },
   { key: "change_orders", label: "Change Orders", stub: true },
-  { key: "files", label: "Files & Photos", stub: true },
 ];
 
 // Legal status targets from the current status: every later stage (forward-only)
@@ -115,11 +128,20 @@ export function JobDetail({ id }: DetailProps) {
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
+      {tab === "photos" && id && <PhotosTab jobId={id} />}
+      {tab === "daily_logs" && id && <DailyLogsTab jobId={id} />}
+      {tab === "notes" && id && <SmartNotesPanel jobId={id} />}
       {tab === "activity" && (
         <ActivityTab activity={data.activity} jobId={id} clientId={data.job.client_id} />
       )}
-      {(tab === "schedule" || tab === "daily_logs" || tab === "change_orders" || tab === "files") && (
-        <StubTab tab={tab} />
+      {(tab === "schedule" || tab === "change_orders") && <StubTab tab={tab} />}
+
+      {id && (
+        <QuickCaptureBar
+          jobId={id}
+          onNavigate={(t) => setTab(t)}
+          onCaptured={() => setTab("photos")}
+        />
       )}
     </div>
   );

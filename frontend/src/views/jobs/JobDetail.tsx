@@ -8,6 +8,7 @@ import { Spinner } from "../../components/ui/Spinner";
 import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
+import { Timeline } from "../../components/Timeline";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
@@ -16,6 +17,7 @@ import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
   type BillingScheduleRow,
+  type Communication,
   type JobDetailResponse,
   type JobStatus,
   type Task,
@@ -112,7 +114,7 @@ export function JobDetail({ id }: DetailProps) {
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
-      {tab === "activity" && <ActivityTab activity={data.activity} />}
+      {tab === "activity" && <ActivityTab activity={data.activity} jobId={id} />}
       {(tab === "schedule" || tab === "daily_logs" || tab === "change_orders" || tab === "files") && (
         <StubTab tab={tab} />
       )}
@@ -530,29 +532,42 @@ function AddTaskModal({
 
 // ─── Activity ──────────────────────────────────────────────────────────────────
 
-function ActivityTab({ activity }: { activity: JobDetailResponse["activity"] }) {
+function ActivityTab({ activity, jobId }: { activity: JobDetailResponse["activity"]; jobId?: string }) {
+  const comms = useApi<{ communications: Communication[] }>(
+    jobId ? `/api/jobs/${jobId}/communications` : null,
+  );
   return (
-    <Card title="Activity Log">
-      {activity.length === 0 ? (
-        <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-          No activity yet.
-        </p>
-      ) : (
-        <div class="timeline">
-          {activity.map((a) => (
-            <div key={a.id} class="timeline__item">
-              <span class="timeline__dot" />
-              <div class="timeline__content">
-                <div class="timeline__summary">{formatStatus(a.action.replace(/^job_/, ""))}</div>
-                <div class="timeline__meta">
-                  {a.user_email} · {formatDateTime(a.created_at)}
+    <div class="stack">
+      <Card title="Communication timeline">
+        {comms.loading ? (
+          <Spinner />
+        ) : (
+          <Timeline entries={comms.data?.communications ?? []} />
+        )}
+      </Card>
+
+      <Card title="Activity Log">
+        {activity.length === 0 ? (
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            No activity yet.
+          </p>
+        ) : (
+          <div class="timeline">
+            {activity.map((a) => (
+              <div key={a.id} class="timeline__item">
+                <span class="timeline__dot" />
+                <div class="timeline__content">
+                  <div class="timeline__summary">{formatStatus(a.action.replace(/^job_/, ""))}</div>
+                  <div class="timeline__meta">
+                    {a.user_email} · {formatDateTime(a.created_at)}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </Card>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
 

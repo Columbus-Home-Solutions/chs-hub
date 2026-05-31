@@ -46,6 +46,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerQuoteSent } from "../lib/wc/triggers.js";
+import { triggerNotification } from "../lib/notification-engine.js";
 import { renderContract } from "../lib/contracts.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
@@ -908,6 +909,25 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
 
   // WC quotes-sent hook (count + dollar value; recomputed on next cron tick).
   triggerQuoteSent(env, id, totals.total);
+
+  // Notification: estimate ready (sms+email, immediate) with the portal link
+  // merged ({{estimate_link}}). Enqueues only; the */15 processor sends. Keyed
+  // on the estimate id so re-sending doesn't double-message until a re-send is
+  // intended (a re-send mints the same token → same key; use revise for a true
+  // new send). Needs the client id from the estimate.
+  {
+    const link = await env.DB.prepare("SELECT client_id, request_id FROM estimates WHERE id = ?")
+      .bind(id)
+      .first<{ client_id: string | null; request_id: string | null }>();
+    if (link?.client_id) {
+      await triggerNotification(env, "estimate_sent", {
+        clientId: link.client_id,
+        estimateId: id,
+        estimateRequestId: link.request_id,
+        instanceKey: now.toISOString().slice(0, 10),
+      });
+    }
+  }
 
   const estimate = await loadFullEstimate(env, id);
   // The public link is live now. Actual email/SMS delivery is the Notification

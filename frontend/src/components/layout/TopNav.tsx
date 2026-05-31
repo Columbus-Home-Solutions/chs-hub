@@ -1,6 +1,7 @@
 import { useAuth } from "../../store/auth";
 import { initials } from "../../lib/format";
 import { go } from "../../lib/nav";
+import { NotificationBell } from "./NotificationBell";
 import logoUrl from "../../assets/chs-logo.png";
 
 export function TopNav() {
@@ -12,10 +13,7 @@ export function TopNav() {
         <span>CHS Platform</span>
       </div>
       <div class="topnav__right">
-        <button class="topnav__bell" aria-label="Notifications" title="Notifications">
-          🔔
-          <span class="topnav__bell-count">0</span>
-        </button>
+        <NotificationBell />
         <button class="topnav__user" onClick={() => go("/settings")}>
           <span class="topnav__avatar">
             {user ? initials(user.first_name, user.last_name, user.email) : "?"}

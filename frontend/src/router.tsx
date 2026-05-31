@@ -13,6 +13,8 @@ import { EstimateBuilder } from "./views/estimating/EstimateBuilder";
 import { EstimateTemplates } from "./views/estimating/EstimateTemplates";
 import { JobPipeline } from "./views/jobs/JobPipeline";
 import { JobDetail } from "./views/jobs/JobDetail";
+import { NotificationSettings } from "./views/notifications/NotificationSettings";
+import { NotificationLogs } from "./views/notifications/NotificationLogs";
 import { Placeholder } from "./views/Placeholder";
 
 export function AppRouter() {
@@ -24,6 +26,8 @@ export function AppRouter() {
       <ClientDetail path={`${BASE}/clients/:id`} />
       <SubcontractorList path={`${BASE}/subcontractors`} />
       <Settings path={`${BASE}/settings`} />
+      <NotificationSettings path={`${BASE}/settings/notifications`} />
+      <NotificationLogs path={`${BASE}/settings/notifications/logs`} />
       <EstimateRequestPipeline path={`${BASE}/estimating`} />
       <EstimateRequestForm path={`${BASE}/estimating/new`} />
       <EstimateTemplates path={`${BASE}/estimating/templates`} />

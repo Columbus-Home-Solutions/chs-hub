@@ -51,6 +51,69 @@ export interface Communication {
   created_at: string;
 }
 
+// ─── Notifications (Sprint 7) ───────────────────────────────────────────────
+
+export interface NotificationTemplate {
+  id: string;
+  trigger_event: string;
+  name: string;
+  recipient_type: string;
+  channel: string;
+  subject: string | null;
+  body_template: string;
+  merge_fields: string[];
+  is_active: boolean;
+  delay_minutes: number | null;
+  send_time: string | null;
+  phase: string | null;
+  sort_order: number | null;
+}
+
+export interface NotificationLog {
+  id: string;
+  template_id: string;
+  trigger_event: string;
+  recipient_type: string;
+  recipient_name: string;
+  recipient_contact: string;
+  channel: string;
+  subject: string | null;
+  body: string;
+  status: string;
+  error_message: string | null;
+  retry_count: number;
+  scheduled_for: string | null;
+  sent_at: string | null;
+  delivered_at: string | null;
+  external_id: string | null;
+  job_id: string | null;
+  client_id: string | null;
+  estimate_request_id: string | null;
+  communication_id: string | null;
+  created_at: string;
+}
+
+export interface InboxNotification {
+  id: string;
+  trigger_event: string;
+  body: string;
+  subject: string | null;
+  link_path: string | null;
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+}
+
+export const NOTIFICATION_PHASES: { key: string; label: string }[] = [
+  { key: "estimating", label: "Estimating" },
+  { key: "job", label: "Job" },
+  { key: "financial", label: "Financial" },
+  { key: "post_job", label: "Post-Job" },
+];
+
+// Channels the engine wires this sprint vs. seam-only (catalog + TODO).
+export const NOTIFICATION_LOG_STATUSES = ["queued", "sent", "delivered", "failed", "bounced"];
+
 export interface JobLite {
   id: string;
   job_number: number | null;

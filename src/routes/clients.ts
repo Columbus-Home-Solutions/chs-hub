@@ -619,6 +619,41 @@ export async function handleCommunicationList(env: Env, clientId: string, url: U
   return json({ communications: results ?? [] });
 }
 
+// ─── GET /api/jobs/:id/communications ─────────────────────────────────────────
+// Job-filtered communication timeline (Sprint 7). Same unified feed as the
+// client timeline — auto-logged notifications (sent_via='system_auto'), inbound
+// Twilio ('twilio'), and manual entries ('manual') — narrowed to one job.
+
+export async function handleJobCommunicationList(env: Env, jobId: string, url: URL): Promise<Response> {
+  const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ?").bind(jobId).first();
+  if (!job) return err(404, "not_found", "Job not found");
+
+  const where = ["job_id = ?"];
+  const binds: unknown[] = [jobId];
+  const channel = str(url.searchParams.get("channel"));
+  const from = str(url.searchParams.get("from"));
+  const to = str(url.searchParams.get("to"));
+  if (channel) {
+    where.push("channel = ?");
+    binds.push(channel);
+  }
+  if (from) {
+    where.push("created_at >= ?");
+    binds.push(from);
+  }
+  if (to) {
+    where.push("created_at <= ?");
+    binds.push(to);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM communications WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 500`,
+  )
+    .bind(...binds)
+    .all();
+  return json({ communications: results ?? [] });
+}
+
 export async function handleCommunicationCreate(request: Request, env: Env): Promise<Response> {
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;

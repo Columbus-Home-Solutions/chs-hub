@@ -86,6 +86,18 @@ DASHBOARD_OAUTH_CLIENT_ID = "249005729817-b238l4929ql3vkst04f7kohoa14cpgch.apps.
 # Google Drive mirror — values must be folder/drive IDs only (from …/folders/ID), not full URLs.
 DRIVE_SHARED_DRIVE_ID = "0AEkL6Jrv29twUk9PVA"
 DRIVE_MIRROR_ROOT_FOLDER_ID = "1ZRJP1v8Ro3OrBoBWc2GppFnK3FKE8Ojf"
+# ─── Notification engine (Sprint 7) ────────────────────────────────────
+# Dispatch mode. "live" attempts real SMS/email when the channel's credentials
+# are present (Twilio secrets / Resend key), and falls back to simulate when
+# they're absent. ANYTHING ELSE (incl. this default) forces SIMULATE: render +
+# log a notification_logs row marked external_id='simulated:<uuid>' WITHOUT
+# touching Twilio/Resend. Default = simulate so local + any creds-less env never
+# messages a real client. Twilio account/number + production Resend
+# from-address are a Pre-Launch item; flip this to "live" only once they exist.
+NOTIFICATIONS_DISPATCH_MODE = "simulate"
+# Absolute origin used to build client-facing links ({{estimate_link}} →
+# /quote/<token>, {{portal_link}} → /portal/<token>) in rendered notifications.
+APP_PUBLIC_ORIGIN = "https://chs-hub.homesolutionsar.com"
 # Public file share links: `wrangler secret put FILE_LINK_SECRET` (32+ char random). Optional
 #   var HUB_FILE_LINK_ORIGIN = "https://chs-hub.<account>.workers.dev" so /api/f?t=… works
 #   for people without Cloudflare Access (the dashboard host may require Access).
@@ -100,8 +112,13 @@ DRIVE_MIRROR_ROOT_FOLDER_ID = "1ZRJP1v8Ro3OrBoBWc2GppFnK3FKE8Ojf"
 #                   30-day retention sweep
 #   0 12 * * *    → daily summary email at 07:00 Central (12:00 UTC)
 
+#   */15 * * * *  → Notification Processor (Sprint 7): drain due queued
+#                   notification_logs rows after recomputing time-based triggers
+#                   (quote follow-ups, work_starting, appointment reminders)
+
 [triggers]
 crons = [
+  "*/15 * * * *",
   "*/30 * * * *",
   "15 * * * *",
   "15 7 * * *",

@@ -11,6 +11,7 @@ import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatStatus } from "../../lib/format";
+import { go } from "../../lib/nav";
 import { REVIEW_SOURCES, type SavedReview } from "../../types";
 import { useAuth } from "../../store/auth";
 
@@ -59,6 +60,29 @@ export function Settings(_props: RoutableProps) {
           </div>
         </div>
       </Card>
+
+      {user?.role === "owner" && (
+        <>
+          <div class="mt-lg" />
+          <Card
+            title="Notifications"
+            actions={
+              <div class="flex gap-sm">
+                <Button size="sm" variant="secondary" onClick={() => go("/settings/notifications/logs")}>
+                  View Log
+                </Button>
+                <Button size="sm" variant="primary" onClick={() => go("/settings/notifications")}>
+                  Manage Templates
+                </Button>
+              </div>
+            }
+          >
+            <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+              Edit the automated emails and texts clients receive, and review the delivery log.
+            </div>
+          </Card>
+        </>
+      )}
 
       <div class="mt-lg" />
       <ReviewsSection />

@@ -20,6 +20,7 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerLeadCreated, triggerAppointmentSet, triggerDealWon } from "../lib/wc/triggers.js";
 import { convertQuoteToJob, type DepositMethod } from "../lib/quote-to-job.js";
+import { triggerNotification, triggerJobConversionNotifications } from "../lib/notification-engine.js";
 
 // Write roles match the app-wide convention (clients/subs): owner, PM, and
 // office_admin — office_admin managing the pipeline is the realistic workflow.
@@ -383,6 +384,14 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
   // WC lead-count hook (recomputed from D1 on next cron tick).
   triggerLeadCreated(env, id);
 
+  // Notification: client lead acknowledgment (sms+email, immediate). Enqueues
+  // only — the */15 processor sends. Idempotent on the request id.
+  await triggerNotification(env, "lead_created", {
+    clientId,
+    estimateRequestId: id,
+    instanceKey: "lead",
+  });
+
   const created = await loadShaped(env, id);
   return json({ request: created }, { status: 201 });
 }
@@ -500,6 +509,16 @@ export async function handleEstimateRequestUpdate(
   if (triggerAppointment) triggerAppointmentSet(env, id);
 
   const updated = await loadShaped(env, id);
+  // Notification: appointment confirmed (sms+email, immediate). Keyed on the
+  // appointment date so re-saving the same date won't re-message the client,
+  // but rescheduling to a new date sends a fresh confirmation.
+  if (triggerAppointment && updated?.appointment_date) {
+    await triggerNotification(env, "appointment_confirmed", {
+      clientId: updated.client_id,
+      estimateRequestId: id,
+      instanceKey: updated.appointment_date,
+    });
+  }
   return json({ request: updated });
 }
 
@@ -563,6 +582,13 @@ export async function handleEstimateRequestAppointment(
   if (triggerAppointment) triggerAppointmentSet(env, id);
 
   const updated = await loadShaped(env, id);
+  if (triggerAppointment && updated?.appointment_date) {
+    await triggerNotification(env, "appointment_confirmed", {
+      clientId: updated.client_id,
+      estimateRequestId: id,
+      instanceKey: updated.appointment_date,
+    });
+  }
   return json({ request: updated });
 }
 
@@ -683,6 +709,9 @@ export async function handleEstimateRequestWin(
 
   // WC closed-deal count + New Sales value track the contract total, not deposit.
   triggerDealWon(env, outcome.jobId, outcome.total);
+
+  // Notifications: deposit receipt + welcome-portal emails (immediate, idempotent).
+  await triggerJobConversionNotifications(env, outcome.jobId);
 
   const updated = await loadShaped(env, id);
   return json({

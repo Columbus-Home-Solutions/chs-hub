@@ -129,10 +129,25 @@ import {
   handleClientUpdate,
   handleCommunicationCreate,
   handleCommunicationList,
+  handleJobCommunicationList,
   handlePropertyCreate,
   handlePropertyList,
   handlePropertyUpdate,
 } from "./routes/clients.js";
+import {
+  handleTemplateList as handleNotifTemplateList,
+  handleTemplateGet as handleNotifTemplateGet,
+  handleTemplateUpdate as handleNotifTemplateUpdate,
+  handleTemplatePreview,
+  handleTemplateTest,
+  handleLogList as handleNotifLogList,
+  handleLogRetry as handleNotifLogRetry,
+  handleInbox,
+  handleInboxRead,
+  handleInboxReadAll,
+} from "./routes/notifications.js";
+import { handleTwilioInbound, handleTwilioStatus } from "./routes/webhooks-twilio.js";
+import { processNotifications } from "./lib/notification-engine.js";
 import {
   handleSubcontractorCreate,
   handleSubcontractorGet,
@@ -215,6 +230,15 @@ export default {
     // Matched early so the token paths never fall through to auth'd routes.
     if (url.pathname === "/api/webhooks/stripe" && request.method === "POST") {
       return handleStripeWebhook(request, env);
+    }
+    // Inbound Twilio (SMS + delivery status). PUBLIC — gated only by the Twilio
+    // signature, like the Stripe webhook. Matched early so they never fall
+    // through to the auth'd routes / Cloudflare Access.
+    if (url.pathname === "/api/webhooks/twilio/inbound" && request.method === "POST") {
+      return handleTwilioInbound(request, env);
+    }
+    if (url.pathname === "/api/webhooks/twilio/status" && request.method === "POST") {
+      return handleTwilioStatus(request, env);
     }
     const pqSign = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/sign$/);
     if (pqSign && request.method === "POST") {
@@ -414,6 +438,10 @@ export default {
     if (jobStatus && request.method === "PUT") {
       return handleJobStatus(request, env, decodeURIComponent(jobStatus[1]));
     }
+    const jobComms = url.pathname.match(/^\/api\/jobs\/([^/]+)\/communications$/);
+    if (jobComms && request.method === "GET") {
+      return handleJobCommunicationList(env, decodeURIComponent(jobComms[1]), url);
+    }
     const jobById = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (jobById) {
       const jid = decodeURIComponent(jobById[1]);
@@ -549,6 +577,46 @@ export default {
     }
     if (url.pathname === "/api/communications" && request.method === "POST") {
       return handleCommunicationCreate(request, env);
+    }
+
+    // ── Notifications (Sprint 7) ─────────────────────────────────────
+    // Fixed / sub-resource paths before bare :id routes.
+    if (url.pathname === "/api/notification-templates" && request.method === "GET") {
+      return handleNotifTemplateList(env, request);
+    }
+    const notifTplTest = url.pathname.match(/^\/api\/notification-templates\/([^/]+)\/test$/);
+    if (notifTplTest && request.method === "POST") {
+      return handleTemplateTest(request, env, decodeURIComponent(notifTplTest[1]));
+    }
+    const notifTplPreview = url.pathname.match(/^\/api\/notification-templates\/([^/]+)\/preview$/);
+    if (notifTplPreview && request.method === "POST") {
+      return handleTemplatePreview(request, env, decodeURIComponent(notifTplPreview[1]));
+    }
+    const notifTplById = url.pathname.match(/^\/api\/notification-templates\/([^/]+)$/);
+    if (notifTplById) {
+      const tid = decodeURIComponent(notifTplById[1]);
+      if (request.method === "GET") return handleNotifTemplateGet(env, request, tid);
+      if (request.method === "PUT") return handleNotifTemplateUpdate(request, env, tid);
+    }
+
+    if (url.pathname === "/api/notification-logs" && request.method === "GET") {
+      return handleNotifLogList(env, request, url);
+    }
+    const notifLogRetry = url.pathname.match(/^\/api\/notification-logs\/([^/]+)\/retry$/);
+    if (notifLogRetry && request.method === "POST") {
+      return handleNotifLogRetry(request, env, decodeURIComponent(notifLogRetry[1]));
+    }
+
+    // In-app inbox (per-user; all roles). read-all before the bare :id route.
+    if (url.pathname === "/api/notifications/inbox" && request.method === "GET") {
+      return handleInbox(request, env);
+    }
+    if (url.pathname === "/api/notifications/read-all" && request.method === "PUT") {
+      return handleInboxReadAll(request, env);
+    }
+    const notifRead = url.pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
+    if (notifRead && request.method === "PUT") {
+      return handleInboxRead(request, env, decodeURIComponent(notifRead[1]));
     }
 
     // ── Subcontractors (CHS platform schema; coexists with /api/subs) ─
@@ -772,6 +840,9 @@ export default {
 
 async function dispatchCron(cron: string, env: Env): Promise<void> {
   switch (cron) {
+    case "*/15 * * * *":
+      await runNotificationProcessor(env);
+      return;
     case "15 * * * *":
       await runHourly(env);
       return;
@@ -785,6 +856,20 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
     default:
       await runJobberTick(cron, env);
       return;
+  }
+}
+
+// Notification Processor (Sprint 7) — drains the queued notification_logs rows
+// that are due, after recomputing time-based triggers (quote follow-ups,
+// work_starting, appointment reminders) from D1. Failures are non-fatal.
+async function runNotificationProcessor(env: Env): Promise<void> {
+  try {
+    const s = await processNotifications(env);
+    console.log(
+      `[cron */15 * * * *] notifications: enqueued=${s.scanned_enqueued} sent=${s.sent} simulated=${s.simulated} deferred=${s.deferred} suppressed=${s.suppressed} failed=${s.failed} dlq=${s.dead_lettered} in ${s.duration_ms}ms`,
+    );
+  } catch (err) {
+    console.error("[cron */15 * * * *] notifications failed:", (err as Error).message);
   }
 }
 

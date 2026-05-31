@@ -52,4 +52,24 @@ export interface Env {
   FILE_LINK_SECRET?: string;
   /** Public origin for shared links, e.g. `https://chs-hub.<subdomain>.workers.dev` so links work without Cloudflare Access. Optional; defaults to the request host. */
   HUB_FILE_LINK_ORIGIN?: string;
+
+  // ─── Notification engine (Sprint 7) ─────────────────────────────
+  // Dispatch mode. "live" attempts real SMS/email when credentials are present
+  // (and falls back to simulate when they're absent); anything else (default,
+  // incl. unset) forces SIMULATE — render + log a notification_logs row marked
+  // external_id='simulated:<uuid>' WITHOUT hitting Twilio/Resend, so the engine
+  // is fully testable locally and never messages a real client. Set in
+  // wrangler.toml [vars]; NOT a secret.
+  NOTIFICATIONS_DISPATCH_MODE?: string;
+  /** Absolute origin used to build client-facing links ({{estimate_link}}, {{portal_link}}). wrangler.toml [vars]. */
+  APP_PUBLIC_ORIGIN?: string;
+
+  // Twilio (SMS send + inbound/status webhook signature verify). All secrets;
+  // a Pre-Launch item. Absent ⇒ SMS simulates and inbound webhooks reject.
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  TWILIO_FROM_NUMBER?: string;
+
+  /** Client-facing "from" address for notification emails. Falls back to ALERT_EMAIL_FROM. Pre-Launch: a verified Resend sender. */
+  NOTIFICATIONS_EMAIL_FROM?: string;
 }

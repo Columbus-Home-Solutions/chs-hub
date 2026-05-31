@@ -24,6 +24,7 @@
 import type { Env } from "../env.js";
 import { convertQuoteToJob } from "../lib/quote-to-job.js";
 import { triggerDealWon } from "../lib/wc/triggers.js";
+import { triggerJobConversionNotifications } from "../lib/notification-engine.js";
 import {
   convenienceFee as computeFee,
   createPaymentIntent,
@@ -674,6 +675,12 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
 
   // WC closed-deal count + New Sales value track the contract total.
   triggerDealWon(env, outcome.jobId, outcome.total);
+
+  // Notifications: deposit receipt + welcome-portal emails (immediate,
+  // idempotent on the job id — a Stripe webhook redelivery never double-sends).
+  // Fired AFTER the conversion succeeded; the verify/branch/200 logic above is
+  // untouched.
+  await triggerJobConversionNotifications(env, outcome.jobId);
 
   return json({ received: true, job_id: outcome.jobId, job_number: outcome.jobNumber });
 }

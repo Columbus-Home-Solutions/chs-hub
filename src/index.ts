@@ -1016,12 +1016,14 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
       return;
     case "15 7 * * *":
       await runNightly(env);
+      // Invoice billing piggybacks on the nightly window (02:15 Central) rather
+      // than its own cron — the account is capped at 5 cron triggers, and running
+      // here keeps late fees fresh for the 07:00 Central daily summary. Order is
+      // backup → billing so a backup captures pre-fee state.
+      await runInvoiceBilling(env);
       return;
     case "0 12 * * *":
       await runMorning(env);
-      return;
-    case "0 8 * * *":
-      await runInvoiceBilling(env);
       return;
     case "*/30 * * * *":
     default:
@@ -1032,16 +1034,17 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
 
 // Invoice billing (Sprint 9): accrue $50/day late fees on overdue invoices, then
 // enqueue due-reminder / past-due notices. Order matters — fees first so the
-// past-due notice carries the up-to-date balance. Failures are non-fatal.
+// past-due notice carries the up-to-date balance. Runs inside the nightly
+// (15 7 * * *) tick because the account is capped at 5 cron triggers. Non-fatal.
 async function runInvoiceBilling(env: Env): Promise<void> {
   try {
     const fees = await runLateFeeCalculator(env);
     const due = await runInvoiceDueCheck(env);
     console.log(
-      `[cron 0 8 * * *] invoice_billing: late_fees scanned=${fees.scanned} updated=${fees.updated} past_due=${fees.marked_past_due}; due_check scanned=${due.scanned} reminders=${due.reminders} past_due_notices=${due.past_due}`,
+      `[cron 15 7 * * *] invoice_billing: late_fees scanned=${fees.scanned} updated=${fees.updated} past_due=${fees.marked_past_due}; due_check scanned=${due.scanned} reminders=${due.reminders} past_due_notices=${due.past_due}`,
     );
   } catch (err) {
-    console.error("[cron 0 8 * * *] invoice_billing failed:", (err as Error).message);
+    console.error("[cron 15 7 * * *] invoice_billing failed:", (err as Error).message);
   }
 }
 

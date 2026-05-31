@@ -111,12 +111,15 @@ APP_PUBLIC_ORIGIN = "https://chs-hub.homesolutionsar.com"
 #   15 7 * * *    → nightly D1 → R2 backup at 02:15 Central (07:15 UTC) +
 #                   30-day retention sweep
 #   0 12 * * *    → daily summary email at 07:00 Central (12:00 UTC)
-#   0 8 * * *     → Invoice billing (Sprint 9): late-fee accrual ($50/day past
-#                   due) + invoice due-reminder / past-due notices, 03:00 Central
 
 #   */15 * * * *  → Notification Processor (Sprint 7): drain due queued
 #                   notification_logs rows after recomputing time-based triggers
 #                   (quote follow-ups, work_starting, appointment reminders)
+#
+# NOTE: the account is capped at 5 cron triggers (Workers Free plan limit). Sprint
+# 9's invoice billing (late-fee accrual + due/past-due notices) therefore runs
+# INSIDE the nightly "15 7 * * *" handler (see dispatchCron → runInvoiceBilling)
+# rather than as a 6th "0 8 * * *" trigger.
 
 [triggers]
 crons = [
@@ -125,7 +128,6 @@ crons = [
   "15 * * * *",
   "15 7 * * *",
   "0 12 * * *",
-  "0 8 * * *",
 ]
 
 [observability]

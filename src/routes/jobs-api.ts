@@ -171,7 +171,10 @@ function shapeJobCard(r: JobListRow) {
     actual_end_date: r.actual_end_date,
     portal_token: r.portal_token,
     portal_type: r.portal_type,
-    portal_path: r.portal_token ? `/portal/${r.portal_token}` : null,
+    // The post-sale client portal view (/portal/:token) is later-sprint work and
+    // has no route yet, so we surface no link. portal_token stays on the row
+    // (selected above) for that future portal; we just don't advertise a path.
+    portal_path: null,
     conversion_complete: (r.conversion_complete ?? 0) === 1,
     estimate_id: r.estimate_id,
     days_in_status: daysSince(r.status_since),

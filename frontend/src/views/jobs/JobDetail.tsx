@@ -135,7 +135,6 @@ function OverviewTab({
 }) {
   const job = data.job;
   const targets = statusTargets(job.status);
-  const portalLink = job.portal_path ? `${window.location.origin}${job.portal_path}` : null;
 
   const changeStatus = async (status: string) => {
     try {
@@ -223,12 +222,6 @@ function OverviewTab({
             )}
           </div>
         </Card>
-
-        {portalLink && (
-          <Card title="Client Portal">
-            <PortalLink link={portalLink} toast={toast} />
-          </Card>
-        )}
       </div>
     </div>
   );
@@ -323,34 +316,6 @@ function DatesCard({
         )}
       </div>
     </Card>
-  );
-}
-
-function PortalLink({ link, toast }: { link: string; toast: ToastApi }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopied(true);
-      toast.push("success", "Portal link copied");
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      toast.push("error", "Couldn't copy — select and copy manually.");
-    }
-  };
-  return (
-    <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
-      <input
-        class="form-input"
-        style={{ flex: "1", minWidth: "220px", fontSize: "var(--text-sm)" }}
-        readOnly
-        value={link}
-        onFocus={(ev) => (ev.target as HTMLInputElement).select()}
-      />
-      <Button variant="secondary" onClick={copy}>
-        {copied ? "Copied ✓" : "Copy link"}
-      </Button>
-    </div>
   );
 }
 

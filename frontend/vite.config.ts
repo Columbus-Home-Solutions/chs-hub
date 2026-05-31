@@ -27,6 +27,7 @@ export default defineConfig({
       input: {
         app: "index.html",
         quote: "quote.html",
+        pay: "pay.html",
       },
     },
   },

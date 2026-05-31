@@ -260,13 +260,14 @@ export async function convertQuoteToJob(
   const portalToken = crypto.randomUUID().replace(/-/g, "");
   const billingModel = row.e_billing;
 
-  const jobNumberRow = await env.DB.prepare(
-    "SELECT COALESCE(MAX(job_number), 0) + 1 AS n FROM jobs",
-  ).first<{ n: number }>();
-  const jobNumber = jobNumberRow?.n ?? 1;
-
   const title = row.e_title || `${titleCase(row.job_type)} — ${row.property_address}`;
 
+  // job_number hardening (Sprint 6 deviation 2): allocate INSIDE the INSERT via
+  // COALESCE(MAX(job_number),0)+1, backed by the UNIQUE index idx_jobs_job_number.
+  // No more read-then-write race (the old `MAX()+1` read outside the batch) and a
+  // concurrent racer that picks the same number now fails the UNIQUE constraint
+  // cleanly instead of silently colliding. The number is read back after the batch.
+  //
   // jobs.synced_at is NOT NULL (legacy Jobber-sync column); native rows set it to
   // creation time so the column stays satisfied without pretending it was synced.
   const createJob = env.DB.prepare(
@@ -276,10 +277,10 @@ export async function convertQuoteToJob(
        billing_model, property_address, property_city, property_state, property_zip,
        job_type, lead_source, estimate_id, contract_total, deposit_amount, deposit_paid,
        portal_token, portal_type, conversion_complete
-     ) VALUES (?, ?, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0)`,
+     )
+     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0`,
   ).bind(
     jobId,
-    jobNumber,
     title,
     row.client_id,
     total,
@@ -360,6 +361,12 @@ export async function convertQuoteToJob(
     env.DB.prepare("UPDATE jobs SET conversion_complete = 1 WHERE id = ?").bind(jobId),
   ]);
 
+  // Read back the in-transaction-allocated job_number.
+  const jobNumberRow = await env.DB.prepare("SELECT job_number FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ job_number: number }>();
+  const jobNumber = jobNumberRow?.job_number ?? 0;
+
   return {
     ok: true,
     jobId,
@@ -370,6 +377,70 @@ export async function convertQuoteToJob(
     idempotent: false,
     completed: true,
   };
+}
+
+// ─── reverse-conversion / un-win (Sprint 6 deviation 6) ───────────────────────
+
+export type ReversalOutcome =
+  | { ok: true; jobId: string; jobNumber: number | null; voidedInvoices: number; alreadyReversed: boolean }
+  | { ok: false; status: number; error: string; details: string };
+
+/**
+ * Reverse a job conversion (bounced check / NSF / chargeback / refund). The
+ * INVERSE of convertQuoteToJob() and its mirror in audit discipline: it
+ * FLAGS-AND-PRESERVES, it never deletes. The job row is KEPT and flagged
+ * (conversion_reversed=1 + reason + reversed_at); every non-void invoice on the
+ * job is voided (preserved for audit); payments, tasks, the estimate, and the
+ * job itself are untouched. A full audit_log row records the reversal.
+ *
+ * Trigger paths (both land here): a manual O-only action, and the Stripe
+ * charge.refunded / charge.dispute.created webhook branch.
+ */
+export async function reverseJobConversion(
+  env: Env,
+  jobId: string,
+  reason: string,
+  reversedBy: string | null,
+): Promise<ReversalOutcome> {
+  const job = await env.DB.prepare(
+    "SELECT id, job_number, conversion_reversed FROM jobs WHERE id = ? AND source = 'estimate'",
+  )
+    .bind(jobId)
+    .first<{ id: string; job_number: number | null; conversion_reversed: number | null }>();
+  if (!job) {
+    return { ok: false, status: 404, error: "not_found", details: "Job not found." };
+  }
+  if ((job.conversion_reversed ?? 0) === 1) {
+    return { ok: true, jobId, jobNumber: job.job_number, voidedInvoices: 0, alreadyReversed: true };
+  }
+
+  const nowIso = new Date().toISOString();
+  const openInvoices = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM invoices WHERE job_id = ? AND status != 'void'",
+  )
+    .bind(jobId)
+    .first<{ n: number }>();
+  const voidedInvoices = openInvoices?.n ?? 0;
+
+  // One atomic batch. NO deletes anywhere: the job is flagged, invoices are
+  // voided (rows preserved), payments are never touched.
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE jobs SET conversion_reversed = 1, reversal_reason = ?, reversed_at = ?, updated_at = ? WHERE id = ?",
+    ).bind(reason, nowIso, nowIso, jobId),
+    env.DB.prepare("UPDATE invoices SET status = 'void' WHERE job_id = ? AND status != 'void'").bind(jobId),
+    env.DB.prepare(
+      "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, 'job_conversion_reversed', 'job', ?, ?, ?)",
+    ).bind(
+      crypto.randomUUID(),
+      reversedBy ?? "system@reverse-conversion",
+      jobId,
+      JSON.stringify({ reason, voided_invoices: voidedInvoices, preserved: true }),
+      nowIso,
+    ),
+  ]);
+
+  return { ok: true, jobId, jobNumber: job.job_number, voidedInvoices, alreadyReversed: false };
 }
 
 /**

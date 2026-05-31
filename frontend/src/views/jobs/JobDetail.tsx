@@ -12,6 +12,7 @@ import { Timeline } from "../../components/Timeline";
 import { CommunicationModal } from "../clients/ClientDetail";
 import { PhotosTab } from "./PhotosTab";
 import { DailyLogsTab } from "./DailyLogsTab";
+import { FinancialTab } from "./FinancialTab";
 import { SmartNotesPanel } from "./SmartNotesPanel";
 import { QuickCaptureBar } from "./QuickCaptureBar";
 import { useToast } from "../../store/toast";
@@ -36,6 +37,7 @@ interface DetailProps extends RoutableProps {
 type TabKey =
   | "overview"
   | "tasks"
+  | "financial"
   | "photos"
   | "daily_logs"
   | "notes"
@@ -46,6 +48,7 @@ type TabKey =
 const TABS: { key: TabKey; label: string; stub?: boolean }[] = [
   { key: "overview", label: "Overview" },
   { key: "tasks", label: "Tasks" },
+  { key: "financial", label: "Financial" },
   { key: "photos", label: "Photos" },
   { key: "daily_logs", label: "Daily Logs" },
   { key: "notes", label: "Field Notes" },
@@ -128,6 +131,7 @@ export function JobDetail({ id }: DetailProps) {
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
+      {tab === "financial" && id && <FinancialTab jobId={id} />}
       {tab === "photos" && id && <PhotosTab jobId={id} />}
       {tab === "daily_logs" && id && <DailyLogsTab jobId={id} />}
       {tab === "notes" && id && <SmartNotesPanel jobId={id} />}

@@ -22,7 +22,8 @@
  */
 
 import type { Env } from "../env.js";
-import { convertQuoteToJob } from "../lib/quote-to-job.js";
+import { convertQuoteToJob, reverseJobConversion } from "../lib/quote-to-job.js";
+import { recordPayment } from "./payments.js";
 import { triggerDealWon } from "../lib/wc/triggers.js";
 import { triggerJobConversionNotifications } from "../lib/notification-engine.js";
 import {
@@ -569,14 +570,27 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
   const event = verified.event;
 
   const type = String(event.type ?? "");
-  // Only deposit PaymentIntents drive conversion. Everything else is ack'd 200.
+  const obj = ((event.data as Record<string, unknown>)?.object ?? {}) as Record<string, unknown>;
+  const metadata = (obj.metadata ?? {}) as Record<string, string>;
+
+  // Reverse-conversion triggers (refund / chargeback) — flag-and-preserve.
+  if (type === "charge.refunded" || type === "charge.dispute.created") {
+    return handleStripeReversal(env, type, obj);
+  }
+
+  // Only succeeded PaymentIntents drive payment recording / conversion.
   if (type !== "payment_intent.succeeded") {
     await logPublicAudit(env, "", null, "stripe_webhook_ignored", "stripe", { ignored: type });
     return json({ received: true, ignored: type });
   }
 
-  const obj = ((event.data as Record<string, unknown>)?.object ?? {}) as Record<string, unknown>;
-  const metadata = (obj.metadata ?? {}) as Record<string, string>;
+  // Sprint 9: invoice payments. A PaymentIntent created from the public pay page
+  // carries metadata.invoice_id and routes here (NOT through quote conversion).
+  if (metadata.invoice_id) {
+    return handleInvoicePaymentWebhook(env, obj, metadata);
+  }
+
+  // Deposit branch (Sprint 5) — unchanged single conversion path.
   if (metadata.kind !== "deposit") {
     await logPublicAudit(env, "", null, "stripe_webhook_ignored", "stripe", {
       ignored: "non_deposit_intent",
@@ -683,4 +697,141 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
   await triggerJobConversionNotifications(env, outcome.jobId);
 
   return json({ received: true, job_id: outcome.jobId, job_number: outcome.jobNumber });
+}
+
+/** Best-effort extraction of Stripe's processing fee (cents → dollars). */
+function stripeFeeFromObject(obj: Record<string, unknown>): number | null {
+  try {
+    const charges = (obj.charges as { data?: Array<Record<string, unknown>> })?.data;
+    const bt = charges?.[0]?.balance_transaction as { fee?: number } | undefined;
+    if (bt && typeof bt.fee === "number") return round2(bt.fee / 100);
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** Map the Stripe payment-method type to our enum. */
+function methodFromObject(obj: Record<string, unknown>): string {
+  try {
+    const charges = (obj.charges as { data?: Array<Record<string, unknown>> })?.data;
+    const pmType = (charges?.[0]?.payment_method_details as { type?: string } | undefined)?.type;
+    if (pmType === "us_bank_account" || pmType === "ach_debit") return "ach";
+  } catch {
+    /* ignore */
+  }
+  return "credit_card";
+}
+
+/**
+ * Invoice payment branch (Sprint 9). The PaymentIntent's metadata carries
+ * invoice_id / job_id / client_id / base_amount / convenience_fee. We route the
+ * money through the SAME recordPayment() the manual route uses — idempotent on
+ * the PaymentIntent id, recomputes invoice status, fires the receipt. Always
+ * ack 200 so Stripe stops retrying.
+ */
+async function handleInvoicePaymentWebhook(
+  env: Env,
+  obj: Record<string, unknown>,
+  metadata: Record<string, string>,
+): Promise<Response> {
+  const stripePaymentId = String(obj.id ?? "");
+  const invoiceId = metadata.invoice_id;
+  // base_amount is the invoice balance; the amount Stripe charged includes the
+  // 3.5% convenience fee. We record the BASE against the invoice and track the
+  // fee separately (revenue, never folded into contract value).
+  const baseAmount = Number(metadata.base_amount ?? metadata.amount);
+  const fee = Number(metadata.convenience_fee);
+
+  if (!invoiceId || !Number.isFinite(baseAmount) || baseAmount <= 0) {
+    await logPublicAudit(env, "", null, "stripe_webhook_ignored", "stripe", {
+      ignored: "invoice_missing_metadata",
+      payment_intent_id: stripePaymentId,
+      invoice_id: invoiceId ?? null,
+    });
+    return json({ received: true, ignored: "invoice_missing_metadata" });
+  }
+
+  const result = await recordPayment(env, {
+    jobId: metadata.job_id ?? null,
+    invoiceId,
+    clientId: metadata.client_id ?? null,
+    amount: round2(baseAmount),
+    method: methodFromObject(obj),
+    convenienceFee: Number.isFinite(fee) ? round2(fee) : null,
+    stripeFee: stripeFeeFromObject(obj),
+    stripePaymentId,
+  });
+
+  await logPublicAudit(
+    env,
+    metadata.token ?? "",
+    null,
+    result.created ? "invoice_payment_recorded" : "stripe_webhook_idempotent",
+    invoiceId,
+    {
+      payment_id: result.paymentId,
+      invoice_id: invoiceId,
+      invoice_status: result.invoiceStatus,
+      base_amount: round2(baseAmount),
+      convenience_fee: Number.isFinite(fee) ? round2(fee) : null,
+      stripe_payment_id: stripePaymentId,
+    },
+  );
+
+  return json({
+    received: true,
+    idempotent: !result.created,
+    payment_id: result.paymentId,
+    invoice_status: result.invoiceStatus,
+  });
+}
+
+/**
+ * Reverse-conversion via Stripe (refund / dispute). The event object is a CHARGE
+ * whose payment_intent links back to the deposit we recorded at conversion. We
+ * find the job by that PaymentIntent id and call reverseJobConversion() — the
+ * same flag-and-preserve engine the manual O-only action uses. Always ack 200.
+ */
+async function handleStripeReversal(
+  env: Env,
+  type: string,
+  obj: Record<string, unknown>,
+): Promise<Response> {
+  const piId = String(obj.payment_intent ?? obj.id ?? "");
+  const reason = type === "charge.dispute.created" ? "stripe_dispute" : "stripe_refund";
+
+  // The deposit payment carries the PaymentIntent id; that locates the job.
+  const pay = piId
+    ? await env.DB.prepare("SELECT job_id FROM payments WHERE stripe_payment_id = ?")
+        .bind(piId)
+        .first<{ job_id: string | null }>()
+    : null;
+
+  if (!pay?.job_id) {
+    await logPublicAudit(env, "", null, "stripe_webhook_ignored", "stripe", {
+      ignored: "reversal_no_job",
+      event: type,
+      payment_intent_id: piId || null,
+    });
+    return json({ received: true, ignored: "reversal_no_job" });
+  }
+
+  const outcome = await reverseJobConversion(env, pay.job_id, reason, "system@stripe-webhook");
+  if (!outcome.ok) {
+    await logPublicAudit(env, "", null, "job_conversion_reverse_failed", pay.job_id, {
+      event: type,
+      error: outcome.error,
+      details: outcome.details,
+    });
+    return json({ received: true, reverse_error: outcome.error });
+  }
+
+  await logPublicAudit(env, "", null, "job_conversion_reversed", pay.job_id, {
+    event: type,
+    reason,
+    voided_invoices: outcome.voidedInvoices,
+    already_reversed: outcome.alreadyReversed,
+  });
+  return json({ received: true, reversed: true, job_id: pay.job_id, voided_invoices: outcome.voidedInvoices });
 }

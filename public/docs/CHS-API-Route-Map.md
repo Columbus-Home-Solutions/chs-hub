@@ -637,13 +637,14 @@ Not REST endpoints, but Worker cron triggers that need to be implemented.
 | */15 * * * * | Notification Processor | Send queued/scheduled notifications |
 | */15 * * * * | Social Post Publisher | Publish approved posts at scheduled time |
 | */30 * * * * | WC Spreadsheet Sync | Push data to Google Sheets (carry forward) |
-| 0 * * * * | Invoice Due Check | Check for invoices approaching due date or past due → trigger reminders |
+| 0 8 * * * | Invoice Billing (as-built, Sprint 9) | One daily pass: Late Fee Calculator ($50/day on overdue invoices) **then** Invoice Due Check (due-reminder + past-due notices). Consolidates the two rows below into a single `0 8 * * *` run. |
+| ~~0 * * * *~~ | ~~Invoice Due Check~~ | Superseded — folded into the `0 8 * * *` Invoice Billing run above |
 | 0 */6 * * * | HL Pipeline Sync | Pull latest HL pipeline data |
 | 0 0 * * * | Nightly Backup | D1 → R2 backup |
 | 0 6 * * * | Daily Summary | Send daily summary email via Resend |
 | 0 0 * * 0 | Weekly Photo Summary | Generate weekly photo summaries for active jobs |
 | 0 0 * * * | Google Drive Mirror | Process pending document/photo mirrors |
-| 0 0 * * * | Late Fee Calculator | Update late fee amounts on overdue invoices |
+| ~~0 0 * * *~~ | ~~Late Fee Calculator~~ | Superseded — folded into the `0 8 * * *` Invoice Billing run above |
 | 0 0 * * * | QBO Sync | Push pending financial data to QuickBooks |
 
 ---

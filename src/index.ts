@@ -38,6 +38,7 @@ import {
   handleJobDetail,
   handleJobUpdate,
   handleJobStatus,
+  handleJobReverseConversion,
   handleTaskList,
   handleTaskCreate,
   handleTaskUpdate,
@@ -170,6 +171,7 @@ import {
 } from "./routes/notifications.js";
 import { handleTwilioInbound, handleTwilioStatus } from "./routes/webhooks-twilio.js";
 import { processNotifications } from "./lib/notification-engine.js";
+import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
 import {
   handleSubcontractorCreate,
   handleSubcontractorGet,
@@ -223,6 +225,17 @@ import {
   handlePublicQuotePayCheck,
   handleStripeWebhook,
 } from "./routes/public-quote.js";
+import {
+  handleInvoiceList,
+  handleInvoiceGet,
+  handleInvoiceCreate,
+  handleInvoiceUpdate,
+  handleInvoiceSend,
+  handleInvoiceVoid,
+  handleJobInvoices,
+} from "./routes/invoices.js";
+import { handlePaymentList, handlePaymentCreate, handleJobPayments } from "./routes/payments.js";
+import { handlePublicPayGet, handlePublicPayIntent } from "./routes/public-pay.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -460,6 +473,10 @@ export default {
     if (jobStatus && request.method === "PUT") {
       return handleJobStatus(request, env, decodeURIComponent(jobStatus[1]));
     }
+    const jobReverse = url.pathname.match(/^\/api\/jobs\/([^/]+)\/reverse-conversion$/);
+    if (jobReverse && request.method === "POST") {
+      return handleJobReverseConversion(request, env, decodeURIComponent(jobReverse[1]));
+    }
     const jobComms = url.pathname.match(/^\/api\/jobs\/([^/]+)\/communications$/);
     if (jobComms && request.method === "GET") {
       return handleJobCommunicationList(env, decodeURIComponent(jobComms[1]), url);
@@ -468,6 +485,15 @@ export default {
     const jobPhotos = url.pathname.match(/^\/api\/jobs\/([^/]+)\/photos$/);
     if (jobPhotos && request.method === "GET") {
       return handleJobPhotos(env, decodeURIComponent(jobPhotos[1]), url);
+    }
+    // Invoices + payments per job (Sprint 9).
+    const jobInvoices = url.pathname.match(/^\/api\/jobs\/([^/]+)\/invoices$/);
+    if (jobInvoices && request.method === "GET") {
+      return handleJobInvoices(env, decodeURIComponent(jobInvoices[1]));
+    }
+    const jobPayments = url.pathname.match(/^\/api\/jobs\/([^/]+)\/payments$/);
+    if (jobPayments && request.method === "GET") {
+      return handleJobPayments(request, env, decodeURIComponent(jobPayments[1]));
     }
     // Daily logs per job (Sprint 8).
     const jobDailyLogs = url.pathname.match(/^\/api\/jobs\/([^/]+)\/daily-logs$/);
@@ -489,6 +515,42 @@ export default {
     const taskComplete = url.pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
     if (taskComplete && request.method === "PUT") {
       return handleTaskComplete(request, env, decodeURIComponent(taskComplete[1]));
+    }
+
+    // ── Invoices (Sprint 9) ──────────────────────────────────────────
+    if (url.pathname === "/api/invoices") {
+      if (request.method === "GET") return handleInvoiceList(env, url);
+      if (request.method === "POST") return handleInvoiceCreate(request, env);
+    }
+    const invoiceSend = url.pathname.match(/^\/api\/invoices\/([^/]+)\/send$/);
+    if (invoiceSend && request.method === "POST") {
+      return handleInvoiceSend(request, env, decodeURIComponent(invoiceSend[1]));
+    }
+    const invoiceVoid = url.pathname.match(/^\/api\/invoices\/([^/]+)\/void$/);
+    if (invoiceVoid && request.method === "POST") {
+      return handleInvoiceVoid(request, env, decodeURIComponent(invoiceVoid[1]));
+    }
+    const invoiceById = url.pathname.match(/^\/api\/invoices\/([^/]+)$/);
+    if (invoiceById) {
+      const iid = decodeURIComponent(invoiceById[1]);
+      if (request.method === "GET") return handleInvoiceGet(env, iid);
+      if (request.method === "PUT") return handleInvoiceUpdate(request, env, iid);
+    }
+
+    // ── Payments (Sprint 9) ──────────────────────────────────────────
+    if (url.pathname === "/api/payments") {
+      if (request.method === "GET") return handlePaymentList(request, env, url);
+      if (request.method === "POST") return handlePaymentCreate(request, env);
+    }
+
+    // ── Public payment page (Sprint 9, token-gated, unauthenticated) ──
+    const publicPay = url.pathname.match(/^\/api\/public\/pay\/([^/]+)$/);
+    if (publicPay && request.method === "GET") {
+      return handlePublicPayGet(env, decodeURIComponent(publicPay[1]));
+    }
+    const publicPayIntent = url.pathname.match(/^\/api\/public\/pay\/([^/]+)\/intent$/);
+    if (publicPayIntent && request.method === "POST") {
+      return handlePublicPayIntent(request, env, decodeURIComponent(publicPayIntent[1]));
     }
 
     // ── Photos (PWA capture + Sprint 8 timeline/receipts) ────────────
@@ -881,6 +943,16 @@ export default {
       return env.ASSETS.fetch(new Request(quoteHtmlUrl.toString(), { method: "GET" }));
     }
 
+    // ── Public invoice payment page (Sprint 9) ───────────────────────
+    // /pay/:token — the invoice analogue of /quote/:token. Standalone, no-auth,
+    // own Vite entry (public/app/pay.html). Reads the token and calls
+    // /api/public/pay/:token. Served on every host; no Access.
+    if (url.pathname === "/pay" || url.pathname.startsWith("/pay/")) {
+      const payHtmlUrl = new URL(request.url);
+      payHtmlUrl.pathname = "/app/pay.html";
+      return env.ASSETS.fetch(new Request(payHtmlUrl.toString(), { method: "GET" }));
+    }
+
     // ── New Preact app (Sprint 2+) ───────────────────────────────────
     // Built by Vite into ./app and served at /app. Handled before the
     // dashboard-host rewrite so it resolves on every host. Deep links
@@ -948,10 +1020,28 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
     case "0 12 * * *":
       await runMorning(env);
       return;
+    case "0 8 * * *":
+      await runInvoiceBilling(env);
+      return;
     case "*/30 * * * *":
     default:
       await runJobberTick(cron, env);
       return;
+  }
+}
+
+// Invoice billing (Sprint 9): accrue $50/day late fees on overdue invoices, then
+// enqueue due-reminder / past-due notices. Order matters — fees first so the
+// past-due notice carries the up-to-date balance. Failures are non-fatal.
+async function runInvoiceBilling(env: Env): Promise<void> {
+  try {
+    const fees = await runLateFeeCalculator(env);
+    const due = await runInvoiceDueCheck(env);
+    console.log(
+      `[cron 0 8 * * *] invoice_billing: late_fees scanned=${fees.scanned} updated=${fees.updated} past_due=${fees.marked_past_due}; due_check scanned=${due.scanned} reminders=${due.reminders} past_due_notices=${due.past_due}`,
+    );
+  } catch (err) {
+    console.error("[cron 0 8 * * *] invoice_billing failed:", (err as Error).message);
   }
 }
 

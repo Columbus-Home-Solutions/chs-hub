@@ -26,8 +26,10 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerJobStatusChanged } from "../lib/wc/triggers.js";
+import { reverseJobConversion } from "../lib/quote-to-job.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
+const REVERSE_ROLES = ["owner"] as const;
 
 // Forward-only lifecycle (Job Management §2). Two backward exceptions only.
 export const JOB_STATUSES = [
@@ -428,18 +430,26 @@ export async function handleJobStatus(request: Request, env: Env, id: string): P
     }
   }
 
-  // Gate → closed: no unpaid invoices (§6.10). Invoices arrive in Sprint 9; the
-  // gate hook is in place now and trivially passes (no invoices exist yet).
+  // Gate → closed: no invoice with an outstanding balance (§6.10 / Sprint 9).
+  // Outstanding = an ISSUED, non-void invoice whose collected payments are less
+  // than its total_due. Void invoices are settled-or-dead (preserved, no balance)
+  // and drafts are not yet real obligations, so neither blocks the close.
   if (target === "closed") {
-    // TODO(Sprint 9): block when invoices for this job have an outstanding
-    // balance. Until the billing engine exists there are no blocking invoices.
     const unpaid = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM invoices WHERE job_id = ? AND UPPER(COALESCE(status, '')) NOT IN ('PAID', 'BAD_DEBT')",
+      `SELECT COUNT(*) AS n FROM invoices i
+        WHERE i.job_id = ?
+          AND i.status NOT IN ('void', 'draft')
+          AND COALESCE(i.total_due, i.amount, 0)
+              > COALESCE((SELECT SUM(amount) FROM payments WHERE invoice_id = i.id), 0) + 0.005`,
     )
       .bind(id)
       .first<{ n: number }>();
     if ((unpaid?.n ?? 0) > 0) {
-      return err(409, "unpaid_invoices", `Cannot close: ${unpaid!.n} unpaid invoice(s) remain.`);
+      return err(
+        409,
+        "unpaid_invoices",
+        `Cannot close: ${unpaid!.n} invoice(s) still have an outstanding balance.`,
+      );
     }
   }
 
@@ -454,6 +464,26 @@ export async function handleJobStatus(request: Request, env: Env, id: string): P
 
   await logAudit(env, user.email, "job_status_changed", "job", id, { from, to: target });
   triggerJobStatusChanged(env, id, from, target);
+
+  return handleJobDetail(env, id);
+}
+
+/**
+ * Reverse a job conversion (un-win) — owner only. The manual counterpart to the
+ * Stripe refund/dispute webhook branch; both call the SAME reverseJobConversion()
+ * (src/lib/quote-to-job.ts), which FLAGS-AND-PRESERVES: the job is kept and
+ * flagged, its open invoices are voided (preserved), payments are untouched.
+ */
+export async function handleJobReverseConversion(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, [...REVERSE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const body = await readJson(request);
+  const reason = (body ? str(body.reason) : null) ?? "manual_reversal";
+
+  const outcome = await reverseJobConversion(env, id, reason, user.email);
+  if (!outcome.ok) return err(outcome.status, outcome.error, outcome.details);
 
   return handleJobDetail(env, id);
 }

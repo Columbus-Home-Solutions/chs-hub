@@ -975,10 +975,79 @@ export function triggerSubScheduled(_env: Env, _scheduleEntryId: string): void {
   // Sprint 6 stub). When POST /api/jobs/:id/schedule lands, call
   // triggerNotification(env, 'sub_scheduled', { jobId, ... }).
 }
-/** Sprint 9 (invoicing): fire on recorded payment / invoice due / past due. */
-export function triggerPaymentReceived(_env: Env, _paymentId: string): void {
-  // TODO(Sprint 9): invoices/payments module owns payment_received,
-  // invoice_due_reminder, invoice_past_due. Wire triggerNotification here then.
+/**
+ * Sprint 9 (invoicing) — WIRED. Fire the payment receipt on every recorded
+ * payment (Stripe + manual). The receipt shows the invoice amount and the
+ * convenience fee SEPARATELY (the `payment_amount` merge is the base invoice
+ * amount, fee-excluded; the fee is recorded on the payment row and surfaced on
+ * the payment page, never bundled into the shown amount). Stays SIMULATED — the
+ * dispatch mode is unchanged. Keyed on the payment id so a webhook redelivery or
+ * a re-fired manual submit never double-receipts. Non-fatal on error.
+ */
+export async function triggerPaymentReceived(env: Env, paymentId: string): Promise<void> {
+  try {
+    const pay = await env.DB.prepare(
+      "SELECT invoice_id, job_id, client_id, amount, convenience_fee FROM payments WHERE id = ?",
+    )
+      .bind(paymentId)
+      .first<{ invoice_id: string | null; job_id: string | null; client_id: string | null; amount: number | null; convenience_fee: number | null }>();
+    if (!pay?.client_id) return;
+
+    let invoiceNumber: number | null = null;
+    let remaining = 0;
+    if (pay.invoice_id) {
+      const inv = await env.DB.prepare(
+        "SELECT invoice_number, total_due, COALESCE((SELECT SUM(amount) FROM payments WHERE invoice_id = ?), 0) AS paid FROM invoices WHERE id = ?",
+      )
+        .bind(pay.invoice_id, pay.invoice_id)
+        .first<{ invoice_number: number | null; total_due: number | null; paid: number }>();
+      if (inv) {
+        invoiceNumber = inv.invoice_number;
+        remaining = Math.max(0, Math.round(((inv.total_due ?? 0) - (inv.paid ?? 0)) * 100) / 100);
+      }
+    }
+
+    await triggerNotification(env, "payment_received", {
+      clientId: pay.client_id,
+      jobId: pay.job_id,
+      instanceKey: paymentId, // one receipt per payment (idempotent)
+      merge: {
+        invoice_number: invoiceNumber != null ? String(invoiceNumber) : "",
+        payment_amount: usd(pay.amount ?? 0),
+        remaining_balance: usd(remaining),
+      },
+    });
+  } catch (err) {
+    console.error("[notify] triggerPaymentReceived failed:", (err as Error).message);
+  }
+}
+
+/**
+ * Sprint 9 — fire the invoice-delivery notification when an invoice is SENT
+ * (POST /api/invoices/:id/send), carrying the secure payment link. Simulated.
+ * Keyed on the invoice id so re-sending is idempotent per invoice instance.
+ */
+export async function triggerInvoiceSent(
+  env: Env,
+  invoiceId: string,
+  merge: { invoice_number: string; invoice_amount: string; due_date: string; payment_link: string },
+): Promise<void> {
+  try {
+    const inv = await env.DB.prepare(
+      "SELECT job_id, client_id FROM invoices WHERE id = ?",
+    )
+      .bind(invoiceId)
+      .first<{ job_id: string | null; client_id: string | null }>();
+    if (!inv?.client_id) return;
+    await triggerNotification(env, "invoice_sent", {
+      clientId: inv.client_id,
+      jobId: inv.job_id,
+      instanceKey: `sent:${invoiceId}`,
+      merge,
+    });
+  } catch (err) {
+    console.error("[notify] triggerInvoiceSent failed:", (err as Error).message);
+  }
 }
 /** Sprint 8 (photos): weekly photo summary is a cron over active jobs' photos. */
 export function triggerWeeklyPhotoSummary(_env: Env): void {

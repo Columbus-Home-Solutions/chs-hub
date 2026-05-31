@@ -617,7 +617,15 @@ async function sendByChannel(env: Env, row: LogRow, live: boolean): Promise<Send
 
   if (row.channel === "email") {
     if (!live) return { kind: "simulated", externalId: `simulated:${crypto.randomUUID()}` };
-    const from = (env.NOTIFICATIONS_EMAIL_FROM ?? env.ALERT_EMAIL_FROM ?? "").trim();
+    // Client-notification from-address is NOTIFICATIONS_EMAIL_FROM ONLY. No
+    // fallback to ALERT_EMAIL_FROM here on purpose: that address belongs to the
+    // owner-facing daily-summary / system-alert path (src/lib/ops/notify.ts) and
+    // is already set in prod — falling back to it would let client email send the
+    // moment dispatch flips to "live", before a client from-address exists. So
+    // absence of NOTIFICATIONS_EMAIL_FROM means "simulate this channel", making
+    // the documented double-gate real: client email sends only when mode='live'
+    // AND NOTIFICATIONS_EMAIL_FROM is set AND RESEND_DRY_RUN != '1'.
+    const from = (env.NOTIFICATIONS_EMAIL_FROM ?? "").trim();
     const apiKey = (env.RESEND_API_KEY ?? "").trim();
     if (!from || !apiKey || env.RESEND_DRY_RUN === "1") {
       return { kind: "simulated", externalId: `simulated:${crypto.randomUUID()}` };

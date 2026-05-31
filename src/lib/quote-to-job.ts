@@ -1,23 +1,45 @@
 /**
- * Quote-to-job conversion engine — Module-Spec-Estimating-Quoting §4.10.
+ * Quote-to-job conversion engine — the SINGLE shared, idempotent function both
+ * triggers call (Job Management §4.2):
+ *   - the manual "Mark as Won" modal  (POST /api/estimate-requests/:id/win)
+ *   - the Stripe deposit webhook       (POST /api/webhooks/stripe)
  *
- * Shared by the manual "Mark as Won" flow (check/cash/Venmo/Zelle/Other) and,
- * later, the Stripe deposit webhook (Sprint 5+). Both paths run this identical
- * engine — the only difference is where the payment data comes from.
+ * There is exactly one conversion path. Calling it twice never creates a second
+ * job. It keys on the estimate request's `converted_job_id` + `jobs.conversion_
+ * complete` to decide between THREE entry cases:
  *
- * On success it:
- *   - creates a native job at "deposit_paid" status (client/property/job type/
- *     lead source/estimate/billing carry over),
- *   - records the deposit payment (method + amount + reference),
- *   - links the request (status → won, converted_job_id set),
- *   - advances the estimate to "approved".
+ *   1. Fully-converted job exists (conversion_complete = 1) → no-op, return it
+ *      (idempotent — preserves the prior "{idempotent:true}" webhook behavior).
+ *   2. Bare job row exists (converted_job_id set, conversion_complete = 0 — the
+ *      Sprint 4/5 stub, e.g. production job #100) → COMPLETE the deferred steps
+ *      ON THAT EXISTING ROW. No second job. (The Sprint 6 branch.)
+ *   3. No job → create the job row, then run all steps.
+ *
+ * Full sequence (steps 5–9 are the Sprint 6 additions):
+ *   1. Create / locate the job in deposit_paid; allocate job_number.
+ *   2. Link the approved estimate; set converted_job_id on the request.
+ *   3. Copy client / property / job_type / lead_source from the request.
+ *   4. Set billing_model, contract_total, deposit_amount, deposit_paid (read the
+ *      deposit the estimate already computed — don't recompute).
+ *   5. Auto-generate task groups from estimate PARENT line items (one seed task
+ *      each, order preserved via task_group_order).
+ *   6. Budget baseline = the linked estimate's sub-item costs. The approved
+ *      estimate is frozen and linked via jobs.estimate_id, so the per-line-item
+ *      costing baseline is already persisted and job-readable (Sprint 9/10 reads
+ *      estimate_line_items + estimate_sub_items through the link). No snapshot
+ *      table — a copy would only risk drifting from the source of truth.
+ *   7. Billing-schedule SCAFFOLD per billing_model (billing_schedule rows +, for
+ *      cost-plus, the first billing_cycles window). No invoices fired — Sprint 9
+ *      owns the billing engine.
+ *   8. Activate the portal — REUSE the stub's portal_token (never regenerate a
+ *      live link); set portal_type from billing_model.
+ *   9. conversion_complete = 1.
+ *
+ * Reversal-aware (decision (c)): the conversion_complete flag + full audit trail
+ * (written by the caller) + NO hard deletes / no ON DELETE CASCADE in this path
+ * mean Sprint 9 can build a clean soft un-win that flags-and-preserves.
  *
  * The caller owns audit logging and the WC trigger (they hold the user email).
- * Idempotent: refuses if the request is already converted.
- *
- * Deferred to Job Management (Sprint 5+): task-group generation from parent line
- * items, budget baseline from sub-items, and client-portal activation. The job
- * record + portal_token are created here so that handoff is a pure read.
  */
 
 import type { Env } from "../env.js";
@@ -37,7 +59,19 @@ export interface DepositPayment {
 }
 
 export type ConversionOutcome =
-  | { ok: true; jobId: string; jobNumber: number; paymentId: string; total: number }
+  | {
+      ok: true;
+      jobId: string;
+      jobNumber: number;
+      /** Null when no new payment was recorded (idempotent no-op / bare-row completion). */
+      paymentId: string | null;
+      total: number;
+      portalToken: string | null;
+      /** True when a fully-converted job already existed and nothing changed (case 1). */
+      idempotent: boolean;
+      /** True when the full conversion sequence ran this call (cases 2 and 3). */
+      completed: boolean;
+    }
   | { ok: false; status: number; error: string; details: string };
 
 interface RequestJoin {
@@ -58,6 +92,18 @@ interface RequestJoin {
   e_billing: string | null;
   e_status: string | null;
   e_sent_at: string | null;
+  e_deposit: number | null;
+}
+
+interface JobRow {
+  id: string;
+  job_number: number;
+  status: string;
+  conversion_complete: number | null;
+  portal_token: string | null;
+  contract_total: number | null;
+  billing_model: string | null;
+  estimate_id: string | null;
 }
 
 // An estimate counts as "reached the client" once it has been sent. sent_at is
@@ -66,6 +112,10 @@ const POST_SEND_ESTIMATE_STATUSES = new Set(["sent", "viewed", "approved", "revi
 
 export function isEstimateSent(status: string | null, sentAt: string | null): boolean {
   return !!sentAt || POST_SEND_ESTIMATE_STATUSES.has(status ?? "");
+}
+
+function portalTypeFor(billingModel: string | null): string {
+  return billingModel === "cost_plus" ? "cost_plus" : "standard";
 }
 
 export async function convertQuoteToJob(
@@ -79,7 +129,8 @@ export async function convertQuoteToJob(
             er.property_state, er.property_zip, er.job_type, er.lead_source,
             er.estimate_id, er.converted_job_id,
             e.id AS e_id, e.total AS e_total, e.title AS e_title,
-            e.billing_model AS e_billing, e.status AS e_status, e.sent_at AS e_sent_at
+            e.billing_model AS e_billing, e.status AS e_status, e.sent_at AS e_sent_at,
+            e.deposit_amount AS e_deposit
      FROM estimate_requests er
      LEFT JOIN estimates e ON e.id = er.estimate_id
      WHERE er.id = ?`,
@@ -90,12 +141,91 @@ export async function convertQuoteToJob(
   if (!row) {
     return { ok: false, status: 404, error: "not_found", details: "Estimate request not found." };
   }
-  if (row.status === "won" || row.converted_job_id) {
+
+  // ── Locate any existing job for this request (the idempotency anchor). ──
+  let existing: JobRow | null = null;
+  if (row.converted_job_id) {
+    existing = await env.DB.prepare(
+      `SELECT id, job_number, status, conversion_complete, portal_token,
+              contract_total, billing_model, estimate_id
+       FROM jobs WHERE id = ?`,
+    )
+      .bind(row.converted_job_id)
+      .first<JobRow>();
+  }
+
+  // ── Case 1: fully converted → no-op, return it. ───────────────────────
+  if (existing && (existing.conversion_complete ?? 0) === 1) {
+    return {
+      ok: true,
+      jobId: existing.id,
+      jobNumber: existing.job_number,
+      paymentId: null,
+      total: round2(existing.contract_total ?? row.e_total ?? 0),
+      portalToken: existing.portal_token,
+      idempotent: true,
+      completed: false,
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const today = nowIso.slice(0, 10);
+
+  // ── Case 2: bare job exists → complete the deferred steps in place. ────
+  if (existing) {
+    const billingModel = existing.billing_model ?? row.e_billing;
+    const estimateId = existing.estimate_id ?? row.e_id;
+    const total = round2(existing.contract_total ?? row.e_total ?? 0);
+    const steps = await buildConversionSteps(
+      env,
+      existing.id,
+      estimateId,
+      billingModel,
+      total,
+      existing.portal_token,
+      today,
+      nowIso,
+    );
+    // Idempotent request/estimate state + the completion flag, plus the steps.
+    const stmts = [
+      ...steps,
+      env.DB.prepare(
+        "UPDATE estimate_requests SET status = 'won', converted_job_id = ?, updated_at = ? WHERE id = ?",
+      ).bind(existing.id, nowIso, requestId),
+      estimateId
+        ? env.DB.prepare(
+            `UPDATE estimates SET status = 'approved',
+                signed_date = COALESCE(signed_date, ?), approved_date = COALESCE(approved_date, ?),
+                updated_at = ? WHERE id = ?`,
+          ).bind(today, today, nowIso, estimateId)
+        : null,
+      env.DB.prepare(
+        "UPDATE jobs SET conversion_complete = 1, updated_at = ? WHERE id = ?",
+      ).bind(nowIso, existing.id),
+    ].filter((s): s is D1PreparedStatement => s !== null);
+
+    await env.DB.batch(stmts);
+
+    return {
+      ok: true,
+      jobId: existing.id,
+      jobNumber: existing.job_number,
+      paymentId: null, // the stub already recorded the deposit payment
+      total,
+      portalToken: existing.portal_token,
+      idempotent: false,
+      completed: true,
+    };
+  }
+
+  // ── Case 3: no job → validate, create, run all steps. ─────────────────
+  if (row.status === "won") {
+    // Defensive: request says won but no job row found — data inconsistency.
     return {
       ok: false,
-      status: 400,
-      error: "already_won",
-      details: "This request has already been converted to a job.",
+      status: 409,
+      error: "won_without_job",
+      details: "Request is marked won but no job row exists; manual review needed.",
     };
   }
   // Gate (§4.10): a quote must have reached the client before it can be won.
@@ -116,13 +246,11 @@ export async function convertQuoteToJob(
     };
   }
 
-  const nowIso = new Date().toISOString();
-  const today = nowIso.slice(0, 10);
   const total = round2(row.e_total ?? 0);
   const deposit = round2(payment.amount);
   // Fees are tracked separately: the convenience fee is CHS revenue, the Stripe
-  // fee is a cost. net_amount = amount - stripe_fee (the deposit applied to the
-  // contract, minus what the processor took). Manual methods carry no fees.
+  // fee is a cost. net_amount = amount - stripe_fee. The contract-applicable
+  // deposit is `amount` (fee-excluded); the fee never inflates contract value.
   const convenienceFee = payment.convenienceFee != null ? round2(payment.convenienceFee) : null;
   const stripeFee = payment.stripeFee != null ? round2(payment.stripeFee) : null;
   const netAmount = round2(deposit - (stripeFee ?? 0));
@@ -130,6 +258,7 @@ export async function convertQuoteToJob(
   const jobId = crypto.randomUUID();
   const paymentId = crypto.randomUUID();
   const portalToken = crypto.randomUUID().replace(/-/g, "");
+  const billingModel = row.e_billing;
 
   const jobNumberRow = await env.DB.prepare(
     "SELECT COALESCE(MAX(job_number), 0) + 1 AS n FROM jobs",
@@ -140,83 +269,296 @@ export async function convertQuoteToJob(
 
   // jobs.synced_at is NOT NULL (legacy Jobber-sync column); native rows set it to
   // creation time so the column stays satisfied without pretending it was synced.
-  await env.DB.prepare(
+  const createJob = env.DB.prepare(
     `INSERT INTO jobs (
        id, job_number, title, status, client_id, source, total,
        created_at, synced_at, updated_at, created_by,
        billing_model, property_address, property_city, property_state, property_zip,
        job_type, lead_source, estimate_id, contract_total, deposit_amount, deposit_paid,
-       portal_token, portal_type
-     ) VALUES (?, ?, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'client')`,
-  )
-    .bind(
-      jobId,
-      jobNumber,
-      title,
-      row.client_id,
-      total,
-      nowIso,
-      nowIso,
-      nowIso,
-      createdBy,
-      row.e_billing,
-      row.property_address,
-      row.property_city,
-      row.property_state,
-      row.property_zip,
-      row.job_type,
-      row.lead_source,
-      row.e_id,
-      total,
-      deposit,
-      portalToken,
-    )
-    .run();
+       portal_token, portal_type, conversion_complete
+     ) VALUES (?, ?, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0)`,
+  ).bind(
+    jobId,
+    jobNumber,
+    title,
+    row.client_id,
+    total,
+    nowIso,
+    nowIso,
+    nowIso,
+    createdBy,
+    billingModel,
+    row.property_address,
+    row.property_city,
+    row.property_state,
+    row.property_zip,
+    row.job_type,
+    row.lead_source,
+    row.e_id,
+    total,
+    deposit,
+    portalToken,
+    portalTypeFor(billingModel),
+  );
 
-  await env.DB.prepare(
+  const createPayment = env.DB.prepare(
     `INSERT INTO payments (
        id, job_id, estimate_id, client_id, amount, convenience_fee, stripe_fee,
        net_amount, payment_method, stripe_payment_id,
        received_date, collected_at, notes, synced_at, created_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      paymentId,
-      jobId,
-      row.e_id,
-      row.client_id,
-      deposit,
-      convenienceFee,
-      stripeFee,
-      netAmount,
-      payment.method,
-      payment.stripePaymentId ?? null,
-      today,
-      nowIso,
-      payment.reference ?? null,
-      nowIso,
-      nowIso,
-    )
-    .run();
+  ).bind(
+    paymentId,
+    jobId,
+    row.e_id,
+    row.client_id,
+    deposit,
+    convenienceFee,
+    stripeFee,
+    netAmount,
+    payment.method,
+    payment.stripePaymentId ?? null,
+    today,
+    nowIso,
+    payment.reference ?? null,
+    nowIso,
+    nowIso,
+  );
 
-  await env.DB.prepare(
+  const linkRequest = env.DB.prepare(
     "UPDATE estimate_requests SET status = 'won', converted_job_id = ?, updated_at = ? WHERE id = ?",
-  )
-    .bind(jobId, nowIso, requestId)
-    .run();
+  ).bind(jobId, nowIso, requestId);
 
-  await env.DB.prepare(
+  const approveEstimate = env.DB.prepare(
     `UPDATE estimates
-     SET status = 'approved',
-         signed_date = COALESCE(signed_date, ?),
-         approved_date = ?,
-         updated_at = ?
+       SET status = 'approved',
+           signed_date = COALESCE(signed_date, ?),
+           approved_date = ?,
+           updated_at = ?
      WHERE id = ?`,
-  )
-    .bind(today, today, nowIso, row.e_id)
-    .run();
+  ).bind(today, today, nowIso, row.e_id);
 
-  return { ok: true, jobId, jobNumber, paymentId, total };
+  const steps = await buildConversionSteps(
+    env,
+    jobId,
+    row.e_id,
+    billingModel,
+    total,
+    portalToken,
+    today,
+    nowIso,
+  );
+
+  // One atomic batch: a partial failure leaves no half-converted job. The
+  // conversion_complete flag flips to 1 last, inside the same transaction.
+  await env.DB.batch([
+    createJob,
+    createPayment,
+    linkRequest,
+    approveEstimate,
+    ...steps,
+    env.DB.prepare("UPDATE jobs SET conversion_complete = 1 WHERE id = ?").bind(jobId),
+  ]);
+
+  return {
+    ok: true,
+    jobId,
+    jobNumber,
+    paymentId,
+    total,
+    portalToken,
+    idempotent: false,
+    completed: true,
+  };
+}
+
+/**
+ * Build the prepared statements for steps 5–8 (task groups, billing scaffold,
+ * portal activation). Reads are done here; the returned statements are run by
+ * the caller inside a single batch/transaction. Re-runnable: skips task groups
+ * and billing rows that already exist so a re-fire never duplicates children.
+ */
+async function buildConversionSteps(
+  env: Env,
+  jobId: string,
+  estimateId: string | null,
+  billingModel: string | null,
+  total: number,
+  existingPortalToken: string | null,
+  today: string,
+  nowIso: string,
+): Promise<D1PreparedStatement[]> {
+  const stmts: D1PreparedStatement[] = [];
+
+  // Parent line items → task groups (order preserved). Sub-items never become
+  // tasks; they are the budget baseline only (read via the estimate link).
+  const lineItems = estimateId
+    ? (
+        await env.DB.prepare(
+          "SELECT id, product_service, description, quantity, unit_price FROM estimate_line_items WHERE estimate_id = ? ORDER BY sort_order ASC",
+        )
+          .bind(estimateId)
+          .all<{
+            id: string;
+            product_service: string | null;
+            description: string | null;
+            quantity: number | null;
+            unit_price: number | null;
+          }>()
+      ).results ?? []
+    : [];
+
+  // Step 5 — only if no tasks exist yet (idempotent completion).
+  const taskCount = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM tasks WHERE job_id = ?",
+  )
+    .bind(jobId)
+    .first<{ n: number }>();
+  if ((taskCount?.n ?? 0) === 0 && lineItems.length > 0) {
+    lineItems.forEach((li, i) => {
+      const group = (li.product_service || `Phase ${i + 1}`).trim();
+      stmts.push(
+        env.DB.prepare(
+          `INSERT INTO tasks (id, job_id, task_group, task_group_order, title, status, sort_order, is_punch_list, created_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, ?)`,
+        ).bind(crypto.randomUUID(), jobId, group, i, `Start ${group}`, nowIso),
+      );
+    });
+  }
+
+  // Step 7 — billing-schedule scaffold (only if none exists yet).
+  const billingCount = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM billing_schedule WHERE job_id = ?",
+  )
+    .bind(jobId)
+    .first<{ n: number }>();
+  if ((billingCount?.n ?? 0) === 0) {
+    if (billingModel === "trade_by_trade") {
+      // Invoice triggers linked to task-group completion (linkage only; no fire).
+      lineItems.forEach((li, i) => {
+        const group = (li.product_service || `Phase ${i + 1}`).trim();
+        const amount = round2((li.quantity ?? 0) * (li.unit_price ?? 0));
+        stmts.push(
+          env.DB.prepare(
+            `INSERT INTO billing_schedule (id, job_id, billing_model, sequence, label, trigger_type, trigger_ref, amount, status, created_at)
+             VALUES (?, ?, 'trade_by_trade', ?, ?, 'trade_completion', ?, ?, 'draft', ?)`,
+          ).bind(crypto.randomUUID(), jobId, i, group, group, amount, nowIso),
+        );
+      });
+    } else if (billingModel === "cost_plus") {
+      // First bi-weekly cycle WINDOW (do not generate the invoice).
+      const periodEnd = addDays(today, 13); // 14-day inclusive window
+      stmts.push(
+        env.DB.prepare(
+          `INSERT INTO billing_cycles (id, job_id, cycle_number, period_start, period_end, is_final_cycle, status, created_at)
+           VALUES (?, ?, 1, ?, ?, 0, 'planning', ?)`,
+        ).bind(crypto.randomUUID(), jobId, today, periodEnd, nowIso),
+      );
+      stmts.push(
+        env.DB.prepare(
+          `INSERT INTO billing_schedule (id, job_id, billing_model, sequence, label, trigger_type, trigger_ref, period_start, period_end, status, created_at)
+           VALUES (?, ?, 'cost_plus', 1, 'Cycle 1 (bi-weekly)', 'cost_plus_cycle', '1', ?, ?, 'draft', ?)`,
+        ).bind(crypto.randomUUID(), jobId, today, periodEnd, nowIso),
+      );
+    } else {
+      // fixed_price (and any unset) → milestone draws. Prefer the estimate's
+      // payment schedule; fall back to the default 33/33/34 (spec §3.1).
+      const schedule = estimateId
+        ? (
+            await env.DB.prepare(
+              "SELECT description, percentage, fixed_amount, amount, is_deposit FROM payment_schedules WHERE estimate_id = ? ORDER BY sort_order ASC",
+            )
+              .bind(estimateId)
+              .all<{
+                description: string | null;
+                percentage: number | null;
+                fixed_amount: number | null;
+                amount: number | null;
+                is_deposit: number | null;
+              }>()
+          ).results ?? []
+        : [];
+
+      const draws =
+        schedule.length > 0
+          ? schedule.map((s, i) => ({
+              label: s.description || `Draw ${i + 1}`,
+              percentage: s.percentage,
+              amount:
+                s.fixed_amount != null
+                  ? round2(s.fixed_amount)
+                  : s.percentage != null
+                    ? round2((s.percentage / 100) * total)
+                    : round2(s.amount ?? 0),
+              isDeposit: (s.is_deposit ?? 0) === 1,
+            }))
+          : defaultMilestones(total);
+
+      draws.forEach((d, i) => {
+        stmts.push(
+          env.DB.prepare(
+            `INSERT INTO billing_schedule (id, job_id, billing_model, sequence, label, trigger_type, trigger_ref, percentage, amount, status, created_at)
+             VALUES (?, ?, 'fixed_price', ?, ?, 'milestone', ?, ?, ?, ?, ?)`,
+          ).bind(
+            crypto.randomUUID(),
+            jobId,
+            i,
+            d.label,
+            String(i + 1),
+            d.percentage,
+            d.amount,
+            d.isDeposit ? "paid" : "draft", // deposit draw is already collected
+            nowIso,
+          ),
+        );
+      });
+    }
+  }
+
+  // Step 8 — portal activation: REUSE the stub's token; set type from model.
+  if (existingPortalToken) {
+    stmts.push(
+      env.DB.prepare("UPDATE jobs SET portal_type = ? WHERE id = ?").bind(
+        portalTypeFor(billingModel),
+        jobId,
+      ),
+    );
+  } else {
+    // No token on the row (should not happen for a stub) — mint one now rather
+    // than leave the portal inactive. Never overwrites an existing live token.
+    stmts.push(
+      env.DB.prepare(
+        "UPDATE jobs SET portal_token = COALESCE(portal_token, ?), portal_type = ? WHERE id = ?",
+      ).bind(crypto.randomUUID().replace(/-/g, ""), portalTypeFor(billingModel), jobId),
+    );
+  }
+
+  return stmts;
+}
+
+function defaultMilestones(total: number): {
+  label: string;
+  percentage: number | null;
+  amount: number;
+  isDeposit: boolean;
+}[] {
+  const draw = round2(total * 0.33);
+  return [
+    { label: "Draw 1 — Materials Deposit", percentage: 33, amount: draw, isDeposit: true },
+    { label: "Draw 2 — 50% Completion", percentage: 33, amount: draw, isDeposit: false },
+    {
+      label: "Draw 3 — Completion",
+      percentage: 34,
+      amount: round2(total - draw * 2),
+      isDeposit: false,
+    },
+  ];
+}
+
+function addDays(isoDate: string, days: number): string {
+  const d = new Date(isoDate + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 function round2(n: number): number {

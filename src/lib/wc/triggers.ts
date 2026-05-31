@@ -36,12 +36,11 @@ export function triggerAppointmentSet(_env: Env, requestId: string): void {
  * Same "log intent, cron recomputes from D1" contract as the Sprint 3 hooks —
  * we do NOT fire a sync or maintain a queue here.
  *
- * NOTE (KBPI cutover, carried from Sprint 3): the live WC weekly "estimates"
- * column is still computed from the Jobber `quotes` table in src/lib/wc/
- * compute.ts. Pointing it at native estimates is deferred to Sprint 5 to avoid
- * double-counting historical Jobber quotes with brand-new native estimates —
- * a clean cutover needs a date boundary, which is out of scope for this
- * local-only sprint. See the Sprint 4 report.
+ * Sprint 6 (decision (d)): the KBPI "estimates"/quotes-sent column now counts
+ * NATIVE CHS estimates only (estimates.sent_at) — the Jobber `quotes` read was
+ * removed from compute.ts. No cutover date, no reconciliation. While the native
+ * count is zero the sync skips the cell (skip-don't-clobber) so Tony's manual
+ * interim entry survives.
  */
 export function triggerQuoteSent(_env: Env, estimateId: string, total: number): void {
   console.log(
@@ -58,15 +57,30 @@ export function triggerQuoteSent(_env: Env, estimateId: string, total: number): 
  *
  * Same "log intent, cron recomputes from D1" contract as the other hooks.
  *
- * NOTE (KBPI cutover, carried from Sprint 4): the live WC closed-deal / New
- * Sales columns are still computed from Jobber-synced jobs in src/lib/wc/
- * compute.ts. Pointing them at native conversion jobs is deferred to the Sprint
- * 5 cutover (needs a date boundary to avoid double-counting historical Jobber
- * deals with brand-new native ones). The native job row is written now, so the
- * cutover is a query change, not a backfill.
+ * Sprint 6 (decision (b)): the WC closed-deal count + New Sales value are now
+ * computed in compute.ts from NATIVE converted `jobs` rows (source='estimate'),
+ * New Sales = contract_total (convenience-fee-excluded). This hook stays a
+ * log-only intent marker; the cron recompute is the source of truth.
  */
 export function triggerDealWon(_env: Env, jobId: string, value: number): void {
   console.log(
     `[wc] deal_won job=${jobId} value=${value} — WC closed-deal count + New Sales value refresh on next cron tick`,
+  );
+}
+
+/**
+ * Called on every job status change (PUT /api/jobs/:id/status). The closed-deal
+ * count + New Sales value are recomputed from converted `jobs` rows in
+ * compute.ts each cron tick (Sprint 6, decision (b)), so this is a log-only
+ * intent hook — same "recompute from D1" contract as the others.
+ */
+export function triggerJobStatusChanged(
+  _env: Env,
+  jobId: string,
+  from: string,
+  to: string,
+): void {
+  console.log(
+    `[wc] job_status_changed job=${jobId} ${from}→${to} — WC job metrics refresh on next cron tick`,
   );
 }

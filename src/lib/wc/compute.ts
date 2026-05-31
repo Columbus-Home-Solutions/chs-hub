@@ -9,11 +9,16 @@
  *                        (weighted by payment_amount / invoice.total so that
  *                        partial payments only pull their pro-rata share of
  *                        the job's cost)
- *   - WC KBPI weekly column C (new_sales) = quote → job conversion dollars
- *     that week (quotes.transitioned_at, COALESCE(quote.subtotal, job.total))
+ *   - WC KBPI weekly column C (new_sales) = contract value of native jobs
+ *     converted that week (jobs.source='estimate', jobs.contract_total —
+ *     convenience-fee-excluded; Sprint 6, decision (b))
  *   - WC KBPI weekly column D (collections) = sum of payments in period by
  *     payments.collected_at (currently invoice issuedDate on each payment row —
  *     Jobber GraphQL PaymentRecord has no payment date field)
+ *   - WC KBPI weekly column F (estimates / quotes-sent) = native CHS estimates
+ *     sent that week (estimates.sent_at). The Jobber `quotes` read was removed
+ *     in Sprint 6 (decision (d)); a zero count is SKIPPED on push, not zeroed.
+ *   - WC KBPI weekly column G (closed) = native jobs converted that week
  *
  * Exposed as two functions:
  *   - computeMonthly(env, year) → one row per month 1..12
@@ -137,14 +142,19 @@ export async function computeWeekly(
 ): Promise<WeeklyRow[]> {
   const weeks = enumerateSundayWeeks(year);
 
+  // New Sales = contract value of NATIVE jobs converted that week (Sprint 6,
+  // decision (b)). Source of truth is the converted `jobs` row (source =
+  // 'estimate'); every converted job is at/after deposit_paid by construction.
+  // Value = contract_total, which is convenience-fee-EXCLUDED — the 3.5% card
+  // fee is a separate revenue line and must never inflate New Sales.
   const newSales = await aggregateByWeek(
     env,
-    `SELECT substr(q.transitioned_at, 1, 10) AS d,
-            COALESCE(q.subtotal, j.total, 0) AS v
-     FROM quotes q
-     INNER JOIN jobs j ON j.id = q.job_id
-     WHERE q.transitioned_at >= ? AND q.transitioned_at < ?
-       AND q.transitioned_at IS NOT NULL`,
+    `SELECT substr(j.created_at, 1, 10) AS d,
+            COALESCE(j.contract_total, j.total, 0) AS v
+     FROM jobs j
+     WHERE j.source = 'estimate'
+       AND j.created_at IS NOT NULL
+       AND j.created_at >= ? AND j.created_at < ?`,
     year,
   );
 
@@ -157,25 +167,29 @@ export async function computeWeekly(
     year,
   );
 
-  // Estimates = quotes issued that week. Quote has no issued_date column in
-  // Jobber — we use created_at as the proxy (quote was sent to customer).
+  // Quotes-sent (KBPI "Estimates") = NATIVE CHS estimates sent that week
+  // (estimates.sent_at). Decision (d): the Jobber `quotes` read is GONE — no
+  // cutover date, no Jobber-vs-native reconciliation. When this count is zero
+  // the sync SKIPS the cell (see sync.ts) so Tony's manual interim entry
+  // survives; the moment a native estimate is sent it auto-populates.
   const estimates = await aggregateByWeek(
     env,
-    `SELECT substr(created_at, 1, 10) AS d, 1 AS v
-     FROM quotes
-     WHERE created_at >= ? AND created_at < ?`,
+    `SELECT substr(sent_at, 1, 10) AS d, 1 AS v
+     FROM estimates
+     WHERE sent_at IS NOT NULL
+       AND sent_at >= ? AND sent_at < ?`,
     year,
   );
 
-  // Closed = quotes whose status transitioned to 'approved' or 'converted'
-  // in that week. Jobber records the timestamp of the most recent status
-  // change in quotes.transitioned_at.
+  // Closed deals = NATIVE jobs converted that week (the closed-deal count
+  // deferred from Sprint 5). Same source as New Sales.
   const closed = await aggregateByWeek(
     env,
-    `SELECT substr(transitioned_at, 1, 10) AS d, 1 AS v
-     FROM quotes
-     WHERE transitioned_at >= ? AND transitioned_at < ?
-       AND LOWER(COALESCE(status, '')) IN ('approved', 'converted')`,
+    `SELECT substr(j.created_at, 1, 10) AS d, 1 AS v
+     FROM jobs j
+     WHERE j.source = 'estimate'
+       AND j.created_at IS NOT NULL
+       AND j.created_at >= ? AND j.created_at < ?`,
     year,
   );
 

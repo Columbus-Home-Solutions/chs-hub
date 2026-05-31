@@ -31,7 +31,18 @@ import { checkHeartbeat } from "./lib/ops/heartbeat.js";
 import { syncWorkbook } from "./lib/wc/sync.js";
 import { handleDrill } from "./routes/drill.js";
 import { handleHLProxy } from "./routes/hl.js";
-import { handleJobDetail, handleJobsList } from "./routes/jobs.js";
+import { handleJobDetail as handleLegacyJobDetail, handleJobsList as handleLegacyJobsList } from "./routes/jobs.js";
+import {
+  handleJobList,
+  handleJobPipeline,
+  handleJobDetail,
+  handleJobUpdate,
+  handleJobStatus,
+  handleTaskList,
+  handleTaskCreate,
+  handleTaskUpdate,
+  handleTaskComplete,
+} from "./routes/jobs-api.js";
 import { handleKpis } from "./routes/kpis.js";
 import {
   handleNoteCreate,
@@ -359,21 +370,18 @@ export default {
       return handleDriveMirrorRun(request, env);
     }
 
-    if (url.pathname === "/api/jobs" && request.method === "GET") {
-      const payload = await handleJobsList(env, url);
+    // ── Legacy Jobber jobs view (old dashboard at dashboard.* host) ──
+    // The native Job Management API (Sprint 6) owns /api/jobs; the legacy
+    // Jobber-rollup list/detail the old dashboard reads lives under
+    // /api/legacy/jobs so the two coexist without shape conflicts.
+    if (url.pathname === "/api/legacy/jobs" && request.method === "GET") {
+      const payload = await handleLegacyJobsList(env, url);
       return jsonResponse(payload);
     }
-
-    // /api/jobs/active must match BEFORE the /api/jobs/:id regex below,
-    // otherwise "active" is treated as a Jobber job ID.
-    if (url.pathname === "/api/jobs/active" && request.method === "GET") {
-      return handleActiveJobs(env);
-    }
-
-    const jobDetail = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
-    if (jobDetail && request.method === "GET") {
+    const legacyJobDetail = url.pathname.match(/^\/api\/legacy\/jobs\/([^/]+)$/);
+    if (legacyJobDetail && request.method === "GET") {
       try {
-        const payload = await handleJobDetail(env, decodeURIComponent(jobDetail[1]));
+        const payload = await handleLegacyJobDetail(env, decodeURIComponent(legacyJobDetail[1]));
         return jsonResponse(payload);
       } catch (err) {
         const code = (err as { code?: number }).code ?? 500;
@@ -382,6 +390,43 @@ export default {
           { status: code === 404 ? 404 : 500 },
         );
       }
+    }
+
+    // ── Native Job Management (Sprint 6) ─────────────────────────────
+    // Fixed/sub-resource paths before the bare :id route.
+    if (url.pathname === "/api/jobs" && request.method === "GET") {
+      return handleJobList(env, url);
+    }
+    if (url.pathname === "/api/jobs/pipeline" && request.method === "GET") {
+      return handleJobPipeline(env);
+    }
+    // /api/jobs/active (legacy capture PWA) must match before /api/jobs/:id.
+    if (url.pathname === "/api/jobs/active" && request.method === "GET") {
+      return handleActiveJobs(env);
+    }
+    const jobTasks = url.pathname.match(/^\/api\/jobs\/([^/]+)\/tasks$/);
+    if (jobTasks) {
+      const jid = decodeURIComponent(jobTasks[1]);
+      if (request.method === "GET") return handleTaskList(env, jid, url);
+      if (request.method === "POST") return handleTaskCreate(request, env, jid);
+    }
+    const jobStatus = url.pathname.match(/^\/api\/jobs\/([^/]+)\/status$/);
+    if (jobStatus && request.method === "PUT") {
+      return handleJobStatus(request, env, decodeURIComponent(jobStatus[1]));
+    }
+    const jobById = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
+    if (jobById) {
+      const jid = decodeURIComponent(jobById[1]);
+      if (request.method === "GET") return handleJobDetail(env, jid);
+      if (request.method === "PUT") return handleJobUpdate(request, env, jid);
+    }
+    const taskById = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (taskById && request.method === "PUT") {
+      return handleTaskUpdate(request, env, decodeURIComponent(taskById[1]));
+    }
+    const taskComplete = url.pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
+    if (taskComplete && request.method === "PUT") {
+      return handleTaskComplete(request, env, decodeURIComponent(taskComplete[1]));
     }
 
     // ── Photos (PWA capture) ─────────────────────────────────────────

@@ -401,3 +401,121 @@ export const BILLING_MODELS: { value: BillingModel; label: string }[] = [
 ];
 
 export const REVIEW_SOURCES = ["google", "facebook", "manual"];
+
+// ─── Jobs & Tasks (Sprint 6) ─────────────────────────────────────────────────
+
+export type JobStatus =
+  | "deposit_paid"
+  | "scheduled"
+  | "in_progress"
+  | "punch_list"
+  | "complete"
+  | "closed";
+
+// Pipeline columns, left → right (matches the API status order).
+export const JOB_STAGES: { key: JobStatus; label: string }[] = [
+  { key: "deposit_paid", label: "Deposit Paid" },
+  { key: "scheduled", label: "Scheduled" },
+  { key: "in_progress", label: "In Progress" },
+  { key: "punch_list", label: "Punch List" },
+  { key: "complete", label: "Complete" },
+  { key: "closed", label: "Closed" },
+];
+
+// Forward-only, plus the two allowed backward exceptions (Job Management §2).
+export const JOB_BACKWARD_EXCEPTIONS: Record<string, JobStatus> = {
+  in_progress: "scheduled",
+  complete: "punch_list",
+};
+
+export interface JobCard {
+  id: string;
+  job_number: number | null;
+  job_display: string | null;
+  title: string | null;
+  status: JobStatus;
+  client_id: string | null;
+  client_name: string | null;
+  billing_model: BillingModel | null;
+  job_type: string | null;
+  lead_source: string | null;
+  property_address: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  property_zip: string | null;
+  contract_total: number | null;
+  deposit_amount: number | null;
+  deposit_paid: boolean;
+  start_date: string | null;
+  target_end_date: string | null;
+  actual_end_date: string | null;
+  portal_token: string | null;
+  portal_type: string | null;
+  portal_path: string | null;
+  conversion_complete: boolean;
+  estimate_id: string | null;
+  days_in_status: number;
+  photo_count: number;
+  overdue: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface JobPipelineResponse {
+  as_of: string;
+  statuses: JobStatus[];
+  counts: Record<JobStatus, number>;
+  pipeline: Record<JobStatus, JobCard[]>;
+}
+
+export interface Task {
+  id: string;
+  job_id: string;
+  task_group: string;
+  task_group_order: number;
+  title: string;
+  status: "pending" | "in_progress" | "complete" | "skipped";
+  assigned_to: string | null;
+  scheduled_date: string | null;
+  completed_date: string | null;
+  completed_by: string | null;
+  notes: string | null;
+  sort_order: number;
+  is_punch_list: boolean;
+  created_at: string | null;
+}
+
+export interface TaskGroup {
+  group: string;
+  group_order: number;
+  tasks: Task[];
+}
+
+export interface BillingScheduleRow {
+  id: string;
+  billing_model: string;
+  sequence: number;
+  label: string;
+  trigger_type: string;
+  trigger_ref: string | null;
+  percentage: number | null;
+  amount: number | null;
+  period_start: string | null;
+  period_end: string | null;
+  status: string;
+}
+
+export interface JobDetailResponse {
+  job: JobCard & {
+    client_phone: string | null;
+    client_email: string | null;
+  };
+  financial: {
+    contract_total: number | null;
+    deposit_amount: number | null;
+    deposit_paid_to_date: number;
+  };
+  task_groups: TaskGroup[];
+  billing_schedule: BillingScheduleRow[];
+  activity: ActivityEntry[];
+}

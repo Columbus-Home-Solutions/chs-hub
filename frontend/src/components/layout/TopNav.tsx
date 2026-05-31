@@ -1,13 +1,14 @@
 import { useAuth } from "../../store/auth";
 import { initials } from "../../lib/format";
 import { go } from "../../lib/nav";
+import logoUrl from "../../assets/chs-logo.png";
 
 export function TopNav() {
   const { user } = useAuth();
   return (
     <header class="topnav">
       <div class="topnav__brand" onClick={() => go("/")} style={{ cursor: "pointer" }}>
-        <span class="topnav__brand-mark">C</span>
+        <img class="topnav__brand-logo" src={logoUrl} alt="Columbus Home Solutions" />
         <span>CHS Platform</span>
       </div>
       <div class="topnav__right">

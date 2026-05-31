@@ -647,13 +647,39 @@ export async function handleEstimateRequestWin(
   const outcome = await convertQuoteToJob(env, id, { amount, method, reference }, user.id);
   if (!outcome.ok) return err(outcome.status, outcome.error, outcome.details);
 
+  // Idempotent: a request that's already fully converted returns the existing
+  // job unchanged (no second job, no second payment).
+  if (outcome.idempotent) {
+    const updated = await loadShaped(env, id);
+    return json({
+      request: updated,
+      job_id: outcome.jobId,
+      job_number: outcome.jobNumber,
+      idempotent: true,
+    });
+  }
+
   await logAudit(env, user.email, "estimate_request_won", id, {
     job_id: outcome.jobId,
     job_number: outcome.jobNumber,
     payment_id: outcome.paymentId,
     payment_method: method,
     deposit_amount: amount,
+    conversion: "completed",
   });
+
+  // Job-scoped audit entry so the Job Detail Activity tab shows the conversion.
+  await env.DB.prepare(
+    "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, ?, 'job', ?, ?, datetime('now'))",
+  )
+    .bind(
+      crypto.randomUUID(),
+      user.email,
+      "job_created",
+      outcome.jobId,
+      JSON.stringify({ from_request: id, job_number: outcome.jobNumber, deposit_method: method }),
+    )
+    .run();
 
   // WC closed-deal count + New Sales value track the contract total, not deposit.
   triggerDealWon(env, outcome.jobId, outcome.total);

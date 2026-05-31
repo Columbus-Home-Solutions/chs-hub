@@ -41,17 +41,11 @@
   align-items: center;
   gap: 14px;
 }
+/* Real company badge: tall arch/shield — render at natural aspect ratio. */
 .quote-header__logo {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  font-family: var(--font-display, "Outfit", sans-serif);
-  font-weight: 800;
-  letter-spacing: 0.5px;
-  color: #fff;
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  height: 52px;
+  width: auto;
+  display: block;
 }
 .quote-header__company {
   font-family: var(--font-display, "Outfit", sans-serif);

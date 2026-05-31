@@ -11,6 +11,8 @@ import { EstimateRequestForm } from "./views/estimating/EstimateRequestForm";
 import { EstimateRequestDetail } from "./views/estimating/EstimateRequestDetail";
 import { EstimateBuilder } from "./views/estimating/EstimateBuilder";
 import { EstimateTemplates } from "./views/estimating/EstimateTemplates";
+import { JobPipeline } from "./views/jobs/JobPipeline";
+import { JobDetail } from "./views/jobs/JobDetail";
 import { Placeholder } from "./views/Placeholder";
 
 export function AppRouter() {
@@ -27,7 +29,8 @@ export function AppRouter() {
       <EstimateTemplates path={`${BASE}/estimating/templates`} />
       <EstimateBuilder path={`${BASE}/estimating/:requestId/estimate`} />
       <EstimateRequestDetail path={`${BASE}/estimating/:id`} />
-      <Placeholder path={`${BASE}/jobs`} title="Jobs" />
+      <JobPipeline path={`${BASE}/jobs`} />
+      <JobDetail path={`${BASE}/jobs/:id`} />
       <Placeholder path={`${BASE}/financial`} title="Financial" />
       <Placeholder path={`${BASE}/photos`} title="Photos" />
       <Placeholder path={`${BASE}/documents`} title="Documents" />

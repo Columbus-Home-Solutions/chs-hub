@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { formatCurrency, formatDate } from "../../lib/format";
+import logoUrl from "../../assets/chs-logo.png";
 
 /**
  * Standalone, no-auth client quote page (Sprint 5), served at /quote/:token.
@@ -194,7 +195,7 @@ function Header({ quote }: { quote: PublicQuote }) {
   return (
     <header class="quote-header">
       <div class="quote-header__brand">
-        <div class="quote-header__logo">CHS</div>
+        <img class="quote-header__logo" src={logoUrl} alt={quote.company_name} />
         <div>
           <div class="quote-header__company">{quote.company_name}</div>
           <div class="quote-header__est">

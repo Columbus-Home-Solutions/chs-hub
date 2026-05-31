@@ -1119,7 +1119,7 @@ a.file-link:hover{text-decoration:underline;}
 
   function ensureJobsOpen() {
     if (jobsOpenPromise) return jobsOpenPromise;
-    jobsOpenPromise = fetch('/api/jobs?status=open', { credentials: 'same-origin' })
+    jobsOpenPromise = fetch('/api/legacy/jobs?status=open', { credentials: 'same-origin' })
       .then(function(r) {
         return r.json();
       })
@@ -1141,7 +1141,7 @@ a.file-link:hover{text-decoration:underline;}
 
   function ensureJobsClosed() {
     if (jobsClosedPromise) return jobsClosedPromise;
-    jobsClosedPromise = fetch('/api/jobs?status=closed', { credentials: 'same-origin' })
+    jobsClosedPromise = fetch('/api/legacy/jobs?status=closed', { credentials: 'same-origin' })
       .then(function(r) {
         return r.json();
       })

@@ -63,6 +63,14 @@
   --pipeline-won: #22c55e;
   --pipeline-lost: #64748b;
 
+  /* Job pipeline (Sprint 6) */
+  --job-deposit-paid: #3b82f6;
+  --job-scheduled: #0ea5e9;
+  --job-in-progress: #f59e0b;
+  --job-punch-list: #f97316;
+  --job-complete: #22c55e;
+  --job-closed: #64748b;
+
   /* ─── Typography ─── */
   --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", monospace;

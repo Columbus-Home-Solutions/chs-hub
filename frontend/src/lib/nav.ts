@@ -34,7 +34,7 @@ export interface NavItem {
 // Settings route to real pages; the rest are "Coming soon" placeholders.
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", path: "/", icon: "🏠", enabled: true },
-  { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: false },
+  { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
   { label: "Financial", path: "/financial", icon: "💰", enabled: false },
   { label: "Clients", path: "/clients", icon: "👥", enabled: true },
   { label: "Estimating", path: "/estimating", icon: "📋", enabled: true },
@@ -48,8 +48,8 @@ export const NAV_ITEMS: NavItem[] = [
 // Condensed set for the mobile bottom tab bar.
 export const MOBILE_TABS: NavItem[] = [
   { label: "Home", path: "/", icon: "🏠", enabled: true },
-  { label: "Clients", path: "/clients", icon: "👥", enabled: true },
+  { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
   { label: "Estimating", path: "/estimating", icon: "📋", enabled: true },
-  { label: "Subs", path: "/subcontractors", icon: "🔧", enabled: true },
+  { label: "Clients", path: "/clients", icon: "👥", enabled: true },
   { label: "Settings", path: "/settings", icon: "⚙️", enabled: true },
 ];

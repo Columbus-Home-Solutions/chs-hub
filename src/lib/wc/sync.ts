@@ -110,14 +110,28 @@ export async function syncWorkbook(env: Env): Promise<SyncResult> {
       // see at a glance which weeks have data vs. haven't happened yet.
       if (week.week_start > today) continue;
       const sheetRow = 3 + i; // A3 is row 3; i=0 → row 3, etc.
+      // C (New Sales) + D (Collections): CHS owns these (converted jobs +
+      // payments), so a real zero is meaningful — write them straight.
       updates.push({
         range: `${q(TAB_KBPI)}!C${sheetRow}:D${sheetRow}`,
         values: [[week.new_sales, week.collections]],
       });
-      updates.push({
-        range: `${q(TAB_KBPI)}!F${sheetRow}:G${sheetRow}`,
-        values: [[week.estimates, week.closed]],
-      });
+      // Skip-don't-clobber (decision (d)): the quotes-sent cell (F) is only
+      // written when CHS has real native data (count ≥ 1). With zero native
+      // estimates we SKIP F entirely so Tony's manual interim entry survives —
+      // never write a structural 0 over a hand-entered value. G (Closed) is
+      // CHS-owned (converted jobs) and always written.
+      if (week.estimates >= 1) {
+        updates.push({
+          range: `${q(TAB_KBPI)}!F${sheetRow}:G${sheetRow}`,
+          values: [[week.estimates, week.closed]],
+        });
+      } else {
+        updates.push({
+          range: `${q(TAB_KBPI)}!G${sheetRow}`,
+          values: [[week.closed]],
+        });
+      }
       result.kbpi.weeks_matched++;
     }
 

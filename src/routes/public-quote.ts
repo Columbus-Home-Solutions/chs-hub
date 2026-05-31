@@ -614,8 +614,9 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
   }
 
   // CONVERGENCE: the same engine the manual "Mark as Won" modal calls. The only
-  // difference is the source of the payment data. Idempotent — a retry on an
-  // already-converted request returns already_won and is ack'd 200 below.
+  // difference is the source of the payment data. Idempotent — a retry on a
+  // fully-converted request returns {idempotent:true} and is ack'd 200 below; a
+  // bare/unconverted stub (e.g. production job #100) gets COMPLETED in place.
   const outcome = await convertQuoteToJob(
     env,
     requestId,
@@ -631,19 +632,21 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
   );
 
   if (!outcome.ok) {
-    if (outcome.error === "already_won") {
-      await logPublicAudit(env, token, null, "stripe_webhook_idempotent", estimateId ?? requestId, {
-        payment_intent_id: stripePaymentId,
-        request_id: requestId,
-      });
-      return json({ received: true, idempotent: true });
-    }
     // Log and ack (200) — returning non-2xx makes Stripe retry indefinitely.
     await logPublicAudit(env, token, null, "quote_deposit_failed", estimateId ?? requestId, {
       error: outcome.error,
       details: outcome.details,
     });
     return json({ received: true, conversion_error: outcome.error });
+  }
+
+  if (outcome.idempotent) {
+    await logPublicAudit(env, token, null, "stripe_webhook_idempotent", estimateId ?? requestId, {
+      payment_intent_id: stripePaymentId,
+      request_id: requestId,
+      job_id: outcome.jobId,
+    });
+    return json({ received: true, idempotent: true });
   }
 
   await logPublicAudit(env, token, null, "quote_deposit_paid", estimateId ?? requestId, {
@@ -654,6 +657,20 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
     convenience_fee: Number.isFinite(fee) ? fee : null,
     stripe_payment_id: stripePaymentId,
   });
+
+  // Job-scoped audit entry (system/token-attributed) for the Job Detail
+  // Activity tab — mirrors the manual Won path's job_created log.
+  await env.DB.prepare(
+    "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, ?, 'job', ?, ?, datetime('now'))",
+  )
+    .bind(
+      crypto.randomUUID(),
+      "system@stripe-webhook",
+      "job_created",
+      outcome.jobId,
+      JSON.stringify({ from_request: requestId, job_number: outcome.jobNumber, deposit_method: "stripe" }),
+    )
+    .run();
 
   // WC closed-deal count + New Sales value track the contract total.
   triggerDealWon(env, outcome.jobId, outcome.total);

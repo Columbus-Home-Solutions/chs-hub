@@ -1615,7 +1615,8 @@
   font-size: var(--text-md);
 }
 .time-clock { display: flex; gap: var(--space-sm); flex-wrap: wrap; align-items: center; }
-.time-clock .form-input { flex: 1 1 140px; min-height: 44px; }
+.time-clock .form-input,
+.time-clock__worker { flex: 1 1 140px; min-height: 44px; }
 @media (max-width: 720px) {
   .time-clock { flex-direction: column; align-items: stretch; }
 }

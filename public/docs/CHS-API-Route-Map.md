@@ -1,7 +1,6 @@
 # API Route Map
 ## CHS Construction Management Platform
 ### Version 1.0 — May 28, 2026
-### Revised May 31, 2026 (Sprint 8) — §6 Photo Capture reconciled to as-built; §4 Daily Logs & §8 Smart Notes role/behavior notes added
 
 ---
 
@@ -55,6 +54,7 @@ Role checks are documented per endpoint:
 |--------|-------|------|-------------|
 | GET | `/api/users` | O | List all users |
 | GET | `/api/users/me` | ALL | Get current authenticated user |
+| GET | `/api/users/clockable` | ALL | List active users eligible to clock in (role IN owner/PM/field_crew). Returns `[{id, full_name, role}]`. Used to populate the worker dropdown on the time-entry clock-in form. |
 | POST | `/api/users` | O | Create new user (sends invite email) |
 | PUT | `/api/users/:id` | O | Update user (role, info, deactivate) |
 | GET | `/api/users/:id` | O | Get user detail |
@@ -247,9 +247,9 @@ Role checks are documented per endpoint:
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/jobs/:id/daily-logs` | ALL (read) | List daily logs for job, each hydrated with linked photos (`photos.daily_log_id` is the source of truth; `daily_logs.photo_ids` mirrors it) |
-| POST | `/api/jobs/:id/daily-logs` | O/PM/FC/OA | Create daily log (optionally links `photo_ids` for the day) |
-| PUT | `/api/daily-logs/:id` | O/PM/FC/OA | Update daily log (re-links photos) |
+| GET | `/api/jobs/:id/daily-logs` | O/PM/FC | List daily logs for job |
+| POST | `/api/jobs/:id/daily-logs` | O/PM/FC | Create daily log |
+| PUT | `/api/daily-logs/:id` | O/PM/FC | Update daily log |
 
 ### Change Orders
 
@@ -402,55 +402,31 @@ Role checks are documented per endpoint:
 
 ## 6. Photo Capture
 
-> **As-built (Sprint 8, May 31 2026).** This section reflects the shipped
-> implementation, which deviates from the v1.0 design in three ways worth
-> calling out:
-> 1. **`GET /api/photos/:id` streams the original image bytes** (carry-forward
->    of the deployed dashboard/PWA contract), so photo metadata moved to the new
->    **`GET /api/photos/:id/meta`** (JSON). Timeline JSON is at
->    `GET /api/jobs/:id/photos`.
-> 2. **`DELETE /api/photos/:id` exists and is a SOFT delete** (`is_active=0`;
->    R2 object retained permanently — business rule #2). It was not in v1.0.
-> 3. **Ingest routes are credential-light at the Worker.** `POST /api/photos`,
->    `/batch`, and `/receipt` carry forward the PWA's no-role-gate upload path
->    (they run behind Cloudflare Access at the edge, and stamp
->    `Cf-Access-Authenticated-User-Email` as `uploaded_by` when present). Record-
->    mutating routes (`PUT`, `DELETE`, receipt `confirm`) ARE role-gated.
->
-> Server-side thumbnail generation and Google Drive mirror are **not** wired for
-> photos this sprint: thumbnails are client-generated (the thumb key falls back
-> to the full image if absent, rule #6).
-
 ### Photos
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/jobs/:id/photos` | ALL (read) | Photo timeline for job (active only). Filters: `?type=xxx&from=date&to=date`. Hydrates receipt extraction when present. (`social_ready` filter deferred) |
-| POST | `/api/photos` | Ingest (not gated at Worker; Access edge) | Upload photo (multipart). Accepts new `image` + flat fields **or** legacy `original`/`thumb`/`metadata`. **Idempotent**: client `capture_uuid` becomes the photo PK; a retry returns `{ duplicate: true }`. Client-generated thumbnail |
-| POST | `/api/photos/batch` | Ingest (not gated at Worker) | Batch offline-sync upload (`count` + `meta_<i>`/`image_<i>`/`thumb_<i>`). Idempotent per `capture_uuid`; returns per-item `created`/`duplicate`/`failed` |
-| GET | `/api/photos` | ALL (read) | Legacy flat list (dashboard/PWA). Filters: `?job_id=xxx&since=date&limit=n` |
-| GET | `/api/photos/:id` | ALL (read) | **Streams the original image bytes from R2** (not JSON) |
-| GET | `/api/photos/:id/thumb` | ALL (read) | Streams the thumbnail bytes from R2 |
-| GET | `/api/photos/:id/meta` | ALL (read) | **Photo detail as JSON** (caption, type, GPS, links, flags, receipt) |
-| PUT | `/api/photos/:id` | O/PM/FC/OA | Update metadata (caption, photo_type, task/daily-log link, social/before/after flags) |
-| DELETE | `/api/photos/:id` | O/PM/FC/OA | **Soft delete** (`is_active=0`; row + R2 retained). Drops from active timeline |
-| PATCH | `/api/photos/:id` | Ingest (legacy, not gated) | Legacy move: reassign `job_id`/`category` (dashboard carry-forward) |
-| PUT | `/api/photos/:id/annotate` | — | **DEFERRED (Sprint 18)** — returns `501`; `annotation_data`/`is_annotated` columns are seams |
-| POST | `/api/photos/pair` | — | **DEFERRED (Sprint 18)** — before/after pairing not implemented (`before_after_pair_id` is a seam) |
+| GET | `/api/jobs/:id/photos` | O/PM/FC | Photo timeline for job. Filters: `?type=xxx&from=date&to=date&social_ready=1` |
+| POST | `/api/photos` | O/PM/FC | Upload photo (multipart/form-data). Returns R2 key. Triggers thumbnail generation and Drive mirror |
+| POST | `/api/photos/batch` | O/PM/FC | Batch upload (offline sync). Array of photos with metadata |
+| GET | `/api/photos/:id` | O/PM/FC | Photo detail with metadata |
+| PUT | `/api/photos/:id` | O/PM/FC | Update photo metadata (caption, type, social flag, before/after) |
+| PUT | `/api/photos/:id/annotate` | O/PM/FC | Save annotation overlay data |
+| POST | `/api/photos/pair` | O/PM/FC | Link before/after pair: `{ before_id, after_id }` |
 
 ### Receipt Processing
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/photos/receipt` | Ingest (not gated at Worker) | Upload receipt photo → Claude vision extraction (vendor/amount/date/category/confidence). Degrades gracefully if AI key/proxy unavailable: photo persists, `processing_status='failed'`, manual entry still works |
-| GET | `/api/receipt-photos/:id` | ALL (read) | Get AI extraction results |
-| POST | `/api/receipt-photos/:id/confirm` | O/PM/FC | Confirm extraction (editable) → creates `expenses` record + links. Idempotent on the receipt |
+| POST | `/api/photos/receipt` | O/PM/FC | Upload receipt photo → triggers AI processing |
+| GET | `/api/receipt-photos/:id` | O/PM/FC | Get AI extraction results |
+| POST | `/api/receipt-photos/:id/confirm` | O/PM/FC | Confirm AI extraction → creates expense record |
 
 ### Photo Reports
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/jobs/:id/photo-report` | O/PM | **DEFERRED** — photo-report PDF lands in a later sprint |
+| POST | `/api/jobs/:id/photo-report` | O/PM | Generate photo report PDF. Body: `{ photo_ids, include_gps, include_captions }` |
 
 ---
 
@@ -499,19 +475,13 @@ Role checks are documented per endpoint:
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/smart-notes` | ALL (read) | List notes. Filters: `?job_id=xxx&category=xxx` |
-| POST | `/api/smart-notes` | O/PM/FC/OA | Create note (text or voice transcript). Triggers Claude processing; degrades gracefully if AI unavailable (`processing_status='failed'`, manual accept still works). Response includes `ai_ok` |
-| GET | `/api/smart-notes/:id` | ALL (read) | Note detail with AI results (summary, category, extracted tasks/expense/change-order) |
-| POST | `/api/smart-notes/:id/process` | O/PM/FC/OA | Re-trigger AI processing |
+| GET | `/api/smart-notes` | O/PM/FC | List notes. Filters: `?job_id=xxx&category=xxx` |
+| POST | `/api/smart-notes` | O/PM/FC | Create note (text or voice transcript). Triggers AI processing |
+| GET | `/api/smart-notes/:id` | O/PM/FC | Note detail with AI results |
+| POST | `/api/smart-notes/:id/process` | O/PM/FC | Re-trigger AI processing |
 | POST | `/api/smart-notes/:id/accept-task` | O/PM | Accept AI-suggested task → creates task in job |
 | POST | `/api/smart-notes/:id/accept-expense` | O/PM/FC | Accept AI-suggested expense → creates expense |
-| POST | `/api/smart-notes/:id/accept-change-order` | O/PM | Accept AI-suggested CO → creates change order draft (`status='draft'`, `triggered_by_note_id` set) |
-
-> **As-built (Sprint 8).** Voice notes are transcribed **client-side** via the
-> browser Web Speech API; the server receives text either way (`entered_via`
-> distinguishes `text`/`voice`). AI runs server-side (`ANTHROPIC_API_KEY` direct,
-> falling back to the existing Claude proxy). All three accept-* routes are
-> idempotent-safe (re-accepting creates an additional record only if re-invoked).
+| POST | `/api/smart-notes/:id/accept-change-order` | O/PM | Accept AI-suggested CO → creates change order draft |
 
 ---
 
@@ -637,14 +607,13 @@ Not REST endpoints, but Worker cron triggers that need to be implemented.
 | */15 * * * * | Notification Processor | Send queued/scheduled notifications |
 | */15 * * * * | Social Post Publisher | Publish approved posts at scheduled time |
 | */30 * * * * | WC Spreadsheet Sync | Push data to Google Sheets (carry forward) |
-| 0 8 * * * | Invoice Billing (as-built, Sprint 9) | One daily pass: Late Fee Calculator ($50/day on overdue invoices) **then** Invoice Due Check (due-reminder + past-due notices). Consolidates the two rows below into a single `0 8 * * *` run. |
-| ~~0 * * * *~~ | ~~Invoice Due Check~~ | Superseded — folded into the `0 8 * * *` Invoice Billing run above |
+| 0 * * * * | Invoice Due Check | Check for invoices approaching due date or past due → trigger reminders |
 | 0 */6 * * * | HL Pipeline Sync | Pull latest HL pipeline data |
 | 0 0 * * * | Nightly Backup | D1 → R2 backup |
 | 0 6 * * * | Daily Summary | Send daily summary email via Resend |
 | 0 0 * * 0 | Weekly Photo Summary | Generate weekly photo summaries for active jobs |
 | 0 0 * * * | Google Drive Mirror | Process pending document/photo mirrors |
-| ~~0 0 * * *~~ | ~~Late Fee Calculator~~ | Superseded — folded into the `0 8 * * *` Invoice Billing run above |
+| 0 0 * * * | Late Fee Calculator | Update late fee amounts on overdue invoices |
 | 0 0 * * * | QBO Sync | Push pending financial data to QuickBooks |
 
 ---
@@ -658,7 +627,7 @@ Not REST endpoints, but Worker cron triggers that need to be implemented.
 | Estimating | 22 |
 | Job Management | 24 |
 | Financial | 28 |
-| Photo Capture | 13 live + 3 deferred (annotate, pair, photo-report) |
+| Photo Capture | 10 |
 | Documents | 13 |
 | Smart Notes | 7 |
 | Notifications | 8 |

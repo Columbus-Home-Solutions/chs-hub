@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -666,6 +666,17 @@ const ROLE_OPTIONS = [
   { value: "pm_skilled", label: "PM / Skilled ($105)" },
 ];
 
+interface ClockableUser {
+  id: string;
+  full_name: string;
+  role: string;
+}
+
+function fullName(u: { first_name: string | null; last_name: string | null } | null): string {
+  if (!u) return "";
+  return [u.first_name, u.last_name].filter(Boolean).join(" ").trim();
+}
+
 function TimeSection({
   jobId,
   data,
@@ -679,15 +690,32 @@ function TimeSection({
   onChanged: () => void;
   toast: ToastApi;
 }) {
+  const { user } = useAuth();
+  // Clockable users populate the worker dropdown. On error we fall back to a
+  // free-text input below so clock-in still works (graceful degradation).
+  const {
+    data: clockable,
+    loading: clockableLoading,
+    error: clockableError,
+  } = useApi<ClockableUser[]>("/api/users/clockable");
   const [worker, setWorker] = useState("");
   const [role, setRole] = useState("general");
   const [busy, setBusy] = useState(false);
   const entries = data?.time_entries ?? [];
   const active = entries.filter((e) => e.is_active);
 
+  const workerOptions = (clockable ?? []).map((u) => ({ value: u.full_name, label: u.full_name }));
+
+  // Default the selection to the logged-in user once auth resolves.
+  useEffect(() => {
+    if (worker) return;
+    const me = fullName(user);
+    if (me) setWorker(me);
+  }, [user, worker]);
+
   const clockIn = async () => {
     if (!worker.trim()) {
-      toast.push("error", "Enter a worker name");
+      toast.push("error", "Select a worker");
       return;
     }
     setBusy(true);
@@ -719,12 +747,23 @@ function TimeSection({
   return (
     <Card title="Time tracking">
       <div class="time-clock">
-        <input
-          class="form-input"
-          placeholder="Worker name"
-          value={worker}
-          onInput={(e) => setWorker((e.target as HTMLInputElement).value)}
-        />
+        {clockableError ? (
+          <input
+            class="form-input"
+            placeholder="Worker name"
+            value={worker}
+            onInput={(e) => setWorker((e.target as HTMLInputElement).value)}
+          />
+        ) : (
+          <Select
+            class="time-clock__worker"
+            value={worker}
+            placeholder={clockableLoading ? "Loading…" : "Select worker"}
+            options={workerOptions}
+            disabled={clockableLoading}
+            onChange={setWorker}
+          />
+        )}
         <Select value={role} options={ROLE_OPTIONS} onChange={setRole} />
         <Button variant="primary" disabled={busy} onClick={clockIn}>
           Clock In

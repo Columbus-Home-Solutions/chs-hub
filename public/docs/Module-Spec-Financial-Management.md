@@ -198,7 +198,7 @@ Billing cycle:
 |-------|------|----------|-------|
 | id | UUID | auto | |
 | job_id | UUID | yes | FK to jobs table |
-| worker | text | yes | Who worked (user name or "Tony", crew member name) |
+| worker | text | yes | Display name of who worked — populated from the clockable-users dropdown (`GET /api/users/clockable`), stored as `"First Last"` string for human-readable history. Defaults to the logged-in user's name. |
 | role | enum | yes | "general" ($90/hr) or "pm_skilled" ($105/hr) |
 | clock_in | datetime | yes | Start time |
 | clock_out | datetime | no | End time (null = still clocked in) |
@@ -457,12 +457,13 @@ Electrical — Budget: $8,635 | Actual: $8,635 | Variance: $0 ⚪
 
 **Clock in/out flow:**
 1. User opens the app → taps "Clock In" on a specific job.
-2. System records clock_in timestamp and the job.
-3. Timer runs visibly on screen.
-4. User taps "Clock Out" when done.
-5. System calculates hours (rounded to nearest 15 minutes).
-6. Labor cost is auto-calculated: hours × rate ($90 or $105 based on role).
-7. For cost-plus jobs: labor cost immediately updates the current billing cycle actuals.
+2. **Worker dropdown** pre-selects the logged-in user; any active owner/PM/field-crew user can be selected instead (for clocking in a crew member). Populated from `GET /api/users/clockable`.
+3. System records clock_in timestamp, the job, and the selected worker name + snapshotted hourly rate.
+4. Timer runs visibly on screen.
+5. User taps "Clock Out" when done.
+6. System calculates hours (rounded to nearest 15 minutes).
+7. Labor cost is auto-calculated: hours × rate ($90 or $105 based on role).
+8. For cost-plus jobs: labor cost immediately updates the current billing cycle actuals.
 
 **Multiple jobs in a day:** User can clock out of one job and clock into another. Each time entry is per-job.
 
@@ -636,8 +637,9 @@ Accessed from the Job Detail View → Financial tab. Shows:
 - Big "Clock In" / "Clock Out" button.
 - Active timer display.
 - Job selector.
-- Role selector (General / PM-Skilled).
-- History view showing recent time entries.
+- **Worker dropdown** — `<Select>` populated from `GET /api/users/clockable` (active owner/PM/field-crew users, sorted by first name). Defaults to the logged-in user. Allows an owner or PM to clock in a crew member who doesn't have a device handy.
+- Role selector (General / PM-Skilled) — drives the hourly rate snapshot.
+- History view showing recent time entries (worker name, hours, labor cost).
 
 ### 10.6 Financial Dashboard
 

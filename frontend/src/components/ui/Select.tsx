@@ -9,6 +9,7 @@ interface SelectProps extends Omit<JSX.HTMLAttributes<HTMLSelectElement>, "onCha
   options: SelectOption[];
   value?: string;
   placeholder?: string;
+  disabled?: boolean;
   onChange?: (value: string) => void;
 }
 

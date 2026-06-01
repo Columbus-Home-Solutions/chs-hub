@@ -163,7 +163,7 @@ import {
   handleSettingUpdate,
   handleSettingsList,
 } from "./routes/settings.js";
-import { handleMe } from "./routes/me.js";
+import { handleMe, handleClockableUsers } from "./routes/me.js";
 import {
   handleClientCreate,
   handleClientGet,
@@ -805,6 +805,10 @@ export default {
       request.method === "GET"
     ) {
       return handleMe(request, env);
+    }
+    // Clockable users — all roles; populates the time-tracker worker dropdown.
+    if (url.pathname === "/api/users/clockable" && request.method === "GET") {
+      return handleClockableUsers(request, env);
     }
 
     // ── Clients, properties, communications ──────────────────────────

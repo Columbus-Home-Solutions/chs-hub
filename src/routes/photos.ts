@@ -31,6 +31,7 @@ import type { Env } from "../env.js";
 import { dateBucket, photoOriginalKey, photoThumbKey, putImage, streamObject } from "../lib/r2.js";
 import { extractReceipt } from "../lib/receipt-ai.js";
 import { guard } from "../middleware/guard.js";
+import { insertFullExpense } from "./expenses.js";
 
 // O/PM/FC may capture; expense creation on confirm is gated O/PM/FC (FC allowed
 // for expense per the route map note).
@@ -583,18 +584,30 @@ export async function handleReceiptConfirm(
   const jobId = str(body.job_id) ?? rp.photo_job_id;
   const description = str(body.description) ?? (vendor ? `Receipt — ${vendor}` : "Receipt");
 
-  const expenseId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  // Minimal expenses row (the full expense module is Sprint 10). synced_at is
-  // legacy NOT NULL; mirror created_at like the PWA expense path does.
-  await env.DB.prepare(
-    `INSERT INTO expenses
-       (id, job_id, amount, description, incurred_at, synced_at, vendor,
-        entered_via, expense_type, incurred_date, receipt_photo_id, created_at, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pwa', ?, ?, ?, ?, ?)`,
-  )
-    .bind(expenseId, jobId, amount, description, date, now, vendor, category, date, rp.photo_id, now, user.email)
-    .run();
+  // Sprint 10: land the FULL expense shape (estimate-line-item alignment, tax
+  // category, sub/1099) via the shared helper — extend, don't fork. The receipt
+  // image stays linked via receipt_photo_id and is never deleted (rule #8).
+  const expenseType = str(body.expense_type) ?? "material";
+  const isSub = expenseType === "subcontractor";
+  const expenseId = await insertFullExpense(env, {
+    job_id: jobId,
+    expense_type: expenseType,
+    vendor,
+    description,
+    amount,
+    incurred_date: date,
+    estimate_line_item_id: str(body.estimate_line_item_id),
+    tax_category: str(body.tax_category) ?? category,
+    sub_id: isSub ? str(body.sub_id) : null,
+    is_1099_reportable: isSub && Boolean(body.is_1099_reportable),
+    receipt_photo_id: rp.photo_id,
+    receipt_r2_key: null,
+    entered_via: "receipt_capture",
+    created_by: user.email,
+    save_to_price_book: Boolean(body.save_to_price_book),
+    material_name: str(body.material_name),
+    material_unit: str(body.material_unit),
+  });
 
   await env.DB.prepare(
     `UPDATE receipt_photos SET expense_id = ?, processing_status = 'confirmed',

@@ -20,6 +20,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { processNote, type NoteProcessing } from "../lib/smart-notes.js";
+import { insertFullExpense } from "./expenses.js";
 
 const NOTE_ROLES = ["owner", "project_manager", "field_crew", "office_admin"] as const;
 const TASK_ROLES = ["owner", "project_manager"] as const;
@@ -288,16 +289,26 @@ export async function handleSmartNoteAcceptExpense(env: Env, request: Request, i
   const jobId = str(body.job_id) ?? note.job_id;
   const date = str(body.date) ?? new Date().toISOString().slice(0, 10);
 
-  const expenseId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  await env.DB.prepare(
-    `INSERT INTO expenses
-       (id, job_id, amount, description, incurred_at, synced_at, vendor,
-        entered_via, expense_type, incurred_date, created_at, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pwa', ?, ?, ?, ?)`,
-  )
-    .bind(expenseId, jobId, amount, description, date, now, vendor, category, date, now, user.email)
-    .run();
+  // Sprint 10: land the FULL expense shape via the shared helper (extend, don't
+  // fork) so a note-sourced expense carries alignment / tax category / sub-1099.
+  const expenseType = str(body.expense_type) ?? category ?? "material";
+  const isSub = expenseType === "subcontractor";
+  const expenseId = await insertFullExpense(env, {
+    job_id: jobId,
+    expense_type: expenseType,
+    vendor,
+    description,
+    amount,
+    incurred_date: date,
+    estimate_line_item_id: str(body.estimate_line_item_id),
+    tax_category: str(body.tax_category) ?? category,
+    sub_id: isSub ? str(body.sub_id) : null,
+    is_1099_reportable: isSub && Boolean(body.is_1099_reportable),
+    receipt_photo_id: null,
+    receipt_r2_key: null,
+    entered_via: "auto",
+    created_by: user.email,
+  });
 
   await logAudit(env, user.email, "smart_note_accept_expense", "expense", expenseId, { note_id: id, amount });
   return json({ ok: true, expense_id: expenseId, job_id: jobId }, { status: 201 });

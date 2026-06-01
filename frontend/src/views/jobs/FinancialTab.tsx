@@ -8,8 +8,13 @@ import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
+import { useAuth } from "../../store/auth";
 import { api, ApiError } from "../../api";
-import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
+import { formatCurrency, formatDate, formatDateTime, formatStatus } from "../../lib/format";
+import {
+  ExpenseFormModal,
+  type CostingLineLite,
+} from "../financial/ExpenseForm";
 
 /**
  * Job Detail → Financial tab (Sprint 9). Shows the job's invoice ledger
@@ -73,6 +78,81 @@ interface JobInvoicesResponse {
   };
 }
 
+// ── Sprint 10 shapes ────────────────────────────────────────────────────────
+interface CostingSubLine {
+  id: string;
+  description: string | null;
+  category: string;
+  budget: number;
+  actual: number;
+  variance: number;
+  status: "under" | "within" | "over";
+}
+interface CostingLine {
+  line_item_id: string;
+  name: string;
+  budget: number;
+  actual: number;
+  variance: number;
+  status: "under" | "within" | "over";
+  sub_items: CostingSubLine[];
+}
+interface CostingResponse {
+  costing: {
+    job_id: string;
+    estimate_id: string | null;
+    has_budget: boolean;
+    lines: CostingLine[];
+    labor_from_time: number;
+    unallocated: number;
+    totals: { budget: number; actual: number; variance: number; status: "under" | "within" | "over" };
+  };
+}
+interface ExpenseItem {
+  id: string;
+  job_id: string | null;
+  amount: number | null;
+  description: string | null;
+  incurred_date: string | null;
+  vendor: string | null;
+  expense_type: string | null;
+  estimate_line_item_id: string | null;
+  tax_category: string | null;
+  is_1099_reportable: boolean;
+  sub_id: string | null;
+  receipt_url: string | null;
+  has_receipt: boolean;
+  is_active: boolean;
+}
+interface ExpensesResponse {
+  total: number;
+  total_amount: number;
+  expenses: ExpenseItem[];
+}
+interface TimeEntryItem {
+  id: string;
+  worker: string;
+  role: string;
+  clock_in: string;
+  clock_out: string | null;
+  hours: number | null;
+  hourly_rate: number | null;
+  labor_cost: number | null;
+  is_active: boolean;
+}
+interface TimeEntriesResponse {
+  total: number;
+  total_hours: number;
+  total_labor: number;
+  time_entries: TimeEntryItem[];
+}
+
+const VARIANCE_TONE: Record<string, "success" | "warning" | "error"> = {
+  under: "success",
+  within: "warning",
+  over: "error",
+};
+
 type ToastApi = ReturnType<typeof useToast>;
 
 const STATUS_TONE: Record<string, "neutral" | "success" | "warning" | "error" | "info"> = {
@@ -96,7 +176,14 @@ interface Prefill {
 
 export function FinancialTab({ jobId }: { jobId: string }) {
   const { data, loading, error, refetch } = useApi<JobInvoicesResponse>(`/api/jobs/${jobId}/invoices`);
+  const costing = useApi<CostingResponse>(`/api/jobs/${jobId}/costing`);
+  const expenses = useApi<ExpensesResponse>(`/api/jobs/${jobId}/expenses`);
+  const timeEntries = useApi<TimeEntriesResponse>(`/api/jobs/${jobId}/time-entries`);
   const toast = useToast();
+  const { user } = useAuth();
+  // Costing + profit/margin are O/PM-only (business rule #9). FC may still log
+  // expenses and clock in/out below.
+  const canSeeCosting = user?.role === "owner" || user?.role === "project_manager";
   const [builderOpen, setBuilderOpen] = useState(false);
   const [prefill, setPrefill] = useState<Prefill | null>(null);
   const [payFor, setPayFor] = useState<InvoiceRow | null>(null);
@@ -120,6 +207,26 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   const suggestions = data.suggestions;
   const hasSuggestions =
     suggestions.milestones.length > 0 || suggestions.trades.length > 0 || suggestions.final != null;
+
+  const costingLines: CostingLineLite[] = (costing.data?.costing.lines ?? []).map((l) => ({
+    line_item_id: l.line_item_id,
+    name: l.name,
+    sub_items: l.sub_items.map((s) => ({ id: s.id, description: s.description, category: s.category })),
+  }));
+  // Total cost = non-void expenses + time-entry labor; profit on the invoiced basis.
+  const totalExpenses = expenses.data?.total_amount ?? 0;
+  const laborCost = costing.data?.costing.labor_from_time ?? 0;
+  const totalCost = Math.round((totalExpenses + laborCost) * 100) / 100;
+  const invoiced = data.summary.total_invoiced;
+  const profit = Math.round((invoiced - totalCost) * 100) / 100;
+  const marginPct = invoiced > 0 ? Math.round((profit / invoiced) * 1000) / 10 : null;
+
+  const refetchAll = () => {
+    refetch();
+    costing.refetch();
+    expenses.refetch();
+    timeEntries.refetch();
+  };
 
   const sendInvoice = async (inv: InvoiceRow) => {
     try {
@@ -162,6 +269,16 @@ export function FinancialTab({ jobId }: { jobId: string }) {
         <SummaryStat label="Invoiced" value={data.summary.total_invoiced} />
         <SummaryStat label="Collected" value={data.summary.total_paid} tone="success" />
         <SummaryStat label="Balance Due" value={data.summary.balance_due} tone="warning" />
+        <SummaryStat label="Expenses" value={totalExpenses + laborCost} />
+        {canSeeCosting && (
+          <>
+            <SummaryStat label="Profit" value={profit} tone={profit >= 0 ? "success" : undefined} />
+            <div class="fin-stat">
+              <div class="fin-stat__label">Margin</div>
+              <div class="fin-stat__value">{marginPct == null ? "—" : `${marginPct}%`}</div>
+            </div>
+          </>
+        )}
       </div>
 
       <div class="flex items-center justify-between gap-sm">
@@ -288,6 +405,32 @@ export function FinancialTab({ jobId }: { jobId: string }) {
         )}
       </Card>
 
+      {canSeeCosting && (
+        <BudgetVsActual costing={costing.data?.costing ?? null} loading={costing.loading} />
+      )}
+
+      <ExpensesSection
+        jobId={jobId}
+        data={expenses.data}
+        loading={expenses.loading}
+        lines={costingLines}
+        onChanged={refetchAll}
+        toast={toast}
+      />
+
+      <TimeSection
+        jobId={jobId}
+        data={timeEntries.data}
+        loading={timeEntries.loading}
+        onChanged={() => {
+          timeEntries.refetch();
+          costing.refetch();
+        }}
+        toast={toast}
+      />
+
+      <MileageSection jobId={jobId} toast={toast} />
+
       {builderOpen && (
         <InvoiceBuilder
           jobId={jobId}
@@ -313,6 +456,468 @@ export function FinancialTab({ jobId }: { jobId: string }) {
         />
       )}
     </div>
+  );
+}
+
+// ── Budget vs. Actual table (O/PM only) ─────────────────────────────────────
+
+function BudgetVsActual({
+  costing,
+  loading,
+}: {
+  costing: CostingResponse["costing"] | null;
+  loading: boolean;
+}) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  if (loading) {
+    return (
+      <Card title="Budget vs. Actual">
+        <Spinner />
+      </Card>
+    );
+  }
+  if (!costing || !costing.has_budget) {
+    return (
+      <Card title="Budget vs. Actual">
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+          No estimate budget found for this job — costing needs an estimate with line items and
+          sub-items.
+        </p>
+      </Card>
+    );
+  }
+  const toggle = (id: string) => setExpanded((e) => ({ ...e, [id]: !e[id] }));
+
+  return (
+    <Card title="Budget vs. Actual">
+      <div class="table-container">
+        <table class="table costing-table">
+          <thead>
+            <tr>
+              <th>Line item</th>
+              <th class="num">Budget</th>
+              <th class="num">Actual</th>
+              <th class="num">Variance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {costing.lines.map((l) => (
+              <>
+                <tr key={l.line_item_id} class="costing-row" onClick={() => l.sub_items.length && toggle(l.line_item_id)}>
+                  <td>
+                    {l.sub_items.length > 0 && <span class="costing-row__caret">{expanded[l.line_item_id] ? "▾" : "▸"}</span>}
+                    {l.name}
+                  </td>
+                  <td class="num">{formatCurrency(l.budget)}</td>
+                  <td class="num">{formatCurrency(l.actual)}</td>
+                  <td class="num">
+                    <Badge tone={VARIANCE_TONE[l.status]}>{formatCurrency(l.variance)}</Badge>
+                  </td>
+                </tr>
+                {expanded[l.line_item_id] &&
+                  l.sub_items.map((s) => (
+                    <tr key={s.id} class="costing-subrow">
+                      <td class="costing-subrow__name">↳ {s.description ?? s.category} <span class="text--muted">({s.category})</span></td>
+                      <td class="num">{formatCurrency(s.budget)}</td>
+                      <td class="num">{formatCurrency(s.actual)}</td>
+                      <td class="num text--muted">{formatCurrency(s.variance)}</td>
+                    </tr>
+                  ))}
+              </>
+            ))}
+            {costing.labor_from_time > 0 && (
+              <tr class="costing-row costing-row--aux">
+                <td>Labor (time tracking)</td>
+                <td class="num text--muted">—</td>
+                <td class="num">{formatCurrency(costing.labor_from_time)}</td>
+                <td class="num text--muted">—</td>
+              </tr>
+            )}
+            {costing.unallocated > 0 && (
+              <tr class="costing-row costing-row--aux">
+                <td>Unallocated</td>
+                <td class="num text--muted">—</td>
+                <td class="num">{formatCurrency(costing.unallocated)}</td>
+                <td class="num text--muted">—</td>
+              </tr>
+            )}
+            <tr class="costing-row costing-row--total">
+              <td><strong>Total</strong></td>
+              <td class="num"><strong>{formatCurrency(costing.totals.budget)}</strong></td>
+              <td class="num"><strong>{formatCurrency(costing.totals.actual)}</strong></td>
+              <td class="num">
+                <Badge tone={VARIANCE_TONE[costing.totals.status]}>{formatCurrency(costing.totals.variance)}</Badge>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ── Expenses list + Add Expense ─────────────────────────────────────────────
+
+const EXPENSE_TYPE_LABEL: Record<string, string> = {
+  material: "Material",
+  subcontractor: "Sub",
+  labor: "Labor",
+  permit: "Permit",
+  equipment: "Equipment",
+  vehicle: "Vehicle",
+  other: "Other",
+};
+
+function ExpensesSection({
+  jobId,
+  data,
+  loading,
+  lines,
+  onChanged,
+  toast,
+}: {
+  jobId: string;
+  data: ExpensesResponse | null | undefined;
+  loading: boolean;
+  lines: CostingLineLite[];
+  onChanged: () => void;
+  toast: ToastApi;
+}) {
+  const [formOpen, setFormOpen] = useState(false);
+  const expenses = data?.expenses ?? [];
+
+  const voidExpense = async (e: ExpenseItem) => {
+    if (!confirm("Void this expense? It stays on file (receipt preserved) but drops out of costing.")) return;
+    try {
+      await api.put(`/api/expenses/${e.id}`, { action: "void" });
+      toast.push("success", "Expense voided");
+      onChanged();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    }
+  };
+
+  return (
+    <Card
+      title="Expenses"
+      actions={
+        <Button variant="primary" size="sm" onClick={() => setFormOpen(true)}>
+          + Add Expense
+        </Button>
+      }
+    >
+      {loading ? (
+        <Spinner />
+      ) : expenses.length === 0 ? (
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+          No expenses logged for this job yet.
+        </p>
+      ) : (
+        <div class="invoice-list">
+          {expenses.map((e) => (
+            <div class="invoice-row" key={e.id}>
+              {e.receipt_url ? (
+                <img class="expense-thumb" src={e.receipt_url} alt="receipt" loading="lazy" />
+              ) : (
+                <span class="expense-thumb expense-thumb--none">{e.has_receipt ? "🧾" : "—"}</span>
+              )}
+              <div class="invoice-row__main">
+                <div class="invoice-row__title">
+                  {e.vendor ?? e.description ?? "Expense"}
+                  <Badge tone="neutral">{EXPENSE_TYPE_LABEL[e.expense_type ?? "other"] ?? e.expense_type}</Badge>
+                  {e.is_1099_reportable && <Badge tone="info">1099</Badge>}
+                </div>
+                <div class="invoice-row__meta">
+                  {e.tax_category ? formatStatus(e.tax_category) : "Uncategorized"}
+                  {e.estimate_line_item_id ? " · aligned" : " · unallocated"}
+                  {e.incurred_date ? ` · ${formatDate(e.incurred_date)}` : ""}
+                </div>
+              </div>
+              <div class="invoice-row__amount">{formatCurrency(e.amount)}</div>
+              <div class="invoice-row__actions">
+                <Button size="sm" variant="danger" onClick={() => voidExpense(e)}>
+                  Void
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {formOpen && (
+        <ExpenseFormModal
+          jobId={jobId}
+          lines={lines}
+          onClose={() => setFormOpen(false)}
+          onSaved={() => {
+            setFormOpen(false);
+            onChanged();
+          }}
+        />
+      )}
+    </Card>
+  );
+}
+
+// ── Time entries + clock control ────────────────────────────────────────────
+
+const ROLE_OPTIONS = [
+  { value: "general", label: "General ($90)" },
+  { value: "pm_skilled", label: "PM / Skilled ($105)" },
+];
+
+function TimeSection({
+  jobId,
+  data,
+  loading,
+  onChanged,
+  toast,
+}: {
+  jobId: string;
+  data: TimeEntriesResponse | null | undefined;
+  loading: boolean;
+  onChanged: () => void;
+  toast: ToastApi;
+}) {
+  const [worker, setWorker] = useState("");
+  const [role, setRole] = useState("general");
+  const [busy, setBusy] = useState(false);
+  const entries = data?.time_entries ?? [];
+  const active = entries.filter((e) => e.is_active);
+
+  const clockIn = async () => {
+    if (!worker.trim()) {
+      toast.push("error", "Enter a worker name");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post(`/api/time-entries`, { job_id: jobId, worker: worker.trim(), role });
+      toast.push("success", `${worker.trim()} clocked in`);
+      setWorker("");
+      onChanged();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clockOut = async (e: TimeEntryItem) => {
+    setBusy(true);
+    try {
+      await api.put(`/api/time-entries/${e.id}`, { clock_out: new Date().toISOString() });
+      toast.push("success", `${e.worker} clocked out`);
+      onChanged();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="Time tracking">
+      <div class="time-clock">
+        <input
+          class="form-input"
+          placeholder="Worker name"
+          value={worker}
+          onInput={(e) => setWorker((e.target as HTMLInputElement).value)}
+        />
+        <Select value={role} options={ROLE_OPTIONS} onChange={setRole} />
+        <Button variant="primary" disabled={busy} onClick={clockIn}>
+          Clock In
+        </Button>
+      </div>
+
+      {active.length > 0 && (
+        <div class="stack" style={{ marginTop: "var(--space-sm)" }}>
+          {active.map((e) => (
+            <div class="invoice-row" key={e.id}>
+              <div class="invoice-row__main">
+                <div class="invoice-row__title">
+                  {e.worker} <Badge tone="success">running</Badge>
+                </div>
+                <div class="invoice-row__meta">
+                  {formatStatus(e.role)} · {formatCurrency(e.hourly_rate)}/hr · in {formatDateTime(e.clock_in)}
+                </div>
+              </div>
+              <div class="invoice-row__actions">
+                <Button size="sm" variant="secondary" disabled={busy} onClick={() => clockOut(e)}>
+                  Clock Out
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop: "var(--space-md)" }}>
+        {loading ? (
+          <Spinner />
+        ) : entries.length === 0 ? (
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            No time logged yet.
+          </p>
+        ) : (
+          <div class="invoice-list">
+            {entries
+              .filter((e) => !e.is_active)
+              .map((e) => (
+                <div class="invoice-row" key={e.id}>
+                  <div class="invoice-row__main">
+                    <div class="invoice-row__title">{e.worker}</div>
+                    <div class="invoice-row__meta">
+                      {formatStatus(e.role)} · {e.hours}h × {formatCurrency(e.hourly_rate)} · {formatDate(e.clock_in)}
+                    </div>
+                  </div>
+                  <div class="invoice-row__amount">{formatCurrency(e.labor_cost)}</div>
+                </div>
+              ))}
+            <div class="invoice-row costing-row--total">
+              <div class="invoice-row__main">
+                <strong>Total labor · {data?.total_hours ?? 0}h</strong>
+              </div>
+              <div class="invoice-row__amount">
+                <strong>{formatCurrency(data?.total_labor ?? 0)}</strong>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ── Mileage (job-scoped) ────────────────────────────────────────────────────
+
+interface MileageItem {
+  id: string;
+  trip_purpose: string;
+  distance_miles: number;
+  trip_date: string;
+  irs_rate: number | null;
+  deduction_amount: number | null;
+}
+
+function MileageSection({ jobId, toast }: { jobId: string; toast: ToastApi }) {
+  const { data, refetch } = useApi<{ mileage: MileageItem[]; total_deduction: number }>(
+    `/api/mileage?job_id=${jobId}`,
+  );
+  const [open, setOpen] = useState(false);
+  const [purpose, setPurpose] = useState("");
+  const [miles, setMiles] = useState("");
+  const [tripDate, setTripDate] = useState(new Date().toISOString().slice(0, 10));
+  const [busy, setBusy] = useState(false);
+
+  const rows = data?.mileage ?? [];
+  const m = Number(miles);
+  // Preview at the current IRS rate (0.70 for 2026) — server snapshots on save.
+  const preview = Number.isFinite(m) && m > 0 ? Math.round(m * 0.7 * 100) / 100 : 0;
+
+  const submit = async () => {
+    if (!purpose.trim() || !(m > 0)) return;
+    setBusy(true);
+    try {
+      await api.post(`/api/mileage`, {
+        job_id: jobId,
+        trip_purpose: purpose.trim(),
+        distance_miles: m,
+        trip_date: tripDate,
+      });
+      toast.push("success", "Mileage logged");
+      setOpen(false);
+      setPurpose("");
+      setMiles("");
+      refetch();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card
+      title="Mileage"
+      actions={
+        <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
+          + Log Trip
+        </Button>
+      }
+    >
+      {rows.length === 0 ? (
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+          No mileage logged for this job.
+        </p>
+      ) : (
+        <div class="invoice-list">
+          {rows.map((r) => (
+            <div class="invoice-row" key={r.id}>
+              <div class="invoice-row__main">
+                <div class="invoice-row__title">{formatStatus(r.trip_purpose)}</div>
+                <div class="invoice-row__meta">
+                  {r.distance_miles} mi × {r.irs_rate} · {formatDate(r.trip_date)}
+                </div>
+              </div>
+              <div class="invoice-row__amount">{formatCurrency(r.deduction_amount)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {open && (
+        <Modal
+          open
+          title="Log Mileage"
+          onClose={() => setOpen(false)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" disabled={!purpose.trim() || !(m > 0) || busy} onClick={submit}>
+                {busy ? "Saving…" : "Save"}
+              </Button>
+            </>
+          }
+        >
+          <FormField label="Trip purpose" required>
+            <input
+              class="form-input"
+              value={purpose}
+              placeholder="e.g. Supply run to Lowe's"
+              onInput={(e) => setPurpose((e.target as HTMLInputElement).value)}
+            />
+          </FormField>
+          <div class="form-row">
+            <FormField label="Distance (miles)" required>
+              <input
+                class="form-input"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.1"
+                value={miles}
+                onInput={(e) => setMiles((e.target as HTMLInputElement).value)}
+              />
+            </FormField>
+            <FormField label="Trip date">
+              <input
+                class="form-input"
+                type="date"
+                value={tripDate}
+                onInput={(e) => setTripDate((e.target as HTMLInputElement).value)}
+              />
+            </FormField>
+          </div>
+          <div class="invoice-builder__total">
+            <span>Deduction @ IRS rate</span>
+            <strong>{formatCurrency(preview)}</strong>
+          </div>
+        </Modal>
+      )}
+    </Card>
   );
 }
 

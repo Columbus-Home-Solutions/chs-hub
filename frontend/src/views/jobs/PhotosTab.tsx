@@ -10,6 +10,13 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatDateTime } from "../../lib/format";
 import { uploadPhoto } from "../../lib/capture";
+import {
+  ExpenseFields,
+  emptyDraft,
+  draftToBody,
+  type ExpenseDraft,
+  type CostingLineLite,
+} from "../financial/ExpenseForm";
 
 export interface PhotoReceipt {
   id: string;
@@ -288,10 +295,6 @@ function PhotoDetailModal({
   );
 }
 
-const EXPENSE_CATEGORIES = [
-  "materials", "labor", "subcontractor", "equipment_rental", "permits", "fuel", "tools", "disposal", "other",
-].map((v) => ({ value: v, label: v.replace(/_/g, " ") }));
-
 export function ReceiptConfirm({
   receipt,
   jobId,
@@ -303,11 +306,28 @@ export function ReceiptConfirm({
   onConfirmed: () => void;
   toast: ReturnType<typeof useToast>;
 }) {
-  const [vendor, setVendor] = useState(receipt.ai_vendor ?? "");
-  const [amount, setAmount] = useState(receipt.ai_amount != null ? String(receipt.ai_amount) : "");
-  const [date, setDate] = useState(receipt.ai_date ?? new Date().toISOString().slice(0, 10));
-  const [category, setCategory] = useState(receipt.ai_category ?? "materials");
+  // Pull the job's costing lines so the receipt confirm lands in the SAME full
+  // expense form (estimate-line-item alignment + tax category + sub/1099).
+  const costing = useApi<{ costing: { lines: CostingLineLite[] } }>(
+    jobId ? `/api/jobs/${jobId}/costing` : null,
+  );
+  const lines: CostingLineLite[] = (costing.data?.costing.lines ?? []).map((l) => ({
+    line_item_id: l.line_item_id,
+    name: l.name,
+    sub_items: l.sub_items.map((s) => ({ id: s.id, description: s.description, category: s.category })),
+  }));
+
+  const [draft, setDraft] = useState<ExpenseDraft>(
+    emptyDraft({
+      vendor: receipt.ai_vendor ?? "",
+      amount: receipt.ai_amount != null ? String(receipt.ai_amount) : "",
+      incurred_date: receipt.ai_date ?? new Date().toISOString().slice(0, 10),
+      tax_category: receipt.ai_category ?? "materials",
+    }),
+  );
   const [busy, setBusy] = useState(false);
+  const set = <K extends keyof ExpenseDraft>(k: K, v: ExpenseDraft[K]) =>
+    setDraft((d) => ({ ...d, [k]: v }));
 
   if (receipt.expense_id || receipt.processing_status === "confirmed") {
     return (
@@ -319,19 +339,20 @@ export function ReceiptConfirm({
   }
 
   const confirm = async () => {
-    const amt = Number(amount);
+    const amt = Number(draft.amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       toast.push("error", "Enter a valid amount");
       return;
     }
     setBusy(true);
     try {
+      const body = draftToBody(draft, jobId);
       await api.post(`/api/receipt-photos/${receipt.id}/confirm`, {
-        vendor: vendor.trim() || null,
-        amount: amt,
-        date,
-        category,
-        job_id: jobId,
+        ...body,
+        // The confirm seam keys on vendor/amount/date/category in addition to
+        // the full field set, and persists the receipt_photo linkage.
+        date: draft.incurred_date,
+        category: draft.tax_category,
       });
       toast.push("success", "Expense created from receipt");
       onConfirmed();
@@ -345,7 +366,7 @@ export function ReceiptConfirm({
   return (
     <div class="receipt-box stack">
       <div class="flex items-center gap-sm">
-        <strong>Receipt</strong>
+        <strong>Receipt → Expense</strong>
         {receipt.processing_status === "failed" ? (
           <Badge tone="warning">AI unavailable — enter manually</Badge>
         ) : (
@@ -354,20 +375,7 @@ export function ReceiptConfirm({
           </Badge>
         )}
       </div>
-      <FormField label="Vendor">
-        <input class="form-input" value={vendor} onInput={(e) => setVendor((e.target as HTMLInputElement).value)} />
-      </FormField>
-      <div class="flex gap-sm">
-        <FormField label="Amount">
-          <input class="form-input" type="number" step="0.01" value={amount} onInput={(e) => setAmount((e.target as HTMLInputElement).value)} />
-        </FormField>
-        <FormField label="Date">
-          <input class="form-input" type="date" value={date} onInput={(e) => setDate((e.target as HTMLInputElement).value)} />
-        </FormField>
-      </div>
-      <FormField label="Category">
-        <Select value={category} options={EXPENSE_CATEGORIES} onChange={setCategory} />
-      </FormField>
+      <ExpenseFields draft={draft} set={set} lines={lines} />
       <Button variant="primary" size="sm" disabled={busy} onClick={confirm}>
         {busy ? "Saving…" : "Confirm → Create Expense"}
       </Button>

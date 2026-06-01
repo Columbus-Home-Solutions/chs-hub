@@ -125,12 +125,32 @@ import { handleSheetsInspect } from "./routes/sheets-debug.js";
 import { handleJobberSync, handleSyncNow } from "./routes/sync.js";
 import {
   handleExpenseCreate,
+  handleExpenseCreateJson,
+  handleExpenseUpdate,
   handleExpenseDelete,
-  handleExpenseList,
+  handleFullExpenseList,
+  handleJobExpenses,
   handleExpensePatch,
   handleExpenseReceipt,
   handleExpensePush,
 } from "./routes/expenses.js";
+import {
+  handleTimeEntryClockIn,
+  handleTimeEntryUpdate,
+  handleJobTimeEntries,
+  handleActiveTimeEntries,
+} from "./routes/time-entries.js";
+import {
+  handleMileageList,
+  handleMileageCreate,
+  handleMileageUpdate,
+} from "./routes/mileage.js";
+import {
+  handleVendorMaterialList,
+  handleVendorMaterialCreate,
+  handleVendorMaterialUpdate,
+} from "./routes/vendor-materials.js";
+import { handleJobCosting } from "./routes/costing.js";
 import {
   handleJobberOAuthStart,
   handleJobberOAuthCallback,
@@ -534,6 +554,19 @@ export default {
       if (request.method === "GET") return handleDailyLogList(env, jid);
       if (request.method === "POST") return handleDailyLogCreate(env, request, jid);
     }
+    // Expenses + job costing + time entries per job (Sprint 10).
+    const jobExpenses = url.pathname.match(/^\/api\/jobs\/([^/]+)\/expenses$/);
+    if (jobExpenses && request.method === "GET") {
+      return handleJobExpenses(env, decodeURIComponent(jobExpenses[1]), url);
+    }
+    const jobCosting = url.pathname.match(/^\/api\/jobs\/([^/]+)\/costing$/);
+    if (jobCosting && request.method === "GET") {
+      return handleJobCosting(env, decodeURIComponent(jobCosting[1]));
+    }
+    const jobTimeEntries = url.pathname.match(/^\/api\/jobs\/([^/]+)\/time-entries$/);
+    if (jobTimeEntries && request.method === "GET") {
+      return handleJobTimeEntries(env, decodeURIComponent(jobTimeEntries[1]));
+    }
     const jobById = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (jobById) {
       const jid = decodeURIComponent(jobById[1]);
@@ -673,10 +706,16 @@ export default {
       return handleSmartNoteGet(env, decodeURIComponent(snById[1]));
     }
 
-    // ── Expenses (PWA capture) ───────────────────────────────────────
+    // ── Expenses (Sprint 8 PWA capture + Sprint 10 full CRUD) ─────────
     if (url.pathname === "/api/expenses") {
-      if (request.method === "POST") return handleExpenseCreate(env, request);
-      if (request.method === "GET") return handleExpenseList(env, url);
+      // JSON body → Sprint 10 full expense form; multipart → legacy PWA capture.
+      if (request.method === "POST") {
+        const ct = request.headers.get("content-type") ?? "";
+        return ct.includes("application/json")
+          ? handleExpenseCreateJson(env, request)
+          : handleExpenseCreate(env, request);
+      }
+      if (request.method === "GET") return handleFullExpenseList(env, url);
     }
     const expenseReceipt = url.pathname.match(/^\/api\/expenses\/([^/]+)\/receipt$/);
     if (expenseReceipt && (request.method === "GET" || request.method === "HEAD")) {
@@ -689,8 +728,41 @@ export default {
     const expenseById = url.pathname.match(/^\/api\/expenses\/([^/]+)$/);
     if (expenseById) {
       const eid = decodeURIComponent(expenseById[1]);
+      if (request.method === "PUT") return handleExpenseUpdate(env, request, eid);
       if (request.method === "DELETE") return handleExpenseDelete(env, eid);
       if (request.method === "PATCH") return handleExpensePatch(env, eid, request);
+    }
+
+    // ── Time entries (Sprint 10) ─────────────────────────────────────
+    if (url.pathname === "/api/time-entries" && request.method === "POST") {
+      return handleTimeEntryClockIn(env, request);
+    }
+    if (url.pathname === "/api/time-entries/active" && request.method === "GET") {
+      return handleActiveTimeEntries(env, url);
+    }
+    const timeEntryById = url.pathname.match(/^\/api\/time-entries\/([^/]+)$/);
+    if (timeEntryById && request.method === "PUT") {
+      return handleTimeEntryUpdate(env, request, decodeURIComponent(timeEntryById[1]));
+    }
+
+    // ── Mileage (Sprint 10) ──────────────────────────────────────────
+    if (url.pathname === "/api/mileage") {
+      if (request.method === "GET") return handleMileageList(env, url);
+      if (request.method === "POST") return handleMileageCreate(env, request);
+    }
+    const mileageById = url.pathname.match(/^\/api\/mileage\/([^/]+)$/);
+    if (mileageById && request.method === "PUT") {
+      return handleMileageUpdate(env, request, decodeURIComponent(mileageById[1]));
+    }
+
+    // ── Vendor / material price book (Sprint 10) ─────────────────────
+    if (url.pathname === "/api/vendor-materials") {
+      if (request.method === "GET") return handleVendorMaterialList(env, url);
+      if (request.method === "POST") return handleVendorMaterialCreate(env, request);
+    }
+    const vendorMaterialById = url.pathname.match(/^\/api\/vendor-materials\/([^/]+)$/);
+    if (vendorMaterialById && request.method === "PUT") {
+      return handleVendorMaterialUpdate(env, request, decodeURIComponent(vendorMaterialById[1]));
     }
 
     // ── Smart Notes ──────────────────────────────────────────────────

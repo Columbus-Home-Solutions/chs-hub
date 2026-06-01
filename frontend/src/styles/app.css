@@ -1574,6 +1574,52 @@
   background: var(--color-surface-2);
 }
 
+/* ── Sprint 10: expenses, job costing, time, mileage ─────────────────────── */
+.chip-row { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.chip {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+  color: var(--color-text);
+  border-radius: var(--radius-pill, 999px);
+  padding: 8px 14px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  min-height: 40px;
+}
+.chip--active {
+  background: var(--color-accent, var(--color-primary, #2563eb));
+  border-color: transparent;
+  color: #fff;
+}
+.costing-table th.num, .costing-table td.num { text-align: right; white-space: nowrap; font-family: var(--font-mono); }
+.costing-row { cursor: pointer; }
+.costing-row__caret { display: inline-block; width: 1em; color: var(--color-text-muted); }
+.costing-subrow td { background: var(--color-surface-2); font-size: var(--text-sm); }
+.costing-subrow__name { padding-left: var(--space-md); }
+.costing-row--aux td { color: var(--color-text); background: var(--color-surface-2); }
+.costing-row--total td { border-top: 2px solid var(--color-border); }
+.expense-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.expense-thumb--none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  font-size: var(--text-md);
+}
+.time-clock { display: flex; gap: var(--space-sm); flex-wrap: wrap; align-items: center; }
+.time-clock .form-input { flex: 1 1 140px; min-height: 44px; }
+@media (max-width: 720px) {
+  .time-clock { flex-direction: column; align-items: stretch; }
+}
+
 .suggestion-list {
   border-top: 1px dashed var(--color-border);
   padding-top: var(--space-sm);

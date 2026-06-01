@@ -251,6 +251,38 @@ export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    // ── Public-host routing guard (Sprint 9 hotfix) ──────────────────────
+    // client.homesolutionsar.com is a NON-Access custom domain that serves ONLY
+    // the token-gated public surface: the pay/quote SPA shells, their public
+    // APIs, and the Stripe webhook. Everything else — the internal /app SPA, the
+    // full authenticated /api surface, ops/debug/health routes — must 404 here so
+    // an open hostname can never reach internal data. The token is the security
+    // boundary (unguessable random per-invoice/quote), so no Access is needed.
+    //
+    // Additive: fires ONLY on this host. dashboard.* and *.workers.dev fall
+    // through to the existing handler completely unchanged.
+    //
+    // /app/assets/* IS allowed: the public pay.html / quote.html shells load
+    // their JS/CSS bundles from /app/assets/ (without it the pages render blank).
+    // The /app entry itself (/app, /app/index.html) is NOT on the allowlist, so
+    // the internal dashboard SPA stays unreachable on this host.
+    if (url.hostname === "client.homesolutionsar.com") {
+      const p = url.pathname;
+      const allowed =
+        p === "/pay" || p.startsWith("/pay/") ||
+        p === "/quote" || p.startsWith("/quote/") ||
+        p.startsWith("/app/assets/") ||
+        p.startsWith("/api/public/pay/") ||
+        p.startsWith("/api/public/quote/") ||
+        p === "/api/webhooks/stripe";
+      if (!allowed) {
+        return new Response(JSON.stringify({ error: "Not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
     if (url.pathname === "/health") {
       return handleHealth(env);
     }

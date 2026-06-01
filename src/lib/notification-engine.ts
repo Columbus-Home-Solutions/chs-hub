@@ -289,7 +289,7 @@ async function buildMergeContext(env: Env, ctx: TriggerContext): Promise<Record<
     company_name: "Columbus Home Solutions",
     company_phone: "(501) 551-1814",
   };
-  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://chs-hub.homesolutionsar.com").replace(/\/$/, "");
+  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
 
   if (ctx.clientId) {
     const c = await env.DB.prepare(

@@ -94,7 +94,7 @@ export function accruedLateFee(dueDate: string | null, asOf: Date = new Date()):
 
 /** Build the public payment-page URL for a per-invoice payment_token. */
 export function paymentLink(env: Env, token: string): string {
-  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://chs-hub.homesolutionsar.com").replace(/\/$/, "");
+  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
   return `${origin}/pay/${token}`;
 }
 

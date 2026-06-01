@@ -266,6 +266,26 @@ import {
 } from "./routes/billing-cycles.js";
 import { handlePublicPayGet, handlePublicPayIntent } from "./routes/public-pay.js";
 import { handlePortalApi } from "./routes/portal.js";
+import {
+  handleJobChangeOrders,
+  handleChangeOrderCreate,
+  handleChangeOrderUpdate,
+  handleChangeOrderSend,
+  handleChangeOrderReject,
+} from "./routes/change-orders.js";
+import {
+  handleJobSchedule,
+  handleScheduleFeed,
+  handleScheduleCreate,
+  handleScheduleUpdate,
+  handleScheduleDelete,
+} from "./routes/schedule.js";
+import {
+  handleJobPermits,
+  handlePermitCreate,
+  handlePermitUpdate,
+  handlePermitDelete,
+} from "./routes/permits.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -586,6 +606,27 @@ export default {
     if (jobTimeEntries && request.method === "GET") {
       return handleJobTimeEntries(env, decodeURIComponent(jobTimeEntries[1]));
     }
+    // Change orders per job (Sprint 13).
+    const jobChangeOrders = url.pathname.match(/^\/api\/jobs\/([^/]+)\/change-orders$/);
+    if (jobChangeOrders) {
+      const jid = decodeURIComponent(jobChangeOrders[1]);
+      if (request.method === "GET") return handleJobChangeOrders(env, jid);
+      if (request.method === "POST") return handleChangeOrderCreate(request, env, jid);
+    }
+    // Schedule entries per job (Sprint 13).
+    const jobSchedule = url.pathname.match(/^\/api\/jobs\/([^/]+)\/schedule$/);
+    if (jobSchedule) {
+      const jid = decodeURIComponent(jobSchedule[1]);
+      if (request.method === "GET") return handleJobSchedule(env, jid);
+      if (request.method === "POST") return handleScheduleCreate(request, env, jid);
+    }
+    // Permits per job (Sprint 13).
+    const jobPermits = url.pathname.match(/^\/api\/jobs\/([^/]+)\/permits$/);
+    if (jobPermits) {
+      const jid = decodeURIComponent(jobPermits[1]);
+      if (request.method === "GET") return handleJobPermits(env, jid);
+      if (request.method === "POST") return handlePermitCreate(request, env, jid);
+    }
     const jobById = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (jobById) {
       const jid = decodeURIComponent(jobById[1]);
@@ -619,6 +660,39 @@ export default {
       const iid = decodeURIComponent(invoiceById[1]);
       if (request.method === "GET") return handleInvoiceGet(env, iid);
       if (request.method === "PUT") return handleInvoiceUpdate(request, env, iid);
+    }
+
+    // ── Change Orders (Sprint 13) ────────────────────────────────────
+    const coSend = url.pathname.match(/^\/api\/change-orders\/([^/]+)\/send$/);
+    if (coSend && request.method === "POST") {
+      return handleChangeOrderSend(request, env, decodeURIComponent(coSend[1]));
+    }
+    const coReject = url.pathname.match(/^\/api\/change-orders\/([^/]+)\/reject$/);
+    if (coReject && request.method === "POST") {
+      return handleChangeOrderReject(request, env, decodeURIComponent(coReject[1]));
+    }
+    const coById = url.pathname.match(/^\/api\/change-orders\/([^/]+)$/);
+    if (coById && request.method === "PUT") {
+      return handleChangeOrderUpdate(request, env, decodeURIComponent(coById[1]));
+    }
+
+    // ── Scheduling (Sprint 13) ───────────────────────────────────────
+    if (url.pathname === "/api/schedule" && request.method === "GET") {
+      return handleScheduleFeed(env, url);
+    }
+    const scheduleById = url.pathname.match(/^\/api\/schedule\/([^/]+)$/);
+    if (scheduleById) {
+      const sid = decodeURIComponent(scheduleById[1]);
+      if (request.method === "PUT") return handleScheduleUpdate(request, env, sid);
+      if (request.method === "DELETE") return handleScheduleDelete(request, env, sid);
+    }
+
+    // ── Permits (Sprint 13) ──────────────────────────────────────────
+    const permitById = url.pathname.match(/^\/api\/permits\/([^/]+)$/);
+    if (permitById) {
+      const pid = decodeURIComponent(permitById[1]);
+      if (request.method === "PUT") return handlePermitUpdate(request, env, pid);
+      if (request.method === "DELETE") return handlePermitDelete(request, env, pid);
     }
 
     // ── Cost-Plus Billing Cycles (Sprint 11) ────────────────────────

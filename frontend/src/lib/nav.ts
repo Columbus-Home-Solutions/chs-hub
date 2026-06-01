@@ -35,6 +35,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", path: "/", icon: "🏠", enabled: true },
   { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
+  { label: "Schedule", path: "/schedule", icon: "📅", enabled: true },
   { label: "Financial", path: "/financial", icon: "💰", enabled: false },
   { label: "Clients", path: "/clients", icon: "👥", enabled: true },
   { label: "Estimating", path: "/estimating", icon: "📋", enabled: true },

@@ -13,6 +13,9 @@ import { CommunicationModal } from "../clients/ClientDetail";
 import { PhotosTab } from "./PhotosTab";
 import { DailyLogsTab } from "./DailyLogsTab";
 import { FinancialTab } from "./FinancialTab";
+import { ChangeOrdersTab } from "./ChangeOrdersTab";
+import { ScheduleTab } from "./ScheduleTab";
+import { PermitsTab } from "./PermitsTab";
 import { SmartNotesPanel } from "./SmartNotesPanel";
 import { QuickCaptureBar } from "./QuickCaptureBar";
 import { useToast } from "../../store/toast";
@@ -37,24 +40,26 @@ interface DetailProps extends RoutableProps {
 type TabKey =
   | "overview"
   | "tasks"
+  | "schedule"
   | "financial"
+  | "change_orders"
+  | "permits"
   | "photos"
   | "daily_logs"
   | "notes"
-  | "activity"
-  | "schedule"
-  | "change_orders";
+  | "activity";
 
-const TABS: { key: TabKey; label: string; stub?: boolean }[] = [
+const TABS: { key: TabKey; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "tasks", label: "Tasks" },
+  { key: "schedule", label: "Schedule" },
   { key: "financial", label: "Financial" },
+  { key: "change_orders", label: "Change Orders" },
+  { key: "permits", label: "Permits" },
   { key: "photos", label: "Photos" },
   { key: "daily_logs", label: "Daily Logs" },
   { key: "notes", label: "Field Notes" },
   { key: "activity", label: "Activity" },
-  { key: "schedule", label: "Schedule", stub: true },
-  { key: "change_orders", label: "Change Orders", stub: true },
 ];
 
 // Legal status targets from the current status: every later stage (forward-only)
@@ -131,14 +136,18 @@ export function JobDetail({ id }: DetailProps) {
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
+      {tab === "schedule" && id && <ScheduleTab jobId={id} />}
       {tab === "financial" && id && <FinancialTab jobId={id} />}
+      {tab === "change_orders" && id && (
+        <ChangeOrdersTab jobId={id} portalToken={data.job.portal_token} />
+      )}
+      {tab === "permits" && id && <PermitsTab jobId={id} />}
       {tab === "photos" && id && <PhotosTab jobId={id} />}
       {tab === "daily_logs" && id && <DailyLogsTab jobId={id} />}
       {tab === "notes" && id && <SmartNotesPanel jobId={id} />}
       {tab === "activity" && (
         <ActivityTab activity={data.activity} jobId={id} clientId={data.job.client_id} />
       )}
-      {(tab === "schedule" || tab === "change_orders") && <StubTab tab={tab} />}
 
       {id && (
         <QuickCaptureBar
@@ -668,25 +677,6 @@ function ActivityTab({
           </div>
         )}
       </Card>
-    </div>
-  );
-}
-
-// ─── Stubbed tabs (later sprints) ───────────────────────────────────────────────
-
-function StubTab({ tab }: { tab: TabKey }) {
-  const copy: Record<string, { icon: string; title: string; body: string }> = {
-    schedule: { icon: "📅", title: "Scheduling", body: "Trade scheduling and the calendar land in a later sprint." },
-    daily_logs: { icon: "📝", title: "Daily Logs", body: "Field daily logs and voice notes land in a later sprint." },
-    change_orders: { icon: "🧾", title: "Change Orders", body: "Change orders land in a later sprint." },
-    files: { icon: "📸", title: "Files & Photos", body: "Job files and progress photos land in a later sprint." },
-  };
-  const c = copy[tab] ?? { icon: "🚧", title: "Coming soon", body: "This section is not available yet." };
-  return (
-    <div class="empty-state">
-      <div class="empty-state__icon">{c.icon}</div>
-      <div class="empty-state__title">{c.title}</div>
-      <div>{c.body}</div>
     </div>
   );
 }

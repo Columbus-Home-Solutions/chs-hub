@@ -398,6 +398,14 @@ Internal cost breakdown — NOT visible to client.
 | triggered_by_note_id | TEXT | REFERENCES smart_notes(id) | |
 | created_by | TEXT | | |
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
+| applied_at | TEXT | | Set exactly once when the signed CO is applied (idempotency guard) — see migration 0035 |
+| end_date_extension_days | INTEGER | DEFAULT 0 | Days added to `jobs.estimated_end_date` on apply |
+| signed_name | TEXT | | Client's typed name captured at portal signature |
+| signed_ip | TEXT | | Client IP captured at portal signature |
+
+**Indexes:** `idx_change_orders_job_id (job_id)`, `idx_change_orders_job_number_unique (job_id, change_order_number)` UNIQUE — enforces sequential per-job numbering (added in migration 0035).
+
+`applied_at`/`end_date_extension_days`/`signed_name`/`signed_ip` and the unique index were added in **0035_change_orders_apply.sql** to support the digital-signature → auto-apply flow. The atomic `UPDATE ... WHERE applied_at IS NULL` makes `applyChangeOrder()` exactly-once even under concurrent portal signatures.
 
 ### schedule_entries
 
@@ -969,6 +977,7 @@ CREATE INDEX idx_dlq_status ON dead_letter_queue(status);
 
 -- Misc
 CREATE INDEX idx_change_orders_job_id ON change_orders(job_id);
+CREATE UNIQUE INDEX idx_change_orders_job_number_unique ON change_orders(job_id, change_order_number); -- 0035
 CREATE INDEX idx_permits_job_id ON permits(job_id);
 CREATE INDEX idx_warranties_job_id ON warranties(job_id);
 CREATE INDEX idx_daily_logs_job_id ON daily_logs(job_id);
@@ -1096,6 +1105,8 @@ Migrations continue from the existing chs-hub sequence (0011+). Recommended appr
 0020_indexes.sql             — All indexes
 0021_views.sql               — All computed views
 0022_seed_data.sql           — Default system_settings, notification_templates, estimate_templates
+...
+0035_change_orders_apply.sql — change_orders: applied_at, end_date_extension_days, signed_name, signed_ip; UNIQUE(job_id, change_order_number); change_order_sent/_approved templates (Sprint 13)
 ```
 
 Each migration is idempotent where possible (CREATE TABLE IF NOT EXISTS, etc.) and tested with `npm run db:migrate:remote` after deployment.

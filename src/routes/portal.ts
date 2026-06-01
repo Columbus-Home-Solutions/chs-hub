@@ -33,6 +33,7 @@ import { handleCycleList } from "./billing-cycles.js";
 import { buildReconciliationReport, type CycleForReport } from "../lib/cost-plus.js";
 import { handlePhotoStream } from "./photos.js";
 import { createOwnerInApp } from "../lib/notification-engine.js";
+import { applyChangeOrder } from "./change-orders.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -524,50 +525,153 @@ async function handleMessagesPost(request: Request, env: Env, token: string): Pr
   );
 }
 
-// ─── GET /api/portal/:token/schedule — S13 SEAM (empty state, no write path) ────
-// TODO(Sprint 13): Schedule module (schedule_entries CRUD + trade calendar). This
-// read returns existing rows (likely none) so the portal tab shows "coming soon".
+// ─── GET /api/portal/:token/schedule — read-only client schedule (S13) ─────────
+// Clients see upcoming/scheduled work (date, trade/work, status, times) but have
+// NO write path (rule #6). Sub identity is intentionally not exposed to clients.
 
-async function handleScheduleSeam(env: Env, token: string): Promise<Response> {
+async function handleSchedule(env: Env, token: string): Promise<Response> {
   const job = await resolveJob(env, token);
   if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
   const rows = (
     await env.DB.prepare(
       `SELECT id, scheduled_date, trade_or_work, start_time, end_time, status
-         FROM schedule_entries WHERE job_id = ? ORDER BY scheduled_date ASC`,
+         FROM schedule_entries WHERE job_id = ?
+        ORDER BY scheduled_date ASC, start_time ASC`,
     )
       .bind(job.id)
-      .all<Record<string, unknown>>()
+      .all<{
+        id: string;
+        scheduled_date: string | null;
+        trade_or_work: string | null;
+        start_time: string | null;
+        end_time: string | null;
+        status: string | null;
+      }>()
   ).results ?? [];
-  return json({ ok: true, coming_soon: true, owning_sprint: "S13", entries: rows });
+  return json({
+    ok: true,
+    entries: rows.map((e) => ({
+      id: e.id,
+      scheduled_date: e.scheduled_date,
+      trade_or_work: e.trade_or_work,
+      start_time: e.start_time,
+      end_time: e.end_time,
+      status: e.status ?? "scheduled",
+    })),
+  });
 }
 
-// ─── GET /api/portal/:token/change-orders — S13 SEAM (empty state) ─────────────
-// TODO(Sprint 13): Change Order module (creation/delivery + digital signature).
+// ─── GET /api/portal/:token/change-orders — client CO list + sign view (S13) ───
 
-async function handleChangeOrdersSeam(env: Env, token: string): Promise<Response> {
+async function handleChangeOrders(env: Env, token: string): Promise<Response> {
   const job = await resolveJob(env, token);
   if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
   const rows = (
     await env.DB.prepare(
-      `SELECT id, change_order_number, title, description, amount, status, requested_date, approved_date
-         FROM change_orders WHERE job_id = ? ORDER BY COALESCE(requested_date, created_at) ASC`,
+      `SELECT id, change_order_number, title, description, amount, status,
+              requested_date, approved_date, applied_at, end_date_extension_days, signed_name
+         FROM change_orders
+        WHERE job_id = ? AND status != 'draft'
+        ORDER BY change_order_number ASC`,
     )
       .bind(job.id)
-      .all<Record<string, unknown>>()
+      .all<{
+        id: string;
+        change_order_number: number;
+        title: string | null;
+        description: string | null;
+        amount: number | null;
+        status: string | null;
+        requested_date: string | null;
+        approved_date: string | null;
+        applied_at: string | null;
+        end_date_extension_days: number | null;
+        signed_name: string | null;
+      }>()
   ).results ?? [];
-  return json({ ok: true, coming_soon: true, owning_sprint: "S13", change_orders: rows });
+  return json({
+    ok: true,
+    on_hold: (job.conversion_reversed ?? 0) === 1,
+    change_orders: rows.map((c) => ({
+      id: c.id,
+      change_order_number: c.change_order_number,
+      display: `CO-${c.change_order_number}`,
+      title: c.title,
+      description: c.description,
+      amount: round2(c.amount ?? 0),
+      is_credit: (c.amount ?? 0) < 0,
+      status: c.status,
+      requested_date: c.requested_date,
+      approved_date: c.approved_date,
+      end_date_extension_days: c.end_date_extension_days ?? 0,
+      signed_name: c.signed_name,
+      // The client can sign a 'sent' CO. Approved/rejected render read-only.
+      can_sign: c.status === "sent" && (job.conversion_reversed ?? 0) !== 1,
+    })),
+  });
 }
 
-// ─── POST /api/portal/:token/change-orders/:id/sign — S13 SEAM (501) ───────────
-// TODO(Sprint 13): digital signature capture for change orders.
+// ─── POST /api/portal/:token/change-orders/:id/sign — capture + auto-apply (S13)
+// The client signs inside the portal under the job portal_token (resolved open
+// question). Idempotent: a double-submit / refresh stores the signature once and
+// applies the CO exactly once (applyChangeOrder claims the apply atomically).
 
-function handleChangeOrderSignSeam(): Response {
-  return err(
-    501,
-    "not_implemented",
-    "Change-order signing arrives in Sprint 13 (Change Orders + digital signature).",
-  );
+async function handleChangeOrderSign(
+  request: Request,
+  env: Env,
+  token: string,
+  coId: string,
+): Promise<Response> {
+  const job = await resolveJob(env, token);
+  if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
+  if ((job.conversion_reversed ?? 0) === 1) {
+    return err(422, "job_on_hold", "This project is on hold — please contact us before signing.");
+  }
+
+  const co = await env.DB.prepare(
+    "SELECT id, job_id, status, applied_at, client_signature FROM change_orders WHERE id = ?",
+  )
+    .bind(coId)
+    .first<{ id: string; job_id: string | null; status: string | null; applied_at: string | null; client_signature: string | null }>();
+  if (!co || co.job_id !== job.id) return err(404, "not_found", "Change order not found for this project.");
+
+  // Already signed/approved → idempotent no-op; return the applied result.
+  if (co.status === "approved" || co.applied_at) {
+    const res = await applyChangeOrder(env, coId); // fast no-op path
+    return json({ ok: true, already_applied: true, change_order: res?.change_order ?? null });
+  }
+  if (co.status !== "sent") {
+    return err(409, "invalid_state", `This change order can't be signed from status '${co.status}'.`);
+  }
+
+  let body: { signature?: unknown; signed_name?: unknown } = {};
+  try {
+    body = (await request.json()) as { signature?: unknown; signed_name?: unknown };
+  } catch {
+    return err(400, "bad_request", "Body must be JSON.");
+  }
+  const signature = typeof body.signature === "string" ? body.signature.trim() : "";
+  if (!signature) return err(400, "signature_required", "A typed signature (your full name) is required.");
+  const signedName = typeof body.signed_name === "string" && body.signed_name.trim() ? body.signed_name.trim() : signature;
+  const ip = request.headers.get("CF-Connecting-IP") ?? request.headers.get("x-forwarded-for") ?? "";
+
+  // Store the signature (only while still 'sent' and unapplied). Safe to repeat.
+  await env.DB.prepare(
+    `UPDATE change_orders SET client_signature = ?, signed_name = ?, signed_ip = ?
+      WHERE id = ? AND status = 'sent' AND applied_at IS NULL`,
+  )
+    .bind(signature, signedName, ip, coId)
+    .run();
+
+  // Auto-apply exactly once. Fires change_order_approved (SIMULATE) inside.
+  try {
+    const res = await applyChangeOrder(env, coId);
+    return json({ ok: true, already_applied: res?.already_applied ?? false, change_order: res?.change_order ?? null });
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg === "signature_required") return err(400, "signature_required", "Signature could not be recorded.");
+    return err(500, "apply_failed", "We couldn't record your signature. Please try again.");
+  }
 }
 
 // ─── GET /api/portal/:token/documents — read-only contract + linked docs ───────
@@ -630,7 +734,9 @@ export async function handlePortalApi(
   }
 
   const coSign = p.match(/^\/api\/portal\/([^/]+)\/change-orders\/([^/]+)\/sign$/);
-  if (coSign && method === "POST") return handleChangeOrderSignSeam();
+  if (coSign && method === "POST") {
+    return handleChangeOrderSign(request, env, decodeURIComponent(coSign[1]), decodeURIComponent(coSign[2]));
+  }
 
   const pay = p.match(/^\/api\/portal\/([^/]+)\/pay\/([^/]+)$/);
   if (pay && method === "POST") {
@@ -653,11 +759,11 @@ export async function handlePortalApi(
   }
 
   const schedule = p.match(/^\/api\/portal\/([^/]+)\/schedule$/);
-  if (schedule && method === "GET") return handleScheduleSeam(env, decodeURIComponent(schedule[1]));
+  if (schedule && method === "GET") return handleSchedule(env, decodeURIComponent(schedule[1]));
 
   const changeOrders = p.match(/^\/api\/portal\/([^/]+)\/change-orders$/);
   if (changeOrders && method === "GET") {
-    return handleChangeOrdersSeam(env, decodeURIComponent(changeOrders[1]));
+    return handleChangeOrders(env, decodeURIComponent(changeOrders[1]));
   }
 
   const documents = p.match(/^\/api\/portal\/([^/]+)\/documents$/);

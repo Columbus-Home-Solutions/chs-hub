@@ -103,6 +103,31 @@ export interface PortalMessage {
   created_at: string;
 }
 
+export interface PortalScheduleEntry {
+  id: string;
+  scheduled_date: string | null;
+  trade_or_work: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  status: string;
+}
+
+export interface PortalChangeOrder {
+  id: string;
+  change_order_number: number;
+  display: string;
+  title: string | null;
+  description: string | null;
+  amount: number;
+  is_credit: boolean;
+  status: string | null;
+  requested_date: string | null;
+  approved_date: string | null;
+  end_date_extension_days: number;
+  signed_name: string | null;
+  can_sign: boolean;
+}
+
 export interface ReconCategory {
   category: string;
   label: string;

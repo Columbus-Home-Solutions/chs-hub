@@ -85,6 +85,8 @@ export interface TriggerContext {
   jobId?: string | null;
   estimateRequestId?: string | null;
   estimateId?: string | null;
+  /** Subcontractor recipient (Sprint 13 sub_scheduled) — resolves sub phone. */
+  subId?: string | null;
   /** Logical instance key for dedupe (e.g. "follow_up_1", an appointment ISO date). */
   instanceKey?: string | null;
   /** Explicit ISO time the row becomes due. Defaults to delay math, then now. */
@@ -398,6 +400,22 @@ async function resolveRecipient(
       return c.email ? { name, contact: c.email, userId: null } : null;
     }
     return { name, contact: c.email ?? c.phone ?? "", userId: null };
+  }
+
+  if (tpl.recipient_type === "subcontractor") {
+    // Sprint 13: schedule-entry sub-notify. The sub's phone is the SMS target;
+    // stays SIMULATE (dispatch mode unchanged). No sub on file → no recipient.
+    if (!ctx.subId) return null;
+    const s = await env.DB.prepare(
+      "SELECT COALESCE(company_name, company) AS name, COALESCE(contact_name, primary_contact) AS contact_name, phone, email FROM subcontractors WHERE id = ?",
+    )
+      .bind(ctx.subId)
+      .first<{ name: string | null; contact_name: string | null; phone: string | null; email: string | null }>();
+    if (!s) return null;
+    const name = (s.contact_name || s.name || "Subcontractor").trim();
+    if (tpl.channel === "sms") return s.phone ? { name, contact: s.phone, userId: null } : null;
+    if (tpl.channel === "email") return s.email ? { name, contact: s.email, userId: null } : null;
+    return { name, contact: s.phone ?? s.email ?? "", userId: null };
   }
 
   // owner / internal → the owner user (the only role that receives system mail).
@@ -969,11 +987,55 @@ export async function triggerJobConversionNotifications(env: Env, jobId: string)
 // enqueue yet; wiring happens when the source module ships. The templates for
 // each already exist in the catalog (seam-only rows).
 
-/** Sprint 13 (scheduling): fire when a schedule entry assigns/changes/cancels a sub. */
-export function triggerSubScheduled(_env: Env, _scheduleEntryId: string): void {
-  // TODO(Sprint 13): schedule-entry CRUD does not exist yet (Schedule tab is a
-  // Sprint 6 stub). When POST /api/jobs/:id/schedule lands, call
-  // triggerNotification(env, 'sub_scheduled', { jobId, ... }).
+/**
+ * Sprint 13 (scheduling) — WIRED. Fire the sub-scheduled SMS when a schedule
+ * entry with a sub_id is created (or first gains a sub). Fires EXACTLY ONCE per
+ * entry: the caller guards on schedule_entries.notification_sent and flips it to
+ * 1 after this returns, so edits to an already-notified entry never re-spam.
+ * Idempotent at the queue layer too (dedupe_key = sub_scheduled:<job>:<entry>).
+ * SIMULATE only — dispatch mode unchanged. Non-fatal on error so a notify hiccup
+ * never blocks the schedule write.
+ */
+export async function triggerSubScheduled(env: Env, scheduleEntryId: string): Promise<TriggerResult> {
+  const result: TriggerResult = { enqueued: 0, skipped: 0, reasons: [] };
+  try {
+    const entry = await env.DB.prepare(
+      `SELECT e.id, e.job_id, e.sub_id, e.scheduled_date, e.trade_or_work, e.start_time, e.end_time, e.notes,
+              j.client_id,
+              TRIM(COALESCE(j.property_address,'') || ', ' || COALESCE(j.property_city,'') || ', ' ||
+                   COALESCE(j.property_state,'') || ' ' || COALESCE(j.property_zip,'')) AS address
+         FROM schedule_entries e JOIN jobs j ON j.id = e.job_id
+        WHERE e.id = ?`,
+    )
+      .bind(scheduleEntryId)
+      .first<{
+        id: string; job_id: string; sub_id: string | null; scheduled_date: string | null;
+        trade_or_work: string | null; start_time: string | null; end_time: string | null;
+        notes: string | null; client_id: string | null; address: string | null;
+      }>();
+    if (!entry || !entry.sub_id) {
+      result.reasons.push("no_sub");
+      return result;
+    }
+    return await triggerNotification(env, "sub_scheduled", {
+      jobId: entry.job_id,
+      clientId: entry.client_id,
+      subId: entry.sub_id,
+      instanceKey: entry.id, // one notify per schedule entry (idempotent)
+      merge: {
+        trade_or_work: entry.trade_or_work ?? "scheduled work",
+        property_address: (entry.address ?? "").replace(/^[,\s]+|[,\s]+$/g, "") || "the job site",
+        scheduled_date: entry.scheduled_date ? formatDate(entry.scheduled_date) : "",
+        start_time: entry.start_time ?? "",
+        end_time: entry.end_time ?? "",
+        notes: entry.notes ?? "",
+      },
+    });
+  } catch (err) {
+    console.error("[notify] triggerSubScheduled failed:", (err as Error).message);
+    result.reasons.push(`error:${(err as Error).message}`);
+    return result;
+  }
 }
 /**
  * Sprint 9 (invoicing) — WIRED. Fire the payment receipt on every recorded
@@ -1049,6 +1111,54 @@ export async function triggerInvoiceSent(
     console.error("[notify] triggerInvoiceSent failed:", (err as Error).message);
   }
 }
+/**
+ * Sprint 13 (change orders) — fire the CO delivery notice when a draft CO is
+ * sent to the client (POST /api/change-orders/:id/send). SIMULATE; keyed on the
+ * CO id so re-sending is idempotent. The client signs inside the portal.
+ */
+export async function triggerChangeOrderSent(
+  env: Env,
+  args: { jobId: string; clientId: string | null; coId: string; coNumber: number; title: string; amount: number },
+): Promise<void> {
+  try {
+    await triggerNotification(env, "change_order_sent", {
+      jobId: args.jobId,
+      clientId: args.clientId,
+      instanceKey: `sent:${args.coId}`,
+      merge: {
+        change_order_number: String(args.coNumber),
+        change_order_title: args.title,
+        change_order_amount: usd(args.amount),
+      },
+    });
+  } catch (err) {
+    console.error("[notify] triggerChangeOrderSent failed:", (err as Error).message);
+  }
+}
+
+/**
+ * Sprint 13 — fire the CO approval receipt when a signed CO is applied. SIMULATE;
+ * keyed on the CO id so a portal double-submit/refresh never double-notifies.
+ */
+export async function triggerChangeOrderApproved(
+  env: Env,
+  args: { jobId: string; clientId: string | null; coId: string; coNumber: number; title: string },
+): Promise<void> {
+  try {
+    await triggerNotification(env, "change_order_approved", {
+      jobId: args.jobId,
+      clientId: args.clientId,
+      instanceKey: `approved:${args.coId}`,
+      merge: {
+        change_order_number: String(args.coNumber),
+        change_order_title: args.title,
+      },
+    });
+  } catch (err) {
+    console.error("[notify] triggerChangeOrderApproved failed:", (err as Error).message);
+  }
+}
+
 /** Sprint 8 (photos): weekly photo summary is a cron over active jobs' photos. */
 export function triggerWeeklyPhotoSummary(_env: Env): void {
   // TODO(Sprint 8): weekly_photo_summary depends on the photo timeline per job.

@@ -1,0 +1,481 @@
+/**
+ * Change Orders — Sprint 13 (Job Management §3, §4.5, §6). Active-job only.
+ *
+ *   GET  /api/jobs/:id/change-orders      list COs for a job
+ *   POST /api/jobs/:id/change-orders      create (draft); CO number allocated in-tx
+ *   PUT  /api/change-orders/:id           edit while draft
+ *   POST /api/change-orders/:id/send      draft → sent (fires change_order_sent, SIMULATE)
+ *   POST /api/change-orders/:id/reject    sent → rejected
+ *
+ * The headline rule (§6 #1,#2,#4): a CO affects the job ONLY after client
+ * signature, and applies EXACTLY ONCE. The client signs inside the portal under
+ * the job portal_token (resolved carry-over open question) — there is no
+ * internal "approve" endpoint and no per-CO public token. applyChangeOrder()
+ * (exported, used by the portal sign handler) is the single idempotent apply
+ * path: it claims the apply atomically via `applied_at IS NULL`, then branches
+ * the billing effect on jobs.billing_model. See applyChangeOrder for the
+ * replay-safety contract.
+ */
+
+import type { Env } from "../env.js";
+import { guard } from "../middleware/guard.js";
+import {
+  triggerChangeOrderSent,
+  triggerChangeOrderApproved,
+} from "../lib/notification-engine.js";
+
+const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
+
+// ─── helpers (match jobs-api.ts conventions) ─────────────────────────────────
+
+function json(body: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("content-type", "application/json; charset=utf-8");
+  headers.set("cache-control", "no-store");
+  return new Response(JSON.stringify(body), { ...init, headers });
+}
+function err(status: number, error: string, details?: string): Response {
+  return json({ error, details }, { status });
+}
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
+  try {
+    return (await request.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+function str(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+}
+function num(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+async function logAudit(
+  env: Env,
+  userEmail: string,
+  action: string,
+  entityId: string,
+  details: unknown,
+): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, ?, 'change_order', ?, ?, datetime('now'))",
+  )
+    .bind(crypto.randomUUID(), userEmail, action, entityId, JSON.stringify(details))
+    .run();
+}
+
+interface ChangeOrderRow {
+  id: string;
+  job_id: string;
+  change_order_number: number;
+  title: string | null;
+  description: string | null;
+  amount: number | null;
+  status: string | null;
+  requested_date: string | null;
+  approved_date: string | null;
+  applied_at: string | null;
+  end_date_extension_days: number | null;
+  client_signature: string | null;
+  signed_name: string | null;
+  signed_ip: string | null;
+  triggered_by_note_id: string | null;
+  created_by: string | null;
+  created_at: string | null;
+}
+
+function shape(co: ChangeOrderRow, billingModel: string | null) {
+  const amount = Math.round((co.amount ?? 0) * 100) / 100;
+  // A fixed/trade CO with a positive amount surfaces a suggested (owner-confirmed)
+  // change_order invoice on the Financial tab once approved. Cost-plus never does
+  // (cost bills through the cycle). A credit (negative) CO never bills.
+  const billable =
+    (billingModel === "fixed_price" || billingModel === "trade_by_trade") && amount > 0;
+  return {
+    id: co.id,
+    job_id: co.job_id,
+    change_order_number: co.change_order_number,
+    display: `CO-${co.change_order_number}`,
+    title: co.title,
+    description: co.description,
+    amount,
+    is_credit: amount < 0,
+    status: co.status,
+    requested_date: co.requested_date,
+    approved_date: co.approved_date,
+    applied_at: co.applied_at,
+    end_date_extension_days: co.end_date_extension_days ?? 0,
+    signed_name: co.signed_name,
+    signed_at: co.approved_date,
+    has_signature: !!co.client_signature,
+    triggered_by_note_id: co.triggered_by_note_id,
+    billing_effect:
+      billingModel === "cost_plus"
+        ? "cost_plus_projection"
+        : billable
+          ? "fixed_invoice_suggested"
+          : amount < 0
+            ? "credit_no_invoice"
+            : "none",
+    created_at: co.created_at,
+  };
+}
+
+const CO_COLUMNS = `id, job_id, change_order_number, title, description, amount, status,
+  requested_date, approved_date, applied_at, end_date_extension_days, client_signature,
+  signed_name, signed_ip, triggered_by_note_id, created_by, created_at`;
+
+async function loadCo(env: Env, id: string): Promise<ChangeOrderRow | null> {
+  return env.DB.prepare(`SELECT ${CO_COLUMNS} FROM change_orders WHERE id = ?`)
+    .bind(id)
+    .first<ChangeOrderRow>();
+}
+
+interface JobCtx {
+  id: string;
+  client_id: string | null;
+  billing_model: string | null;
+  target_end_date: string | null;
+  conversion_reversed: number | null;
+}
+async function loadJob(env: Env, id: string): Promise<JobCtx | null> {
+  return env.DB.prepare(
+    "SELECT id, client_id, billing_model, target_end_date, conversion_reversed FROM jobs WHERE id = ? AND source = 'estimate'",
+  )
+    .bind(id)
+    .first<JobCtx>();
+}
+
+// ─── GET /api/jobs/:id/change-orders ─────────────────────────────────────────
+
+export async function handleJobChangeOrders(env: Env, jobId: string): Promise<Response> {
+  const job = await loadJob(env, jobId);
+  if (!job) return err(404, "not_found", "Job not found.");
+  const rows = (
+    await env.DB.prepare(
+      `SELECT ${CO_COLUMNS} FROM change_orders WHERE job_id = ?
+        ORDER BY change_order_number ASC`,
+    )
+      .bind(jobId)
+      .all<ChangeOrderRow>()
+  ).results ?? [];
+  return json({
+    job_id: jobId,
+    billing_model: job.billing_model,
+    change_orders: rows.map((r) => shape(r, job.billing_model)),
+  });
+}
+
+// ─── POST /api/jobs/:id/change-orders (create draft) ─────────────────────────
+
+export async function handleChangeOrderCreate(request: Request, env: Env, jobId: string): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const job = await loadJob(env, jobId);
+  if (!job) return err(404, "not_found", "Job not found.");
+  if ((job.conversion_reversed ?? 0) === 1) {
+    return err(409, "job_reversed", "This job's conversion was reversed; change orders are blocked.");
+  }
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON.");
+  const title = str(body.title);
+  if (!title) return err(400, "bad_request", "title is required.");
+  const amount = num(body.amount);
+  if (amount == null) return err(400, "bad_request", "amount is required (use a negative value for a credit).");
+  // description is NOT NULL on the shipped table — default to the title.
+  const description = str(body.description) ?? title;
+  const extDays = Math.max(0, Math.trunc(num(body.end_date_extension_days) ?? 0));
+  const triggeredByNoteId = str(body.triggered_by_note_id);
+
+  const id = crypto.randomUUID();
+  // change_order_number allocated INSIDE the INSERT via COALESCE(MAX)+1, backed
+  // by the UNIQUE index idx_change_orders_job_number_unique. A concurrent racer
+  // that picks the same number fails the UNIQUE constraint cleanly; we retry.
+  // (Mirrors the invoice_number pattern — no outside MAX()+1.)
+  const insertSql = `INSERT INTO change_orders
+      (id, job_id, change_order_number, title, description, amount, status,
+       requested_date, end_date_extension_days, triggered_by_note_id, created_by, created_at)
+    SELECT ?, ?, COALESCE((SELECT MAX(change_order_number) FROM change_orders WHERE job_id = ?), 0) + 1,
+           ?, ?, ?, 'draft', datetime('now'), ?, ?, ?, datetime('now')`;
+  let attempts = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      await env.DB.prepare(insertSql)
+        .bind(id, jobId, jobId, title, description, amount, extDays, triggeredByNoteId, user.email)
+        .run();
+      break;
+    } catch (e) {
+      const msg = (e as Error).message ?? "";
+      if (/UNIQUE/i.test(msg) && msg.includes("change_order") && attempts < 4) {
+        attempts++;
+        continue;
+      }
+      throw e;
+    }
+  }
+
+  const co = await loadCo(env, id);
+  await logAudit(env, user.email, "change_order_created", id, {
+    change_order_number: co?.change_order_number,
+    job_id: jobId,
+    amount,
+  });
+  return json({ change_order: shape(co!, job.billing_model) }, { status: 201 });
+}
+
+// ─── PUT /api/change-orders/:id (edit while draft) ───────────────────────────
+
+export async function handleChangeOrderUpdate(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const co = await loadCo(env, id);
+  if (!co) return err(404, "not_found", "Change order not found.");
+  if (co.status !== "draft") {
+    return err(409, "not_editable", `A '${co.status}' change order can't be edited (only drafts).`);
+  }
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON.");
+
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  if ("title" in body) {
+    const t = str(body.title);
+    if (!t) return err(400, "bad_request", "title cannot be empty.");
+    sets.push("title = ?");
+    binds.push(t);
+  }
+  if ("description" in body) {
+    // description is NOT NULL — fall back to the (possibly updated) title.
+    sets.push("description = ?");
+    binds.push(str(body.description) ?? str(body.title) ?? co.title ?? "");
+  }
+  if ("amount" in body) {
+    const a = num(body.amount);
+    if (a == null) return err(400, "bad_request", "amount must be a number.");
+    sets.push("amount = ?");
+    binds.push(a);
+  }
+  if ("end_date_extension_days" in body) {
+    sets.push("end_date_extension_days = ?");
+    binds.push(Math.max(0, Math.trunc(num(body.end_date_extension_days) ?? 0)));
+  }
+  if (sets.length === 0) return err(400, "bad_request", "No editable fields supplied.");
+
+  binds.push(id);
+  await env.DB.prepare(`UPDATE change_orders SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+  await logAudit(env, user.email, "change_order_updated", id, { fields: Object.keys(body) });
+
+  const job = await loadJob(env, co.job_id);
+  return json({ change_order: shape((await loadCo(env, id))!, job?.billing_model ?? null) });
+}
+
+// ─── POST /api/change-orders/:id/send (draft → sent) ─────────────────────────
+
+export async function handleChangeOrderSend(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const co = await loadCo(env, id);
+  if (!co) return err(404, "not_found", "Change order not found.");
+  if (co.status === "sent") {
+    // Idempotent re-send: re-fire the (dedupe-keyed) notice, return current state.
+    const job = await loadJob(env, co.job_id);
+    await triggerChangeOrderSent(env, {
+      jobId: co.job_id,
+      clientId: job?.client_id ?? null,
+      coId: co.id,
+      coNumber: co.change_order_number,
+      title: co.title ?? "Change order",
+      amount: co.amount ?? 0,
+    });
+    return json({ change_order: shape(co, job?.billing_model ?? null) });
+  }
+  if (co.status !== "draft") {
+    return err(409, "invalid_state", `A '${co.status}' change order can't be sent.`);
+  }
+
+  await env.DB.prepare(
+    "UPDATE change_orders SET status = 'sent', requested_date = COALESCE(requested_date, datetime('now')) WHERE id = ? AND status = 'draft'",
+  )
+    .bind(id)
+    .run();
+
+  const job = await loadJob(env, co.job_id);
+  await triggerChangeOrderSent(env, {
+    jobId: co.job_id,
+    clientId: job?.client_id ?? null,
+    coId: co.id,
+    coNumber: co.change_order_number,
+    title: co.title ?? "Change order",
+    amount: co.amount ?? 0,
+  });
+  await logAudit(env, user.email, "change_order_sent", id, { change_order_number: co.change_order_number });
+
+  return json({ change_order: shape((await loadCo(env, id))!, job?.billing_model ?? null) });
+}
+
+// ─── POST /api/change-orders/:id/reject (sent → rejected) ────────────────────
+
+export async function handleChangeOrderReject(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const co = await loadCo(env, id);
+  if (!co) return err(404, "not_found", "Change order not found.");
+  if (co.status === "rejected") {
+    const job = await loadJob(env, co.job_id);
+    return json({ change_order: shape(co, job?.billing_model ?? null) });
+  }
+  if (co.status !== "sent" && co.status !== "draft") {
+    return err(409, "invalid_state", `A '${co.status}' change order can't be rejected.`);
+  }
+  await env.DB.prepare("UPDATE change_orders SET status = 'rejected' WHERE id = ?").bind(id).run();
+  await logAudit(env, user.email, "change_order_rejected", id, { change_order_number: co.change_order_number });
+
+  const job = await loadJob(env, co.job_id);
+  return json({ change_order: shape((await loadCo(env, id))!, job?.billing_model ?? null) });
+}
+
+// ─── applyChangeOrder — the single idempotent apply path (the headline) ──────
+
+export interface ApplyResult {
+  ok: boolean;
+  already_applied: boolean;
+  change_order: ReturnType<typeof shape>;
+}
+
+/**
+ * Apply a signed CO to its job EXACTLY ONCE. Called by the portal sign handler
+ * after the client signature is stored. Replay-safe by construction:
+ *
+ *   1. Fast no-op if applied_at is already set (a refresh/double-submit returns
+ *      the already-applied result, never re-applies).
+ *   2. Signature gate (§6 #1): refuses to apply a CO with no client_signature.
+ *   3. ATOMIC CLAIM: `UPDATE … SET applied_at = now WHERE id = ? AND applied_at
+ *      IS NULL`. Exactly one caller wins (meta.changes === 1); a racing second
+ *      caller sees 0 changes and returns the already-applied result. This is the
+ *      same discipline as the invoice_number UNIQUE retry and the Stripe webhook
+ *      dedupe — the apply-anchor is the idempotency key.
+ *   4. Side effects common to all billing models (only after the claim wins):
+ *      task group + ≥1 task, optional target_end_date bump, audit row.
+ *   5. Billing effect branches on jobs.billing_model:
+ *        fixed_price / trade_by_trade → contract_total += amount; a positive CO
+ *          surfaces a suggested (owner-confirmed) change_order invoice on the
+ *          Financial tab (computeSuggestions). A credit reduces contract_total
+ *          and bills nothing.
+ *        cost_plus → contract_total revised as the (informational) projection
+ *          only; NO invoice — the added scope's actual cost flows through the
+ *          next bi-weekly reconciliation (computeJobActuals → calcCycleFees).
+ *          Generating a change_order invoice here would double-bill (rule #4).
+ */
+export async function applyChangeOrder(env: Env, coId: string): Promise<ApplyResult | null> {
+  const co = await loadCo(env, coId);
+  if (!co) return null;
+  const job = await loadJob(env, co.job_id);
+  if (!job) return null;
+
+  // (1) Already applied → replay-safe no-op.
+  if (co.applied_at) {
+    return { ok: true, already_applied: true, change_order: shape(co, job.billing_model) };
+  }
+  // (2) Signature gate — no signature, no effect (§6 #1).
+  if (!co.client_signature) {
+    throw new Error("signature_required");
+  }
+  if (co.status === "rejected") {
+    throw new Error("rejected");
+  }
+
+  const now = new Date().toISOString();
+  // (3) Atomic claim of the apply. Only the winner proceeds to side effects.
+  const claim = await env.DB.prepare(
+    `UPDATE change_orders
+        SET status = 'approved',
+            approved_date = COALESCE(approved_date, ?),
+            applied_at = ?
+      WHERE id = ? AND applied_at IS NULL`,
+  )
+    .bind(now, now, coId)
+    .run();
+  if ((claim.meta?.changes ?? 0) === 0) {
+    // Lost the race (concurrent apply) — return the now-applied state.
+    const fresh = await loadCo(env, coId);
+    return { ok: true, already_applied: true, change_order: shape(fresh!, job.billing_model) };
+  }
+
+  const amount = Math.round((co.amount ?? 0) * 100) / 100;
+  const extDays = Math.max(0, Math.trunc(co.end_date_extension_days ?? 0));
+
+  // (4a) Optional target_end_date bump (§4.5 "extends target end date if specified").
+  if (extDays > 0 && job.target_end_date) {
+    await env.DB.prepare(
+      "UPDATE jobs SET target_end_date = date(target_end_date, ?) WHERE id = ?",
+    )
+      .bind(`+${extDays} days`, job.id)
+      .run();
+  }
+
+  // (4b) Track the work: a task group "Change Order N: <title>" with one task.
+  const groupName = `Change Order ${co.change_order_number}: ${co.title ?? "Approved change"}`;
+  const maxRow = await env.DB.prepare(
+    "SELECT COALESCE(MAX(task_group_order), -1) AS m FROM tasks WHERE job_id = ?",
+  )
+    .bind(job.id)
+    .first<{ m: number }>();
+  const groupOrder = (maxRow?.m ?? -1) + 1;
+  await env.DB.prepare(
+    `INSERT INTO tasks (id, job_id, task_group, task_group_order, title, status, notes, sort_order, is_punch_list, created_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, 0, 0, datetime('now'))`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      job.id,
+      groupName,
+      groupOrder,
+      co.title ?? "Complete approved change-order work",
+      co.description,
+    )
+    .run();
+
+  // (4c/5) Billing effect — both models revise contract_total; only fixed/trade
+  // (positive) surfaces an invoice suggestion (handled in computeSuggestions).
+  await env.DB.prepare("UPDATE jobs SET contract_total = COALESCE(contract_total, 0) + ? WHERE id = ?")
+    .bind(amount, job.id)
+    .run();
+
+  // (4d) Audit.
+  await logAudit(env, "system@portal-sign", "change_order_applied", coId, {
+    change_order_number: co.change_order_number,
+    job_id: job.id,
+    billing_model: job.billing_model,
+    amount,
+    end_date_extension_days: extDays,
+    task_group: groupName,
+    invoice_suggested:
+      (job.billing_model === "fixed_price" || job.billing_model === "trade_by_trade") && amount > 0,
+  });
+
+  // Approval receipt (SIMULATE, dedupe-keyed on the CO id).
+  await triggerChangeOrderApproved(env, {
+    jobId: job.id,
+    clientId: job.client_id,
+    coId: co.id,
+    coNumber: co.change_order_number,
+    title: co.title ?? "Change order",
+  });
+
+  const fresh = await loadCo(env, coId);
+  return { ok: true, already_applied: false, change_order: shape(fresh!, job.billing_model) };
+}

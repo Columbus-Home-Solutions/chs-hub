@@ -272,11 +272,20 @@ export interface FinalSuggestion {
   title: string;
   amount: number; // remaining contract balance
 }
+export interface ChangeOrderSuggestion {
+  change_order_id: string;
+  invoice_type: "change_order";
+  change_order_number: number;
+  title: string;
+  amount: number;
+}
 
 export interface InvoiceSuggestions {
   milestones: MilestoneSuggestion[];
   trades: TradeSuggestion[];
   final: FinalSuggestion | null;
+  /** Sprint 13: approved fixed/trade COs (amount>0) not yet billed. Owner-confirmed. */
+  change_orders: ChangeOrderSuggestion[];
 }
 
 interface BillingScheduleRow {
@@ -306,7 +315,7 @@ export async function computeSuggestions(
   billingModel: string | null,
   contractTotal: number,
 ): Promise<InvoiceSuggestions> {
-  const out: InvoiceSuggestions = { milestones: [], trades: [], final: null };
+  const out: InvoiceSuggestions = { milestones: [], trades: [], final: null, change_orders: [] };
 
   const schedule = (
     await env.DB.prepare(
@@ -319,10 +328,10 @@ export async function computeSuggestions(
   // Existing non-void invoices: which milestones / trades are already invoiced.
   const invoices = (
     await env.DB.prepare(
-      "SELECT invoice_type, milestone_number, trade_line_item_id, amount, status FROM invoices WHERE job_id = ? AND status != 'void'",
+      "SELECT invoice_type, milestone_number, trade_line_item_id, amount, status, notes FROM invoices WHERE job_id = ? AND status != 'void'",
     )
       .bind(jobId)
-      .all<{ invoice_type: string | null; milestone_number: number | null; trade_line_item_id: string | null; amount: number | null; status: string | null }>()
+      .all<{ invoice_type: string | null; milestone_number: number | null; trade_line_item_id: string | null; amount: number | null; status: string | null; notes: string | null }>()
   ).results ?? [];
   const invoicedMilestones = new Set(
     invoices.filter((i) => i.milestone_number != null).map((i) => Number(i.milestone_number)),
@@ -382,6 +391,41 @@ export async function computeSuggestions(
         title: `${row.label} — Complete`,
         amount: round2(row.amount ?? 0),
         task_group: group,
+      });
+    }
+  }
+
+  // Sprint 13: approved change orders on fixed/trade jobs surface a suggested
+  // (owner-confirmed, never auto-sent) change_order invoice. Cost-plus COs are a
+  // projection revision only — their cost bills through the bi-weekly cycle, so
+  // NO invoice is ever suggested for them (double-billing guard, rule #4). A
+  // negative (credit) CO reduces contract_total and produces no invoice.
+  if (billingModel === "fixed_price" || billingModel === "trade_by_trade") {
+    // A CO is "already billed" when a non-void change_order invoice references it
+    // via the notes token `co:<coId>` (set by the builder prefill). No FK needed.
+    const billedCoIds = new Set(
+      invoices
+        .filter((i) => i.invoice_type === "change_order")
+        .map((i) => /co:([0-9a-f-]+)/i.exec(i.notes ?? "")?.[1])
+        .filter((v): v is string => !!v),
+    );
+    const approvedCos = (
+      await env.DB.prepare(
+        `SELECT id, change_order_number, title, amount FROM change_orders
+          WHERE job_id = ? AND status = 'approved' AND applied_at IS NOT NULL AND amount > 0
+          ORDER BY change_order_number ASC`,
+      )
+        .bind(jobId)
+        .all<{ id: string; change_order_number: number; title: string | null; amount: number | null }>()
+    ).results ?? [];
+    for (const co of approvedCos) {
+      if (billedCoIds.has(co.id)) continue;
+      out.change_orders.push({
+        change_order_id: co.id,
+        invoice_type: "change_order",
+        change_order_number: co.change_order_number,
+        title: `Change Order ${co.change_order_number}: ${co.title ?? "Approved change"}`,
+        amount: round2(co.amount ?? 0),
       });
     }
   }

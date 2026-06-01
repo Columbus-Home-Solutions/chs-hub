@@ -255,21 +255,23 @@ Role checks are documented per endpoint:
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/jobs/:id/change-orders` | O/PM | List change orders for job |
-| POST | `/api/jobs/:id/change-orders` | O/PM | Create change order (can be triggered from Smart Note) |
-| PUT | `/api/change-orders/:id` | O/PM | Update change order |
-| POST | `/api/change-orders/:id/send` | O/PM | Send to client for signature |
-| POST | `/api/change-orders/:id/approve` | SYSTEM (via portal signature) | Process client approval — updates budget, creates tasks |
+| GET | `/api/jobs/:id/change-orders` | O/PM | List change orders for job (draft/sent/approved/rejected) |
+| POST | `/api/jobs/:id/change-orders` | O/PM | Create draft change order (unique `change_order_number` per job; can be triggered from Smart Note) |
+| PUT | `/api/change-orders/:id` | O/PM | Update change order (drafts only) |
+| POST | `/api/change-orders/:id/send` | O/PM | Mark `sent` and notify client (`change_order_sent`) for signature |
+| POST | `/api/change-orders/:id/reject` | O/PM | Mark a sent change order `rejected` |
+
+Client approval is **not** an internal route — it happens when the client signs in the portal (`POST /api/portal/:token/change-orders/:id/sign`), which calls the idempotent `applyChangeOrder()`: stamps `applied_at` exactly once, revises `jobs.contract_total`, extends the end date, creates the CO task group, and fires `change_order_approved`.
 
 ### Schedule
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
 | GET | `/api/jobs/:id/schedule` | O/PM | Schedule entries for a job |
-| GET | `/api/schedule` | O/PM | Calendar view across all jobs. Filters: `?from=date&to=date` |
-| POST | `/api/jobs/:id/schedule` | O/PM | Create schedule entry (triggers sub notification if sub assigned) |
-| PUT | `/api/schedule-entries/:id` | O/PM | Update entry (triggers sub notification if changed) |
-| DELETE | `/api/schedule-entries/:id` | O/PM | Cancel entry (triggers sub cancellation notification) |
+| GET | `/api/schedule` | O/PM | Cross-job calendar feed. Filters: `?from=date&to=date` |
+| POST | `/api/jobs/:id/schedule` | O/PM | Create schedule entry (fires `sub_scheduled` once if a sub is assigned) |
+| PUT | `/api/schedule/:id` | O/PM | Update / drag-to-reschedule entry (fires `sub_scheduled` once if a sub becomes assigned) |
+| DELETE | `/api/schedule/:id` | O/PM | Delete schedule entry |
 
 ### Permits
 
@@ -278,6 +280,7 @@ Role checks are documented per endpoint:
 | GET | `/api/jobs/:id/permits` | O/PM | List permits for job |
 | POST | `/api/jobs/:id/permits` | O/PM | Create permit record |
 | PUT | `/api/permits/:id` | O/PM | Update permit (inspection result, status change) |
+| DELETE | `/api/permits/:id` | O/PM | Delete permit record |
 
 ### Warranties
 

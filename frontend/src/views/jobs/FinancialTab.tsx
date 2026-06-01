@@ -62,6 +62,13 @@ interface FinalSuggestion {
   title: string;
   amount: number;
 }
+interface ChangeOrderSuggestion {
+  change_order_id: string;
+  invoice_type: "change_order";
+  change_order_number: number;
+  title: string;
+  amount: number;
+}
 interface JobInvoicesResponse {
   job_id: string;
   billing_model: string | null;
@@ -76,6 +83,7 @@ interface JobInvoicesResponse {
     milestones: MilestoneSuggestion[];
     trades: TradeSuggestion[];
     final: FinalSuggestion | null;
+    change_orders: ChangeOrderSuggestion[];
   };
 }
 
@@ -173,6 +181,7 @@ interface Prefill {
   milestone_number?: number;
   trade_line_item_id?: string;
   billing_schedule_id?: string;
+  notes?: string;
 }
 
 export function FinancialTab({ jobId }: { jobId: string }) {
@@ -207,7 +216,10 @@ export function FinancialTab({ jobId }: { jobId: string }) {
 
   const suggestions = data.suggestions;
   const hasSuggestions =
-    suggestions.milestones.length > 0 || suggestions.trades.length > 0 || suggestions.final != null;
+    suggestions.milestones.length > 0 ||
+    suggestions.trades.length > 0 ||
+    suggestions.final != null ||
+    (suggestions.change_orders?.length ?? 0) > 0;
 
   const costingLines: CostingLineLite[] = (costing.data?.costing.lines ?? []).map((l) => ({
     line_item_id: l.line_item_id,
@@ -324,6 +336,23 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                     amount: t.amount,
                     trade_line_item_id: t.trade_line_item_id,
                     billing_schedule_id: t.billing_schedule_id,
+                  })
+                }
+              />
+            ))}
+            {(suggestions.change_orders ?? []).map((c) => (
+              <SuggestionRow
+                key={c.change_order_id}
+                label={c.title}
+                sub={`Approved change order CO-${c.change_order_number} · owner-confirmed`}
+                amount={c.amount}
+                onCreate={() =>
+                  openBuilder({
+                    invoice_type: "change_order",
+                    title: c.title,
+                    amount: c.amount,
+                    // Links the invoice back to the CO so it stops being suggested.
+                    notes: `co:${c.change_order_id}`,
                   })
                 }
               />
@@ -1037,6 +1066,9 @@ function InvoiceBuilder({
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [busy, setBusy] = useState(false);
+  // Carried-through linkage (e.g. `co:<id>` for a change-order invoice) so the
+  // server-side suggestion stops re-offering it once the invoice exists.
+  const prefillNotes = prefill?.notes ?? null;
 
   const amt = Number(amount);
   const taxN = Number(tax) || 0;
@@ -1060,6 +1092,8 @@ function InvoiceBuilder({
         milestone_number: prefill?.milestone_number ?? null,
         trade_line_item_id: prefill?.trade_line_item_id ?? null,
         billing_schedule_id: prefill?.billing_schedule_id ?? null,
+        // Append the CO linkage token to any owner-typed notes.
+        notes: [description.trim(), prefillNotes].filter(Boolean).join(" ") || null,
       });
       toast.push("success", "Invoice created (draft)");
       onCreated();

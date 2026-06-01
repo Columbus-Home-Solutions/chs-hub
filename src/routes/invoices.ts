@@ -394,6 +394,17 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
   const totalPaid = round2(paidAgg?.paid ?? 0);
   const contractTotal = round2(job.contract_total ?? 0);
 
+  // Approved + applied change orders folded into the summary bar (net of credits)
+  // so the contract change is always visible — on cost-plus jobs this is the only
+  // CO signal, since they never generate a standalone change_order invoice.
+  const coAgg = await env.DB.prepare(
+    `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+       FROM change_orders
+      WHERE job_id = ? AND status = 'approved' AND applied_at IS NOT NULL`,
+  )
+    .bind(jobId)
+    .first<{ total: number; count: number }>();
+
   const suggestions = await computeSuggestions(env, jobId, job.billing_model, contractTotal);
 
   return json({
@@ -404,6 +415,8 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
       total_invoiced: totalInvoiced,
       total_paid: totalPaid,
       balance_due: round2(totalInvoiced - totalPaid),
+      change_orders_total: round2(coAgg?.total ?? 0),
+      change_orders_count: coAgg?.count ?? 0,
     },
     invoices,
     suggestions,

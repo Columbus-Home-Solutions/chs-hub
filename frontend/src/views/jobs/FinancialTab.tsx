@@ -77,6 +77,8 @@ interface JobInvoicesResponse {
     total_invoiced: number;
     total_paid: number;
     balance_due: number;
+    change_orders_total: number;
+    change_orders_count: number;
   };
   invoices: InvoiceRow[];
   suggestions: {
@@ -279,6 +281,13 @@ export function FinancialTab({ jobId }: { jobId: string }) {
     <div class="stack">
       <div class="fin-summary">
         <SummaryStat label="Contract" value={data.summary.contract_total} />
+        {data.summary.change_orders_count > 0 && (
+          <SummaryStat
+            label={`Change Orders (${data.summary.change_orders_count})`}
+            value={data.summary.change_orders_total}
+            tone={data.summary.change_orders_total >= 0 ? "success" : "warning"}
+          />
+        )}
         <SummaryStat label="Invoiced" value={data.summary.total_invoiced} />
         <SummaryStat label="Collected" value={data.summary.total_paid} tone="success" />
         <SummaryStat label="Balance Due" value={data.summary.balance_due} tone="warning" />

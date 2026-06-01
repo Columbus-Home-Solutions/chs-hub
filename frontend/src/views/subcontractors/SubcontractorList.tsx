@@ -11,6 +11,7 @@ import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
 import { formatPhone } from "../../lib/format";
+import { go } from "../../lib/nav";
 import { TRADES, type Subcontractor } from "../../types";
 
 interface SubListResponse {
@@ -126,7 +127,7 @@ export function SubcontractorList(_props: RoutableProps) {
           columns={columns}
           rows={rows}
           rowKey={(s) => s.id}
-          onRowClick={(s) => setModal({ mode: "edit", sub: s })}
+          onRowClick={(s) => go(`/subcontractors/${s.id}`)}
           initialSort="company_name"
         />
       )}
@@ -148,7 +149,7 @@ export function SubcontractorList(_props: RoutableProps) {
 
 // ─── Create / edit modal ──────────────────────────────────────────────────────
 
-function SubForm({
+export function SubForm({
   mode,
   sub,
   onClose,

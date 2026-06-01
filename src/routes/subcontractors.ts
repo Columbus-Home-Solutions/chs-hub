@@ -145,7 +145,102 @@ export async function handleSubcontractorGet(env: Env, id: string): Promise<Resp
     .bind(id)
     .first<RawSub>();
   if (!row) return err(404, "not_found", "Subcontractor not found");
-  return json({ subcontractor: shape(row) });
+
+  const payments = await loadSubPayments(env, id);
+  return json({ subcontractor: shape(row), payments });
+}
+
+/**
+ * Payment history for a sub, sourced from the `expenses` ledger (rows tagged with
+ * sub_id). Amounts are stored positive; we ignore voided (is_active=0) rows. The
+ * effective date is incurred_date, falling back to the legacy incurred_at. We
+ * surface YTD + 1099 YTD + lifetime, a per-year breakdown ("paid for the year"),
+ * and a recent line-item history joined to the job for context.
+ */
+async function loadSubPayments(env: Env, subId: string) {
+  const dateExpr = "substr(COALESCE(incurred_date, incurred_at), 1, 4)";
+  const year = String(new Date().getUTCFullYear());
+
+  const totals = await env.DB.prepare(
+    `SELECT
+        COALESCE(SUM(amount), 0) AS lifetime,
+        COALESCE(SUM(CASE WHEN ${dateExpr} = ? THEN amount ELSE 0 END), 0) AS ytd,
+        COALESCE(SUM(CASE WHEN is_1099_reportable = 1 AND ${dateExpr} = ? THEN amount ELSE 0 END), 0) AS ytd_1099,
+        COUNT(*) AS count
+       FROM expenses
+      WHERE sub_id = ? AND COALESCE(is_active, 1) = 1`,
+  )
+    .bind(year, year, subId)
+    .first<{ lifetime: number; ytd: number; ytd_1099: number; count: number }>();
+
+  const byYear = (
+    await env.DB.prepare(
+      `SELECT ${dateExpr} AS year,
+              COALESCE(SUM(amount), 0) AS total,
+              COALESCE(SUM(CASE WHEN is_1099_reportable = 1 THEN amount ELSE 0 END), 0) AS total_1099,
+              COUNT(*) AS count
+         FROM expenses
+        WHERE sub_id = ? AND COALESCE(is_active, 1) = 1 AND ${dateExpr} IS NOT NULL
+        GROUP BY year
+        ORDER BY year DESC`,
+    )
+      .bind(subId)
+      .all<{ year: string; total: number; total_1099: number; count: number }>()
+  ).results ?? [];
+
+  const history = (
+    await env.DB.prepare(
+      `SELECT e.id, e.amount, COALESCE(e.incurred_date, e.incurred_at) AS date,
+              e.description, e.expense_type, e.is_1099_reportable,
+              e.job_id, j.job_number AS job_number, j.title AS job_title
+         FROM expenses e
+         LEFT JOIN jobs j ON j.id = e.job_id
+        WHERE e.sub_id = ? AND COALESCE(e.is_active, 1) = 1
+        ORDER BY COALESCE(e.incurred_date, e.incurred_at) DESC
+        LIMIT 50`,
+    )
+      .bind(subId)
+      .all<{
+        id: string;
+        amount: number | null;
+        date: string | null;
+        description: string | null;
+        expense_type: string | null;
+        is_1099_reportable: number | null;
+        job_id: string | null;
+        job_number: number | null;
+        job_title: string | null;
+      }>()
+  ).results ?? [];
+
+  return {
+    year: Number(year),
+    ytd: round2(totals?.ytd ?? 0),
+    ytd_1099: round2(totals?.ytd_1099 ?? 0),
+    lifetime: round2(totals?.lifetime ?? 0),
+    count: totals?.count ?? 0,
+    by_year: byYear.map((r) => ({
+      year: r.year,
+      total: round2(r.total),
+      total_1099: round2(r.total_1099),
+      count: r.count,
+    })),
+    history: history.map((h) => ({
+      id: h.id,
+      amount: round2(h.amount ?? 0),
+      date: h.date,
+      description: h.description,
+      expense_type: h.expense_type,
+      is_1099_reportable: Boolean(h.is_1099_reportable),
+      job_id: h.job_id,
+      job_number: h.job_number,
+      job_title: h.job_title,
+    })),
+  };
+}
+
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
 // ─── POST /api/subcontractors ─────────────────────────────────────────────────

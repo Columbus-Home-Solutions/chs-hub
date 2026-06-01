@@ -23,8 +23,7 @@
 
 **Key new files:** `src/lib/cost-plus.ts` (fee/credit/reconcile math, `periodActuals`, `buildReconciliationReport`), `src/routes/billing-cycles.ts` (cycle CRUD + `generate-invoice`/`reconcile`/`bill-final` handlers, wrapping Sprint 9 invoices), `frontend/src/views/jobs/CycleManager.tsx` (cycle UI in the Financial tab), `migrations/0034_cost_plus_billing.sql`. Extended (not forked): `src/index.ts` (cycle routes), `frontend/src/views/jobs/FinancialTab.tsx` (conditionally renders `CycleManager` for `cost_plus` jobs), `src/lib/invoicing.ts` (`INVOICE_TYPES` adds `cost_plus_cycle`). **Local seed (gitignored):** `scripts/dev-seed-sprint11.local.sql` (two cost-plus jobs: under/over budget + credit carry-forward + final 50/50).
 
-**Still pending — need a logged-in browser:**
-- Full Cycle Manager browser walkthrough on a cost-plus job: create cycle → generate upfront invoice → reconcile → verify credit carry-forward into the next cycle → final-cycle 50/50 bill-final. Backend + guards smoke-tested locally; in-prod UI walkthrough not yet logged.
+**Verified in production (full Cycle Manager walkthrough — Jun 1, 2026):** create cycle → generate upfront invoice → reconcile (projected vs actual delta) → credit carry-forward into the next cycle → final-cycle 50/50 (`Generate Invoice` 50% + `Bill Final` 50% netting reconciliation), all confirmed in a logged-in browser on a cost-plus job. **No open Sprint 11 items.**
 
 ### Shipped — Sprint 9 (May 31, 2026) — Invoice Generation & Basic Payments
 

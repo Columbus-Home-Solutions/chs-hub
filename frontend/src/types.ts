@@ -572,6 +572,9 @@ export interface JobDetailResponse {
   job: JobCard & {
     client_phone: string | null;
     client_email: string | null;
+    conversion_reversed: boolean;
+    reversal_reason: string | null;
+    portal_url: string | null;
   };
   financial: {
     contract_total: number | null;

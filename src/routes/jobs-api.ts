@@ -306,12 +306,26 @@ export async function handleJobDetail(env: Env, id: string): Promise<Response> {
     client?.name ||
     card.client_name;
 
+  // Surface conversion_reversed (carry-forward: not previously returned here) so
+  // the owner UI can flag a reversed/on-hold job, and build the client portal URL
+  // (Sprint 12) from the SAME public origin pay/quote links use.
+  const reversal = await env.DB.prepare(
+    "SELECT conversion_reversed, reversal_reason FROM jobs WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ conversion_reversed: number | null; reversal_reason: string | null }>();
+  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
+  const portalUrl = card.portal_token ? `${origin}/portal/${card.portal_token}` : null;
+
   return json({
     job: {
       ...card,
       client_name: clientName,
       client_phone: client?.phone ?? null,
       client_email: client?.email ?? null,
+      conversion_reversed: (reversal?.conversion_reversed ?? 0) === 1,
+      reversal_reason: reversal?.reversal_reason ?? null,
+      portal_url: portalUrl,
     },
     financial: {
       contract_total: card.contract_total,

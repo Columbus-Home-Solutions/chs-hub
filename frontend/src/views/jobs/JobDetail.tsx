@@ -228,6 +228,8 @@ function OverviewTab({
 
         <BillingScheduleCard rows={data.billing_schedule} />
 
+        <PortalLinkCard data={data} toast={toast} />
+
         <DatesCard data={data} refetch={refetch} toast={toast} />
       </div>
 
@@ -285,6 +287,44 @@ function BillingScheduleCard({ rows }: { rows: BillingScheduleRow[] }) {
           ))}
         </div>
       )}
+    </Card>
+  );
+}
+
+// Owner/PM-only control to view + copy the client's portal link (Sprint 12).
+// Internal-only; the link itself is the client's token-gated portal URL.
+function PortalLinkCard({ data, toast }: { data: JobDetailResponse; toast: ToastApi }) {
+  const job = data.job;
+  if (!job.portal_token) return null;
+  const url = job.portal_url ?? `/portal/${job.portal_token}`;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.push("success", "Portal link copied");
+    } catch {
+      toast.push("error", "Couldn't copy — select and copy manually");
+    }
+  };
+
+  return (
+    <Card title="Client Portal">
+      <div class="stack">
+        <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+          Share this private link so {job.client_name ?? "the client"} can view photos, pay invoices,
+          and message you. The link is the credential — only share it with the client.
+          {job.portal_type === "cost_plus" ? " (Cost-plus: includes the Budget & Costs view.)" : ""}
+        </div>
+        <input class="form-input" readOnly value={url} onFocus={(e) => (e.target as HTMLInputElement).select()} />
+        <div class="flex gap-sm">
+          <Button variant="primary" size="sm" onClick={copy}>
+            Copy link
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => window.open(url, "_blank")}>
+            Open
+          </Button>
+        </div>
+      </div>
     </Card>
   );
 }

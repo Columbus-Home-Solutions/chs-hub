@@ -28,6 +28,7 @@ export default defineConfig({
         app: "index.html",
         quote: "quote.html",
         pay: "pay.html",
+        portal: "portal.html",
       },
     },
   },

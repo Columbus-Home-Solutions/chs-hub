@@ -265,6 +265,7 @@ import {
   handleCycleBillFinal,
 } from "./routes/billing-cycles.js";
 import { handlePublicPayGet, handlePublicPayIntent } from "./routes/public-pay.js";
+import { handlePortalApi } from "./routes/portal.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
 async function fetchAssetWithDashboardInject(
@@ -300,9 +301,11 @@ export default {
       const allowed =
         p === "/pay" || p.startsWith("/pay/") ||
         p === "/quote" || p.startsWith("/quote/") ||
+        p === "/portal" || p.startsWith("/portal/") ||
         p.startsWith("/app/assets/") ||
         p.startsWith("/api/public/pay/") ||
         p.startsWith("/api/public/quote/") ||
+        p.startsWith("/api/portal/") ||
         p === "/api/webhooks/stripe";
       if (!allowed) {
         return new Response(JSON.stringify({ error: "Not found" }), {
@@ -652,6 +655,15 @@ export default {
     const publicPayIntent = url.pathname.match(/^\/api\/public\/pay\/([^/]+)\/intent$/);
     if (publicPayIntent && request.method === "POST") {
       return handlePublicPayIntent(request, env, decodeURIComponent(publicPayIntent[1]));
+    }
+
+    // ── Client Portal API (Sprint 12, PUBLIC token-gated) ────────────
+    // All /api/portal/* routes (landing, photos, invoices, pay, budget,
+    // messages, deferred seams). The dispatcher returns null when nothing
+    // matches so non-portal paths fall through to the auth'd routes.
+    if (url.pathname.startsWith("/api/portal/")) {
+      const portalRes = await handlePortalApi(request, env, url);
+      if (portalRes) return portalRes;
     }
 
     // ── Photos (PWA capture + Sprint 8 timeline/receipts) ────────────
@@ -1095,6 +1107,16 @@ export default {
       const payHtmlUrl = new URL(request.url);
       payHtmlUrl.pathname = "/app/pay.html";
       return env.ASSETS.fetch(new Request(payHtmlUrl.toString(), { method: "GET" }));
+    }
+
+    // ── Client Portal app (Sprint 12) ────────────────────────────────
+    // /portal/:token is the token-gated, light-theme, mobile-first Preact app
+    // (its own Vite entry, public/app/portal.html). Reads the token from the
+    // URL and calls /api/portal/:token. Served on every host; no Access.
+    if (url.pathname === "/portal" || url.pathname.startsWith("/portal/")) {
+      const portalHtmlUrl = new URL(request.url);
+      portalHtmlUrl.pathname = "/app/portal.html";
+      return env.ASSETS.fetch(new Request(portalHtmlUrl.toString(), { method: "GET" }));
     }
 
     // ── New Preact app (Sprint 2+) ───────────────────────────────────

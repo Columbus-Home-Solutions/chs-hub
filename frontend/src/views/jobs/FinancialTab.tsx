@@ -15,6 +15,7 @@ import {
   ExpenseFormModal,
   type CostingLineLite,
 } from "../financial/ExpenseForm";
+import { CycleManager } from "./CycleManager";
 
 /**
  * Job Detail → Financial tab (Sprint 9). Shows the job's invoice ledger
@@ -404,6 +405,8 @@ export function FinancialTab({ jobId }: { jobId: string }) {
           </div>
         )}
       </Card>
+
+      {canSeeCosting && data.billing_model === "cost_plus" && <CycleManager jobId={jobId} />}
 
       {canSeeCosting && (
         <BudgetVsActual costing={costing.data?.costing ?? null} loading={costing.loading} />

@@ -685,6 +685,34 @@
   font-size: var(--text-sm);
 }
 .invoice-builder__total strong { font-family: var(--font-mono); font-size: var(--text-md); }
+
+/* Cost-plus cycle manager (Sprint 11) */
+.callout {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+.callout--warning { background: var(--color-warning-subtle); border-color: var(--color-warning-border); }
+.callout--success { background: var(--color-success-subtle); border-color: var(--color-success-border); }
+.cycle-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.cycle-card--active { border-color: var(--color-border-hover); }
+.cycle-detail {
+  padding: var(--space-md);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+}
+.cycle-preview {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-sm);
+}
+.cycle-preview .invoice-builder__total { margin-top: var(--space-xs); padding-top: var(--space-xs); border-top: none; }
+
 .form-row { display: flex; gap: var(--space-sm); }
 .form-row > * { flex: 1; }
 

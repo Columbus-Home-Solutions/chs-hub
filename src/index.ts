@@ -255,6 +255,15 @@ import {
   handleJobInvoices,
 } from "./routes/invoices.js";
 import { handlePaymentList, handlePaymentCreate, handleJobPayments } from "./routes/payments.js";
+import {
+  handleCycleList,
+  handleCycleGet,
+  handleCycleCreate,
+  handleCycleUpdate,
+  handleCycleGenerateInvoice,
+  handleCycleReconcile,
+  handleCycleBillFinal,
+} from "./routes/billing-cycles.js";
 import { handlePublicPayGet, handlePublicPayIntent } from "./routes/public-pay.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 
@@ -563,6 +572,13 @@ export default {
     if (jobCosting && request.method === "GET") {
       return handleJobCosting(env, decodeURIComponent(jobCosting[1]));
     }
+    // Cost-plus billing cycles per job (Sprint 11).
+    const jobCycles = url.pathname.match(/^\/api\/jobs\/([^/]+)\/billing-cycles$/);
+    if (jobCycles) {
+      const jid = decodeURIComponent(jobCycles[1]);
+      if (request.method === "GET") return handleCycleList(env, jid);
+      if (request.method === "POST") return handleCycleCreate(request, env, jid);
+    }
     const jobTimeEntries = url.pathname.match(/^\/api\/jobs\/([^/]+)\/time-entries$/);
     if (jobTimeEntries && request.method === "GET") {
       return handleJobTimeEntries(env, decodeURIComponent(jobTimeEntries[1]));
@@ -600,6 +616,26 @@ export default {
       const iid = decodeURIComponent(invoiceById[1]);
       if (request.method === "GET") return handleInvoiceGet(env, iid);
       if (request.method === "PUT") return handleInvoiceUpdate(request, env, iid);
+    }
+
+    // ── Cost-Plus Billing Cycles (Sprint 11) ────────────────────────
+    const cycleGenInvoice = url.pathname.match(/^\/api\/billing-cycles\/([^/]+)\/generate-invoice$/);
+    if (cycleGenInvoice && request.method === "POST") {
+      return handleCycleGenerateInvoice(request, env, decodeURIComponent(cycleGenInvoice[1]));
+    }
+    const cycleReconcile = url.pathname.match(/^\/api\/billing-cycles\/([^/]+)\/reconcile$/);
+    if (cycleReconcile && request.method === "POST") {
+      return handleCycleReconcile(request, env, decodeURIComponent(cycleReconcile[1]));
+    }
+    const cycleBillFinal = url.pathname.match(/^\/api\/billing-cycles\/([^/]+)\/bill-final$/);
+    if (cycleBillFinal && request.method === "POST") {
+      return handleCycleBillFinal(request, env, decodeURIComponent(cycleBillFinal[1]));
+    }
+    const cycleById = url.pathname.match(/^\/api\/billing-cycles\/([^/]+)$/);
+    if (cycleById) {
+      const cid = decodeURIComponent(cycleById[1]);
+      if (request.method === "GET") return handleCycleGet(env, cid);
+      if (request.method === "PUT") return handleCycleUpdate(request, env, cid);
     }
 
     // ── Payments (Sprint 9) ──────────────────────────────────────────

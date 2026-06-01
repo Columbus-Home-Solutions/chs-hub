@@ -53,6 +53,14 @@ run_worker_first = true
 pattern = "dashboard.homesolutionsar.com"
 custom_domain = true
 
+# client.homesolutionsar.com is the NON-Access public host for customer-facing
+# pay/quote pages (APP_PUBLIC_ORIGIN). The Worker's public-host routing guard
+# (src/index.ts) restricts it to the token-gated public surface only; the token
+# is the security boundary, so no Cloudflare Access policy is applied here.
+[[routes]]
+pattern = "client.homesolutionsar.com"
+custom_domain = true
+
 # ─── D1 database ───────────────────────────────────────────────────────
 # Created via: wrangler d1 create chs-hub-db
 # The database_id below is filled in after creation in Session 6a.

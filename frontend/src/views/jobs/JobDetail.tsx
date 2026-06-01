@@ -95,7 +95,7 @@ export function JobDetail({ id }: DetailProps) {
     .join(", ");
 
   return (
-    <div>
+    <div class="job-detail">
       <div class="view-header">
         <div>
           <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>

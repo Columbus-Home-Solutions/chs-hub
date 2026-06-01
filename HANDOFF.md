@@ -6,6 +6,26 @@
 
 > **Note on coverage:** Sprint 9 (invoices + payments) is recorded in full below. **Sprint 8** (photo capture, receipts, smart notes, daily logs — commit `75e95e3`, tag `v0.8.0-sprint8*`) shipped between Sprint 7 and Sprint 9 but is **not yet written up in this file** — see git history / its deploy runbook until backfilled.
 
+### Shipped — Sprint 11 (Jun 1, 2026) — Cost-Plus Billing Engine
+
+**Tags:** `v0.11.0-sprint11` (code on `main`), `v0.11.0-sprint11-deployed` (production infra). Feature commit **`8e3b099`** (`feat(sprint11): cost-plus billing engine — cycles, mini-budget, reconciliation, credit carry-forward, final 50/50`).
+
+**Production:** Worker version **`46132dd6`** at Sprint 11 deploy (later **`0afedbb3-ec2b-4379-9d96-ac98b59c0032`** after the mobile capture-bar hotfix below) on `https://chs-hub.tony-bc5.workers.dev` + `dashboard.homesolutionsar.com` + `client.homesolutionsar.com`. Migration **`migrations/0034_cost_plus_billing.sql`** applied remote by **direct execute** (NOT `migrations apply` — same unrecorded-ledger reason as prior sprints). It is a single additive, non-destructive index: `idx_invoices_cost_plus_cycle ON invoices(cost_plus_cycle_id)` (no new tables/columns — the cost-plus schema already existed). Backup before migrate: **`backup_pre_sprint11_remote_20260601.sql`** (local, gitignored) + R2 **`chs-backups/`**. Rollback tag if needed: **`v0.10.0-sprint10-deployed`** (0034 is index-only and harmless to the Sprint 10 Worker). **Stripe stays test mode**; **notifications still SIMULATE**.
+
+**The single most important fact:** cost-plus jobs now bill in **bi-weekly cycles** — each cycle has a **mini-budget** (projected materials/labor/subs) that drives an **upfront invoice** (reusing the Sprint 9 invoice create→send path), then at cycle close a **reconciliation** compares projected vs. **actual** costs (via the Sprint 10 `computeJobActuals(jobId, {from,to})` helper, the single source of truth) to produce a signed **delta** that **carries forward** as a credit/overage into the next cycle. The **final cycle** bills 50% upfront / 50% at completion and nets the final reconciliation. All money math lives in `src/lib/cost-plus.ts`; it does **not** fork the Sprint 9 invoice logic — it wraps it.
+
+**Verified in production:**
+- Backend deploy healthy; `/app` 200, job costing + pipeline endpoints 200; clean cost-plus slate (no orphan cycles).
+- `0034` index present on `invoices(cost_plus_cycle_id)`.
+- **⭐ Sprint 8 gate re-cleared in prod** (was the open verification item carried into this session): smart-note → task ✅, smart-note → expense ✅, and **receipt capture → AI extraction → confirm → linked expense ✅** — confirmed expense **Lowe's $121.09**, `receipt_photos.processing_status='confirmed'`, `expense_id` ↔ `receipt_photo_id` linked, created `2026-06-01T14:16:19Z` via the Sprint 10 `insertFullExpense` path.
+
+**Mobile capture-bar hotfix found + fixed (this session):** the **Quick Capture bar** (📷 Photo / 💵 Receipt, `frontend/src/views/jobs/QuickCaptureBar.tsx`) was rendered but **invisible on mobile** — it and the global app nav (`.bottom-tabs`) were both `position:fixed; bottom:0`, and the nav's `z-index: var(--z-capture-bar)` (**500**) painted over the capture bar's `z-index: 40`. This blocked **all** mobile users from the photo/receipt capture flow, not just verification. Fix (`frontend/src/styles/app.css` + `JobDetail.tsx`): capture bar now stacks **above** the nav (`bottom: var(--capture-bar-height)`), z-index raised to `calc(var(--z-capture-bar) + 1)`, breakpoint aligned to `767px`, and a `.job-detail` bottom-padding reserve so content clears both stacked bars. Deployed in version `0afedbb3`. **Carry-forward:** audit for any other `position:fixed; bottom:0` element that could collide with `.bottom-tabs`.
+
+**Key new files:** `src/lib/cost-plus.ts` (fee/credit/reconcile math, `periodActuals`, `buildReconciliationReport`), `src/routes/billing-cycles.ts` (cycle CRUD + `generate-invoice`/`reconcile`/`bill-final` handlers, wrapping Sprint 9 invoices), `frontend/src/views/jobs/CycleManager.tsx` (cycle UI in the Financial tab), `migrations/0034_cost_plus_billing.sql`. Extended (not forked): `src/index.ts` (cycle routes), `frontend/src/views/jobs/FinancialTab.tsx` (conditionally renders `CycleManager` for `cost_plus` jobs), `src/lib/invoicing.ts` (`INVOICE_TYPES` adds `cost_plus_cycle`). **Local seed (gitignored):** `scripts/dev-seed-sprint11.local.sql` (two cost-plus jobs: under/over budget + credit carry-forward + final 50/50).
+
+**Still pending — need a logged-in browser:**
+- Full Cycle Manager browser walkthrough on a cost-plus job: create cycle → generate upfront invoice → reconcile → verify credit carry-forward into the next cycle → final-cycle 50/50 bill-final. Backend + guards smoke-tested locally; in-prod UI walkthrough not yet logged.
+
 ### Shipped — Sprint 9 (May 31, 2026) — Invoice Generation & Basic Payments
 
 **Tags:** `v0.9.0-sprint9` (code on `main`), `v0.9.0-sprint9-deployed` (production infra). Deploy commit **`a86f215`** (`fix(sprint9): fold invoice billing into nightly cron`); feature commit `1fc5b0d`.

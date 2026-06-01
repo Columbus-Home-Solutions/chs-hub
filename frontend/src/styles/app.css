@@ -1661,13 +1661,15 @@
   font-size: var(--text-sm);
 }
 
-/* Quick Capture Bar — mobile only */
+/* Quick Capture Bar — mobile only. Sits directly above the global
+   .bottom-tabs nav (which is fixed at bottom:0, height --capture-bar-height)
+   and paints above it so its buttons aren't hidden behind the app nav. */
 .quick-capture-bar {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
-  z-index: 40;
+  bottom: var(--capture-bar-height);
+  z-index: calc(var(--z-capture-bar) + 1);
   display: none;
   justify-content: space-around;
   gap: var(--space-xs);
@@ -1694,7 +1696,7 @@
 .qc-btn__icon { font-size: 20px; }
 .qc-uploading {
   position: fixed;
-  bottom: 64px;
+  bottom: calc(var(--capture-bar-height) * 2 + var(--space-xs));
   left: 50%;
   transform: translateX(-50%);
   z-index: 50;
@@ -1708,6 +1710,9 @@
   box-shadow: var(--shadow-lg);
   font-size: var(--text-sm);
 }
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .quick-capture-bar { display: flex; }
+  /* Reserve room so the last bit of job-detail content clears BOTH the
+     global bottom nav and the quick-capture bar stacked above it. */
+  .job-detail { padding-bottom: var(--capture-bar-height); }
 }

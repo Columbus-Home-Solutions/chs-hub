@@ -2,7 +2,55 @@
 
 > **For Tony:** Open Cursor on `~/projects/chs-hub`, start a brand new chat, and paste the contents of this file as your first message. Then say _"Read HANDOFF.md and confirm you're caught up. I want to work on **&lt;X&gt;** today."_
 
-> **For the next AI session:** **`CHS-Session-Handoff.md`** (maintained outside this repo) is the **canonical planning doc** — priorities, sprint queue, operator decisions. **`HANDOFF.md`** (this file) is the **repo-side code-state reference** — what shipped, what's deployed, migration tags, local dev URLs. Keep both aligned; when they conflict, **`CHS-Session-Handoff.md` wins on planning**; **`HANDOFF.md` wins on what's actually in git/production**. Code state as of **May 30, 2026** (Sprint 7 deployed). Trust this over any older context in this file below the Sprint 7 section. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
+> **For the next AI session:** **`CHS-Session-Handoff.md`** (maintained outside this repo) is the **canonical planning doc** — priorities, sprint queue, operator decisions. **`HANDOFF.md`** (this file) is the **repo-side code-state reference** — what shipped, what's deployed, migration tags, local dev URLs. Keep both aligned; when they conflict, **`CHS-Session-Handoff.md` wins on planning**; **`HANDOFF.md` wins on what's actually in git/production**. Code state as of **May 31, 2026** (Sprint 9 deployed). Trust this over any older context in this file below the Sprint 9 section. All work since the migration playbook (archived at `docs/archive/migration-playbook.md`) has happened in this repo, `chs-hub`.
+
+> **Note on coverage:** Sprint 9 (invoices + payments) is recorded in full below. **Sprint 8** (photo capture, receipts, smart notes, daily logs — commit `75e95e3`, tag `v0.8.0-sprint8*`) shipped between Sprint 7 and Sprint 9 but is **not yet written up in this file** — see git history / its deploy runbook until backfilled.
+
+### Shipped — Sprint 9 (May 31, 2026) — Invoice Generation & Basic Payments
+
+**Tags:** `v0.9.0-sprint9` (code on `main`), `v0.9.0-sprint9-deployed` (production infra). Deploy commit **`a86f215`** (`fix(sprint9): fold invoice billing into nightly cron`); feature commit `1fc5b0d`.
+
+**Production:** Worker version **`26895297-bdb4-4c51-99f2-2216ebf0e05a`** on `https://chs-hub.tony-bc5.workers.dev` + `dashboard.homesolutionsar.com`. Migration **`migrations/0032_invoices_payments.sql`** applied remote by **direct execute** (NOT `migrations apply` — same unrecorded-ledger reason as prior sprints). Backup before migrate: **`backup_pre_sprint9_remote_20260531.sql`** (local, gitignored) + R2 **`chs-backups/`**. Rollback tag if needed: **`v0.8.0-sprint8-deployed`** (0032's added columns + UNIQUE indexes are additive and harmless to the Sprint 8 Worker). **Stripe stays test mode** (live-key swap is Pre-Launch); **notifications still SIMULATE**.
+
+**The single most important fact:** invoices generate, payments collect (Stripe **test-mode** + manual), late fees accrue, and reverse-conversion exists — but it's all **owner-facing**: no real client messaging (engine still `NOTIFICATIONS_DISPATCH_MODE="simulate"`) and no live card processing (Stripe test keys).
+
+**Verified in production:**
+- Health 40/40 tables; `0032` columns (`invoices.payment_token`/`viewed_date`, `jobs.conversion_reversed`/`reversal_reason`/`reversed_at`) + four UNIQUE indexes (`idx_jobs_job_number`, `idx_invoices_invoice_number`, `idx_invoices_payment_token`, partial `idx_payments_stripe_payment_id`) + `invoice_sent` email+sms templates all live.
+- **Static-asset manifest healthy:** `/app/` → 200, `/app/index.html` → 307 redirect (correct trailing-slash behavior), `/api/public/pay/bogus` → 404 JSON.
+- **Zero duplicate** `job_number` / `invoice_number` on remote — the UNIQUE-index pre-check (runbook Step 3) is clean.
+- **Invoice create→send loop exercised in browser:** invoices **#1 ($66)** + **#2 ($68)**, both `sent`, both carry a `payment_token`, due `2026-06-07`. Atomic numbering sequential (1, 2). `invoice_sent` email+sms logs show `status='sent'` = SIMULATE (no real send).
+- **Legacy data shape:** ~120 invoice rows all `invoice_number=NULL` (clean slate for native numbering); 158 payment rows all legacy Jobber import (1 has a `stripe_payment_id`); 6 `past_due` invoices are all legacy (`invoice_number=NULL`, `total_due=NULL`) — **skipped by the billing cron, correctly**.
+
+**Still pending — need a logged-in browser on `dashboard.homesolutionsar.com` (Access injects auth; can't be driven by curl):**
+- Record manual payment → `paid` + `payment_received` queued (SIMULATE). `payment_received` logs are currently **empty** — the payment side of the loop is unexercised on native invoices.
+- `/pay/:token` render in-browser (invoices #1/#2 have tokens; **use the `workers.dev` host** until the custom domain is live — the generated `APP_PUBLIC_ORIGIN` link is still NXDOMAIN, see carry-forward).
+- Void (Owner) + close-gate `409 unpaid_invoices`.
+- Reverse-conversion on a **disposable** test job only (NOT #100). Zero `conversion_reversed=1` rows — not exercised.
+
+**Cron status:**
+- Billing cron is **folded into the `15 7 * * *` nightly run** (02:15 Central) because the Cloudflare **Free plan caps at 5 cron triggers**. There is **no standalone `0 8 * * *`**. Live crons: `*/15`, `*/30`, `15 * * * *`, `15 7 * * *`, `0 12 * * *` (commit `a86f215`).
+- Runtime proof (`--test-scheduled`): late fee `0 → $500` (10×$50), `total_due 1500 → 2000`, `invoice_past_due` SMS enqueued SIMULATE; log `late_fees updated=1; due_check past_due_notices=1`.
+- The next real `15 7 * * *` tick is the **first live proof against native invoices** — re-run the past-due data query after that tick to close this item.
+- Legacy-invoice skip is intended (billing skips rows with NULL `invoice_number` / NULL `total_due`). **Cursor to add an explicit `WHERE invoice_number IS NOT NULL` guard** so this is intentional code, not accidental NULL behavior.
+
+**Deploy bug found + fixed (this deploy):** a prior deploy shipped a **stale static-asset manifest** — the dashboard SPA 404'd ("page won't load") while the Worker reported success. Fixed by re-running `npm run deploy` (manifest rebuilt, 65 files). A post-deploy smoke check (`curl /app/index.html` + `/app/` expecting 200) is now in the runbook (Step 6 + Done Criteria + carry-forward) and is **standard for all future runbooks**.
+
+**Key new files:** `src/lib/invoicing.ts` (money rules, status recompute, suggestions, `runLateFeeCalculator`/`runInvoiceDueCheck` → combined `runInvoiceBilling`), `src/routes/invoices.ts`, `src/routes/payments.ts`, `src/routes/public-pay.ts`, `frontend/src/views/jobs/FinancialTab.tsx`, `frontend/src/views/public/PayPage.tsx`, `frontend/{pay.html,src/pay-main.tsx}`, `migrations/0032_invoices_payments.sql`. Extended (not forked): `src/routes/public-quote.ts` (Stripe webhook now branches invoice-payment + reversal vs the untouched deposit→conversion path), `src/lib/quote-to-job.ts` (`reverseJobConversion` + atomic `job_number`), `src/lib/notification-engine.ts` (`triggerInvoiceSent`), `src/index.ts` / `wrangler.toml` (billing in nightly cron, `/pay/:token` asset serving). **Local seed (gitignored):** `scripts/dev-seed-sprint9.local.sql`.
+
+### Carry-forwards (Sprint 9 → next work / Pre-Launch)
+
+**Also record these in `CHS-Session-Handoff.md`** — keep planning and code-state in sync.
+
+1. **🔴 `APP_PUBLIC_ORIGIN` / public custom domain — UNRESOLVED; customer-facing links are currently dead.** `APP_PUBLIC_ORIGIN=https://chs-hub.homesolutionsar.com` is **NXDOMAIN** (no DNS, no route — only `dashboard.homesolutionsar.com` is configured), so every generated pay/quote link 404s at the network level. Needs, in order: **hostname decision** (candidates `pay.homesolutionsar.com` or `portal.homesolutionsar.com`) → DNS record → `custom_domain` route in `wrangler.toml` → **host-aware Worker routing guard** (Option A: on the public host the Worker 404s everything except `/pay`, `/quote`, and the public API endpoints — so `/app` + authenticated writes stay off the public host) → update `APP_PUBLIC_ORIGIN`. Hotfix prompt pending the hostname decision. Until then, test `/pay/:token` via the `workers.dev` host.
+2. **Reverse-conversion accounting — DECIDE BEFORE STRIPE LIVE-KEY SWAP.** As built, reverse-conversion voids **all** non-void invoices including **paid** ones while preserving payment rows → cash-collected can exceed invoiced (books mismatch). Pre-Launch: (a) a refund/chargeback should post a **negative/refund payment** that nets the original, not just void; (b) reversal should be **reason-aware** (an NSF on Draw 2 shouldn't void a cleared, possibly non-refundable deposit). Not a deploy blocker (won't fire in normal test-mode use).
+3. **Surface `conversion_reversed` in `handleJobDetail`.** The DB flag is set correctly but the job-detail API/UI doesn't return/show it, so a reversed job still looks active and could be re-invoiced. Small add (return the three fields + optional banner) — prevents a real foot-gun.
+4. **Explicit `WHERE invoice_number IS NOT NULL` guard in the billing cron (Cursor).** Make the legacy-row skip intentional code, not incidental NULL behavior.
+5. **Confirm the late-fee `due_date` anchor against the Service / Cost-Plus Agreement** before any live late-fee collection (default = `sent + 7 days`; grace lives in the due date). Flagged in `invoicing.ts`.
+6. **Notifications live-flip trigger:** Resend domain verified + `NOTIFICATIONS_EMAIL_FROM` set unlocks **live email** (receipts/reminders) independently of SMS (SMS has the longer 10DLC tail). Both still SIMULATE — intentional.
+7. **Stripe still test mode (intentional, Pre-Launch).** Confirm the **test-mode** webhook subscribes `charge.refunded` + `charge.dispute.created` (only the automatic refund/dispute → reverse-conversion path needs them; manual reverse + invoice payment work without). Live-key swap gated on Arkansas attorney contract review.
+8. **Global "Financial" sidebar item stays grayed / "coming soon."** Sprint 9 delivered the **per-job** Financial tab (Job → Financial), not a cross-job AR dashboard. The top-level `/financial` route is a `Placeholder` (`nav.ts` `enabled:false`). A cross-job AR/aging dashboard is a later sprint and depends on Sprint 10 expense data.
+9. **Post-deploy static-asset smoke check is now standard** — fold `curl /app/index.html` + `/app/` (expect 200; re-deploy on 404) into every future runbook's Step 6, plus `/pay`/`/quote` once the public host exists.
+10. **`payment_token` = per-invoice random token** (generated at create, reused on send), independent of the job `portal_token`; the Sprint 12 client-portal invoices tab is separate work.
 
 ### Shipped — Sprint 7 (May 30, 2026) — Notification Engine & Communications
 
@@ -719,13 +767,16 @@ npm run ops:sync:log          # last 20 sync_log entries
 - The PWA capture flow wireframe (`canvases/pwa-capture-wireframe.canvas.tsx`) mirrors this same palette so the production PWA can drop into the existing visual language without re-design.
 - Resend sending domain: `send.homesolutionsar.com`
 
-### Cron schedule (all in `wrangler.toml`)
+### Cron schedule (all in `wrangler.toml`) — 5 triggers (Free-plan cap)
 ```
+*/15 * * * *   Notification processor — drains queued notification_logs (Sprint 7)
 */30 * * * *   Jobber + WC sync
 15 * * * *     Heartbeat (alerts if sync >4h stale) + DLQ replay
-15 7 * * *     Nightly D1→R2 backup + 30-day retention sweep (02:15 Central)
+15 7 * * *     Nightly D1→R2 backup + 30-day retention sweep + INVOICE BILLING
+               (late fees + due/past-due reminders, Sprint 9) — 02:15 Central
 0 12 * * *     Daily summary email (07:00 Central)
 ```
+> **Free plan caps at 5 cron triggers**, so Sprint 9's invoice-billing run was folded into the existing `15 7 * * *` nightly handler rather than getting a standalone `0 8 * * *`. Adding a 6th distinct schedule will fail to deploy (`code: 10072`).
 
 ---
 

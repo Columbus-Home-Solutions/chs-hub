@@ -29,6 +29,24 @@ import { sendDailySummary } from "./lib/ops/daily-summary.js";
 import { replayDeadLetters } from "./lib/ops/dlq.js";
 import { checkHeartbeat } from "./lib/ops/heartbeat.js";
 import { syncWorkbook } from "./lib/wc/sync.js";
+import { runWcSpreadsheetSync, getWcStatus } from "./services/wc-spreadsheet.js";
+import { runQboSweep, getQboStatus } from "./lib/qbo-sync.js";
+import {
+  handleIntegrationsList,
+  handleIntegrationDetail,
+  handleQboConnect,
+  handleQboCallback,
+  handleQboDisconnect,
+  handleQboTest,
+  handleQboReference,
+  handleQboMapping,
+  handleQboStatus,
+  handleQboSync,
+} from "./routes/integrations.js";
+import {
+  handleWcSpreadsheetSync,
+  handleWcSpreadsheetStatus,
+} from "./routes/wc-spreadsheet.js";
 import { handleDrill } from "./routes/drill.js";
 import { handleHLProxy } from "./routes/hl.js";
 import { handleJobDetail as handleLegacyJobDetail, handleJobsList as handleLegacyJobsList } from "./routes/jobs.js";
@@ -481,6 +499,49 @@ export default {
 
     if (url.pathname === "/api/wc/sync" && request.method === "POST") {
       return handleWcSync(request, env);
+    }
+
+    // ── Integrations / QuickBooks Online (Sprint 14) ─────────────────
+    if (url.pathname === "/api/integrations" && request.method === "GET") {
+      return handleIntegrationsList(request, env);
+    }
+    if (url.pathname === "/api/integrations/quickbooks/connect" && request.method === "POST") {
+      return handleQboConnect(request, env);
+    }
+    // Callback is Access-gated (browser redirect); matched before the generic
+    // /api/integrations/:service detail route.
+    if (url.pathname === "/api/integrations/quickbooks/callback" && request.method === "GET") {
+      return handleQboCallback(request, env);
+    }
+    if (url.pathname === "/api/integrations/quickbooks/disconnect" && request.method === "POST") {
+      return handleQboDisconnect(request, env);
+    }
+    if (url.pathname === "/api/integrations/quickbooks/test" && request.method === "POST") {
+      return handleQboTest(request, env);
+    }
+    if (url.pathname === "/api/integrations/quickbooks/reference" && request.method === "GET") {
+      return handleQboReference(request, env);
+    }
+    if (url.pathname === "/api/integrations/quickbooks/mapping" && request.method === "POST") {
+      return handleQboMapping(request, env);
+    }
+    const integrationDetail = url.pathname.match(/^\/api\/integrations\/([^/]+)$/);
+    if (integrationDetail && request.method === "GET") {
+      return handleIntegrationDetail(request, env, decodeURIComponent(integrationDetail[1]));
+    }
+    if (url.pathname === "/api/quickbooks/status" && request.method === "GET") {
+      return handleQboStatus(request, env);
+    }
+    if (url.pathname === "/api/quickbooks/sync" && request.method === "POST") {
+      return handleQboSync(request, env);
+    }
+
+    // ── WC Spreadsheet (Sprint 14 rebuild) ───────────────────────────
+    if (url.pathname === "/api/wc-spreadsheet/sync" && request.method === "POST") {
+      return handleWcSpreadsheetSync(request, env);
+    }
+    if (url.pathname === "/api/wc-spreadsheet/status" && request.method === "GET") {
+      return handleWcSpreadsheetStatus(request, env);
     }
 
     // ── Ops / reliability routes ─────────────────────────────────────
@@ -1261,6 +1322,10 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
       // here keeps late fees fresh for the 07:00 Central daily summary. Order is
       // backup → billing so a backup captures pre-fee state.
       await runInvoiceBilling(env);
+      // QBO push sweep also folds into the nightly window (Sprint 14) — the
+      // 5-cron cap means no standalone "0 0 * * * QBO Sync" trigger. Runs after
+      // billing so freshly-accrued invoices/late-fees are included in the push.
+      await runQboSyncSweep(env);
       return;
     case "0 12 * * *":
       await runMorning(env);
@@ -1288,6 +1353,28 @@ async function runInvoiceBilling(env: Env): Promise<void> {
   }
 }
 
+// QBO push sweep (Sprint 14) — selects unsynced invoices/payments/expenses and
+// pushes each to QuickBooks (idempotent, keyed on the qbo_*_id columns). Folded
+// into the nightly tick rather than its own cron (5-cron cap). Non-fatal: a
+// disconnected/error connection is a no-op; per-record failures land in the
+// qbo_sync DLQ and the next sweep retries.
+async function runQboSyncSweep(env: Env): Promise<void> {
+  try {
+    const r = await runQboSweep(env);
+    if (!r.ran) {
+      console.log(`[cron 15 7 * * *] qbo_sync: skipped (${r.reason ?? "not_connected"})`);
+      return;
+    }
+    console.log(
+      `[cron 15 7 * * *] qbo_sync: inv=${r.invoices.pushed}/${r.invoices.skipped}/${r.invoices.failed} ` +
+        `pay=${r.payments.pushed}/${r.payments.skipped}/${r.payments.failed} ` +
+        `exp=${r.expenses.pushed}/${r.expenses.skipped}/${r.expenses.failed} (pushed/skipped/failed) in ${r.duration_ms}ms`,
+    );
+  } catch (err) {
+    console.error("[cron 15 7 * * *] qbo_sync failed:", (err as Error).message);
+  }
+}
+
 // Notification Processor (Sprint 7) — drains the queued notification_logs rows
 // that are due, after recomputing time-based triggers (quote follow-ups,
 // work_starting, appointment reminders) from D1. Failures are non-fatal.
@@ -1312,18 +1399,16 @@ async function runJobberTick(cron: string, env: Env): Promise<void> {
     console.error(`[cron ${cron}] jobber_full failed:`, (err as Error).message);
   }
 
-  // WC sync piggybacks on the Jobber tick so the sheet always reflects
-  // the freshest D1 state. Failures here are non-fatal.
+  // WC Spreadsheet sync (Sprint 14 rebuild) piggybacks on the */30 tick so the
+  // sheet always reflects the freshest D1 state. Failures here are non-fatal
+  // (logged to sync_log + DLQ inside the service).
   try {
-    const wc = await syncWorkbook(env);
+    const wc = await runWcSpreadsheetSync(env);
     console.log(
-      `[cron ${cron}] wc_sync: monthly=${wc.monthly.rows_written} weeks=${wc.kbpi.weeks_matched} in ${wc.duration_ms}ms ok=${wc.ok}`,
+      `[cron ${cron}] wc_spreadsheet: status=${wc.status} updated=[${wc.tabs_updated.join(",")}] failed=[${wc.tabs_failed.join(",")}] in ${wc.duration_ms}ms`,
     );
-    if (wc.errors.length > 0) {
-      console.warn(`[cron ${cron}] wc_sync errors:`, wc.errors);
-    }
   } catch (err) {
-    console.error(`[cron ${cron}] wc_sync failed:`, (err as Error).message);
+    console.error(`[cron ${cron}] wc_spreadsheet failed:`, (err as Error).message);
   }
 }
 
@@ -1431,10 +1516,27 @@ async function handleHealth(env: Env): Promise<Response> {
     checks.r2 = { status: "error", error: (err as Error).message };
   }
 
-  return jsonResponse(checks, {
-    status: checks.ok ? 200 : 503,
-    headers: { "x-total-ms": String(Date.now() - startedAt) },
-  });
+  // Integration sync status (Sprint 14) — QBO connection + last sweep, WC last
+  // sync. Non-fatal: never flip overall health on an integration read.
+  const integrations: Record<string, unknown> = {};
+  try {
+    integrations.quickbooks = await getQboStatus(env);
+  } catch (err) {
+    integrations.quickbooks = { error: (err as Error).message };
+  }
+  try {
+    integrations.wc_spreadsheet = await getWcStatus(env);
+  } catch (err) {
+    integrations.wc_spreadsheet = { error: (err as Error).message };
+  }
+
+  return jsonResponse(
+    { ...checks, integrations },
+    {
+      status: checks.ok ? 200 : 503,
+      headers: { "x-total-ms": String(Date.now() - startedAt) },
+    },
+  );
 }
 
 // GET /api/health/heartbeat — lightweight readiness probe for the CHS

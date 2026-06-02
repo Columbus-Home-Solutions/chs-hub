@@ -81,6 +81,20 @@ export function Settings(_props: RoutableProps) {
               Edit the automated emails and texts clients receive, and review the delivery log.
             </div>
           </Card>
+
+          <div class="mt-lg" />
+          <Card
+            title="Integrations"
+            actions={
+              <Button size="sm" variant="primary" onClick={() => go("/settings/integrations")}>
+                Manage
+              </Button>
+            }
+          >
+            <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+              Connect QuickBooks Online (sandbox), map categories, and run the push sync.
+            </div>
+          </Card>
         </>
       )}
 

@@ -53,9 +53,12 @@ export class SheetsClient {
     }));
   }
 
-  async readRange(range: string): Promise<(string | number | null)[][]> {
+  async readRange(
+    range: string,
+    renderOption: "UNFORMATTED_VALUE" | "FORMATTED_VALUE" = "UNFORMATTED_VALUE",
+  ): Promise<(string | number | null)[][]> {
     const token = await this.token();
-    const url = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`;
+    const url = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${encodeURIComponent(range)}?valueRenderOption=${renderOption}`;
     const resp = await fetch(url, {
       headers: { authorization: `Bearer ${token}` },
     });

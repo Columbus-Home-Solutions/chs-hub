@@ -387,19 +387,32 @@ Client approval is **not** an internal route — it happens when the client sign
 | GET | `/api/reports/cpa-export` | O | Generate CPA-ready annual export (CSV) |
 | GET | `/api/reports/1099-summary` | O | 1099-NEC summary for subs exceeding $600/year |
 
-### QuickBooks Sync
+### QuickBooks Sync (Sprint 14 — **push + reference-read**, not two-way)
+
+QBO direction is **one-way transactional push (CHS → QBO)** plus a **reference-data
+read** (Customers/Vendors/Accounts) for entity mapping. There is **no transactional
+pull-back** and **no QBO webhook consumption** this sprint — `/api/webhooks/quickbooks`
+remains a labeled seam. Push is **exactly-once**, keyed on the `qbo_*_id` columns.
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/quickbooks/sync` | O | Trigger manual QBO sync |
-| GET | `/api/quickbooks/status` | O | Sync status and last sync date |
+| GET | `/api/integrations` | O | List integration connections + status |
+| GET | `/api/integrations/:service` | O | Connection detail (QBO returns full status + counts) |
+| POST | `/api/integrations/quickbooks/connect` | O | Start OAuth (returns Intuit authorize URL + anti-CSRF state) |
+| GET | `/api/integrations/quickbooks/callback` | O (Access) | OAuth redirect: verify state, exchange code, store realmId + encrypted tokens |
+| POST | `/api/integrations/quickbooks/disconnect` | O | Revoke + mark disconnected |
+| POST | `/api/integrations/quickbooks/test` | O | CompanyInfo ping to confirm live creds |
+| GET | `/api/integrations/quickbooks/reference` | O | QBO Accounts + client/vendor match suggestions + current map |
+| POST | `/api/integrations/quickbooks/mapping` | O | Persist client→Customer, sub→Vendor, expense_type→Account, payment account |
+| POST | `/api/quickbooks/sync` | O | On-demand push sweep (same code path as the nightly fold) |
+| GET | `/api/quickbooks/status` | O | Connection status, last sweep, synced/pending/failed counts |
 
-### WC Spreadsheet Sync
+### WC Spreadsheet Sync (Sprint 14 — rebuilt to Module-Spec-WC-Spreadsheet)
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/wc-spreadsheet/sync` | O | Trigger manual WC Spreadsheet sync (carry forward) |
-| GET | `/api/wc-spreadsheet/status` | O | Sync status |
+| POST | `/api/wc-spreadsheet/sync` | O | Manual WC Spreadsheet sync (owner; also accepts SYNC_TRIGGER_SECRET) |
+| GET | `/api/wc-spreadsheet/status` | O | Last sync status + structured snapshot |
 
 ---
 
@@ -617,7 +630,9 @@ Not REST endpoints, but Worker cron triggers that need to be implemented.
 | 0 0 * * 0 | Weekly Photo Summary | Generate weekly photo summaries for active jobs |
 | 0 0 * * * | Google Drive Mirror | Process pending document/photo mirrors |
 | 0 0 * * * | Late Fee Calculator | Update late fee amounts on overdue invoices |
-| 0 0 * * * | QBO Sync | Push pending financial data to QuickBooks |
+| ~~0 0 * * * QBO Sync~~ | **SUPERSEDED (Sprint 14)** | Cloudflare Free plan caps at **5 cron triggers** and all 5 are full. The QBO push runs as a **dirty-flag reconcile sweep folded into the existing `15 7 * * *` nightly handler** (after invoice billing) + the on-demand `POST /api/quickbooks/sync`. **No standalone QBO cron.** |
+
+**As-built cron triggers (wrangler.toml — exactly 5):** `*/15 * * * *` (notifications), `*/30 * * * *` (Jobber tick + WC Spreadsheet sync), `15 * * * *` (heartbeat + DLQ replay + drive mirror), `15 7 * * *` (backup → invoice billing → **QBO push sweep**), `0 12 * * *` (daily summary).
 
 ---
 

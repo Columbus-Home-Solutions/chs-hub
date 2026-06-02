@@ -7,6 +7,7 @@ import { ClientDetail } from "./views/clients/ClientDetail";
 import { SubcontractorList } from "./views/subcontractors/SubcontractorList";
 import { SubcontractorDetail } from "./views/subcontractors/SubcontractorDetail";
 import { Settings } from "./views/settings/Settings";
+import { Integrations } from "./views/settings/Integrations";
 import { EstimateRequestPipeline } from "./views/estimating/EstimateRequestPipeline";
 import { EstimateRequestForm } from "./views/estimating/EstimateRequestForm";
 import { EstimateRequestDetail } from "./views/estimating/EstimateRequestDetail";
@@ -29,6 +30,7 @@ export function AppRouter() {
       <SubcontractorList path={`${BASE}/subcontractors`} />
       <SubcontractorDetail path={`${BASE}/subcontractors/:id`} />
       <Settings path={`${BASE}/settings`} />
+      <Integrations path={`${BASE}/settings/integrations`} />
       <NotificationSettings path={`${BASE}/settings/notifications`} />
       <NotificationLogs path={`${BASE}/settings/notifications/logs`} />
       <EstimateRequestPipeline path={`${BASE}/estimating`} />

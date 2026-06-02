@@ -30,7 +30,8 @@ export type DlqEntityType =
   | "quote"
   | "expense"
   | "payment"
-  | "client";
+  | "client"
+  | "wc_spreadsheet";
 
 export interface RecordDeadLetterArgs {
   jobName: string;            // e.g. 'jobber_full'
@@ -183,6 +184,7 @@ async function replayOne(
     case "expense":
     case "payment":
     case "client":
+    case "wc_spreadsheet":
       throw new Error(
         `replay not yet implemented for ${row.entity_type}; awaiting next full sync`,
       );
@@ -231,6 +233,7 @@ export interface DlqSummary {
   resolved_24h: number;
   oldest_open_at: string | null;
   by_type: Record<string, number>;
+  by_job: Record<string, number>;
 }
 
 export async function getDlqSummary(env: Env): Promise<DlqSummary> {
@@ -255,10 +258,20 @@ export async function getDlqSummary(env: Env): Promise<DlqSummary> {
   const map: Record<string, number> = {};
   for (const r of byType.results) map[r.entity_type] = r.n;
 
+  // Group by job_name too so sync types (jobber_full, qbo_sync, wc_spreadsheet)
+  // are distinctly visible in the System-Admin DLQ surface (Sprint 14).
+  const byJob = await env.DB.prepare(
+    `SELECT job_name, COUNT(*) AS n FROM sync_dead_letters
+     WHERE resolved_at IS NULL GROUP BY job_name`,
+  ).all<{ job_name: string; n: number }>();
+  const jobMap: Record<string, number> = {};
+  for (const r of byJob.results) jobMap[r.job_name] = r.n;
+
   return {
     open: open?.n ?? 0,
     resolved_24h: resolved?.n ?? 0,
     oldest_open_at: oldest?.oldest ?? null,
     by_type: map,
+    by_job: jobMap,
   };
 }

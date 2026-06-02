@@ -16,6 +16,7 @@
     "r2:create": "wrangler r2 bucket create chs-hub-files",
     "tail": "wrangler tail",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "jobber:oauth": "node scripts/jobber-oauth.mjs",
     "ops:dlq:list": "wrangler d1 execute chs-hub-db --remote --command \"SELECT id, entity_type, entity_id, attempts, last_attempt_status, error_message, first_seen_at, last_seen_at FROM sync_dead_letters WHERE resolved_at IS NULL ORDER BY last_seen_at DESC LIMIT 50\"",
     "ops:dlq:resolved": "wrangler d1 execute chs-hub-db --remote --command \"SELECT id, entity_type, entity_id, attempts, resolved_at FROM sync_dead_letters WHERE resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT 20\"",
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",
     "typescript": "^5.4.5",
+    "vitest": "^2.1.9",
     "wrangler": "^4.85.0"
   }
 }

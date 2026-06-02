@@ -1107,6 +1107,22 @@ Migrations continue from the existing chs-hub sequence (0011+). Recommended appr
 0022_seed_data.sql           — Default system_settings, notification_templates, estimate_templates
 ...
 0035_change_orders_apply.sql — change_orders: applied_at, end_date_extension_days, signed_name, signed_ip; UNIQUE(job_id, change_order_number); change_order_sent/_approved templates (Sprint 13)
+0036_qbo_sync.sql            — QBO push targets + reference mapping (Sprint 14):
+                               invoices.qbo_invoice_id, invoices.qbo_synced_at,
+                               payments.qbo_payment_id, payments.qbo_synced_at,
+                               clients.qbo_customer_id, subcontractors.qbo_vendor_id;
+                               partial-UNIQUE idx_invoices_qbo_id / idx_payments_qbo_id,
+                               idx_invoices_unsynced / idx_payments_unsynced;
+                               sync_log.details TEXT (WC sync snapshot);
+                               WC Spreadsheet config rows in system_settings (category 'wc_spreadsheet')
 ```
+
+> **Sprint 14 note:** `integration_connections` was reused as-is for the QBO connection
+> (encrypted `access_token`/`refresh_token`/`token_expiry`, `account_id`=realmId,
+> `configuration` JSON for environment + expense_type→Account map). `expenses` already
+> carried `pushed_to_qbo` + `qbo_transaction_id` (reused as the expense dirty flag + dedup
+> anchor). QBO tokens are stored **AES-GCM encrypted** (key: `QBO_TOKEN_ENCRYPTION_KEY`) —
+> there was no prior at-rest encryption scheme in the repo. **Direct-execute 0036**
+> (`wrangler d1 execute --file=…`); do NOT `migrations apply` (ledger only records 0001–0013).
 
 Each migration is idempotent where possible (CREATE TABLE IF NOT EXISTS, etc.) and tested with `npm run db:migrate:remote` after deployment.

@@ -85,4 +85,26 @@ export interface Env {
   // a key. Defaulted in code to the known proxy URL when unset.
   ANTHROPIC_API_KEY?: string;
   CLAUDE_PROXY_URL?: string;
+
+  // ─── QuickBooks Online (Sprint 14 — push + reference pull) ──────
+  // OAuth 2.0 app credentials from the Intuit Developer portal. Sandbox app
+  // credentials this sprint. Set via `wrangler secret put` at deploy; NEVER
+  // committed. Absent ⇒ the QBO connect flow returns a config error.
+  QBO_CLIENT_ID?: string;
+  QBO_CLIENT_SECRET?: string;
+  // Exact OAuth redirect URI registered in the Intuit app, e.g.
+  // https://dashboard.homesolutionsar.com/api/integrations/quickbooks/callback
+  QBO_REDIRECT_URI?: string;
+  // AES-GCM key (secret) used to encrypt QBO access/refresh tokens at rest in
+  // integration_connections. Any string — it's hashed to a 256-bit key. Absent
+  // ⇒ a documented dev-only fallback key is used (local only; logs a warning).
+  QBO_TOKEN_ENCRYPTION_KEY?: string;
+
+  // ─── WC Spreadsheet (Sprint 14 rebuild) ─────────────────────────
+  // Dedicated service-account JSON for the Sheets v4 API. Falls back to
+  // GOOGLE_SERVICE_ACCOUNT_JSON when unset (same SA powers Drive + Sheets).
+  WC_SHEETS_SERVICE_ACCOUNT?: string;
+  // Test spreadsheet ID used in dev when the wc_spreadsheet_id setting is blank.
+  // NEVER point this at the production WC workbook.
+  WC_TEST_SHEET_ID?: string;
 }

@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "build:frontend": "npm --prefix frontend run build",
-    "deploy": "npm run build:frontend && wrangler deploy",
+    "deploy": "npm run build:frontend && node -e \"const fs=require('fs'),t=Date.now();['index','portal','pay','quote'].forEach(n=>{const f='public/app/'+n+'.html',s=fs.readFileSync(f,'utf8').replace(/<!--build:[0-9]+-->/,'');fs.writeFileSync(f,s.replace('</head>','<!--build:'+t+'--></head>'))})\" && wrangler deploy",
     "db:create": "wrangler d1 create chs-hub-db",
     "db:migrate:local": "wrangler d1 migrations apply chs-hub-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply chs-hub-db --remote",

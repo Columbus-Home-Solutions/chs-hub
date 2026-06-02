@@ -11,6 +11,7 @@ import { Select } from "../../components/ui/Select";
 import { Timeline } from "../../components/Timeline";
 import { CommunicationModal } from "../clients/ClientDetail";
 import { PhotosTab } from "./PhotosTab";
+import { DocumentsTab } from "./DocumentsTab";
 import { DailyLogsTab } from "./DailyLogsTab";
 import { FinancialTab } from "./FinancialTab";
 import { ChangeOrdersTab } from "./ChangeOrdersTab";
@@ -45,6 +46,7 @@ type TabKey =
   | "change_orders"
   | "permits"
   | "photos"
+  | "documents"
   | "daily_logs"
   | "notes"
   | "activity";
@@ -57,6 +59,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "change_orders", label: "Change Orders" },
   { key: "permits", label: "Permits" },
   { key: "photos", label: "Photos" },
+  { key: "documents", label: "Documents" },
   { key: "daily_logs", label: "Daily Logs" },
   { key: "notes", label: "Field Notes" },
   { key: "activity", label: "Activity" },
@@ -143,6 +146,7 @@ export function JobDetail({ id }: DetailProps) {
       )}
       {tab === "permits" && id && <PermitsTab jobId={id} />}
       {tab === "photos" && id && <PhotosTab jobId={id} />}
+      {tab === "documents" && id && <DocumentsTab jobId={id} clientId={data.job.client_id} />}
       {tab === "daily_logs" && id && <DailyLogsTab jobId={id} />}
       {tab === "notes" && id && <SmartNotesPanel jobId={id} />}
       {tab === "activity" && (

@@ -263,7 +263,7 @@ function TemplateEditor({
           </FormField>
           {preview !== null && (
             <FormField label="Preview (sample data)">
-              <pre class="doc-preview" style={{ whiteSpace: "pre-wrap", background: "var(--surface-2, #f4f6f8)", padding: "var(--space-md)", borderRadius: "8px", maxHeight: "260px", overflow: "auto" }}>
+              <pre class="doc-preview" style={{ whiteSpace: "pre-wrap", background: "#ffffff", color: "#111827", padding: "var(--space-md)", borderRadius: "8px", maxHeight: "260px", overflow: "auto", fontFamily: "var(--font-mono, monospace)", fontSize: "var(--text-sm)" }}>
                 {preview}
               </pre>
             </FormField>

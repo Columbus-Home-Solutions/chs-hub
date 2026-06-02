@@ -231,13 +231,39 @@ export function HubFiles(_props: RoutableProps) {
   );
 }
 
+interface JobOption {
+  id: string;
+  job_number: number | null;
+  job_display: string | null;
+  title: string | null;
+  client_name: string | null;
+}
+
+function jobLabel(j: JobOption): string {
+  const head = j.job_display ?? (j.job_number != null ? `#${j.job_number}` : j.id.slice(0, 8));
+  const tail = j.title ?? j.client_name;
+  return tail ? `${head} · ${tail}` : head;
+}
+
 function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
   const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("other");
   const [jobId, setJobId] = useState("");
+  const [jobs, setJobs] = useState<JobOption[] | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<{ pipeline: Record<string, JobOption[]> }>("/api/jobs/pipeline")
+      .then((r) => {
+        const flat = Object.values(r.pipeline ?? {}).flat();
+        flat.sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+        setJobs(flat);
+      })
+      .catch(() => setJobs([]));
+  }, []);
 
   const upload = async () => {
     if (!file) return;
@@ -296,8 +322,16 @@ function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded:
         <FormField label="Category">
           <Select value={category} options={CATEGORIES.map((c) => ({ value: c, label: formatStatus(c) }))} onChange={setCategory} />
         </FormField>
-        <FormField label="Job ID (optional — leave blank for company)">
-          <input class="form-input" value={jobId} onInput={(e) => setJobId((e.target as HTMLInputElement).value)} />
+        <FormField label="Attach to job (or leave as Company)">
+          {jobs === null ? (
+            <div class="form-input" style={{ color: "var(--text-muted, #6b7280)" }}>Loading jobs…</div>
+          ) : (
+            <Select
+              value={jobId}
+              options={[{ value: "", label: "Company (no job)" }, ...jobs.map((j) => ({ value: j.id, label: jobLabel(j) }))]}
+              onChange={setJobId}
+            />
+          )}
         </FormField>
       </div>
     </Modal>

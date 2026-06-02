@@ -8,6 +8,8 @@ import { SubcontractorList } from "./views/subcontractors/SubcontractorList";
 import { SubcontractorDetail } from "./views/subcontractors/SubcontractorDetail";
 import { Settings } from "./views/settings/Settings";
 import { Integrations } from "./views/settings/Integrations";
+import { DocumentTemplates } from "./views/settings/DocumentTemplates";
+import { HubFiles } from "./views/documents/HubFiles";
 import { EstimateRequestPipeline } from "./views/estimating/EstimateRequestPipeline";
 import { EstimateRequestForm } from "./views/estimating/EstimateRequestForm";
 import { EstimateRequestDetail } from "./views/estimating/EstimateRequestDetail";
@@ -31,6 +33,7 @@ export function AppRouter() {
       <SubcontractorDetail path={`${BASE}/subcontractors/:id`} />
       <Settings path={`${BASE}/settings`} />
       <Integrations path={`${BASE}/settings/integrations`} />
+      <DocumentTemplates path={`${BASE}/settings/documents`} />
       <NotificationSettings path={`${BASE}/settings/notifications`} />
       <NotificationLogs path={`${BASE}/settings/notifications/logs`} />
       <EstimateRequestPipeline path={`${BASE}/estimating`} />
@@ -43,7 +46,7 @@ export function AppRouter() {
       <JobDetail path={`${BASE}/jobs/:id`} />
       <Placeholder path={`${BASE}/financial`} title="Financial" />
       <Placeholder path={`${BASE}/photos`} title="Photos" />
-      <Placeholder path={`${BASE}/documents`} title="Documents" />
+      <HubFiles path={`${BASE}/documents`} />
       <Placeholder path={`${BASE}/social`} title="Social" />
       <NotFound default />
     </Router>

@@ -369,7 +369,8 @@ Client approval is **not** an internal route — it happens when the client sign
 |--------|-------|------|-------------|
 | GET | `/api/jobs/:id/lien-waivers` | O/PM | Lien waivers for a job |
 | POST | `/api/lien-waivers` | O/PM | Create waiver request |
-| PUT | `/api/lien-waivers/:id` | O/PM | Update waiver (received, filed) |
+| PUT | `/api/lien-waivers/:id` | O/PM | Update waiver lifecycle (requested → received → filed) |
+| POST | `/api/lien-waivers/:id/generate` | O/PM | Generate the waiver document from a `lien_waiver` template (merge-populated) and store it in `documents` |
 
 ### Vendor / Material Database
 
@@ -452,38 +453,40 @@ remains a labeled seam. Push is **exactly-once**, keyed on the `qbo_*_id` column
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/documents` | O/PM/OA | List documents. Filters: `?job_id=xxx&context_type=xxx&category=xxx&search=xxx` |
+| GET | `/api/documents` | O/PM/OA | List documents (active only). Filters: `?job_id=xxx&context_type=xxx&category=xxx&search=xxx` |
 | GET | `/api/jobs/:id/documents` | O/PM/OA | Documents for a job, grouped by category |
 | GET | `/api/documents/:id` | O/PM/OA | Document detail |
-| POST | `/api/documents` | O/PM/OA | Upload document (multipart/form-data) |
+| POST | `/api/documents` | O/PM/OA | Upload document (multipart/form-data → R2 canonical store; 50 MB cap; audit-logged) |
+| GET | `/api/documents/:id/file` | O/PM/OA | Stream the underlying file from R2 (GET/HEAD) |
 | PUT | `/api/documents/:id` | O/PM/OA | Update metadata |
-| POST | `/api/documents/:id/share` | O/PM/OA | Generate shareable link (returns token + URL with expiration) |
+| DELETE | `/api/documents/:id` | O/PM/OA | Soft-delete (`is_active=0`; R2 object retained) |
+| POST | `/api/documents/:id/share` | O/PM/OA | Generate 7-day shareable link (returns token + public URL with expiration) |
 | GET | `/api/documents/company` | O/OA | Company documents (non-job) |
 
 ### Document Templates
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/document-templates` | O | List templates |
-| GET | `/api/document-templates/:id` | O | Template detail |
-| POST | `/api/document-templates` | O | Create template |
-| PUT | `/api/document-templates/:id` | O | Update template (creates new version) |
-| POST | `/api/document-templates/:id/generate` | O/PM | Generate document from template. Body: `{ job_id, client_id }` — auto-populates merge fields |
-| POST | `/api/document-templates/:id/preview` | O | Preview with sample data |
+| GET | `/api/document-templates` | O | List current template heads (one per lineage) + `merge_field_catalog` |
+| GET | `/api/document-templates/:id` | O | Template detail + version history |
+| POST | `/api/document-templates` | O | Create template (v1) |
+| PUT | `/api/document-templates/:id` | O | Update template. Content change → **copy-on-write new version** (links `previous_version_id`); `is_active`-only toggle is in-place |
+| POST | `/api/document-templates/:id/generate` | O/PM | Generate document from template. Body: `{ job_id, client_id }` — auto-populates merge fields, stores result in `documents` |
+| POST | `/api/document-templates/:id/preview` | O | Preview rendered output with sample merge data |
 
 ### Public Document Access
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/share/:token` | PUBLIC | Access shared document by token (validates expiration) |
+| GET | `/api/share/:token` | PUBLIC | Access shared document by token (validates expiration; serves file or expired-link page). Also reachable as `/share/:token` on every host incl. `client.homesolutionsar.com` |
 
 ### Job Completion Package
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/jobs/:id/completion-package` | O/PM | Generate completion package (compiles photos, docs, financials into PDF) |
-| GET | `/api/jobs/:id/completion-package` | O/PM | Get existing completion package |
-| POST | `/api/jobs/:id/completion-package/send` | O/PM | Send to client via email |
+| POST | `/api/jobs/:id/completion-package` | O/PM | Compile completion package — aggregates docs, before/after photos, financial summary into a **branded HTML package** (HTML-first, Workers-compatible; no Node PDF deps). Saved as a `completion_package` document **draft** |
+| GET | `/api/jobs/:id/completion-package` | O/PM | Get existing completion package (draft or sent) |
+| POST | `/api/jobs/:id/completion-package/send` | O/PM | Transition draft → **sent** (state tracked via `documents.is_signed`/`signed_date`); triggers `completion_package_sent` notification. Once sent, surfaces in the client portal |
 
 ---
 
@@ -628,7 +631,7 @@ Not REST endpoints, but Worker cron triggers that need to be implemented.
 | 0 0 * * * | Nightly Backup | D1 → R2 backup |
 | 0 6 * * * | Daily Summary | Send daily summary email via Resend |
 | 0 0 * * 0 | Weekly Photo Summary | Generate weekly photo summaries for active jobs |
-| 0 0 * * * | Google Drive Mirror | Process pending document/photo mirrors |
+| ~~0 0 * * * Google Drive Mirror~~ | **FOLDED (Sprint 15)** | No standalone trigger (5-cron cap). The mirror runs inside the existing `15 * * * *` hourly handler and now mirrors pending **photos, job files, company docs, and `documents`** (Sprint 15 added the `documents` table to the same batch loop). |
 | 0 0 * * * | Late Fee Calculator | Update late fee amounts on overdue invoices |
 | ~~0 0 * * * QBO Sync~~ | **SUPERSEDED (Sprint 14)** | Cloudflare Free plan caps at **5 cron triggers** and all 5 are full. The QBO push runs as a **dirty-flag reconcile sweep folded into the existing `15 7 * * *` nightly handler** (after invoice billing) + the on-demand `POST /api/quickbooks/sync`. **No standalone QBO cron.** |
 

@@ -32,6 +32,7 @@ export interface PortalLanding {
   company_name: string;
   portal_type: string;
   is_cost_plus: boolean;
+  completion_package_available?: boolean;
   on_hold: boolean;
   header: {
     client_name: string;

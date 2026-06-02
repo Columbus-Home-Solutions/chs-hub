@@ -291,6 +291,38 @@ import {
   handleChangeOrderSend,
   handleChangeOrderReject,
 } from "./routes/change-orders.js";
+// ── Document Management (Sprint 15) ──────────────────────────────────────────
+import {
+  handleDocumentCreate,
+  handleDocumentList,
+  handleCompanyDocuments,
+  handleJobDocuments,
+  handleDocumentGet,
+  handleDocumentFile,
+  handleDocumentUpdate,
+  handleDocumentDelete,
+  handleDocumentShare,
+  handleShareToken,
+} from "./routes/documents.js";
+import {
+  handleTemplateList as handleDocTemplateList,
+  handleTemplateGet as handleDocTemplateGet,
+  handleTemplateCreate as handleDocTemplateCreate,
+  handleTemplateUpdate as handleDocTemplateUpdate,
+  handleTemplatePreview as handleDocTemplatePreview,
+  handleTemplateGenerate as handleDocTemplateGenerate,
+} from "./routes/document-templates.js";
+import {
+  handleJobLienWaivers,
+  handleLienWaiverCreate,
+  handleLienWaiverUpdate,
+  handleLienWaiverGenerate,
+} from "./routes/lien-waivers.js";
+import {
+  handleCompletionPackageCompile,
+  handleCompletionPackageGet,
+  handleCompletionPackageSend,
+} from "./routes/completion-package.js";
 import {
   handleJobSchedule,
   handleScheduleFeed,
@@ -340,6 +372,9 @@ export default {
         p === "/pay" || p.startsWith("/pay/") ||
         p === "/quote" || p.startsWith("/quote/") ||
         p === "/portal" || p.startsWith("/portal/") ||
+        // Sprint 15: public shareable document links (token = access control).
+        p === "/share" || p.startsWith("/share/") ||
+        p.startsWith("/api/share/") ||
         p.startsWith("/app/assets/") ||
         p.startsWith("/api/public/pay/") ||
         p.startsWith("/api/public/quote/") ||
@@ -398,6 +433,17 @@ export default {
       return handlePublicQuoteGet(env, decodeURIComponent(pqGet[1]));
     }
 
+    // ── Public shareable document link (Sprint 15) ───────────────────
+    // PUBLIC, token-gated: the share_token is the access control (no auth).
+    // Served as /share/:token (and /api/share/:token) on every host; allowed on
+    // the public host via the guard above. Expired/invalid → branded 410 page.
+    // NOTE: like pay/quote/portal, the public URL rides the unresolved
+    // APP_PUBLIC_ORIGIN Pre-Launch blocker — local/workers.dev tested only.
+    const shareMatch = url.pathname.match(/^\/(?:api\/)?share\/([^/]+)$/);
+    if (shareMatch && (request.method === "GET" || request.method === "HEAD")) {
+      return handleShareToken(env, decodeURIComponent(shareMatch[1]), request.method);
+    }
+
     if (url.pathname === "/api/kpis" && request.method === "GET") {
       const payload = await handleKpis(env);
       return jsonResponse(payload);
@@ -443,6 +489,63 @@ export default {
       const cid = decodeURIComponent(companyById[1]);
       if (request.method === "DELETE") return handleCompanyDocumentDelete(env, cid);
       if (request.method === "PATCH") return handleCompanyDocumentPatch(env, cid, request);
+    }
+
+    // ── Document Management (Sprint 15) ──────────────────────────────
+    if (url.pathname === "/api/documents") {
+      if (request.method === "GET") return handleDocumentList(env, url);
+      if (request.method === "POST") return handleDocumentCreate(request, env);
+    }
+    if (url.pathname === "/api/documents/company" && request.method === "GET") {
+      return handleCompanyDocuments(env, url);
+    }
+    const docFile = url.pathname.match(/^\/api\/documents\/([^/]+)\/file$/);
+    if (docFile && (request.method === "GET" || request.method === "HEAD")) {
+      return handleDocumentFile(env, decodeURIComponent(docFile[1]), request.method);
+    }
+    const docShare = url.pathname.match(/^\/api\/documents\/([^/]+)\/share$/);
+    if (docShare && request.method === "POST") {
+      return handleDocumentShare(request, env, decodeURIComponent(docShare[1]));
+    }
+    const docById = url.pathname.match(/^\/api\/documents\/([^/]+)$/);
+    if (docById) {
+      const did = decodeURIComponent(docById[1]);
+      if (request.method === "GET") return handleDocumentGet(env, did);
+      if (request.method === "PUT") return handleDocumentUpdate(request, env, did);
+      if (request.method === "DELETE") return handleDocumentDelete(request, env, did);
+    }
+
+    // Document Template Manager (Sprint 15).
+    if (url.pathname === "/api/document-templates") {
+      if (request.method === "GET") return handleDocTemplateList(env, url);
+      if (request.method === "POST") return handleDocTemplateCreate(request, env);
+    }
+    const tplGenerate = url.pathname.match(/^\/api\/document-templates\/([^/]+)\/generate$/);
+    if (tplGenerate && request.method === "POST") {
+      return handleDocTemplateGenerate(request, env, decodeURIComponent(tplGenerate[1]));
+    }
+    const tplPreview = url.pathname.match(/^\/api\/document-templates\/([^/]+)\/preview$/);
+    if (tplPreview && request.method === "POST") {
+      return handleDocTemplatePreview(request, env, decodeURIComponent(tplPreview[1]));
+    }
+    const tplById = url.pathname.match(/^\/api\/document-templates\/([^/]+)$/);
+    if (tplById) {
+      const tid = decodeURIComponent(tplById[1]);
+      if (request.method === "GET") return handleDocTemplateGet(env, tid);
+      if (request.method === "PUT") return handleDocTemplateUpdate(request, env, tid);
+    }
+
+    // Lien Waivers (Sprint 15 — carried from S14).
+    if (url.pathname === "/api/lien-waivers" && request.method === "POST") {
+      return handleLienWaiverCreate(request, env);
+    }
+    const lwGenerate = url.pathname.match(/^\/api\/lien-waivers\/([^/]+)\/generate$/);
+    if (lwGenerate && request.method === "POST") {
+      return handleLienWaiverGenerate(request, env, decodeURIComponent(lwGenerate[1]));
+    }
+    const lwById = url.pathname.match(/^\/api\/lien-waivers\/([^/]+)$/);
+    if (lwById && request.method === "PUT") {
+      return handleLienWaiverUpdate(request, env, decodeURIComponent(lwById[1]));
     }
 
     if (url.pathname === "/api/job-files") {
@@ -673,6 +776,25 @@ export default {
       const jid = decodeURIComponent(jobChangeOrders[1]);
       if (request.method === "GET") return handleJobChangeOrders(env, jid);
       if (request.method === "POST") return handleChangeOrderCreate(request, env, jid);
+    }
+    // ── Job-scoped Document Management routes (Sprint 15) ─────────────
+    const jobDocuments = url.pathname.match(/^\/api\/jobs\/([^/]+)\/documents$/);
+    if (jobDocuments && request.method === "GET") {
+      return handleJobDocuments(env, decodeURIComponent(jobDocuments[1]));
+    }
+    const jobLienWaivers = url.pathname.match(/^\/api\/jobs\/([^/]+)\/lien-waivers$/);
+    if (jobLienWaivers && request.method === "GET") {
+      return handleJobLienWaivers(env, decodeURIComponent(jobLienWaivers[1]));
+    }
+    const jobCompletionSend = url.pathname.match(/^\/api\/jobs\/([^/]+)\/completion-package\/send$/);
+    if (jobCompletionSend && request.method === "POST") {
+      return handleCompletionPackageSend(request, env, decodeURIComponent(jobCompletionSend[1]));
+    }
+    const jobCompletion = url.pathname.match(/^\/api\/jobs\/([^/]+)\/completion-package$/);
+    if (jobCompletion) {
+      const jid = decodeURIComponent(jobCompletion[1]);
+      if (request.method === "GET") return handleCompletionPackageGet(env, jid);
+      if (request.method === "POST") return handleCompletionPackageCompile(request, env, jid);
     }
     // Schedule entries per job (Sprint 13).
     const jobSchedule = url.pathname.match(/^\/api\/jobs\/([^/]+)\/schedule$/);
@@ -1444,11 +1566,11 @@ async function runHourly(env: Env): Promise<void> {
         `[cron 15 * * * *] drive_mirror skipped: ${dm.reason ?? "unknown"}`,
       );
     } else if (
-      dm.photos + dm.expenses + dm.job_files + dm.company + dm.job_folder_stubs > 0 ||
+      dm.photos + dm.expenses + dm.job_files + dm.company + dm.documents + dm.job_folder_stubs > 0 ||
       dm.errors.length > 0
     ) {
       console.log(
-        `[cron 15 * * * *] drive_mirror: stubs=${dm.job_folder_stubs} photos=${dm.photos} expenses=${dm.expenses} job_files=${dm.job_files} company=${dm.company} err=${dm.errors.length} ms=${dm.duration_ms}`,
+        `[cron 15 * * * *] drive_mirror: stubs=${dm.job_folder_stubs} photos=${dm.photos} expenses=${dm.expenses} job_files=${dm.job_files} company=${dm.company} documents=${dm.documents} err=${dm.errors.length} ms=${dm.duration_ms}`,
       );
     }
     if (dm.errors.length > 0) {

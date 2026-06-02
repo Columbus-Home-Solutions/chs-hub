@@ -733,10 +733,17 @@ Extension of photos for AI-processed receipts.
 | template_type | TEXT | NOT NULL | "service_agreement", "cost_plus_agreement", "change_order", "lien_waiver", "proposal", "other" |
 | content | TEXT | NOT NULL | Template with {{merge_field}} placeholders |
 | merge_fields | TEXT | NOT NULL | JSON array of available fields |
-| is_active | INTEGER | NOT NULL DEFAULT 1 | |
-| version | INTEGER | NOT NULL DEFAULT 1 | Auto-increment on edit |
+| is_active | INTEGER | NOT NULL DEFAULT 1 | Only the current head of a lineage is active |
+| version | INTEGER | NOT NULL DEFAULT 1 | Incremented on each copy-on-write edit |
+| previous_version_id | TEXT | REFERENCES document_templates(id) | **Added in `0037` (Sprint 15).** Copy-on-write lineage pointer; editing content inserts a new row pointing back at the prior version. `NULL` for v1 |
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 | updated_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
+
+> **Versioning (Sprint 15):** Document templates are immutable per version. A content edit
+> via `PUT /api/document-templates/:id` creates a **new row** (`version+1`,
+> `previous_version_id` = old id), deactivates the prior head, and the list endpoint returns
+> only current heads. `completion_package` drafts/sent state is tracked on the `documents`
+> table (`is_signed`/`signed_date`) — no schema change there.
 
 ---
 
@@ -1115,6 +1122,9 @@ Migrations continue from the existing chs-hub sequence (0011+). Recommended appr
                                idx_invoices_unsynced / idx_payments_unsynced;
                                sync_log.details TEXT (WC sync snapshot);
                                WC Spreadsheet config rows in system_settings (category 'wc_spreadsheet')
+0037_document_template_versioning.sql — document_templates.previous_version_id (+ index) for
+                               copy-on-write template lineage (Sprint 15). Only additive change
+                               this sprint; documents/lien_waivers reused as-built.
 ```
 
 > **Sprint 14 note:** `integration_connections` was reused as-is for the QBO connection

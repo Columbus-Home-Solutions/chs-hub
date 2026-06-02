@@ -423,3 +423,18 @@
   font-weight: var(--weight-medium);
   margin-bottom: var(--space-xs);
 }
+
+/* Sprint 15 — Document Templates merge-field chips */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--brand, #c8102e);
+  background: var(--surface-2, #f4f6f8);
+  border: 1px solid var(--border, #e3e8ee);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chip:hover { background: var(--surface-3, #eceff3); }

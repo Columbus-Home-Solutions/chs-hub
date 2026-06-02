@@ -152,11 +152,21 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
     }
   }
 
+  // Completion-package tab is visible only once the owner has SENT it (S15).
+  const sentPkg = await env.DB.prepare(
+    `SELECT 1 AS x FROM documents
+      WHERE job_id = ? AND document_category='completion_package'
+        AND COALESCE(is_active,1)=1 AND COALESCE(is_signed,0)=1 LIMIT 1`,
+  )
+    .bind(job.id)
+    .first<{ x: number }>();
+
   return json({
     ok: true,
     company_name: await companyName(env),
     portal_type: job.portal_type ?? "standard",
     is_cost_plus: (job.portal_type ?? "") === "cost_plus",
+    completion_package_available: !!sentPkg,
     on_hold: onHold,
     header: {
       client_name: await clientName(env, job.client_id),
@@ -674,36 +684,63 @@ async function handleChangeOrderSign(
   }
 }
 
-// ─── GET /api/portal/:token/documents — read-only contract + linked docs ───────
-// Full Document Management (upload, share mgmt, completion-package compile) is
-// Sprint 15. This sprint surfaces the signed contract + docs already linked to
-// the job, read-only. TODO(Sprint 15): full Documents module.
+// ─── GET /api/portal/:token/documents — client-visible job documents (S15) ────
+// Read-only, token-gated, grouped by category. Visibility filter mirrors the
+// S12 photo pattern: is_active=1, and exclude internal-only categories
+// (receipt, sop, insurance, license) AND the completion_package (it has its own
+// tab and only appears once SENT). Documents are never editable here.
+
+const PORTAL_HIDDEN_DOC_CATEGORIES = ["receipt", "sop", "insurance", "license", "completion_package"];
 
 async function handleDocuments(env: Env, token: string): Promise<Response> {
   const job = await resolveJob(env, token);
   if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
+  const placeholders = PORTAL_HIDDEN_DOC_CATEGORIES.map(() => "?").join(",");
   const rows = (
     await env.DB.prepare(
       `SELECT id, title, file_type, document_category, is_signed, signed_date, created_at
          FROM documents
         WHERE job_id = ? AND COALESCE(is_active, 1) = 1
-        ORDER BY created_at DESC`,
+          AND document_category NOT IN (${placeholders})
+        ORDER BY document_category ASC, created_at DESC`,
     )
-      .bind(job.id)
-      .all<Record<string, unknown>>()
+      .bind(job.id, ...PORTAL_HIDDEN_DOC_CATEGORIES)
+      .all<Record<string, unknown> & { document_category: string }>()
   ).results ?? [];
-  return json({ ok: true, owning_sprint_full: "S15", documents: rows });
+  const groups: Record<string, unknown[]> = {};
+  for (const d of rows) (groups[d.document_category] ??= []).push(d);
+  return json({ ok: true, documents: rows, groups });
 }
 
-// ─── GET /api/portal/:token/completion-package — S15 SEAM (501) ────────────────
-// TODO(Sprint 15): completion-package compile (warranty docs, final photos, etc.).
+// ─── GET /api/portal/:token/completion-package — sent package only (S15) ──────
+// Renders the branded HTML package, but ONLY once the owner has SENT it
+// (is_signed=1). Draft packages are invisible to the client (review gate,
+// business rule 6). Returns 404 until sent so the portal tab stays hidden.
 
-function handleCompletionPackageSeam(): Response {
-  return err(
-    501,
-    "not_implemented",
-    "The completion package arrives in Sprint 15 (Document Management + completion package).",
-  );
+async function handleCompletionPackage(env: Env, token: string): Promise<Response> {
+  const job = await resolveJob(env, token);
+  if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
+  const pkg = await env.DB.prepare(
+    `SELECT id, r2_key, file_type, title, signed_date
+       FROM documents
+      WHERE job_id = ? AND document_category='completion_package'
+        AND COALESCE(is_active,1)=1 AND COALESCE(is_signed,0)=1
+      ORDER BY datetime(signed_date) DESC LIMIT 1`,
+  )
+    .bind(job.id)
+    .first<{ id: string; r2_key: string; file_type: string; title: string; signed_date: string | null }>();
+  if (!pkg) return err(404, "not_sent", "The completion package is not available yet.");
+
+  const obj = await env.FILES.get(pkg.r2_key);
+  if (!obj) return err(404, "not_sent", "The completion package is not available yet.");
+  // Render inline so the client can view + browser-print to PDF.
+  return new Response(obj.body, {
+    status: 200,
+    headers: {
+      "content-type": pkg.file_type || "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 }
 
 // ─── dispatcher ────────────────────────────────────────────────────────────────
@@ -770,7 +807,7 @@ export async function handlePortalApi(
   if (documents && method === "GET") return handleDocuments(env, decodeURIComponent(documents[1]));
 
   const completion = p.match(/^\/api\/portal\/([^/]+)\/completion-package$/);
-  if (completion && method === "GET") return handleCompletionPackageSeam();
+  if (completion && method === "GET") return handleCompletionPackage(env, decodeURIComponent(completion[1]));
 
   // Landing — match LAST so it never shadows the sub-routes above.
   const landing = p.match(/^\/api\/portal\/([^/]+)$/);

@@ -6,7 +6,7 @@ import { PhotosTab } from "./PhotosTab";
 import { InvoicesTab } from "./InvoicesTab";
 import { BudgetTab } from "./BudgetTab";
 import { MessagesTab } from "./MessagesTab";
-import { ScheduleTab, ChangeOrdersTab, DocumentsTab } from "./SeamTabs";
+import { ScheduleTab, ChangeOrdersTab, DocumentsTab, CompletionPackageTab } from "./SeamTabs";
 
 type TabKey =
   | "photos"
@@ -15,6 +15,7 @@ type TabKey =
   | "budget"
   | "change_orders"
   | "documents"
+  | "completion"
   | "messages";
 
 const TAB_LABELS: Record<TabKey, string> = {
@@ -24,6 +25,7 @@ const TAB_LABELS: Record<TabKey, string> = {
   budget: "Budget & Costs",
   change_orders: "Change Orders",
   documents: "Documents",
+  completion: "Completion Package",
   messages: "Messages",
 };
 
@@ -80,6 +82,7 @@ export function PortalApp() {
     ...(landing.is_cost_plus ? (["budget"] as TabKey[]) : []),
     "change_orders",
     "documents",
+    ...(landing.completion_package_available ? (["completion"] as TabKey[]) : []),
     "messages",
   ];
 
@@ -148,6 +151,7 @@ export function PortalApp() {
         {tab === "budget" && <BudgetTab token={token} />}
         {tab === "change_orders" && <ChangeOrdersTab token={token} />}
         {tab === "documents" && <DocumentsTab token={token} />}
+        {tab === "completion" && <CompletionPackageTab token={token} />}
         {tab === "messages" && <MessagesTab token={token} />}
       </main>
 

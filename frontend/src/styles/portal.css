@@ -596,3 +596,13 @@
   width: 100%;
 }
 .portal-sign-modal h3 { margin-bottom: var(--space-sm); }
+
+/* Sprint 15 — portal documents category grouping */
+.portal-doc-group { margin-top: var(--space-md); }
+.portal-doc-group__label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--quote-muted, #5b6b7b);
+  margin-bottom: var(--space-xs);
+}

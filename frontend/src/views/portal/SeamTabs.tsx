@@ -177,31 +177,77 @@ function SignModal({
   );
 }
 
-// ─── Documents — read-only (full Document Management is Sprint 15) ─────────────
+// ─── Documents — read-only, grouped by category (Sprint 15) ───────────────────
+interface PortalDoc {
+  id: string;
+  title: string | null;
+  file_type: string | null;
+  document_category: string;
+  is_signed: number | null;
+  created_at: string | null;
+}
+
+const DOC_CATEGORY_LABELS: Record<string, string> = {
+  contract: "Contracts",
+  change_order: "Change Orders",
+  permit: "Permits",
+  plan_drawing: "Plans & Drawings",
+  invoice: "Invoices",
+  lien_waiver: "Lien Waivers",
+  photo_report: "Photo Reports",
+  other: "Other",
+};
+
 export function DocumentsTab({ token }: { token: string }) {
-  const [rows, setRows] = useState<any[] | null>(null);
+  const [groups, setGroups] = useState<Record<string, PortalDoc[]> | null>(null);
   useEffect(() => {
-    getJson<{ documents: any[] }>(`/api/portal/${token}/documents`)
-      .then((r) => setRows(r.documents))
-      .catch(() => setRows([]));
+    getJson<{ groups: Record<string, PortalDoc[]> }>(`/api/portal/${token}/documents`)
+      .then((r) => setGroups(r.groups ?? {}))
+      .catch(() => setGroups({}));
   }, [token]);
 
-  if (!rows) return <div class="quote-muted">Loading documents…</div>;
-  if (rows.length === 0) {
+  if (!groups) return <div class="quote-muted">Loading documents…</div>;
+  const cats = Object.keys(groups);
+  if (cats.length === 0) {
     return <Empty icon="📄" title="No documents yet" body="Your signed contract and shared documents will appear here." />;
   }
   return (
     <div class="portal-card">
       <h3 class="portal-card__title">Documents</h3>
-      {rows.map((d, i) => (
-        <div class="portal-invoice__history-row" key={i}>
-          <span>
-            {d.title ?? "Document"}
-            {d.is_signed ? " · Signed" : ""}
-          </span>
-          <span class="quote-muted">{formatStatus(d.document_category) || formatStatus(d.file_type)}</span>
+      {cats.map((cat) => (
+        <div key={cat} class="portal-doc-group">
+          <div class="portal-doc-group__label">{DOC_CATEGORY_LABELS[cat] ?? formatStatus(cat)}</div>
+          {groups[cat].map((d) => (
+            <div class="portal-invoice__history-row" key={d.id}>
+              <span>{d.title ?? "Document"}{d.is_signed ? " · Signed" : ""}</span>
+              <span class="quote-muted">{d.created_at ? formatDate(d.created_at) : ""}</span>
+            </div>
+          ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Completion Package — sent HTML artifact, printable (Sprint 15) ────────────
+// Only mounted when landing.completion_package_available (owner has sent it).
+export function CompletionPackageTab({ token }: { token: string }) {
+  const src = `/api/portal/${token}/completion-package`;
+  return (
+    <div class="portal-card">
+      <div class="flex gap-sm" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <h3 class="portal-card__title" style={{ margin: 0 }}>Project Completion Package</h3>
+        <button class="quote-btn" onClick={() => window.open(src, "_blank")}>Open &amp; print</button>
+      </div>
+      <p class="quote-muted" style={{ marginTop: "var(--space-sm)" }}>
+        Your finished-project summary — documents, photos, and financials. Use your browser's
+        “Save as PDF” to keep a copy.
+      </p>
+      <iframe
+        title="Completion package"
+        src={src}
+        style={{ width: "100%", height: "70vh", border: "1px solid var(--line, #e3e8ee)", borderRadius: "8px", background: "#fff" }}
+      />
     </div>
   );
 }

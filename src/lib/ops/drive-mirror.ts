@@ -26,6 +26,8 @@ const BATCH_PHOTOS = 5;
 const BATCH_EXPENSES = 5;
 const BATCH_JOB_FILES = 5;
 const BATCH_COMPANY = 5;
+/** Sprint 15: documents (the unified Document Management table) mirror batch. */
+const BATCH_DOCUMENTS = 5;
 /** Max jobs per mirror run to pre-create SITE PHOTOS + PROJECT FILES trees. Keep low:
  * each stub triggers many Drive `fetch` calls; the cron also runs photo/expense/file/company batches. */
 const BATCH_JOB_FOLDER_STUBS = 4;
@@ -47,6 +49,20 @@ const MIRROR_JOB_FILE_FOLDER: Record<string, string> = {
   pay_stub: "Sub / pay records",
   design: "Design & finishes",
   other: "Design & finishes",
+};
+
+/** Sprint 15: map a `documents.document_category` to the job PROJECT FILES
+ * subfolder docType the mirror already knows (reuses ensureProjectFileLeafFolder). */
+const DOC_CATEGORY_TO_DOCTYPE: Record<string, string> = {
+  contract: "contracts",
+  change_order: "contracts",
+  lien_waiver: "contracts",
+  permit: "design",
+  plan_drawing: "drawings",
+  invoice: "design",
+  photo_report: "design",
+  completion_package: "design",
+  other: "other",
 };
 
 function mirrorPhotoCategoryKey(dbCategory: string | null | undefined): string {
@@ -74,6 +90,8 @@ export interface DriveMirrorResult {
   expenses: number;
   job_files: number;
   company: number;
+  /** Sprint 15: rows mirrored from the unified `documents` table this cycle. */
+  documents: number;
   errors: string[];
   duration_ms: number;
 }
@@ -91,12 +109,13 @@ export interface DriveMirrorStatus {
     expenses_with_receipt: number;
     job_files: number;
     company_documents: number;
+    documents: number;
   };
   /** When all Drive vars are set, whether a Drive-scoped token can be minted */
   drive_token_ok: boolean | null;
   drive_token_error?: string;
   /** What this job copies (for operator expectations) */
-  mirrors: readonly ["photos", "expense_receipts", "job_files", "company_documents"];
+  mirrors: readonly ["photos", "expense_receipts", "job_files", "company_documents", "documents"];
   /** `jobs` rows with no `stub_<id>` in `drive_mirror_folders` yet (folder tree not created in Drive). */
   jobs_without_drive_stub: number;
 }
@@ -113,7 +132,7 @@ export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus>
     reason = "DRIVE_SHARED_DRIVE_ID or DRIVE_MIRROR_ROOT_FOLDER_ID unset";
   }
 
-  const [ph, ex, jf, co, stub] = await Promise.all([
+  const [ph, ex, jf, co, doc, stub] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) as n FROM photos WHERE drive_mirrored_at IS NULL")
       .first<{ n: number }>(),
     env.DB.prepare(
@@ -127,6 +146,10 @@ export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus>
       n: number;
     }>(),
     env.DB.prepare(
+      `SELECT COUNT(*) as n FROM documents
+       WHERE COALESCE(is_active,1)=1 AND COALESCE(mirror_status,'pending') IN ('pending','failed')`,
+    ).first<{ n: number }>(),
+    env.DB.prepare(
       `SELECT COUNT(*) as n FROM jobs j
        WHERE NOT EXISTS (
          SELECT 1 FROM drive_mirror_folders f WHERE f.path_key = ('stub_' || j.id)
@@ -139,6 +162,7 @@ export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus>
     expenses_with_receipt: ex?.n ?? 0,
     job_files: jf?.n ?? 0,
     company_documents: co?.n ?? 0,
+    documents: doc?.n ?? 0,
   };
 
   const jobs_without_drive_stub = stub?.n ?? 0;
@@ -164,7 +188,7 @@ export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus>
     pending,
     drive_token_ok,
     drive_token_error,
-    mirrors: ["photos", "expense_receipts", "job_files", "company_documents"] as const,
+    mirrors: ["photos", "expense_receipts", "job_files", "company_documents", "documents"] as const,
     jobs_without_drive_stub,
   };
 }
@@ -178,6 +202,7 @@ export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
     expenses: 0,
     job_files: 0,
     company: 0,
+    documents: 0,
     errors: [],
     duration_ms: 0,
   };
@@ -217,6 +242,7 @@ export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
     await mirrorExpensesBatch(env, token, driveId, expensesId, jobsRootId, out);
     await mirrorJobFilesBatch(env, token, driveId, jobsRootId, out);
     await mirrorCompanyBatch(env, token, driveId, companyRootId, out);
+    await mirrorDocumentsBatch(env, token, driveId, jobsRootId, companyRootId, out);
   } catch (e) {
     out.errors.push((e as Error).message);
   }
@@ -867,6 +893,112 @@ async function mirrorCompanyBatch(
       out.company++;
     } catch (e) {
       out.errors.push(`company ${r.id}: ${(e as Error).message}`);
+    }
+  }
+}
+
+/**
+ * Sprint 15 — mirror the unified `documents` table. Picks up rows whose
+ * mirror_status is pending OR failed (best-effort retry next cycle, business
+ * rule 2), copies R2 → Drive, stamps google_drive_id/url + mirror_date and
+ * flips mirror_status to 'synced'. On error → 'failed' (re-tried next run).
+ * Job-context docs land in the job's PROJECT FILES tree (reusing the existing
+ * folder cache); company docs go under the flat Company segment. R2 + D1 stay
+ * canonical. Runs inside the SAME hourly 15 * * * handler — NO new cron.
+ */
+async function mirrorDocumentsBatch(
+  env: Env,
+  token: string,
+  driveId: string,
+  jobsRootId: string,
+  companyRootId: string,
+  out: DriveMirrorResult,
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT d.id, d.r2_key, d.file_type, d.title, d.context_type, d.document_category, d.job_id,
+            j.job_number AS job_number, j.title AS job_title, j.client_id AS client_id,
+            c.name AS client_name, j.start_at AS job_start_at, j.created_at AS job_created_at,
+            j.synced_at AS job_synced_at
+       FROM documents d
+       LEFT JOIN jobs j ON j.id = d.job_id
+       LEFT JOIN clients c ON c.id = j.client_id
+      WHERE COALESCE(d.is_active,1)=1
+        AND COALESCE(d.mirror_status,'pending') IN ('pending','failed')
+      ORDER BY datetime(d.created_at) ASC
+      LIMIT ?`,
+  )
+    .bind(BATCH_DOCUMENTS)
+    .all<{
+      id: string;
+      r2_key: string;
+      file_type: string | null;
+      title: string;
+      context_type: string;
+      document_category: string;
+      job_id: string | null;
+      job_number: number | null;
+      job_title: string | null;
+      client_id: string | null;
+      client_name: string | null;
+      job_start_at: string | null;
+      job_created_at: string | null;
+      job_synced_at: string | null;
+    }>();
+  for (const r of rows.results ?? []) {
+    try {
+      const obj = await env.FILES.get(r.r2_key);
+      if (!obj) {
+        // No bytes to mirror — mark failed so it isn't retried forever-fast.
+        await env.DB.prepare("UPDATE documents SET mirror_status='failed' WHERE id = ?").bind(r.id).run();
+        out.errors.push(`document ${r.id}: missing R2 ${r.r2_key}`);
+        continue;
+      }
+      const buf = await obj.arrayBuffer();
+      let parentId: string;
+      if (r.job_id) {
+        const jobRootId = await ensureJobFolderId(
+          env,
+          token,
+          driveId,
+          jobsRootId,
+          r.job_id,
+          r.job_number,
+          r.job_title,
+          r.client_id,
+          r.client_name,
+          { jobStartAt: r.job_start_at, jobCreatedAt: r.job_created_at, jobSyncedAt: r.job_synced_at },
+        );
+        const docType = DOC_CATEGORY_TO_DOCTYPE[r.document_category] ?? "other";
+        parentId = await ensureProjectFileLeafFolder(env, token, driveId, jobRootId, r.job_id, docType);
+      } else {
+        parentId = await docTypeFolderId(env, token, driveId, companyRootId, r.document_category || "other");
+      }
+      const safe = r.title.replace(/[\\/]/g, "_").slice(0, 200);
+      const name = `doc_${r.id}__${safe || "document"}`;
+      const mime = obj.httpMetadata?.contentType || r.file_type || guessMimeFromKey(r.r2_key);
+      const driveFileId = await uploadFileMultipart({
+        token,
+        name,
+        parents: [parentId],
+        body: buf,
+        mimeType: mime || "application/octet-stream",
+      });
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        `UPDATE documents
+            SET mirror_status='synced', mirror_date=?, google_drive_id=?,
+                google_drive_url=?
+          WHERE id = ?`,
+      )
+        .bind(now, driveFileId, `https://drive.google.com/file/d/${driveFileId}/view`, r.id)
+        .run();
+      out.documents++;
+    } catch (e) {
+      await env.DB.prepare("UPDATE documents SET mirror_status='failed' WHERE id = ?")
+        .bind(r.id)
+        .run()
+        .catch(() => undefined);
+      out.errors.push(`document ${r.id}: ${(e as Error).message}`);
     }
   }
 }

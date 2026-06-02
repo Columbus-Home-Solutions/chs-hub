@@ -95,6 +95,21 @@ export function Settings(_props: RoutableProps) {
               Connect QuickBooks Online (sandbox), map categories, and run the push sync.
             </div>
           </Card>
+
+          <div class="mt-lg" />
+          <Card
+            title="Document Templates"
+            actions={
+              <Button size="sm" variant="primary" onClick={() => go("/settings/documents")}>
+                Manage
+              </Button>
+            }
+          >
+            <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+              Create and version reusable documents (lien waivers, proposals, agreements) with
+              merge-field auto-population.
+            </div>
+          </Card>
         </>
       )}
 

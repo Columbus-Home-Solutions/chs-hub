@@ -1273,6 +1273,9 @@ export default {
     const isDashboardHost =
       host === "dashboard.homesolutionsar.com" ||
       host === "dash.homesolutionsar.com"; // legacy alias, harmless to keep
+    if (isDashboardHost && url.pathname === "/") {
+      return Response.redirect("https://dashboard.homesolutionsar.com/app/", 301);
+    }
     if (isDashboardHost && !url.pathname.startsWith("/dashboard")) {
       const rewritten = new URL(request.url);
       rewritten.pathname = "/dashboard" + (url.pathname === "/" ? "/" : url.pathname);

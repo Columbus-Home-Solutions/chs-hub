@@ -155,14 +155,16 @@ async function writeTokens(
   const encRefresh = await encryptToken(env, args.refreshToken);
   const now = new Date().toISOString();
 
-  // Upsert keyed on the unique `service`. A single write persists BOTH tokens —
+  // Upsert keyed on the PRIMARY KEY `id`. `integration_connections.service` is
+  // CHECK-constrained but NOT unique, so the row id is deterministically the
+  // service name — one row per service. A single write persists BOTH tokens;
   // this atomicity is the entire point (rotation must never lose the refresh).
   await env.DB.prepare(
     `INSERT INTO integration_connections
        (id, service, status, access_token, refresh_token, token_expiry,
         account_id, configuration, last_error, connected_at, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
-     ON CONFLICT(service) DO UPDATE SET
+     ON CONFLICT(id) DO UPDATE SET
        status        = excluded.status,
        access_token  = excluded.access_token,
        refresh_token = excluded.refresh_token,
@@ -173,7 +175,7 @@ async function writeTokens(
        updated_at    = excluded.updated_at`,
   )
     .bind(
-      crypto.randomUUID(),
+      QBO_SERVICE,
       QBO_SERVICE,
       args.status ?? "connected",
       encAccess,

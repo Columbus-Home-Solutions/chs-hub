@@ -356,10 +356,14 @@ export async function runQboSweep(env: Env): Promise<SweepResult> {
 }
 
 async function sweepInvoices(env: Env, conn: QboConnection, result: SweepResult): Promise<void> {
+  // Invoices link to a client through their job (jobs.client_id); the direct
+  // invoices.client_id column is only sparsely populated, so resolve via the job
+  // and fall back to a direct client_id when one is present.
   const { results } = await env.DB.prepare(
     `SELECT i.id, i.job_id, i.invoice_number, i.total, c.qbo_customer_id
        FROM invoices i
-       LEFT JOIN clients c ON c.id = i.client_id
+       LEFT JOIN jobs j ON j.id = i.job_id
+       LEFT JOIN clients c ON c.id = COALESCE(i.client_id, j.client_id)
       WHERE i.qbo_invoice_id IS NULL
       LIMIT 200`,
   ).all<InvoiceRow>();
@@ -398,11 +402,14 @@ async function sweepInvoices(env: Env, conn: QboConnection, result: SweepResult)
 }
 
 async function sweepPayments(env: Env, conn: QboConnection, result: SweepResult): Promise<void> {
+  // Same as invoices: resolve the client through the linked invoice's job,
+  // preferring a direct payments.client_id when present.
   const { results } = await env.DB.prepare(
     `SELECT p.id, p.amount, p.invoice_id, c.qbo_customer_id, i.qbo_invoice_id
        FROM payments p
-       LEFT JOIN clients c ON c.id = p.client_id
        LEFT JOIN invoices i ON i.id = p.invoice_id
+       LEFT JOIN jobs j ON j.id = i.job_id
+       LEFT JOIN clients c ON c.id = COALESCE(p.client_id, j.client_id)
       WHERE p.qbo_payment_id IS NULL
       LIMIT 200`,
   ).all<PaymentRow>();

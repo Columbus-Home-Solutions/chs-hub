@@ -12,7 +12,7 @@
 import type { Env } from "../env.js";
 import { authenticateRequest, AuthError } from "../middleware/auth.js";
 import { requireRole, RoleError } from "../middleware/roles.js";
-import { getWcStatus, runWcSpreadsheetSync } from "../services/wc-spreadsheet.js";
+import { getWcStatus, listWcSheetTabs, runWcSpreadsheetSync } from "../services/wc-spreadsheet.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -51,5 +51,12 @@ export async function handleWcSpreadsheetSync(request: Request, env: Env): Promi
 export async function handleWcSpreadsheetStatus(request: Request, env: Env): Promise<Response> {
   const denied = await requireOwnerOrSecret(request, env);
   if (denied) return denied;
-  return json(await getWcStatus(env));
+  const status = await getWcStatus(env);
+  let sheet_tabs: string[] | string = [];
+  try {
+    sheet_tabs = await listWcSheetTabs(env);
+  } catch (e) {
+    sheet_tabs = `error: ${(e as Error).message}`;
+  }
+  return json({ ...status, sheet_tabs });
 }

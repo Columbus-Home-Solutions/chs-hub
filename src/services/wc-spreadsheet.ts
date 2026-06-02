@@ -448,7 +448,9 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     }
   } catch (err) {
     result.tabs_failed.push(settings.marketingTab);
-    console.warn(`[wc] marketing discovery failed: ${(err as Error).message}`);
+    const msg = (err as Error).message;
+    result.error_message = (result.error_message ? result.error_message + " | " : "") + `marketing: ${msg}`;
+    console.warn(`[wc] marketing discovery failed: ${msg}`);
   }
 
   // Monthly Net Profits — columns B:C (configurable): Total Income, Net Profits
@@ -611,4 +613,15 @@ export async function getWcStatus(env: Env): Promise<WcStatus> {
     last_status: last?.status ?? null,
     last_details: details,
   };
+}
+
+export async function listWcSheetTabs(env: Env): Promise<string[]> {
+  const settings = await loadSettings(env);
+  const { id: sheetId } = resolveSheetId(settings, env);
+  if (!sheetId) throw new Error("no sheet id");
+  const sa = env.WC_SHEETS_SERVICE_ACCOUNT ?? env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!sa) throw new Error("no service account");
+  const client = new SheetsClient(sa, sheetId);
+  const tabs = await client.listSheets();
+  return tabs.map((t) => t.title);
 }

@@ -144,6 +144,15 @@ crons = [
 [observability]
 enabled = true
 
+# ─── Build command ──────────────────────────────────────────────────────────
+# Runs BEFORE `wrangler deploy` regardless of who invokes it — local CLI or
+# the Cloudflare GitHub integration. Keeps public/app/ (gitignored Vite output)
+# populated so static assets are always uploaded with the worker code.
+# The npm run deploy script delegates entirely to this; never call
+# `npm run build:frontend && wrangler deploy` directly (it would build twice).
+[build]
+command = "bash scripts/build-frontend.sh"
+
 # Drive mirror + Jobber full sync need many `fetch()`s and (on Paid) higher CPU for
 # long crons. The `[limits]` block is Workers Paid–only; it breaks `wrangler deploy`
 # on Free (API error re CPU / configurable caps). Uncomment after upgrading:

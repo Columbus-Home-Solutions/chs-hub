@@ -1,6 +1,5 @@
 import type { RoutableProps } from "preact-router";
 import { useEffect, useState } from "preact/hooks";
-import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -11,134 +10,113 @@ import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatStatus } from "../../lib/format";
-import { go } from "../../lib/nav";
 import { REVIEW_SOURCES, type SavedReview } from "../../types";
 import { useAuth } from "../../store/auth";
+import { isOwner, ROLE_LABELS } from "../../lib/rbac";
+import { UsersTab } from "./UsersTab";
+import { AuditLogTab, DlqTab, BackupTab, HealthTab } from "./ReliabilityTabs";
+import { CompanyTab, FinancialSettingsTab, NotificationsTab } from "./SettingsEditors";
+import { IntegrationsTab } from "./IntegrationsTab";
 
-interface SettingShape {
-  key: string;
-  label: string;
-  category: string;
-  value: string;
-  value_type: string;
-  description: string | null;
-}
+type TabKey =
+  | "company"
+  | "financial"
+  | "integrations"
+  | "notifications"
+  | "users"
+  | "audit"
+  | "dlq"
+  | "backup"
+  | "health"
+  | "mobile";
 
-interface SettingsResponse {
-  settings: SettingShape[];
-}
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "company", label: "Company" },
+  { key: "financial", label: "Financial" },
+  { key: "integrations", label: "Integrations" },
+  { key: "notifications", label: "Notifications" },
+  { key: "users", label: "Users" },
+  { key: "audit", label: "Audit Log" },
+  { key: "dlq", label: "Failure Queue" },
+  { key: "backup", label: "Backup" },
+  { key: "health", label: "Health" },
+  { key: "mobile", label: "Mobile App" },
+];
 
 export function Settings(_props: RoutableProps) {
-  const { user } = useAuth();
-  const { data, loading, error } = useApi<SettingsResponse>("/api/settings");
+  const { user, loading } = useAuth();
+  const [tab, setTab] = useState<TabKey>("company");
 
-  const grouped: Record<string, SettingShape[]> = {};
-  for (const s of data?.settings ?? []) {
-    (grouped[s.category] ??= []).push(s);
+  if (loading) return <Spinner center />;
+
+  // Owner-only surface (business rule 1). The server also returns 403 on every
+  // System Admin route — this is the UI half of the same gate.
+  if (!isOwner(user)) {
+    return (
+      <div>
+        <div class="view-header">
+          <h1 class="view-title">Settings</h1>
+        </div>
+        <Card title="Owner only">
+          <p class="text--muted">
+            System Settings are restricted to the Owner role. You're signed in as{" "}
+            <strong>{user ? ROLE_LABELS[user.role] : "an unknown role"}</strong>.
+          </p>
+        </Card>
+      </div>
+    );
   }
 
   return (
     <div>
       <div class="view-header">
         <div>
-          <h1 class="view-title">Settings</h1>
-          <p class="view-subtitle">
-            System settings (read-only here). Editing is owner-only via the settings API.
-          </p>
+          <h1 class="view-title">System Settings</h1>
+          <p class="view-subtitle">Owner administration — {user?.email}</p>
         </div>
       </div>
 
-      <Card title="Signed in as">
-        <div class="kv">
-          <div class="kv__row">
-            <span class="kv__label">Email</span>
-            <span class="kv__value">{user?.email ?? "not signed in"}</span>
-          </div>
-          <div class="kv__row">
-            <span class="kv__label">Role</span>
-            <span class="kv__value">{user?.role ?? "—"}</span>
-          </div>
-        </div>
-      </Card>
+      <div class="job-tabs" role="tablist">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            role="tab"
+            aria-selected={tab === t.key}
+            class={`job-tab${tab === t.key ? " job-tab--active" : ""}`}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      {user?.role === "owner" && (
+      <div class="mt-lg" />
+
+      {tab === "company" && (
         <>
+          <CompanyTab />
           <div class="mt-lg" />
-          <Card
-            title="Notifications"
-            actions={
-              <div class="flex gap-sm">
-                <Button size="sm" variant="secondary" onClick={() => go("/settings/notifications/logs")}>
-                  View Log
-                </Button>
-                <Button size="sm" variant="primary" onClick={() => go("/settings/notifications")}>
-                  Manage Templates
-                </Button>
-              </div>
-            }
-          >
-            <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-              Edit the automated emails and texts clients receive, and review the delivery log.
-            </div>
-          </Card>
-
-          <div class="mt-lg" />
-          <Card
-            title="Integrations"
-            actions={
-              <Button size="sm" variant="primary" onClick={() => go("/settings/integrations")}>
-                Manage
-              </Button>
-            }
-          >
-            <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-              Connect QuickBooks Online (sandbox), map categories, and run the push sync.
-            </div>
-          </Card>
-
-          <div class="mt-lg" />
-          <Card
-            title="Document Templates"
-            actions={
-              <Button size="sm" variant="primary" onClick={() => go("/settings/documents")}>
-                Manage
-              </Button>
-            }
-          >
-            <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-              Create and version reusable documents (lien waivers, proposals, agreements) with
-              merge-field auto-population.
-            </div>
-          </Card>
+          <ReviewsSection />
         </>
       )}
-
-      <div class="mt-lg" />
-      <ReviewsSection />
-
-      <div class="mt-lg" />
-
-      {loading && <Spinner center />}
-      {error && <div class="empty-state">Couldn't load settings: {error}</div>}
-
-      {!loading &&
-        !error &&
-        Object.entries(grouped).map(([category, items]) => (
-          <div key={category} class="mb-lg">
-            <Card title={category.charAt(0).toUpperCase() + category.slice(1)}>
-              <div class="kv">
-                {items.map((s) => (
-                  <div key={s.key} class="kv__row">
-                    <span class="kv__label" title={s.description ?? undefined}>
-                      {s.label}
-                    </span>
-                    <span class="kv__value text--mono">{s.value}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
+      {tab === "financial" && <FinancialSettingsTab />}
+      {tab === "integrations" && <IntegrationsTab />}
+      {tab === "notifications" && <NotificationsTab />}
+      {tab === "users" && <UsersTab />}
+      {tab === "audit" && <AuditLogTab />}
+      {tab === "dlq" && <DlqTab />}
+      {tab === "backup" && <BackupTab />}
+      {tab === "health" && <HealthTab />}
+      {tab === "mobile" && (
+        <Card title="Mobile App">
+          <div class="empty-state">
+            <p>📱 Native mobile app (Capacitor / App Store) is coming in a later build (Sprint 18).</p>
+            <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+              This is a placeholder seam — no mobile infrastructure ships this sprint.
+            </p>
           </div>
-        ))}
+        </Card>
+      )}
     </div>
   );
 }

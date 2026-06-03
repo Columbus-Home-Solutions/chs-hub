@@ -88,7 +88,7 @@ VALUES (
 | work_starting | Work Starts Tomorrow | client | sms | send_time: 18:00, night before | Work begins tomorrow at {{property_address}}! Our crew will arrive between 7-8 AM. Contact us with any questions. |
 | weekly_photo_summary | Weekly Photo Summary | client | email | cron: weekly Sunday | Subject: "This Week on Your Project — {{job_title}}". Body: photo summary link |
 | cost_plus_cycle_report | Bi-Weekly Cycle Report | client | email | 0 | Subject: "Project Report — {{job_title}} — Cycle {{cycle_number}}". Body: cycle breakdown link |
-| job_completion_package | Completion Package | client | email | 0 | Subject: "Your Project is Complete! — {{job_title}}". Body: completion package link |
+| completion_package_sent | Completion Package | client | email | 0 | Subject: "Your Project is Complete! — {{job_title}}". Body: completion package link. **(Sprint 17 reconciliation:** the trigger event is `completion_package_sent` — the key the send path in `routes/completion-package.ts` actually fires and that `notification-engine.ts` treats as transactional. The earlier `job_completion_package` name is **deprecated**; migration `0038_prod_parity_seed.sql` seeds the reconciled `completion_package_sent` template.) |
 
 ### Financial
 

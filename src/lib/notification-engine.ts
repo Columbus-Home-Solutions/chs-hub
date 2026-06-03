@@ -64,6 +64,11 @@ const TRANSACTIONAL_EVENTS = new Set([
   "invoice_due_reminder",
   "invoice_past_due",
   "cost_plus_cycle_report",
+  // Completion-package send. Sprint 17 reconcile: the live send path
+  // (routes/completion-package.ts) fires the key `completion_package_sent`
+  // (template seed-ntpl-s15-cp). The older `job_completion_package` key is
+  // retained here only as a deprecated alias; the canonical key is the former.
+  "completion_package_sent",
   "job_completion_package",
   "sub_scheduled",
   "sub_schedule_change",

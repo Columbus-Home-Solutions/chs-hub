@@ -19,6 +19,7 @@
 import type { Env } from "../env.js";
 import { authenticateRequest, AuthError } from "../middleware/auth.js";
 import { requireRole, RoleError } from "../middleware/roles.js";
+import { writeAudit } from "../lib/audit.js";
 import {
   buildAuthorizeUrl,
   disconnect,
@@ -289,6 +290,127 @@ export async function handleQboSync(request: Request, env: Env): Promise<Respons
   if (denied) return denied;
   const result = await runQboSweep(env);
   return json(result, { status: result.ran ? 200 : 409 });
+}
+
+// ─── Generic per-service management (Sprint 17) ───────────────────────────────
+//
+// QBO keeps its dedicated OAuth routes above. These manage ANY existing
+// integration_connections row (test/connect/disconnect) without wiring a new
+// live service. Owner-only is enforced by the central RBAC gate. Tokens are
+// NEVER read or returned here (business rule 5).
+
+/** Services whose "connection" is config-based (no OAuth) and SIMULATE/sandbox. */
+const SIMULATE_SERVICES: Record<string, string> = {
+  twilio: "SMS sends are SIMULATE unless NOTIFICATIONS_DISPATCH_MODE=live",
+  resend: "Email sends honor the notification dispatch mode",
+  facebook: "Social publishing is SIMULATE unless social_publish_mode=live",
+  instagram: "Social publishing is SIMULATE unless social_publish_mode=live",
+  stripe: "Stripe runs in TEST mode this sprint",
+  wc_spreadsheet: "WC sync targets the TEST sheet this sprint",
+  google_drive: "Drive mirror runs against the configured Shared Drive",
+};
+
+function actorOf(request: Request): string {
+  const u = (request as Request & { user?: { email?: string } }).user;
+  return u?.email ?? request.headers.get("Cf-Access-Authenticated-User-Email") ?? "owner";
+}
+
+export async function handleIntegrationTest(
+  request: Request,
+  env: Env,
+  service: string,
+): Promise<Response> {
+  // QBO has a live CompanyInfo ping; route there for parity.
+  if (service === QBO_SERVICE) return handleQboTest(request, env);
+
+  const row = await env.DB.prepare(
+    `SELECT service, status, last_sync, last_error FROM integration_connections WHERE service = ?`,
+  )
+    .bind(service)
+    .first<{ service: string; status: string; last_sync: string | null; last_error: string | null }>();
+
+  if (!row) {
+    return json({ ok: false, service, status: "not_configured" }, { status: 404 });
+  }
+
+  const note = SIMULATE_SERVICES[service] ?? "Connection record present; no live test wired this sprint.";
+  // Honest report: we don't fake a live ping for SIMULATE/sandbox services.
+  return json({
+    ok: row.status === "connected",
+    service,
+    status: row.status,
+    last_sync: row.last_sync,
+    last_error: row.last_error,
+    mode: "simulate_or_sandbox",
+    note,
+  });
+}
+
+export async function handleIntegrationConnect(
+  request: Request,
+  env: Env,
+  service: string,
+): Promise<Response> {
+  if (service === QBO_SERVICE) return handleQboConnect(request, env);
+
+  let body: { configuration?: Record<string, unknown> } = {};
+  try {
+    body = (await request.json().catch(() => ({}))) as typeof body;
+  } catch {
+    body = {};
+  }
+
+  const now = new Date().toISOString();
+  const config = body.configuration ? JSON.stringify(body.configuration) : null;
+  await env.DB.prepare(
+    `INSERT INTO integration_connections (id, service, status, configuration, connected_at, connected_by, created_at, updated_at)
+     VALUES (?, ?, 'connected', ?, ?, ?, ?, ?)
+     ON CONFLICT(service) DO UPDATE SET
+       status = 'connected',
+       configuration = COALESCE(excluded.configuration, integration_connections.configuration),
+       connected_at = excluded.connected_at,
+       connected_by = excluded.connected_by,
+       updated_at = excluded.updated_at`,
+  )
+    .bind(crypto.randomUUID(), service, config, now, actorOf(request), now, now)
+    .run();
+
+  await writeAudit(env, {
+    userEmail: actorOf(request),
+    action: "integration.connect",
+    entityType: "integration_connection",
+    entityId: service,
+    details: { service },
+    ipAddress: request.headers.get("cf-connecting-ip"),
+  });
+
+  return json({ ok: true, service, status: "connected" });
+}
+
+export async function handleIntegrationDisconnect(
+  request: Request,
+  env: Env,
+  service: string,
+): Promise<Response> {
+  if (service === QBO_SERVICE) return handleQboDisconnect(request, env);
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE integration_connections SET status = 'disconnected', updated_at = ? WHERE service = ?`,
+  )
+    .bind(now, service)
+    .run();
+
+  await writeAudit(env, {
+    userEmail: actorOf(request),
+    action: "integration.disconnect",
+    entityType: "integration_connection",
+    entityId: service,
+    details: { service },
+    ipAddress: request.headers.get("cf-connecting-ip"),
+  });
+
+  return json({ ok: true, service, status: "disconnected" });
 }
 
 // ─── HTML callback page ───────────────────────────────────────────────────────

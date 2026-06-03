@@ -1,4 +1,5 @@
 import { route, getCurrentUrl } from "preact-router";
+import type { Capability } from "./rbac";
 
 /**
  * The app is served under /app (see vite.config base + the Worker's /app
@@ -28,22 +29,25 @@ export interface NavItem {
   path: string;
   icon: string;
   enabled: boolean;
+  /** When set, the item is shown only to roles holding this capability (RBAC). */
+  capability?: Capability;
 }
 
 // Sidebar nav (Dashboard spec). For Sprint 2 only Clients, Subcontractors and
 // Settings route to real pages; the rest are "Coming soon" placeholders.
+// `capability` gates visibility per the Sprint 17 RBAC matrix (owner sees all).
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", path: "/", icon: "🏠", enabled: true },
   { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
   { label: "Schedule", path: "/schedule", icon: "📅", enabled: true },
-  { label: "Financial", path: "/financial", icon: "💰", enabled: false },
-  { label: "Clients", path: "/clients", icon: "👥", enabled: true },
-  { label: "Estimating", path: "/estimating", icon: "📋", enabled: true },
+  { label: "Financial", path: "/financial", icon: "💰", enabled: false, capability: "view_financials" },
+  { label: "Clients", path: "/clients", icon: "👥", enabled: true, capability: "manage_clients" },
+  { label: "Estimating", path: "/estimating", icon: "📋", enabled: true, capability: "manage_estimates" },
   { label: "Subcontractors", path: "/subcontractors", icon: "🔧", enabled: true },
-  { label: "Photos", path: "/photos", icon: "📸", enabled: false },
+  { label: "Photos", path: "/photos", icon: "📸", enabled: false, capability: "field_ops" },
   { label: "Documents", path: "/documents", icon: "📄", enabled: true },
-  { label: "Social", path: "/social", icon: "📱", enabled: true },
-  { label: "Settings", path: "/settings", icon: "⚙️", enabled: true },
+  { label: "Social", path: "/social", icon: "📱", enabled: true, capability: "manage_estimates" },
+  { label: "Settings", path: "/settings", icon: "⚙️", enabled: true, capability: "system_admin" },
 ];
 
 // Condensed set for the mobile bottom tab bar.

@@ -23,3 +23,8 @@ export function requireRole(
     throw new RoleError("Insufficient permissions");
   }
 }
+
+/** Convenience gate for Owner-only routes (system admin surface). */
+export function requireOwner(request: AuthenticatedRequest): void {
+  requireRole(request, ["owner"]);
+}

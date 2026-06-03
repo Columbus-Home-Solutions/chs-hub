@@ -56,7 +56,8 @@ Role checks are documented per endpoint:
 | GET | `/api/users/me` | ALL | Get current authenticated user |
 | GET | `/api/users/clockable` | ALL | List active users eligible to clock in (role IN owner/PM/field_crew). Returns `[{id, full_name, role}]`. Used to populate the worker dropdown on the time-entry clock-in form. |
 | POST | `/api/users` | O | Create new user (sends invite email) |
-| PUT | `/api/users/:id` | O | Update user (role, info, deactivate) |
+| PUT | `/api/users/:id` | O | Update user (role, info, deactivate). Guards against deactivating the last active owner |
+| PUT | `/api/users/:id/notification-preferences` | O | Replace a user's `notification_preferences` JSON (per-channel/event opt-outs) |
 | GET | `/api/users/:id` | O | Get user detail |
 
 ### Audit Log
@@ -82,9 +83,10 @@ Role checks are documented per endpoint:
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/dlq` | O | List DLQ items. Filters: `?status=pending` |
-| POST | `/api/dlq/:id/retry` | O | Retry a failed item |
-| POST | `/api/dlq/:id/dismiss` | O | Dismiss/resolve an item |
+| GET | `/api/dlq` | O | List DLQ items (`sync_dead_letters`). Filter: `?status=open\|resolved\|all` (default `open`; open = `resolved_at IS NULL`). Returns `{ items, open_count }`. |
+| POST | `/api/dlq/:id/retry` | O | Re-run a single dead letter; 404 if not found/already resolved, 502 if the replay fails again |
+| POST | `/api/dlq/:id/dismiss` | O | Mark resolved without re-running |
+| POST | `/api/dlq/dismiss` | O | Bulk-dismiss `{ ids: number[] }` |
 
 ### Health & Backup
 
@@ -621,23 +623,22 @@ External services that push data to CHS.
 
 ## 14. Cron Jobs (Worker Scheduled)
 
-Not REST endpoints, but Worker cron triggers that need to be implemented.
+Not REST endpoints, but the Worker's `scheduled()` triggers. The Cloudflare Workers
+Free plan caps the account at **exactly 5 cron triggers** — so all recurring work is
+folded into these 5 handlers (see `dispatchCron` in `src/index.ts`). This table is the
+**as-built** reality (verified against `wrangler.toml [triggers].crons`), not a wishlist.
 
-| Schedule | Name | Description |
-|----------|------|-------------|
-| */15 * * * * | Notification Processor | Send queued/scheduled notifications |
-| */15 * * * * | Social Post Publisher | Publish approved posts at scheduled time |
-| */30 * * * * | WC Spreadsheet Sync | Push data to Google Sheets (carry forward) |
-| 0 * * * * | Invoice Due Check | Check for invoices approaching due date or past due → trigger reminders |
-| 0 */6 * * * | HL Pipeline Sync | Pull latest HL pipeline data |
-| 0 0 * * * | Nightly Backup | D1 → R2 backup |
-| 0 6 * * * | Daily Summary | Send daily summary email via Resend |
-| 0 0 * * 0 | Weekly Photo Summary | Generate weekly photo summaries for active jobs |
-| ~~0 0 * * * Google Drive Mirror~~ | **FOLDED (Sprint 15)** | No standalone trigger (5-cron cap). The mirror runs inside the existing `15 * * * *` hourly handler and now mirrors pending **photos, job files, company docs, and `documents`** (Sprint 15 added the `documents` table to the same batch loop). |
-| 0 0 * * * | Late Fee Calculator | Update late fee amounts on overdue invoices |
-| ~~0 0 * * * QBO Sync~~ | **SUPERSEDED (Sprint 14)** | Cloudflare Free plan caps at **5 cron triggers** and all 5 are full. The QBO push runs as a **dirty-flag reconcile sweep folded into the existing `15 7 * * *` nightly handler** (after invoice billing) + the on-demand `POST /api/quickbooks/sync`. **No standalone QBO cron.** |
+| Schedule | Folded work (in dispatch order) |
+|----------|---------------------------------|
+| `*/15 * * * *` | Notification processor (queued/scheduled sends) **+** social-post publisher (Sprint 16 folded the due-post sweep here — no new cron). |
+| `*/30 * * * *` | Jobber tick **+** WC Spreadsheet sync (Google Sheets carry-forward). |
+| `15 * * * *` | Reliability hourly: heartbeat **+** DLQ replay **+** Google Drive mirror (Sprint 15 added `documents` to the photos/job-files/company-docs batch loop). |
+| `15 7 * * *` | Nightly: D1→R2 backup → invoice billing (late-fee accrual + due/past-due notices) → **QBO dirty-flag push sweep** (Sprint 14 — no standalone QBO cron). |
+| `0 12 * * *` | Daily summary email (via Resend). |
 
-**As-built cron triggers (wrangler.toml — exactly 5):** `*/15 * * * *` (notifications + **social-post publisher** — Sprint 16 folded the due-post sweep into this existing trigger, no new cron), `*/30 * * * *` (Jobber tick + WC Spreadsheet sync), `15 * * * *` (heartbeat + DLQ replay + drive mirror), `15 7 * * *` (backup → invoice billing → **QBO push sweep**), `0 12 * * *` (daily summary).
+> **Superseded standalone crons** (folded above, never deployed as their own trigger):
+> Google Drive Mirror (Sprint 15 → `15 * * * *`), QBO Sync (Sprint 14 → `15 7 * * *`
+> + on-demand `POST /api/quickbooks/sync`), invoice due-check / late-fee (→ `15 7 * * *`).
 
 ---
 
@@ -660,4 +661,4 @@ Not REST endpoints, but Worker cron triggers that need to be implemented.
 | Webhooks | 5 |
 | **Total** | **~179 endpoints** |
 
-Plus 11 cron jobs.
+Plus 5 cron triggers (Workers Free plan cap — see §14; recurring work is folded into these 5 handlers).

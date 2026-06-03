@@ -1,10 +1,14 @@
 import { NAV_ITEMS, go, isActive } from "../../lib/nav";
+import { useAuth } from "../../store/auth";
+import { can } from "../../lib/rbac";
 
 export function Sidebar() {
+  const { user } = useAuth();
+  const items = NAV_ITEMS.filter((item) => !item.capability || can(user, item.capability));
   return (
     <aside class="sidebar">
       <nav class="sidebar__nav">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const active = item.enabled && isActive(item.path);
           const classes = [
             "sidebar__link",

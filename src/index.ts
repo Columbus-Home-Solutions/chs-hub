@@ -359,6 +359,31 @@ import {
 } from "./routes/content-schedules.js";
 import { handleSocialPostPublish } from "./routes/social-publish.js";
 import { publishDuePosts } from "./lib/social-publish.js";
+import { enforceRbac } from "./lib/rbac.js";
+import {
+  handleUserList,
+  handleUserGet,
+  handleUserCreate,
+  handleUserUpdate,
+  handleUserNotificationPreferences,
+} from "./routes/users.js";
+import {
+  handleAuditLogList,
+  handleAuditLogExport,
+} from "./routes/audit-logs.js";
+import {
+  handleDlqList,
+  handleDlqRetry,
+  handleDlqDismiss,
+  handleDlqDismissBulk,
+} from "./routes/dlq.js";
+import { handleBackupStatus, handleBackupTrigger } from "./routes/backup.js";
+import { handleAdminHealth } from "./routes/health.js";
+import {
+  handleIntegrationTest,
+  handleIntegrationConnect,
+  handleIntegrationDisconnect,
+} from "./routes/integrations.js";
 
 async function fetchAssetWithDashboardInject(
   env: Env,
@@ -416,6 +441,17 @@ export default {
 
     if (url.pathname === "/api/health/heartbeat" && request.method === "GET") {
       return handleHeartbeat(env);
+    }
+
+    // ── RBAC enforcement gate (Sprint 17) ────────────────────────────────
+    // Centralized role enforcement in front of every gated /api route, per the
+    // Module-Spec-System-Admin §3 matrix + Route Map labels. Resolves the
+    // Access identity (401 if absent/inactive) and returns 403 when the role
+    // isn't permitted. PUBLIC/token/secret routes are exempt (see rbac.ts).
+    // The owner passes every gate — no behavior change for the current sole user.
+    {
+      const denied = await enforceRbac(request, env, url);
+      if (denied) return denied;
     }
 
     // ── Public quote delivery + Stripe webhook (Sprint 5) ────────────
@@ -649,6 +685,21 @@ export default {
     }
     if (url.pathname === "/api/integrations/quickbooks/mapping" && request.method === "POST") {
       return handleQboMapping(request, env);
+    }
+    // Generic per-service connection management (Sprint 17). QBO keeps its own
+    // OAuth routes above; these manage any existing integration_connections row
+    // (status/test/connect/disconnect) without wiring a new live service.
+    const integrationTest = url.pathname.match(/^\/api\/integrations\/([^/]+)\/test$/);
+    if (integrationTest && request.method === "POST") {
+      return handleIntegrationTest(request, env, decodeURIComponent(integrationTest[1]));
+    }
+    const integrationConnect = url.pathname.match(/^\/api\/integrations\/([^/]+)\/connect$/);
+    if (integrationConnect && request.method === "POST") {
+      return handleIntegrationConnect(request, env, decodeURIComponent(integrationConnect[1]));
+    }
+    const integrationDisconnect = url.pathname.match(/^\/api\/integrations\/([^/]+)\/disconnect$/);
+    if (integrationDisconnect && request.method === "POST") {
+      return handleIntegrationDisconnect(request, env, decodeURIComponent(integrationDisconnect[1]));
     }
     const integrationDetail = url.pathname.match(/^\/api\/integrations\/([^/]+)$/);
     if (integrationDetail && request.method === "GET") {
@@ -1136,6 +1187,60 @@ export default {
     // Clockable users — all roles; populates the time-tracker worker dropdown.
     if (url.pathname === "/api/users/clockable" && request.method === "GET") {
       return handleClockableUsers(request, env);
+    }
+
+    // ── User management (Sprint 17, Owner-only via RBAC gate) ─────────────
+    if (url.pathname === "/api/users") {
+      if (request.method === "GET") return handleUserList(env);
+      if (request.method === "POST") return handleUserCreate(request, env);
+    }
+    const userPrefs = url.pathname.match(/^\/api\/users\/([^/]+)\/notification-preferences$/);
+    if (userPrefs && request.method === "PUT") {
+      return handleUserNotificationPreferences(request, env, decodeURIComponent(userPrefs[1]));
+    }
+    const userById = url.pathname.match(/^\/api\/users\/([^/]+)$/);
+    if (userById) {
+      const uid = decodeURIComponent(userById[1]);
+      if (request.method === "GET") return handleUserGet(env, uid);
+      if (request.method === "PUT") return handleUserUpdate(request, env, uid);
+    }
+
+    // ── Audit-log viewer + CSV export (Sprint 17, Owner-only) ─────────────
+    if (url.pathname === "/api/audit-logs" && request.method === "GET") {
+      return handleAuditLogList(env, url);
+    }
+    if (url.pathname === "/api/audit-logs/export" && request.method === "GET") {
+      return handleAuditLogExport(env, url);
+    }
+
+    // ── Dead-letter queue viewer (Sprint 17, Owner-only) ──────────────────
+    // Surfaces the existing sync_dead_letters store — no second failure store.
+    if (url.pathname === "/api/dlq" && request.method === "GET") {
+      return handleDlqList(env, url);
+    }
+    if (url.pathname === "/api/dlq/dismiss" && request.method === "POST") {
+      return handleDlqDismissBulk(request, env);
+    }
+    const dlqRetry = url.pathname.match(/^\/api\/dlq\/([^/]+)\/retry$/);
+    if (dlqRetry && request.method === "POST") {
+      return handleDlqRetry(env, decodeURIComponent(dlqRetry[1]));
+    }
+    const dlqDismiss = url.pathname.match(/^\/api\/dlq\/([^/]+)\/dismiss$/);
+    if (dlqDismiss && request.method === "POST") {
+      return handleDlqDismiss(env, decodeURIComponent(dlqDismiss[1]));
+    }
+
+    // ── Backup status + manual trigger (Sprint 17, Owner-only; NO new cron) ─
+    if (url.pathname === "/api/backup/status" && request.method === "GET") {
+      return handleBackupStatus(env);
+    }
+    if (url.pathname === "/api/backup/trigger" && request.method === "POST") {
+      return handleBackupTrigger(request, env);
+    }
+
+    // ── System-health panel (Sprint 17, Owner-only; read-only) ────────────
+    if (url.pathname === "/api/health" && request.method === "GET") {
+      return handleAdminHealth(env);
     }
 
     // ── Clients, properties, communications ──────────────────────────

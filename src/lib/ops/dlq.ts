@@ -226,6 +226,56 @@ function safeStringify(value: unknown): string | null {
   }
 }
 
+// ─── Single-row retry / dismiss (Sprint 17 DLQ viewer) ────────────
+//
+// The owner-facing viewer drives these per-item; they re-run the SAME replay
+// path the hourly cron uses, so "retry" is identical to an automatic attempt.
+
+export interface SingleRetryResult {
+  ok: boolean;
+  id: number;
+  error?: string;
+}
+
+export async function retryDeadLetter(env: Env, id: number): Promise<SingleRetryResult> {
+  const row = await env.DB.prepare(
+    `SELECT id, job_name, entity_type, entity_id, payload
+       FROM sync_dead_letters WHERE id = ? AND resolved_at IS NULL`,
+  )
+    .bind(id)
+    .first<{
+      id: number;
+      job_name: string;
+      entity_type: DlqEntityType;
+      entity_id: string | null;
+      payload: string | null;
+    }>();
+
+  if (!row) return { ok: false, id, error: "not_found_or_resolved" };
+
+  try {
+    await replayOne(env, row);
+    await markResolved(env, row.id);
+    return { ok: true, id };
+  } catch (err) {
+    const msg = (err as Error).message;
+    await markFailed(env, row.id, msg);
+    return { ok: false, id, error: msg };
+  }
+}
+
+/** Mark an open dead-letter row resolved without re-running it (owner dismiss). */
+export async function dismissDeadLetter(env: Env, id: number): Promise<boolean> {
+  const res = await env.DB.prepare(
+    `UPDATE sync_dead_letters
+        SET resolved_at = ?, last_attempt_status = 'dismissed', last_seen_at = ?
+      WHERE id = ? AND resolved_at IS NULL`,
+  )
+    .bind(new Date().toISOString(), new Date().toISOString(), id)
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
+}
+
 // ─── Read API for dashboard / debugging ───────────────────────────
 
 export interface DlqSummary {

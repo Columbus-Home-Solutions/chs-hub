@@ -1,6 +1,7 @@
 import { useEffect } from "preact/hooks";
 import { AuthProvider } from "./store/auth";
 import { ToastProvider } from "./store/toast";
+import { WeatherProvider } from "./store/weather";
 import { AppShell } from "./components/layout/AppShell";
 import { ToastViewport } from "./components/ui/Toast";
 import { AppRouter } from "./router";
@@ -17,10 +18,12 @@ export function App() {
   return (
     <AuthProvider>
       <ToastProvider>
-        <AppShell>
-          <AppRouter />
-        </AppShell>
-        <ToastViewport />
+        <WeatherProvider>
+          <AppShell>
+            <AppRouter />
+          </AppShell>
+          <ToastViewport />
+        </WeatherProvider>
       </ToastProvider>
     </AuthProvider>
   );

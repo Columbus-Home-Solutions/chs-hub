@@ -63,6 +63,9 @@ export function JobPipeline(_props: RoutableProps) {
             {data ? `${total(data)} active jobs in the pipeline` : "Job pipeline"}
           </p>
         </div>
+        <button class="btn btn--secondary btn--sm" onClick={() => go("/jobs/map")}>
+          🗺 Map View
+        </button>
       </div>
 
       {loading && <Spinner center />}

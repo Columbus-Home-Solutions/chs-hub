@@ -69,6 +69,12 @@ function str(v: unknown): string | null {
   return s === "" ? null : s;
 }
 
+function optionalCoord(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 async function logAudit(
   env: Env,
   userEmail: string,
@@ -92,11 +98,14 @@ interface RequestRow {
   property_city: string;
   property_state: string | null;
   property_zip: string;
+  lat: number | null;
+  lon: number | null;
   job_type: string;
   lead_source: string;
   lead_source_detail: string | null;
   high_level_opportunity_id: string | null;
   appointment_date: string | null;
+  appointment_time: string | null;
   appointment_completed: number | null;
   visit_notes: string | null;
   visit_photo_ids: string | null;
@@ -160,11 +169,14 @@ function shape(row: RequestRow) {
     property_city: row.property_city,
     property_state: row.property_state,
     property_zip: row.property_zip,
+    lat: row.lat ?? null,
+    lon: row.lon ?? null,
     job_type: row.job_type,
     lead_source: row.lead_source,
     lead_source_detail: row.lead_source_detail,
     high_level_opportunity_id: row.high_level_opportunity_id,
     appointment_date: row.appointment_date,
+    appointment_time: row.appointment_time ?? null,
     appointment_completed: (row.appointment_completed ?? 0) === 1,
     visit_notes: row.visit_notes,
     visit_photo_ids: row.visit_photo_ids,
@@ -351,9 +363,10 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
     `INSERT INTO estimate_requests (
       id, request_number, status, client_id,
       property_address, property_city, property_state, property_zip,
+      lat, lon,
       job_type, lead_source, lead_source_detail, high_level_opportunity_id,
       visit_notes, created_at, updated_at, created_by
-    ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -363,6 +376,8 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
       propertyCity,
       str(body.property_state) ?? "Arkansas",
       propertyZip,
+      optionalCoord(body.lat),
+      optionalCoord(body.lon),
       jobType,
       leadSource,
       str(body.lead_source_detail),
@@ -468,6 +483,10 @@ export async function handleEstimateRequestUpdate(
       triggerAppointment = true;
     }
   }
+  if ("appointment_time" in body) {
+    updates.push("appointment_time = ?");
+    binds.push(str(body.appointment_time));
+  }
   if ("appointment_completed" in body) {
     updates.push("appointment_completed = ?");
     binds.push(body.appointment_completed === true || body.appointment_completed === 1 ? 1 : 0);
@@ -476,6 +495,14 @@ export async function handleEstimateRequestUpdate(
     const n = Number(body.follow_up_count);
     updates.push("follow_up_count = ?");
     binds.push(Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0);
+  }
+  if ("lat" in body) {
+    updates.push("lat = ?");
+    binds.push(optionalCoord(body.lat));
+  }
+  if ("lon" in body) {
+    updates.push("lon = ?");
+    binds.push(optionalCoord(body.lon));
   }
 
   for (const col of UPDATABLE_TEXT) {
@@ -557,13 +584,17 @@ export async function handleEstimateRequestAppointment(
       triggerAppointment = true;
     }
   }
+  if ("appointment_time" in body) {
+    updates.push("appointment_time = ?");
+    binds.push(str(body.appointment_time));
+  }
   if ("appointment_completed" in body) {
     updates.push("appointment_completed = ?");
     binds.push(body.appointment_completed === true || body.appointment_completed === 1 ? 1 : 0);
   }
 
   if (updates.length === 0) {
-    return err(400, "bad_request", "Provide appointment_date and/or appointment_completed");
+    return err(400, "bad_request", "Provide appointment_date, appointment_time, and/or appointment_completed");
   }
 
   updates.push("updated_at = ?");

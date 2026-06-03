@@ -84,6 +84,11 @@ bucket_name = "chs-hub-files"
 
 [vars]
 HL_LOCATION_ID = "lZ8L8FAf6K2niuHoFbaw"
+# Google Maps/Places key (browser-safe when referrer-restricted). Set via:
+#   npx wrangler secret put GOOGLE_MAPS_API_KEY
+# Secrets set via wrangler secret put (never commit values):
+#   GOOGLE_CLIENT_EMAIL, GOOGLE_PROJECT_ID, GOOGLE_PRIVATE_KEY  — Imagen 3 / Vertex AI
+#   GOOGLE_MAPS_API_KEY  — Places autocomplete (referrer-restricted browser key)
 # Set to "1" to disable real Resend sends (notify() will log to console
 # instead). Useful while wiring up the Resend domain or for dev runs.
 RESEND_DRY_RUN = "0"

@@ -17,10 +17,13 @@ import { EstimateBuilder } from "./views/estimating/EstimateBuilder";
 import { EstimateTemplates } from "./views/estimating/EstimateTemplates";
 import { JobPipeline } from "./views/jobs/JobPipeline";
 import { JobDetail } from "./views/jobs/JobDetail";
+import { JobMap } from "./views/jobs/JobMap";
 import { ScheduleCalendar } from "./views/jobs/ScheduleCalendar";
 import { NotificationSettings } from "./views/notifications/NotificationSettings";
 import { NotificationLogs } from "./views/notifications/NotificationLogs";
 import { SocialMedia } from "./views/social/SocialMedia";
+import { FinancialDashboard } from "./views/financial/FinancialDashboard";
+import { PhotoLibrary } from "./views/photos/PhotoLibrary";
 import { Placeholder } from "./views/Placeholder";
 
 export function AppRouter() {
@@ -43,10 +46,11 @@ export function AppRouter() {
       <EstimateBuilder path={`${BASE}/estimating/:requestId/estimate`} />
       <EstimateRequestDetail path={`${BASE}/estimating/:id`} />
       <JobPipeline path={`${BASE}/jobs`} />
+      <JobMap path={`${BASE}/jobs/map`} />
       <ScheduleCalendar path={`${BASE}/schedule`} />
       <JobDetail path={`${BASE}/jobs/:id`} />
-      <Placeholder path={`${BASE}/financial`} title="Financial" />
-      <Placeholder path={`${BASE}/photos`} title="Photos" />
+      <FinancialDashboard path={`${BASE}/financial`} />
+      <PhotoLibrary path={`${BASE}/photos`} />
       <HubFiles path={`${BASE}/documents`} />
       <SocialMedia path={`${BASE}/social`} />
       <NotFound default />

@@ -16,12 +16,35 @@ interface HLPipeline {
   stages: { id: string; name: string }[];
 }
 
+// HL stage name → CHS display label. Stage names from the HL API are compared
+// case-insensitively. Unmapped stages fall through to their raw HL name.
+// Lead Nurture Campaign stages are grouped under "Nurture" so they appear in
+// their own column instead of being silently hidden or mislabeled.
+export const HL_STAGE_MAP: Record<string, string> = {
+  // Main pipeline
+  "New Lead": "New Lead",
+  "Contacted / Follow Up": "Contacted / Follow Up",
+  "Appointment Set": "Appointment Set",
+  "Estimate Sent": "Estimate Sent",
+  // Lead Nurture Campaign stages → Nurture column
+  "Purgatory": "Nurture",
+  "Emails Round 1": "Nurture",
+  "Emails Round 2": "Nurture",
+  "Emails Round 1 ": "Nurture", // trailing-space variant
+  "Emails Round 2 ": "Nurture",
+  "SMS Round 1": "Nurture",
+  "SMS Round 1 ": "Nurture",
+  "Drip Campaign": "Nurture",
+  "Drip Campaign ": "Nurture",
+};
+
 // HL stages to show in the condensed Kanban (subset of full pipeline).
 const DISPLAY_STAGES = [
   "New Lead",
   "Contacted / Follow Up",
   "Appointment Set",
   "Estimate Sent",
+  "Nurture",
 ];
 
 function stageAge(dateAdded: string | undefined): string {
@@ -94,16 +117,53 @@ export function LeadPipeline() {
     );
   }
 
-  // Use the first pipeline found (main CHS pipeline).
-  const pipeline = pipelines[0];
-  const stages = pipeline?.stages ?? [];
+  // Collect all stages across all pipelines (to handle nurture campaigns
+  // which may live in a separate pipeline from the main CHS pipeline).
+  const allStages = pipelines.flatMap((p) => p.stages);
 
-  // Filter to display stages only.
-  const displayStages = stages.filter((s) =>
-    DISPLAY_STAGES.some((d) => s.name.toLowerCase().includes(d.toLowerCase())),
-  );
-  const shownStages = displayStages.length > 0 ? displayStages : stages.slice(0, 4);
+  // Map each HL stage name → CHS display label using HL_STAGE_MAP.
+  // Stages not in the map use their raw HL name as the display label.
+  function resolveDisplayLabel(stageName: string): string {
+    const exact = HL_STAGE_MAP[stageName];
+    if (exact) return exact;
+    // Case-insensitive fallback.
+    const lower = stageName.toLowerCase().trim();
+    for (const [key, val] of Object.entries(HL_STAGE_MAP)) {
+      if (key.toLowerCase().trim() === lower) return val;
+    }
+    return stageName;
+  }
 
+  // Build a virtual column list from DISPLAY_STAGES order. Each column
+  // accumulates opportunities whose stage name resolves to that display label.
+  const columnDefs = DISPLAY_STAGES.map((label) => ({
+    label,
+    // All stage IDs (across all pipelines) that map to this display label.
+    stageIds: allStages
+      .filter((s) => resolveDisplayLabel(s.name) === label)
+      .map((s) => s.id),
+  })).filter((col) => col.stageIds.length > 0);
+
+  // Fallback: if no mapped stages found, show first pipeline's first 4 stages.
+  const shownColumns = columnDefs.length > 0
+    ? columnDefs
+    : (pipelines[0]?.stages ?? []).slice(0, 4).map((s) => ({
+        label: s.name,
+        stageIds: [s.id],
+      }));
+
+  // Group opportunities by resolved display label.
+  const oppsByLabel = new Map<string, HLOpportunity[]>();
+  for (const opp of opportunities) {
+    const sid = opp.pipelineStageId ?? "";
+    const stage = allStages.find((s) => s.id === sid);
+    const label = stage ? resolveDisplayLabel(stage.name) : null;
+    if (!label || !DISPLAY_STAGES.includes(label)) continue;
+    if (!oppsByLabel.has(label)) oppsByLabel.set(label, []);
+    oppsByLabel.get(label)!.push(opp);
+  }
+
+  // Keep the old oppsByStage for drag-drop write-back (we still move by actual stage ID).
   const oppsByStage = new Map<string, HLOpportunity[]>();
   for (const opp of opportunities) {
     const sid = opp.pipelineStageId ?? "";
@@ -140,17 +200,19 @@ export function LeadPipeline() {
       </div>
       <div class="dash-card__body">
         <div class="lead-pipeline">
-          {shownStages.map((stage) => {
-            const cards = oppsByStage.get(stage.id) ?? [];
+          {shownColumns.map((col) => {
+            const cards = oppsByLabel.get(col.label) ?? [];
+            // Use the first real stage ID for drag-drop write-back.
+            const primaryStageId = col.stageIds[0] ?? "";
             return (
               <div
-                key={stage.id}
+                key={col.label}
                 class="lead-col"
-                onDragOver={(e) => { e.preventDefault(); dragStage.current = stage.id; }}
-                onDrop={() => handleDrop(stage.id)}
+                onDragOver={(e) => { e.preventDefault(); dragStage.current = primaryStageId; }}
+                onDrop={() => handleDrop(primaryStageId)}
               >
                 <div class="lead-col__header">
-                  <span class="lead-col__name">{stage.name}</span>
+                  <span class="lead-col__name">{col.label}</span>
                   <span class="lead-col__count">{cards.length}</span>
                 </div>
                 <div class="lead-col__body">

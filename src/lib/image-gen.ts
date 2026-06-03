@@ -1,48 +1,42 @@
 /**
  * AI image generation for non-job posts (Sprint 16, Deliverable D).
  *
- * Gated on a configured key (env.REPLICATE_API_KEY, or a settings fallback). No
- * key → callers return a "configure image API / attach manually" state and the
- * post still flows through the queue. Per-image cost means generation is NEVER
- * speculative (business rule #7): it fires only on an explicit "Generate Image"
- * request or as part of an owner-initiated schedule, and bumps the monthly
- * cost counter on success.
+ * Provider: Google Imagen 3 via Vertex AI, authenticated with a service account.
+ * Requires GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, and GOOGLE_PROJECT_ID secrets.
  *
- * The bytes land in R2 under a deterministic key derived from the post id
- * (no new column needed); `ai_generated_image_url` is stamped to the app path
- * GET /api/social-posts/:id/image which streams that object.
+ * Gated on configured credentials: absent secrets → callers receive a
+ * "configure image API / attach manually" state and the post still flows through
+ * the queue. Per-image cost means generation is NEVER speculative (business
+ * rule #7): it fires only on an explicit "Generate Image" request or as part of
+ * an owner-initiated schedule, and bumps the monthly cost counter on success.
+ *
+ * The bytes land in R2 under a deterministic key derived from the post id;
+ * `ai_generated_image_url` is stamped to GET /api/social-posts/:id/image.
  */
 
 import type { Env } from "../env.js";
 import { putImage, streamObject } from "./r2.js";
-import { bumpImageGenCount, getSetting, SETTING_REPLICATE_KEY } from "./social.js";
-
-const REPLICATE_BASE = "https://api.replicate.com/v1";
-// Flux 1.1 Pro (Black Forest Labs) via Replicate, per the module spec.
-const FLUX_MODEL = "black-forest-labs/flux-1.1-pro";
+import { bumpImageGenCount } from "./social.js";
+import { getGoogleAccessToken } from "./google-auth.js";
 
 /** Deterministic R2 key for a post's generated image. */
 export function socialImageKey(postId: string): string {
   return `social-images/${postId}.png`;
 }
 
-/** Resolve the Replicate key: env secret first, settings fallback. */
-async function resolveReplicateKey(env: Env): Promise<string | null> {
-  const fromEnv = (env.REPLICATE_API_KEY ?? "").trim();
-  if (fromEnv) return fromEnv;
-  const fromSettings = (await getSetting(env, SETTING_REPLICATE_KEY))?.trim();
-  return fromSettings || null;
-}
-
-export async function imageGenConfigured(env: Env): Promise<boolean> {
-  return Boolean(await resolveReplicateKey(env));
+export function imageGenConfigured(env: Env): boolean {
+  return !!(
+    env.GOOGLE_CLIENT_EMAIL &&
+    env.GOOGLE_PRIVATE_KEY &&
+    env.GOOGLE_PROJECT_ID
+  );
 }
 
 export interface ImageGenResult {
   ok: boolean;
   /** App path stamped onto ai_generated_image_url when ok. */
   url: string | null;
-  /** True when no key is configured (degrade to "configure image API"). */
+  /** True when no credentials are configured (degrade to "configure image API"). */
   unconfigured: boolean;
   error: string | null;
   /** This month's running count after a successful generation. */
@@ -51,24 +45,20 @@ export interface ImageGenResult {
 
 /**
  * Generate an image for `postId` from `prompt`, store it in R2, and stamp
- * `ai_generated_image_url`. The real Replicate call shape is written here but is
- * only exercised when a key is present; with no key it degrades.
+ * `ai_generated_image_url`. Degrades to unconfigured when service account
+ * secrets are absent.
  */
 export async function generateAndStoreImage(
   env: Env,
   postId: string,
   prompt: string,
 ): Promise<ImageGenResult> {
-  const key = await resolveReplicateKey(env);
-  if (!key) {
-    return { ok: false, url: null, unconfigured: true, error: "replicate_not_configured" };
+  if (!imageGenConfigured(env)) {
+    return { ok: false, url: null, unconfigured: true, error: "imagen_not_configured" };
   }
 
   try {
-    const bytes = await callReplicateFlux(key, prompt);
-    if (!bytes) {
-      return { ok: false, url: null, unconfigured: false, error: "image_generation_failed" };
-    }
+    const bytes = await generateImageViaImagen(prompt, env);
     const r2Key = socialImageKey(postId);
     await putImage(env, r2Key, bytes, "image/png");
     const appUrl = `/api/social-posts/${postId}/image`;
@@ -87,38 +77,52 @@ export async function streamSocialImage(env: Env, postId: string): Promise<Respo
   return streamObject(env, socialImageKey(postId));
 }
 
-/**
- * Call Replicate Flux 1.1 Pro and return the rendered PNG bytes. Uses the
- * `Prefer: wait` synchronous-prediction header so we don't have to poll inside
- * a Worker invocation. Returns null on a non-image / error response.
- *
- * NOTE: only ever called when a REPLICATE_API_KEY is present (see the gate
- * above). The request shape follows Replicate's documented predictions API.
- */
-async function callReplicateFlux(apiKey: string, prompt: string): Promise<Uint8Array | null> {
-  const res = await fetch(`${REPLICATE_BASE}/models/${FLUX_MODEL}/predictions`, {
+async function generateImageViaImagen(prompt: string, env: Env): Promise<Uint8Array> {
+  const { GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, GOOGLE_PROJECT_ID } = env;
+
+  if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY || !GOOGLE_PROJECT_ID) {
+    throw new Error("Google service account credentials not configured");
+  }
+
+  const accessToken = await getGoogleAccessToken(
+    GOOGLE_CLIENT_EMAIL,
+    GOOGLE_PRIVATE_KEY,
+    "https://www.googleapis.com/auth/cloud-platform",
+  );
+
+  const endpoint =
+    `https://us-central1-aiplatform.googleapis.com/v1/projects/` +
+    `${GOOGLE_PROJECT_ID}/locations/us-central1/publishers/google/` +
+    `models/imagen-3.0-generate-001:predict`;
+
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
-      Prefer: "wait",
     },
     body: JSON.stringify({
-      input: {
-        prompt,
-        aspect_ratio: "1:1",
-        output_format: "png",
-        safety_tolerance: 2,
-      },
+      instances: [{ prompt }],
+      parameters: { sampleCount: 1, aspectRatio: "1:1" },
     }),
   });
-  if (!res.ok) {
-    throw new Error(`replicate_http_${res.status}`);
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Imagen API failed: ${response.status} ${err}`);
   }
-  const data = (await res.json()) as { output?: string | string[]; status?: string };
-  const outputUrl = Array.isArray(data.output) ? data.output[0] : data.output;
-  if (!outputUrl) return null;
-  const img = await fetch(outputUrl);
-  if (!img.ok) throw new Error(`replicate_output_http_${img.status}`);
-  return new Uint8Array(await img.arrayBuffer());
+
+  const data = (await response.json()) as {
+    predictions?: Array<{ bytesBase64Encoded?: string }>;
+  };
+
+  const b64 = data.predictions?.[0]?.bytesBase64Encoded;
+  if (!b64) throw new Error("No image in Imagen response");
+
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }

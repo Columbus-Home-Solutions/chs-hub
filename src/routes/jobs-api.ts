@@ -775,3 +775,144 @@ async function nextSortOrder(env: Env, jobId: string, taskGroup: string): Promis
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
+
+// ─── GET /api/jobs/map ────────────────────────────────────────────────────────
+
+interface MapJobRow {
+  id: string;
+  job_number: number | null;
+  title: string | null;
+  status: string;
+  property_address: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  property_zip: string | null;
+  lat: number | null;
+  lon: number | null;
+  client_name: string | null;
+}
+
+interface MapPin {
+  job_id: string;
+  job_number: number | null;
+  title: string | null;
+  status: string;
+  client_name: string | null;
+  address: string;
+  lat: number;
+  lon: number;
+}
+
+// In-memory geocode cache keyed on normalized address string. No TTL — job
+// addresses don't change, and this warms quickly since jobs are few.
+const _geocodeCache = new Map<string, { lat: number; lon: number }>();
+
+async function geocodeAddress(address: string): Promise<{ lat: number; lon: number } | null> {
+  const key = address.toLowerCase().trim();
+  const cached = _geocodeCache.get(key);
+  if (cached) return cached;
+
+  const url =
+    `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress` +
+    `?address=${encodeURIComponent(address)}&benchmark=2020&format=json`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      result?: { addressMatches?: Array<{ coordinates?: { x: number; y: number } }> };
+    };
+    const coords = data?.result?.addressMatches?.[0]?.coordinates;
+    if (!coords) return null;
+    const result = { lat: coords.y, lon: coords.x };
+    _geocodeCache.set(key, result);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+export async function handleJobMap(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, ["owner", "project_manager", "office_admin"]);
+  if (guarded instanceof Response) return guarded;
+
+  const rows = (
+    await env.DB.prepare(
+      `SELECT j.id, j.job_number, j.title, j.status,
+              j.property_address, j.property_city, j.property_state, j.property_zip,
+              j.lat, j.lon,
+              (c.first_name || ' ' || c.last_name) AS client_name
+       FROM jobs j
+       LEFT JOIN clients c ON c.id = j.client_id
+       WHERE j.status NOT IN ('closed')
+       ORDER BY j.created_at DESC`,
+    ).all<MapJobRow>()
+  ).results ?? [];
+
+  const pins: MapPin[] = [];
+  const skipped: string[] = [];
+
+  const needsGeocode: MapJobRow[] = [];
+
+  for (const row of rows) {
+    const addressLabel = [row.property_address, row.property_city, row.property_state]
+      .filter(Boolean)
+      .join(", ");
+
+    if (row.lat != null && row.lon != null && Number.isFinite(row.lat) && Number.isFinite(row.lon)) {
+      pins.push({
+        job_id: row.id,
+        job_number: row.job_number,
+        title: row.title,
+        status: row.status,
+        client_name: row.client_name,
+        address: addressLabel,
+        lat: row.lat,
+        lon: row.lon,
+      });
+      continue;
+    }
+
+    needsGeocode.push(row);
+  }
+
+  // Census geocode only for jobs without stored coordinates (batched).
+  for (let i = 0; i < needsGeocode.length; i += 5) {
+    const batch = needsGeocode.slice(i, i + 5);
+    const results = await Promise.all(
+      batch.map(async (row) => {
+        const parts = [
+          row.property_address,
+          row.property_city,
+          row.property_state ?? "AR",
+          row.property_zip,
+        ]
+          .filter(Boolean)
+          .join(", ");
+        if (!parts) return { row, coords: null };
+        const coords = await geocodeAddress(parts);
+        return { row, coords };
+      }),
+    );
+    for (const { row, coords } of results) {
+      if (!coords) {
+        skipped.push(row.id);
+        continue;
+      }
+      const addressLabel = [row.property_address, row.property_city, row.property_state]
+        .filter(Boolean)
+        .join(", ");
+      pins.push({
+        job_id: row.id,
+        job_number: row.job_number,
+        title: row.title,
+        status: row.status,
+        client_name: row.client_name,
+        address: addressLabel,
+        lat: coords.lat,
+        lon: coords.lon,
+      });
+    }
+  }
+
+  return json({ pins, skipped });
+}

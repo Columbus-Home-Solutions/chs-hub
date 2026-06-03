@@ -116,9 +116,12 @@ export interface Env {
   // step (FB Page token + IG Business id in settings, app review, go-ahead).
   // Read from env first, then the system_settings 'social_publish_mode' row.
   SOCIAL_PUBLISH_MODE?: string;
-  // Replicate API key for AI image generation (Flux 1.1 Pro). Secret. Absent ⇒
-  // image generation degrades to a "configure image API / attach manually"
-  // state and the post still flows through the queue. Falls back to the
-  // system_settings 'social_replicate_api_key' row when the secret is unset.
-  REPLICATE_API_KEY?: string;
+
+  // ─── Google Cloud (Imagen + Maps) ─────────────────────────────────
+  // Service account for Vertex AI Imagen 3 (image gen). All three required.
+  GOOGLE_CLIENT_EMAIL?: string;
+  GOOGLE_PROJECT_ID?: string;
+  GOOGLE_PRIVATE_KEY?: string;
+  // Browser-safe Maps/Places key (referrer-restricted). Served via GET /api/config/maps.
+  GOOGLE_MAPS_API_KEY?: string;
 }

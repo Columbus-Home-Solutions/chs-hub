@@ -41,6 +41,7 @@ export function SmartNotes() {
   const [category, setCategory] = useState("");
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [notesCollapsed, setNotesCollapsed] = useState(false);
   const recRef = useRef<SpeechRecognitionLike | null>(null);
 
   const toggleVoice = () => {
@@ -174,30 +175,70 @@ export function SmartNotes() {
           </div>
         </div>
 
-        {loading ? (
-          <div class="smart-notes__recent--skeleton" aria-hidden="true" />
-        ) : notes.length === 0 ? (
-          <div class="smart-notes__empty">No notes yet — capture a thought above.</div>
-        ) : (
-          <div class="smart-notes__recent">
-            {notes.map((n) => (
-              <div key={n.id} class="smart-note-preview">
-                <div class="smart-note-preview__meta">
-                  <span class="smart-note-preview__time">{formatDateTime(n.created_at)}</span>
-                  {n.ai_extracted_tasks?.length > 0 && (
-                    <span class="smart-note-preview__tasks">
-                      {n.ai_extracted_tasks.length} task{n.ai_extracted_tasks.length !== 1 ? "s" : ""}
-                    </span>
-                  )}
-                </div>
-                <div class="smart-note-preview__summary">
-                  {n.ai_summary ?? n.raw_content.slice(0, 80)}
-                  {!n.ai_summary && n.raw_content.length > 80 ? "…" : ""}
-                </div>
+        {/* Recent notes — collapsible */}
+        <div
+          style={{
+            marginTop: "var(--space-sm)",
+            borderTop: "1px solid var(--color-border)",
+            paddingTop: "var(--space-xs)",
+          }}
+        >
+          <button
+            class="link-btn"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-xs)",
+              fontSize: "var(--text-sm)",
+              color: "var(--color-text-muted)",
+              width: "100%",
+              textAlign: "left",
+              padding: "var(--space-xs) 0",
+            }}
+            onClick={() => setNotesCollapsed((v) => !v)}
+          >
+            <span
+              style={{
+                transition: "transform 0.2s",
+                display: "inline-block",
+                transform: notesCollapsed ? "rotate(-90deg)" : "rotate(0deg)",
+              }}
+            >
+              ▾
+            </span>
+            Recent Notes
+            {notes.length > 0 && !notesCollapsed && (
+              <span style={{ marginLeft: "auto", opacity: 0.6 }}>{notes.length}</span>
+            )}
+          </button>
+
+          {!notesCollapsed && (
+            loading ? (
+              <div class="smart-notes__recent--skeleton" aria-hidden="true" />
+            ) : notes.length === 0 ? (
+              <div class="smart-notes__empty">No notes yet — capture a thought above.</div>
+            ) : (
+              <div class="smart-notes__recent">
+                {notes.map((n) => (
+                  <div key={n.id} class="smart-note-preview">
+                    <div class="smart-note-preview__meta">
+                      <span class="smart-note-preview__time">{formatDateTime(n.created_at)}</span>
+                      {n.ai_extracted_tasks?.length > 0 && (
+                        <span class="smart-note-preview__tasks">
+                          {n.ai_extracted_tasks.length} task{n.ai_extracted_tasks.length !== 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </div>
+                    <div class="smart-note-preview__summary">
+                      {n.ai_summary ?? n.raw_content.slice(0, 80)}
+                      {!n.ai_summary && n.raw_content.length > 80 ? "…" : ""}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            )
+          )}
+        </div>
       </div>
     </div>
   );

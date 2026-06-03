@@ -12,6 +12,8 @@ import { LeadPipeline } from "./dashboard/LeadPipeline";
 import { SmartNotes } from "./dashboard/SmartNotes";
 import { TodaySchedule } from "./dashboard/TodaySchedule";
 import { RecentActivity } from "./dashboard/RecentActivity";
+import { JobsMapWidget } from "./dashboard/JobsMapWidget";
+import { WeatherForecastCard } from "./dashboard/WeatherForecastCard";
 
 export function Dashboard(_props: RoutableProps) {
   const { user } = useAuth();
@@ -73,12 +75,14 @@ export function Dashboard(_props: RoutableProps) {
 
         {/* Secondary column (~40%) */}
         <div class="dashboard__secondary">
-          <SmartNotes />
+          <WeatherForecastCard />
           <TodaySchedule
             entries={schedule.data?.entries ?? []}
             loading={schedule.loading}
             error={schedule.error}
           />
+          <SmartNotes />
+          <JobsMapWidget />
           <RecentActivity
             entries={activity.data?.entries ?? []}
             loading={activity.loading}

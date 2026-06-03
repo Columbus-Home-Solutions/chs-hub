@@ -8,6 +8,7 @@ import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
+import { useWeather, weatherEmoji } from "../../store/weather";
 import { api, ApiError } from "../../api";
 import { formatDate, formatStatus } from "../../lib/format";
 
@@ -78,6 +79,15 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
   const { data, loading, error, refetch } = useApi<ScheduleResponse>(`/api/jobs/${jobId}/schedule`);
   const subsApi = useApi<{ subcontractors: Sub[] }>("/api/subcontractors?active=1");
   const toast = useToast();
+  const weather = useWeather();
+  const forecastMap = useMemo(
+    () => new Map((weather?.forecast ?? []).map((d) => [d.date, d])),
+    [weather],
+  );
+  const alertDates = useMemo(
+    () => new Set((weather?.scheduleAlerts ?? []).map((a) => a.date)),
+    [weather],
+  );
   const [modalDate, setModalDate] = useState<string | null>(null);
   const [editing, setEditing] = useState<ScheduleEntry | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -188,6 +198,8 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
         <div class="sched-grid">
           {days.map((day) => {
             const entries = byDay.get(day) ?? [];
+            const wx = forecastMap.get(day);
+            const wxAlert = alertDates.has(day);
             return (
               <div
                 class={`sched-day${dragId ? " sched-day--drop" : ""}`}
@@ -201,6 +213,14 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
               >
                 <div class="sched-day__head">
                   <span class="sched-day__date">{formatDate(day)}</span>
+                  {wx && (
+                    <span
+                      class={`sched-day__wx${wxAlert ? " sched-day__wx--alert" : ""}`}
+                      title={`${wx.condition} · High ${wx.high}°F`}
+                    >
+                      {weatherEmoji(wx.icon)} {wx.high}°
+                    </span>
+                  )}
                   <button class="sched-day__add" title="Add entry" onClick={() => setModalDate(day)}>
                     +
                   </button>

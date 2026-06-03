@@ -48,6 +48,7 @@ export interface PhotoItem {
   task_id: string | null;
   daily_log_id: string | null;
   is_annotated: boolean;
+  is_social_ready: boolean;
   annotation_data: string | null;
   before_after_pair_id: string | null;
   thumb_url: string;
@@ -86,6 +87,48 @@ export function PhotosTab({ jobId }: { jobId: string }) {
   const [showReport, setShowReport] = useState(false);
   const [packetBusy, setPacketBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Bulk-select state.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = (visiblePhotos: PhotoItem[]) => {
+    setSelectedIds(new Set(visiblePhotos.map((p) => p.id)));
+  };
+
+  const bulkSetSocialReady = async (value: 1 | 0) => {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      await Promise.all(
+        Array.from(selectedIds).map((id) =>
+          api.put(`/api/photos/${id}`, { is_social_ready: value }),
+        ),
+      );
+      toast.push("success", `${selectedIds.size} photo${selectedIds.size !== 1 ? "s" : ""} updated`);
+      exitSelectMode();
+      refetch();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const qs = new URLSearchParams();
   if (type) qs.set("type", type);
@@ -138,7 +181,7 @@ export function PhotosTab({ jobId }: { jobId: string }) {
   };
 
   return (
-    <div class="stack">
+    <div class="stack" style={{ position: "relative" }}>
       <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
         <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
           <Select
@@ -156,7 +199,7 @@ export function PhotosTab({ jobId }: { jobId: string }) {
           )}
         </div>
         <div class="flex gap-sm" style={{ flexWrap: "wrap" }}>
-          {canReport && (
+          {canReport && !selectMode && (
             <>
               <Button variant="secondary" size="sm" disabled={photos.length === 0} onClick={() => setShowReport(true)}>
                 📄 Photo Report
@@ -166,18 +209,31 @@ export function PhotosTab({ jobId }: { jobId: string }) {
               </Button>
             </>
           )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            multiple
-            style={{ display: "none" }}
-            onChange={onPick}
-          />
-          <Button variant="primary" size="sm" disabled={uploading} onClick={() => fileRef.current?.click()}>
-            {uploading ? "Uploading…" : "📷 Add Photo"}
-          </Button>
+          {photos.length > 0 && (
+            <Button
+              variant={selectMode ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
+            >
+              {selectMode ? "✕ Cancel Select" : "☑ Select"}
+            </Button>
+          )}
+          {!selectMode && (
+            <>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                style={{ display: "none" }}
+                onChange={onPick}
+              />
+              <Button variant="primary" size="sm" disabled={uploading} onClick={() => fileRef.current?.click()}>
+                {uploading ? "Uploading…" : "📷 Add Photo"}
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -198,13 +254,64 @@ export function PhotosTab({ jobId }: { jobId: string }) {
             <div class="photo-grid">
               {items.map((p) => {
                 const idx = photos.indexOf(p);
+                const selected = selectedIds.has(p.id);
                 return (
-                  <button key={p.id} class="photo-thumb" onClick={() => setOpenIdx(idx)}>
+                  <button
+                    key={p.id}
+                    class={`photo-thumb${selected ? " photo-thumb--selected" : ""}`}
+                    style={selected ? { outline: "2px solid var(--color-primary, var(--color-brand))" } : undefined}
+                    onClick={() => {
+                      if (selectMode) {
+                        toggleSelect(p.id);
+                      } else {
+                        setOpenIdx(idx);
+                      }
+                    }}
+                  >
+                    {selectMode && (
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        tabIndex={-1}
+                        class="photo-thumb__checkbox"
+                        style={{
+                          position: "absolute",
+                          top: "4px",
+                          left: "4px",
+                          zIndex: 2,
+                          pointerEvents: "none",
+                        }}
+                        readOnly
+                      />
+                    )}
                     <img src={p.thumb_url} alt={p.caption ?? p.photo_type} loading="lazy" />
                     <span class="photo-thumb__type">{TYPE_LABEL[p.photo_type] ?? p.photo_type}</span>
                     {p.receipt && <span class="photo-thumb__badge">💵</span>}
                     {(p.is_annotated || !!p.annotation_data) && <span class="photo-thumb__badge photo-thumb__badge--annot">✏️</span>}
                     {p.before_after_pair_id && <span class="photo-thumb__badge photo-thumb__badge--pair">↔️</span>}
+                    {p.is_social_ready && (
+                      <span
+                        class="photo-thumb__badge photo-thumb__badge--social"
+                        style={{
+                          position: "absolute",
+                          bottom: "4px",
+                          right: "4px",
+                          background: "var(--color-warning)",
+                          borderRadius: "50%",
+                          width: "18px",
+                          height: "18px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "11px",
+                          lineHeight: 1,
+                          zIndex: 2,
+                        }}
+                        title="Social-ready"
+                      >
+                        ★
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -213,7 +320,54 @@ export function PhotosTab({ jobId }: { jobId: string }) {
         ))
       )}
 
-      {openIdx != null && photos[openIdx] && (
+      {/* Bulk-select action bar */}
+      {selectMode && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            zIndex: 200,
+            background: "var(--color-surface-elevated, var(--color-surface-2))",
+            borderTop: "1px solid var(--color-border)",
+            boxShadow: "var(--shadow-lg, 0 -4px 16px rgba(0,0,0,0.4))",
+            padding: "var(--space-sm) var(--space-md)",
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-sm)",
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontWeight: 600, minWidth: "80px" }}>
+            {selectedIds.size} selected
+          </span>
+          <Button variant="tertiary" size="sm" onClick={() => selectAll(photos)}>
+            Select All
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={bulkBusy || selectedIds.size === 0}
+            onClick={() => void bulkSetSocialReady(1)}
+          >
+            ★ Mark Social-Ready
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={bulkBusy || selectedIds.size === 0}
+            onClick={() => void bulkSetSocialReady(0)}
+          >
+            ✕ Unmark Social-Ready
+          </Button>
+          <Button variant="tertiary" size="sm" onClick={exitSelectMode}>
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      {!selectMode && openIdx != null && photos[openIdx] && (
         <PhotoDetailModal
           photos={photos}
           index={openIdx}

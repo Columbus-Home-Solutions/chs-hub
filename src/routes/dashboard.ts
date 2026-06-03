@@ -579,13 +579,13 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
     ).bind(today).all<{ id: string; start_time: string; trade_or_work: string; job_title: string; job_id: string; job_number: string }>(),
 
     env.DB.prepare(
-      `SELECT er.id, er.appointment_date, c.first_name, c.last_name, er.property_address
+      `SELECT er.id, er.appointment_date, er.appointment_time, c.first_name, c.last_name, er.property_address
        FROM estimate_requests er
        JOIN clients c ON er.client_id = c.id
        WHERE DATE(er.appointment_date) = ?
          AND er.status NOT IN ('converted', 'lost', 'cancelled')
        ORDER BY er.appointment_date ASC`,
-    ).bind(today).all<{ id: string; appointment_date: string; first_name: string; last_name: string; property_address: string }>(),
+    ).bind(today).all<{ id: string; appointment_date: string; appointment_time: string | null; first_name: string; last_name: string; property_address: string }>(),
   ]);
 
   const entries: ScheduleEntry[] = [];
@@ -606,7 +606,7 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
     entries.push({
       type: "appointment",
       id: row.id,
-      startTime: null, // estimate_requests has no appointment_time column
+      startTime: row.appointment_time ?? null,
       label: `Estimate appointment: ${clientName}`,
       description: row.property_address ?? null,
       link: "/estimating",

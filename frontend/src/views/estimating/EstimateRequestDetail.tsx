@@ -353,10 +353,11 @@ export function EstimateRequestDetail({ id }: DetailProps) {
       <AppointmentModal
         open={apptOpen}
         initial={r.appointment_date}
+        initialTime={(r as any).appointment_time ?? null}
         onClose={() => setApptOpen(false)}
-        onSave={(iso) => {
+        onSave={(date, time) => {
           setApptOpen(false);
-          void apptCall({ appointment_date: iso }, "Appointment set");
+          void apptCall({ appointment_date: date, appointment_time: time }, "Appointment set");
         }}
       />
 
@@ -388,29 +389,35 @@ function stageLabel(key: EstimateRequestStatus): string {
 function AppointmentModal({
   open,
   initial,
+  initialTime,
   onClose,
   onSave,
 }: {
   open: boolean;
   initial: string | null;
+  initialTime: string | null;
   onClose: () => void;
-  onSave: (iso: string) => void;
+  onSave: (date: string, time: string | null) => void;
 }) {
-  const [value, setValue] = useState("");
+  const [dateVal, setDateVal] = useState("");
+  const [timeVal, setTimeVal] = useState("");
+
   useEffect(() => {
-    // datetime-local wants "YYYY-MM-DDTHH:mm"
     if (initial) {
-      const d = new Date(initial);
+      const d = new Date(initial.includes("T") ? initial : initial + "T00:00:00");
       if (!isNaN(d.getTime())) {
         const pad = (n: number) => String(n).padStart(2, "0");
-        setValue(
-          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`,
+        setDateVal(
+          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
         );
-        return;
+      } else {
+        setDateVal(initial.slice(0, 10));
       }
+    } else {
+      setDateVal("");
     }
-    setValue("");
-  }, [initial, open]);
+    setTimeVal(initialTime ?? "");
+  }, [initial, initialTime, open]);
 
   return (
     <Modal
@@ -422,18 +429,26 @@ function AppointmentModal({
           <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!value} onClick={() => onSave(new Date(value).toISOString())}>
+          <Button variant="primary" disabled={!dateVal} onClick={() => onSave(dateVal, timeVal || null)}>
             Save
           </Button>
         </>
       }
     >
-      <FormField label="Appointment date & time" required>
+      <FormField label="Appointment Date" required>
         <input
           class="form-input"
-          type="datetime-local"
-          value={value}
-          onInput={(e) => setValue((e.target as HTMLInputElement).value)}
+          type="date"
+          value={dateVal}
+          onInput={(e) => setDateVal((e.target as HTMLInputElement).value)}
+        />
+      </FormField>
+      <FormField label="Appointment Time (optional)">
+        <input
+          class="form-input"
+          type="time"
+          value={timeVal}
+          onInput={(e) => setTimeVal((e.target as HTMLInputElement).value)}
         />
       </FormField>
     </Modal>

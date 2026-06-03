@@ -50,7 +50,9 @@ export const SETTING_PUBLISH_MODE = "social_publish_mode";
 export const SETTING_FB_PAGE_ID = "social_facebook_page_id";
 export const SETTING_FB_TOKEN = "social_facebook_page_token";
 export const SETTING_IG_ACCOUNT_ID = "social_instagram_account_id";
-export const SETTING_REPLICATE_KEY = "social_replicate_api_key";
+export const SETTING_GEMINI_KEY = "social_gemini_api_key";
+/** @deprecated Use SETTING_GEMINI_KEY — kept for migration reference only. */
+export const SETTING_REPLICATE_KEY = SETTING_GEMINI_KEY;
 export const SETTING_IMAGE_GEN_COUNT = "social_image_gen_count";
 
 /** Default brand voice — owner can override via the settings row without a deploy. */

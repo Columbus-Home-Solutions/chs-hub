@@ -6,6 +6,7 @@ import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Spinner";
 import { go } from "../../lib/nav";
 import { formatDate, formatStatus } from "../../lib/format";
+import { useWeather, weatherEmoji } from "../../store/weather";
 
 /**
  * Schedule Calendar — cross-job view (Sprint 13, spec §5.5). Day / week / month,
@@ -56,6 +57,15 @@ export function ScheduleCalendar(_props: RoutableProps) {
   const [mode, setMode] = useState<Mode>("month");
   const [anchor, setAnchor] = useState<Date>(new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const weather = useWeather();
+  const forecastMap = useMemo(
+    () => new Map((weather?.forecast ?? []).map((d) => [d.date, d])),
+    [weather],
+  );
+  const alertDates = useMemo(
+    () => new Set((weather?.scheduleAlerts ?? []).map((a) => a.date)),
+    [weather],
+  );
 
   const range = useMemo(() => {
     if (mode === "day") return { from: anchor, to: anchor, gridFrom: anchor, gridTo: anchor };
@@ -156,6 +166,8 @@ export function ScheduleCalendar(_props: RoutableProps) {
             {days.map((day) => {
               const entries = byDay.get(day) ?? [];
               const inMonth = mode !== "month" || new Date(day + "T00:00:00Z").getUTCMonth() === anchor.getUTCMonth();
+              const wx = forecastMap.get(day);
+              const wxAlert = alertDates.has(day);
               return (
                 <div
                   class={`cal-cell${inMonth ? "" : " cal-cell--muted"}${selectedDay === day ? " cal-cell--selected" : ""}`}
@@ -166,6 +178,14 @@ export function ScheduleCalendar(_props: RoutableProps) {
                     {mode === "month"
                       ? new Date(day + "T00:00:00Z").getUTCDate()
                       : formatDate(day)}
+                    {wx && (
+                      <span
+                        class={`cal-cell__wx${wxAlert ? " cal-cell__wx--alert" : ""}`}
+                        title={`${wx.condition} · High ${wx.high}°F`}
+                      >
+                        {weatherEmoji(wx.icon)} {wx.high}°
+                      </span>
+                    )}
                   </div>
                   <div class="cal-cell__entries">
                     {entries.slice(0, mode === "month" ? 3 : 50).map((e) => (

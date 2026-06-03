@@ -11,7 +11,7 @@
  *   POST   /api/social-posts/:id/approve     pending/draft → approved
  *   POST   /api/social-posts/:id/reject      → rejected (+ reason)
  *   POST   /api/social-posts/:id/regenerate  re-run caption (+ optional hashtags)
- *   POST   /api/social-posts/:id/generate-image  Replicate image (gated on key)
+ *   POST   /api/social-posts/:id/generate-image  Gemini Imagen image (gated on key)
  *   GET    /api/social-posts/:id/image       stream the generated image from R2
  *
  * Soft vs. hard delete: `social_posts` has NO is_active column (confirmed in
@@ -417,7 +417,7 @@ export async function handleSocialPostGenerateImage(request: Request, env: Env, 
     return json({
       ok: false,
       unconfigured: true,
-      message: "Image generation isn't configured — set a Replicate API key or attach a photo manually.",
+      message: "Image generation isn't configured — set Google Imagen credentials or attach a photo manually.",
     });
   }
 

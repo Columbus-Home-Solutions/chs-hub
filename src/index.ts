@@ -52,6 +52,7 @@ import { handleHLProxy } from "./routes/hl.js";
 import { handleJobDetail as handleLegacyJobDetail, handleJobsList as handleLegacyJobsList } from "./routes/jobs.js";
 import {
   handleJobList,
+  handleJobMap,
   handleJobPipeline,
   handleJobDetail,
   handleJobUpdate,
@@ -391,6 +392,8 @@ import {
 } from "./routes/dlq.js";
 import { handleBackupStatus, handleBackupTrigger } from "./routes/backup.js";
 import { handleAdminHealth } from "./routes/health.js";
+import { handleCpaExport } from "./routes/reports.js";
+import { handleMapsConfig } from "./routes/config.js";
 import {
   handleIntegrationTest,
   handleIntegrationConnect,
@@ -517,6 +520,10 @@ export default {
     if (url.pathname === "/api/kpis" && request.method === "GET") {
       const payload = await handleKpis(env);
       return jsonResponse(payload);
+    }
+
+    if (url.pathname === "/api/config/maps" && request.method === "GET") {
+      return handleMapsConfig(request, env);
     }
 
     if (url.pathname === "/api/weather" && request.method === "GET") {
@@ -804,6 +811,9 @@ export default {
     // Fixed/sub-resource paths before the bare :id route.
     if (url.pathname === "/api/jobs" && request.method === "GET") {
       return handleJobList(env, url);
+    }
+    if (url.pathname === "/api/jobs/map" && request.method === "GET") {
+      return handleJobMap(request, env);
     }
     if (url.pathname === "/api/jobs/pipeline" && request.method === "GET") {
       return handleJobPipeline(env);
@@ -1189,6 +1199,11 @@ export default {
     const mileageById = url.pathname.match(/^\/api\/mileage\/([^/]+)$/);
     if (mileageById && request.method === "PUT") {
       return handleMileageUpdate(env, request, decodeURIComponent(mileageById[1]));
+    }
+
+    // ── Financial reports / CPA export ───────────────────────────────
+    if (url.pathname === "/api/reports/cpa-export" && request.method === "GET") {
+      return handleCpaExport(request, env);
     }
 
     // ── Vendor / material price book (Sprint 10) ─────────────────────

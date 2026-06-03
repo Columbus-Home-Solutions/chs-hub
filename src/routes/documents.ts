@@ -39,6 +39,7 @@ export const DOCUMENT_CATEGORIES = new Set([
   "license",
   "sop",
   "photo_report",
+  "project_packet",
   "completion_package",
   "other",
 ]);

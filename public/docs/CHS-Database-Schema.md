@@ -1137,6 +1137,16 @@ Migrations continue from the existing chs-hub sequence (0011+). Recommended appr
                                IDs were aligned to the exact prod ids during the S17 deploy
                                (verified via remote PRAGMA) — INSERT OR IGNORE is a genuine
                                no-op on prod (keys on the PK), not a duplicate insert.
+0039_device_tokens.sql       — Sprint 18. NEW TABLE device_tokens (id PK, user_id→users,
+                               platform CHECK ios|android|web, token, is_active, created_at,
+                               last_seen_at) + UNIQUE(token) + idx(user_id,is_active). Push
+                               device registration store — the ONLY schema change in S18.
+                               Photo annotations/before-after/photo-report/project-packet are
+                               pure code over EXISTING columns (photos.is_annotated /
+                               annotation_data / before_after_pair_id from 0031;
+                               documents.document_category is free-text so 'photo_report' and
+                               'project_packet' need no DDL). CREATE TABLE IF NOT EXISTS —
+                               idempotent. Direct-execute; do NOT `migrations apply`.
 ```
 
 > **Sprint 14 note:** `integration_connections` was reused as-is for the QBO connection

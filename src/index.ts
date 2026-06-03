@@ -93,11 +93,21 @@ import {
   handlePhotoMeta,
   handlePhotoStream,
   handlePhotoAnnotate,
+  handlePhotoAnnotationGet,
+  handlePhotoPair,
+  handlePhotoUnpair,
   handleJobPhotos,
   handleReceiptCreate,
   handleReceiptGet,
   handleReceiptConfirm,
 } from "./routes/photos.js";
+import {
+  handleDeviceRegister,
+  handleDeviceUnregister,
+  handleDeviceList,
+} from "./routes/devices.js";
+import { handlePhotoReportGenerate } from "./routes/photo-report.js";
+import { handleProjectPacketGenerate } from "./routes/project-packet.js";
 import {
   handleSmartNoteCreate,
   handleSmartNoteList,
@@ -807,6 +817,15 @@ export default {
     if (jobPhotos && request.method === "GET") {
       return handleJobPhotos(env, decodeURIComponent(jobPhotos[1]), url);
     }
+    // Photo report + project packet (Sprint 18, O/PM — HTML-first artifacts).
+    const jobPhotoReport = url.pathname.match(/^\/api\/jobs\/([^/]+)\/photo-report$/);
+    if (jobPhotoReport && request.method === "POST") {
+      return handlePhotoReportGenerate(request, env, decodeURIComponent(jobPhotoReport[1]));
+    }
+    const jobProjectPacket = url.pathname.match(/^\/api\/jobs\/([^/]+)\/project-packet$/);
+    if (jobProjectPacket && request.method === "POST") {
+      return handleProjectPacketGenerate(request, env, decodeURIComponent(jobProjectPacket[1]));
+    }
     // Invoices + payments per job (Sprint 9).
     const jobInvoices = url.pathname.match(/^\/api\/jobs\/([^/]+)\/invoices$/);
     if (jobInvoices && request.method === "GET") {
@@ -996,13 +1015,30 @@ export default {
       if (portalRes) return portalRes;
     }
 
+    // ── Push device-token registration (Sprint 18, ALL roles) ────────
+    if (url.pathname === "/api/devices/register" && request.method === "POST") {
+      return handleDeviceRegister(request, env);
+    }
+    if (url.pathname === "/api/devices/unregister" && request.method === "POST") {
+      return handleDeviceUnregister(request, env);
+    }
+    if (url.pathname === "/api/devices" && request.method === "GET") {
+      return handleDeviceList(request, env);
+    }
+
     // ── Photos (PWA capture + Sprint 8 timeline/receipts) ────────────
-    // Fixed sub-paths (batch, receipt) must match BEFORE /api/photos/:id.
+    // Fixed sub-paths (batch, receipt, pair) must match BEFORE /api/photos/:id.
     if (url.pathname === "/api/photos/batch" && request.method === "POST") {
       return handlePhotoBatch(env, request);
     }
     if (url.pathname === "/api/photos/receipt" && request.method === "POST") {
       return handleReceiptCreate(env, request);
+    }
+    if (url.pathname === "/api/photos/pair" && request.method === "POST") {
+      return handlePhotoPair(env, request);
+    }
+    if (url.pathname === "/api/photos/unpair" && request.method === "POST") {
+      return handlePhotoUnpair(env, request);
     }
     if (url.pathname === "/api/photos") {
       if (request.method === "POST") return handlePhotoCreate(env, request);
@@ -1019,10 +1055,14 @@ export default {
     if (photoMeta && request.method === "GET") {
       return handlePhotoMeta(env, decodeURIComponent(photoMeta[1]));
     }
-    // Deferred seam (Sprint 18) — returns 501 so callers know it's not wired.
+    // Annotation (Sprint 18): PUT saves the overlay (non-destructive), GET loads.
     const photoAnnotate = url.pathname.match(/^\/api\/photos\/([^/]+)\/annotate$/);
     if (photoAnnotate && request.method === "PUT") {
-      return handlePhotoAnnotate(env, decodeURIComponent(photoAnnotate[1]));
+      return handlePhotoAnnotate(env, request, decodeURIComponent(photoAnnotate[1]));
+    }
+    const photoAnnotation = url.pathname.match(/^\/api\/photos\/([^/]+)\/annotation$/);
+    if (photoAnnotation && request.method === "GET") {
+      return handlePhotoAnnotationGet(env, decodeURIComponent(photoAnnotation[1]));
     }
     const photoDetail = url.pathname.match(/^\/api\/photos\/([^/]+)$/);
     if (photoDetail) {

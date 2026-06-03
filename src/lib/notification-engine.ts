@@ -622,9 +622,12 @@ async function sendByChannel(env: Env, row: LogRow, live: boolean): Promise<Send
   if (row.channel === "in_app") {
     return { kind: "sent", externalId: `in_app:${row.id}` };
   }
-  // push: documented no-op stub (Capacitor/FCM/APNS is Sprint 18).
+  // push (Sprint 18): resolve the recipient's active device tokens and SIMULATE
+  // the dispatch exactly as SMS/email simulate today. NO live FCM/APNS call is
+  // made this sprint — real send is a Pre-Launch flip gated on the same
+  // NOTIFICATIONS_DISPATCH_MODE='live' discipline. Tokens are masked in the log.
   if (row.channel === "push") {
-    return { kind: "simulated", externalId: `push_noop:${crypto.randomUUID()}` };
+    return sendByPush(env, row, live);
   }
 
   if (row.channel === "sms") {
@@ -661,6 +664,46 @@ async function sendByChannel(env: Env, row: LogRow, live: boolean): Promise<Send
   }
 
   return { kind: "failed", error: `unknown_channel:${row.channel}` };
+}
+
+/**
+ * Push channel send (Sprint 18 — SIMULATE).
+ *
+ * Resolves the recipient user's ACTIVE device tokens from `device_tokens` and
+ * logs the intended push, masking each token. Under the current dispatch posture
+ * (and this whole sprint) nothing is sent to FCM/APNS — the row is marked
+ * 'simulated'. A recipient with no registered device still simulates cleanly
+ * (no-op), so a push-pref user without a device never errors the queue.
+ *
+ * When dispatch mode flips to 'live' at Pre-Launch, this is where the real
+ * FCM/APNS HTTP call slots in (one place, mirroring sendResendEmail / sendSms).
+ */
+async function sendByPush(env: Env, row: LogRow, live: boolean): Promise<SendOutcome> {
+  let tokens: Array<{ id: string; platform: string; token: string }> = [];
+  if (row.recipient_user_id) {
+    tokens =
+      (
+        await env.DB.prepare(
+          "SELECT id, platform, token FROM device_tokens WHERE user_id = ? AND is_active = 1",
+        )
+          .bind(row.recipient_user_id)
+          .all<{ id: string; platform: string; token: string }>()
+      ).results ?? [];
+  }
+
+  const masked = tokens.map((t) => `${t.platform}:${maskDeviceToken(t.token)}`);
+  // SIMULATE: log the intended push (masked) and mark the row simulated. This is
+  // the SMS/email simulate posture — never a live send this sprint.
+  console.log(
+    `[notify][push][SIMULATE] event=${row.trigger_event} user=${row.recipient_user_id ?? "?"} devices=${tokens.length} -> ${masked.join(", ") || "(no active device)"}; body="${row.body.slice(0, 80)}"${live ? " (mode=live but push send is gated off this sprint)" : ""}`,
+  );
+  return { kind: "simulated", externalId: `push_simulated:${tokens.length}:${crypto.randomUUID()}` };
+}
+
+/** Mask a device token to its last 4 chars — never log the raw token. */
+function maskDeviceToken(token: string): string {
+  if (!token) return "";
+  return `••••${token.slice(-4)}`;
 }
 
 /** Minimal Resend send (reuses the established daily-summary Resend HTTP path). */

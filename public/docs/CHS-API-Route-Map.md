@@ -430,8 +430,10 @@ remains a labeled seam. Push is **exactly-once**, keyed on the `qbo_*_id` column
 | POST | `/api/photos/batch` | O/PM/FC | Batch upload (offline sync). Array of photos with metadata |
 | GET | `/api/photos/:id` | O/PM/FC | Photo detail with metadata |
 | PUT | `/api/photos/:id` | O/PM/FC | Update photo metadata (caption, type, social flag, before/after) |
-| PUT | `/api/photos/:id/annotate` | O/PM/FC | Save annotation overlay data |
-| POST | `/api/photos/pair` | O/PM/FC | Link before/after pair: `{ before_id, after_id }` |
+| PUT | `/api/photos/:id/annotate` | O/PM/FC | **Built S18.** Save annotation overlay (`{ annotation_data }`); non-destructive — sets `is_annotated=1`, never rewrites the R2 original. Empty overlay clears it |
+| GET | `/api/photos/:id/annotation` | O/PM/FC | **Built S18.** Load the saved overlay JSON for re-render |
+| POST | `/api/photos/pair` | O/PM/FC | **Built S18.** Link before/after: `{ before_id, after_id }` (after→before; sets type flags so portal/completion seams surface it) |
+| POST | `/api/photos/unpair` | O/PM/FC | **Built S18.** Clear a pair: `{ after_id }` |
 
 ### Receipt Processing
 
@@ -441,11 +443,22 @@ remains a labeled seam. Push is **exactly-once**, keyed on the `qbo_*_id` column
 | GET | `/api/receipt-photos/:id` | O/PM/FC | Get AI extraction results |
 | POST | `/api/receipt-photos/:id/confirm` | O/PM/FC | Confirm AI extraction → creates expense record |
 
-### Photo Reports
+### Photo Reports & Project Packet
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/jobs/:id/photo-report` | O/PM | Generate photo report PDF. Body: `{ photo_ids, include_gps, include_captions }` |
+| POST | `/api/jobs/:id/photo-report` | O/PM | **Built S18.** Generate a photo report (HTML-first, S15 pattern — no binary-PDF). Body: `{ photo_ids, include_gps, include_captions }`. Stores R2 + `documents` row `document_category='photo_report'` (`is_signed=0` — never swept into signed-doc queries). Shareable via `POST /api/documents/:id/share` |
+| POST | `/api/jobs/:id/project-packet` | O/PM | **Built S18.** Generate a sales packet (HTML-first; before/after + scope + highlights). `documents` row `document_category='project_packet'`, distinct from the completion package. Shareable |
+
+### Push Device Registration (Sprint 18)
+
+| Method | Route | Role | Description |
+|--------|-------|------|-------------|
+| POST | `/api/devices/register` | ALL | Upsert a device token keyed on `token`: `{ platform: ios\|android\|web, token }` → `user_id` from `req.user`, `is_active=1`, refresh `last_seen_at`. Tokens masked in responses/logs |
+| POST | `/api/devices/unregister` | ALL | Deactivate a token: `{ token }` (own device; owner may retire any) |
+| GET | `/api/devices` | ALL | The caller's own devices (tokens masked) |
+
+> **S18 push posture:** registration stores the token; the notification dispatcher's `push` branch resolves the recipient's active `device_tokens` and **SIMULATES** the send (logs the intended push, masked) — identical to SMS/email today. **No live FCM/APNS** — real send is a Pre-Launch dispatch-mode flip. Rides the existing `*/15` notification tick (no new cron).
 
 ---
 

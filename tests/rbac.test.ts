@@ -137,6 +137,15 @@ describe("resolveRequiredRoles", () => {
   it("unmatched routes default to ALL (null)", () => {
     expect(resolveRequiredRoles("GET", "/api/notifications/inbox")).toBeNull();
   });
+
+  it("Sprint 18: photo-report + project-packet are O/PM; devices default to ALL", () => {
+    expect(resolveRequiredRoles("POST", "/api/jobs/abc/photo-report")).toEqual(["owner", "project_manager"]);
+    expect(resolveRequiredRoles("POST", "/api/jobs/abc/project-packet")).toEqual(["owner", "project_manager"]);
+    // Every authenticated user registers their own device → no rule → ALL.
+    expect(resolveRequiredRoles("POST", "/api/devices/register")).toBeNull();
+    expect(resolveRequiredRoles("POST", "/api/devices/unregister")).toBeNull();
+    expect(resolveRequiredRoles("GET", "/api/devices")).toBeNull();
+  });
 });
 
 describe("enforceRbac — the §3 matrix end-to-end", () => {
@@ -186,6 +195,16 @@ describe("enforceRbac — the §3 matrix end-to-end", () => {
     expect(await status(env, "fc@chs.local", "POST", "/api/daily-logs")).toBe(200);
     // Reads default to ALL — own jobs reachable.
     expect(await status(env, "fc@chs.local", "GET", "/api/jobs/abc")).toBe(200);
+  });
+
+  it("Sprint 18: photo-report/packet 403 for field_crew, devices 200 for all", async () => {
+    expect(await status(env, "fc@chs.local", "POST", "/api/jobs/abc/photo-report")).toBe(403);
+    expect(await status(env, "fc@chs.local", "POST", "/api/jobs/abc/project-packet")).toBe(403);
+    expect(await status(env, "pm@chs.local", "POST", "/api/jobs/abc/photo-report")).toBe(200);
+    expect(await status(env, "owner@chs.local", "POST", "/api/jobs/abc/project-packet")).toBe(200);
+    // Device registration is open to every authenticated active role.
+    expect(await status(env, "fc@chs.local", "POST", "/api/devices/register")).toBe(200);
+    expect(await status(env, "oa@chs.local", "GET", "/api/devices")).toBe(200);
   });
 
   it("office_admin: 403 on costing/settings/users, 200 on clients/invoices/payments", async () => {

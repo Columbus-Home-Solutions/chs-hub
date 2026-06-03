@@ -7,9 +7,15 @@ import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
+import { useAuth } from "../../store/auth";
+import { can } from "../../lib/rbac";
 import { api, ApiError } from "../../api";
 import { formatDateTime } from "../../lib/format";
 import { uploadPhoto } from "../../lib/capture";
+import { renderAnnotatedImageSvg, type AnnotationData } from "../../lib/annotation";
+import { PhotoAnnotator } from "./PhotoAnnotator";
+import { BeforeAfterSlider } from "./BeforeAfterSlider";
+import { PhotoReportBuilder } from "./PhotoReportBuilder";
 import {
   ExpenseFields,
   emptyDraft,
@@ -41,6 +47,9 @@ export interface PhotoItem {
   synced_from_offline: boolean;
   task_id: string | null;
   daily_log_id: string | null;
+  is_annotated: boolean;
+  annotation_data: string | null;
+  before_after_pair_id: string | null;
   thumb_url: string;
   original_url: string;
   receipt: PhotoReceipt | null;
@@ -67,11 +76,15 @@ function dayKey(iso: string | null): string {
 
 export function PhotosTab({ jobId }: { jobId: string }) {
   const toast = useToast();
+  const { user } = useAuth();
+  const canReport = can(user, "manage_jobs"); // O/PM — photo report + project packet
   const [type, setType] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [openIdx, setOpenIdx] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  const [packetBusy, setPacketBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const qs = new URLSearchParams();
@@ -91,6 +104,19 @@ export function PhotosTab({ jobId }: { jobId: string }) {
     }
     return Array.from(m.entries());
   }, [photos]);
+
+  const generatePacket = async () => {
+    setPacketBusy(true);
+    try {
+      const r = await api.post<{ preview_url: string }>(`/api/jobs/${jobId}/project-packet`, {});
+      toast.push("success", "Project packet generated");
+      window.open(r.preview_url, "_blank");
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setPacketBusy(false);
+    }
+  };
 
   const onPick = async (e: Event) => {
     const input = e.target as HTMLInputElement;
@@ -129,7 +155,17 @@ export function PhotosTab({ jobId }: { jobId: string }) {
             </Button>
           )}
         </div>
-        <div>
+        <div class="flex gap-sm" style={{ flexWrap: "wrap" }}>
+          {canReport && (
+            <>
+              <Button variant="secondary" size="sm" disabled={photos.length === 0} onClick={() => setShowReport(true)}>
+                📄 Photo Report
+              </Button>
+              <Button variant="secondary" size="sm" disabled={packetBusy || photos.length === 0} onClick={generatePacket}>
+                {packetBusy ? "Building…" : "🎁 Project Packet"}
+              </Button>
+            </>
+          )}
           <input
             ref={fileRef}
             type="file"
@@ -167,6 +203,8 @@ export function PhotosTab({ jobId }: { jobId: string }) {
                     <img src={p.thumb_url} alt={p.caption ?? p.photo_type} loading="lazy" />
                     <span class="photo-thumb__type">{TYPE_LABEL[p.photo_type] ?? p.photo_type}</span>
                     {p.receipt && <span class="photo-thumb__badge">💵</span>}
+                    {p.is_annotated && <span class="photo-thumb__badge photo-thumb__badge--annot">✏️</span>}
+                    {p.before_after_pair_id && <span class="photo-thumb__badge photo-thumb__badge--pair">↔️</span>}
                   </button>
                 );
               })}
@@ -184,6 +222,10 @@ export function PhotosTab({ jobId }: { jobId: string }) {
           onChanged={refetch}
           toast={toast}
         />
+      )}
+
+      {showReport && (
+        <PhotoReportBuilder jobId={jobId} photos={photos} onClose={() => setShowReport(false)} toast={toast} />
       )}
     </div>
   );
@@ -208,9 +250,55 @@ function PhotoDetailModal({
   const [caption, setCaption] = useState(p.caption ?? "");
   const [ptype, setPtype] = useState(p.photo_type);
   const [busy, setBusy] = useState(false);
+  const [annotating, setAnnotating] = useState(false);
+  const [showAnnotated, setShowAnnotated] = useState(true);
+  const [pairing, setPairing] = useState(false);
 
   const prev = () => index > 0 && onIndex(index - 1);
   const next = () => index < photos.length - 1 && onIndex(index + 1);
+
+  // The paired "before" photo, if this one is an "after" in a pair.
+  const pairedBefore = p.before_after_pair_id
+    ? photos.find((x) => x.id === p.before_after_pair_id) ?? null
+    : null;
+
+  const annotatedSvg = (() => {
+    if (!p.is_annotated || !p.annotation_data) return null;
+    try {
+      const data = JSON.parse(p.annotation_data) as AnnotationData;
+      if (!data?.shapes?.length) return null;
+      return renderAnnotatedImageSvg(p.original_url, data);
+    } catch {
+      return null;
+    }
+  })();
+
+  const pairWith = async (beforeId: string) => {
+    setBusy(true);
+    try {
+      await api.post(`/api/photos/pair`, { before_id: beforeId, after_id: p.id });
+      toast.push("success", "Before/after pair created");
+      setPairing(false);
+      onChanged();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unpair = async () => {
+    setBusy(true);
+    try {
+      await api.post(`/api/photos/unpair`, { after_id: p.id });
+      toast.push("success", "Pair removed");
+      onChanged();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const saveMeta = async () => {
     setBusy(true);
@@ -264,7 +352,13 @@ function PhotoDetailModal({
       }
     >
       <div class="photo-detail">
-        <img class="photo-detail__img" src={p.original_url} alt={p.caption ?? p.photo_type} />
+        {pairedBefore ? (
+          <BeforeAfterSlider beforeUrl={pairedBefore.original_url} afterUrl={p.original_url} />
+        ) : annotatedSvg && showAnnotated ? (
+          <div class="photo-detail__img" dangerouslySetInnerHTML={{ __html: annotatedSvg }} />
+        ) : (
+          <img class="photo-detail__img" src={p.original_url} alt={p.caption ?? p.photo_type} />
+        )}
         <div class="stack">
           <FormField label="Caption">
             <input class="form-input" value={caption} onInput={(e) => setCaption((e.target as HTMLInputElement).value)} placeholder="Add a caption…" />
@@ -282,15 +376,52 @@ function PhotoDetailModal({
 
           {p.receipt && <ReceiptConfirm receipt={p.receipt} jobId={p.job_id} onConfirmed={onChanged} toast={toast} />}
 
-          {/* Deferred seams — rendered disabled so they're discoverable but not wired.
-              Annotate = Sprint 18, Before/After = Sprint 18, Social = Sprint 16. */}
           <div class="flex gap-sm" style={{ flexWrap: "wrap" }}>
-            <Button variant="tertiary" size="sm" disabled title="Coming soon (Sprint 18)">✏️ Annotate</Button>
-            <Button variant="tertiary" size="sm" disabled title="Coming soon (Sprint 18)">↔️ Before/After</Button>
-            <Button variant="tertiary" size="sm" disabled title="Coming soon (Sprint 16)">📣 Social</Button>
+            <Button variant="secondary" size="sm" onClick={() => setAnnotating(true)}>
+              ✏️ {p.is_annotated ? "Edit markup" : "Annotate"}
+            </Button>
+            {annotatedSvg && (
+              <Button variant="tertiary" size="sm" onClick={() => setShowAnnotated((v) => !v)}>
+                {showAnnotated ? "Show original" : "Show annotated"}
+              </Button>
+            )}
+            {pairedBefore ? (
+              <Button variant="tertiary" size="sm" disabled={busy} onClick={unpair}>↔️ Unpair</Button>
+            ) : (
+              <Button variant="secondary" size="sm" onClick={() => setPairing((v) => !v)}>
+                ↔️ Before/After
+              </Button>
+            )}
           </div>
+
+          {pairing && !pairedBefore && (
+            <div class="stack" style={{ marginTop: "var(--space-2)" }}>
+              <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+                Pick the <strong>“before”</strong> photo — this one becomes the “after”.
+              </div>
+              <div class="photo-grid">
+                {photos
+                  .filter((x) => x.id !== p.id && x.photo_type !== "receipt")
+                  .map((x) => (
+                    <button key={x.id} class="photo-thumb" disabled={busy} onClick={() => pairWith(x.id)}>
+                      <img src={x.thumb_url} alt={x.caption ?? x.photo_type} loading="lazy" />
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {annotating && (
+        <PhotoAnnotator
+          photoId={p.id}
+          originalUrl={p.original_url}
+          onClose={() => setAnnotating(false)}
+          onSaved={onChanged}
+          toast={toast}
+        />
+      )}
     </Modal>
   );
 }

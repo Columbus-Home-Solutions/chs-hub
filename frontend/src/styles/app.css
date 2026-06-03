@@ -99,7 +99,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.12));
-  z-index: 50;
+  z-index: var(--z-dropdown); /* S18 CSS audit: align to the z-index scale (was raw 50) */
   overflow: hidden;
 }
 .notif-dropdown__head {
@@ -1598,6 +1598,154 @@
     grid-template-columns: 1fr;
   }
 }
+.photo-detail__img svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 60vh;
+}
+.photo-thumb__badge--annot {
+  right: auto;
+  left: 4px;
+  top: 4px;
+}
+.photo-thumb__badge--pair {
+  top: 22px;
+}
+
+/* ── Sprint 18: photo annotation editor ──────────────────────────────────── */
+.annot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.annot__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.annot__tool {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 15px;
+}
+.annot__tool--on {
+  border-color: var(--color-brand);
+  background: var(--color-brand);
+  color: #fff;
+}
+.annot__swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  cursor: pointer;
+  padding: 0;
+}
+.annot__swatch--on {
+  outline: 2px solid var(--color-text);
+  outline-offset: 1px;
+}
+.annot__sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--color-border);
+  margin: 0 2px;
+}
+.annot__stage {
+  position: relative;
+  line-height: 0;
+  max-height: 64vh;
+  overflow: auto;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+}
+.annot__img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.annot__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Sprint 18: before/after comparison slider ───────────────────────────── */
+.ba-slider {
+  position: relative;
+  width: 100%;
+  max-height: 60vh;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  touch-action: none;
+  user-select: none;
+  cursor: ew-resize;
+}
+.ba-slider__img {
+  display: block;
+  width: 100%;
+  height: auto;
+  -webkit-user-drag: none;
+}
+.ba-slider__img--before {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  object-fit: cover;
+}
+.ba-slider__divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #fff;
+  transform: translateX(-1px);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.ba-slider__handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--color-text);
+  font-size: 14px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.ba-slider__label {
+  position: absolute;
+  bottom: 8px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+.ba-slider__label--before {
+  left: 8px;
+}
+.ba-slider__label--after {
+  right: 8px;
+}
 
 .receipt-box {
   border: 1px solid var(--color-border);
@@ -1703,7 +1851,10 @@
   bottom: calc(var(--capture-bar-height) * 2 + var(--space-xs));
   left: 50%;
   transform: translateX(-50%);
-  z-index: 50;
+  /* S18 CSS audit: the upload pill must paint ABOVE the capture bar + bottom nav
+     (both at --z-capture-bar) so it's never hidden behind them — the S11 lesson.
+     Was a raw z-index:50, which sat below the bars. */
+  z-index: calc(var(--z-capture-bar) + 2);
   display: flex;
   align-items: center;
   gap: var(--space-sm);

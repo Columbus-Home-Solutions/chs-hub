@@ -148,6 +148,13 @@ const ROUTE_RULES: RouteRule[] = [
   { method: "*", pattern: /^\/api\/social-posts(\/.*)?$/, roles: O_PM },
   { method: "*", pattern: /^\/api\/content-schedules(\/.*)?$/, roles: O_PM },
 
+  // ── Photo report + project packet (Sprint 18) — OWNER + PM ─────────────────
+  // Sales/owner artifacts (Route Map §6 O/PM). Device-token registration
+  // (/api/devices/*) is intentionally absent → defaults to ALL (every user
+  // registers their own device); the handlers scope writes to req.user.
+  { method: "POST", pattern: /^\/api\/jobs\/[^/]+\/photo-report$/, roles: O_PM },
+  { method: "POST", pattern: /^\/api\/jobs\/[^/]+\/project-packet$/, roles: O_PM },
+
   // ── Invoices / payments / billing — OWNER + PM + Office Admin ──────────────
   { method: "*", pattern: /^\/api\/invoices(\/.*)?$/, roles: O_PM_OA },
   { method: "*", pattern: /^\/api\/payments(\/.*)?$/, roles: O_PM_OA },

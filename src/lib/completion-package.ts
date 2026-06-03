@@ -129,7 +129,7 @@ export async function buildCompletionPackageData(
     await env.DB.prepare(
       `SELECT title, document_category FROM documents
         WHERE job_id = ? AND COALESCE(is_active,1)=1
-          AND document_category NOT IN ('receipt','completion_package')
+          AND document_category NOT IN ('receipt','completion_package','project_packet')
         ORDER BY document_category ASC, datetime(created_at) ASC`,
     )
       .bind(jobId)

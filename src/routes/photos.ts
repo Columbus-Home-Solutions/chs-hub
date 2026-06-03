@@ -32,6 +32,8 @@ import { dateBucket, photoOriginalKey, photoThumbKey, putImage, streamObject } f
 import { extractReceipt } from "../lib/receipt-ai.js";
 import { guard } from "../middleware/guard.js";
 import { insertFullExpense } from "./expenses.js";
+import { validateAnnotationData, hasMarkup } from "../lib/annotation.js";
+import { writeAudit } from "../lib/audit.js";
 
 // O/PM/FC may capture; expense creation on confirm is gated O/PM/FC (FC allowed
 // for expense per the route map note).
@@ -217,6 +219,8 @@ interface PhotoRow {
   is_before_photo: number | null;
   is_after_photo: number | null;
   is_annotated: number | null;
+  annotation_data: string | null;
+  before_after_pair_id: string | null;
   tags: string | null;
   entered_via: string | null;
   rp_id?: string | null;
@@ -261,6 +265,8 @@ function hydratePhoto(row: PhotoRow) {
     is_before_photo: Boolean(row.is_before_photo),
     is_after_photo: Boolean(row.is_after_photo),
     is_annotated: Boolean(row.is_annotated),
+    annotation_data: row.annotation_data ?? null,
+    before_after_pair_id: row.before_after_pair_id ?? null,
     tags: safeJsonArray(row.tags),
     entered_via: row.entered_via,
     thumb_url: `/api/photos/${row.id}/thumb`,
@@ -274,6 +280,7 @@ const PHOTO_SELECT = `
   p.latitude, p.longitude, p.location_accuracy, p.gps_lat, p.gps_lng,
   p.uploaded_by, p.synced_from_offline, p.task_id, p.daily_log_id, p.is_active,
   p.is_social_ready, p.is_before_photo, p.is_after_photo, p.is_annotated,
+  p.annotation_data, p.before_after_pair_id,
   p.tags, p.entered_via,
   rp.id AS rp_id, rp.processing_status AS rp_status, rp.ai_vendor AS rp_vendor,
   rp.ai_amount AS rp_amount, rp.ai_date AS rp_date, rp.ai_category AS rp_category,
@@ -744,12 +751,163 @@ export async function handlePhotoDelete(env: Env, request: Request, id: string):
   return jsonResponse({ ok: true, soft_deleted: true });
 }
 
-// ─── DEFERRED SEAM: PUT /api/photos/:id/annotate (Sprint 18+) ───────────────
-// The annotation_data column + is_annotated flag exist. The drawing UI and the
-// real endpoint are out of scope for Sprint 8. This stub records intent only.
-// TODO(Sprint 18): implement markup persistence to annotation_data.
-export async function handlePhotoAnnotate(_env: Env, _id: string): Promise<Response> {
-  return jsonErr(501, "not_implemented", "Photo annotation lands in a later sprint (Sprint 18).");
+// ─── PUT /api/photos/:id/annotate (Sprint 18 — non-destructive markup) ──────
+//
+// Body: { annotation_data: AnnotationData }  (see src/lib/annotation.ts for the
+// JSON↔render contract). Persists the validated overlay to photos.annotation_data
+// and sets is_annotated=1. The stored R2 ORIGINAL IS NEVER TOUCHED (business
+// rule 1) — the annotated render is composited from original + this JSON at view
+// and report time. Sending an empty/cleared overlay removes the annotation.
+export async function handlePhotoAnnotate(env: Env, request: Request, id: string): Promise<Response> {
+  const guarded = await guard(request, env, [...CAPTURE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return jsonErr(400, "invalid_json");
+  }
+  const existing = await env.DB.prepare("SELECT id FROM photos WHERE id = ?")
+    .bind(id)
+    .first<{ id: string }>();
+  if (!existing) return jsonErr(404, "not_found");
+
+  const raw = body.annotation_data ?? body;
+  const data = validateAnnotationData(raw);
+  // A null parse OR an explicit empty overlay clears the annotation.
+  const clearing = !data || !hasMarkup(data);
+
+  if (clearing) {
+    await env.DB.prepare("UPDATE photos SET annotation_data = NULL, is_annotated = 0 WHERE id = ?")
+      .bind(id)
+      .run();
+    await writeAudit(env, {
+      userEmail: user.email,
+      action: "photo.annotate.clear",
+      entityType: "photo",
+      entityId: id,
+    });
+    return jsonResponse({ ok: true, id, is_annotated: false, annotation_data: null });
+  }
+
+  const serialized = JSON.stringify(data);
+  await env.DB.prepare("UPDATE photos SET annotation_data = ?, is_annotated = 1 WHERE id = ?")
+    .bind(serialized, id)
+    .run();
+  await writeAudit(env, {
+    userEmail: user.email,
+    action: "photo.annotate",
+    entityType: "photo",
+    entityId: id,
+    details: { shapes: data.shapes.length },
+  });
+  return jsonResponse({ ok: true, id, is_annotated: true, annotation_data: data });
+}
+
+// ─── GET /api/photos/:id/annotation (load saved overlay) ────────────────────
+export async function handlePhotoAnnotationGet(env: Env, id: string): Promise<Response> {
+  const row = await env.DB.prepare("SELECT id, annotation_data, is_annotated FROM photos WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; annotation_data: string | null; is_annotated: number | null }>();
+  if (!row) return jsonErr(404, "not_found");
+  const data = row.annotation_data ? validateAnnotationData(row.annotation_data) : null;
+  return jsonResponse({
+    id: row.id,
+    is_annotated: Boolean(row.is_annotated),
+    annotation_data: data,
+  });
+}
+
+// ─── POST /api/photos/pair (Sprint 18 — before/after pairing) ───────────────
+//
+// Body: { before_id, after_id }. Links the two photos via before_after_pair_id.
+// Direction (confirmed against the S8 seam + completion-package before/after
+// query): the AFTER photo carries before_after_pair_id = the BEFORE photo's id
+// (after → points back to its before), and both rows get their before/after type
+// flags set so the existing portal Photos tab + completion package surface them.
+// Idempotent: re-pairing the same two is a no-op. Audit-logged.
+export async function handlePhotoPair(env: Env, request: Request): Promise<Response> {
+  const guarded = await guard(request, env, [...CAPTURE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return jsonErr(400, "invalid_json");
+  }
+  const beforeId = str(body.before_id);
+  const afterId = str(body.after_id);
+  if (!beforeId || !afterId) return jsonErr(400, "before_and_after_required");
+  if (beforeId === afterId) return jsonErr(400, "cannot_pair_with_self");
+
+  const rows = await env.DB.prepare(
+    `SELECT id, job_id FROM photos WHERE id IN (?, ?) AND COALESCE(is_active,1)=1`,
+  )
+    .bind(beforeId, afterId)
+    .all<{ id: string; job_id: string | null }>();
+  const found = new Map((rows.results ?? []).map((r) => [r.id, r]));
+  if (!found.has(beforeId) || !found.has(afterId)) return jsonErr(404, "photo_not_found");
+
+  // after → before linkage + before/after type flags (so existing seams pick up).
+  await env.DB.prepare(
+    "UPDATE photos SET before_after_pair_id = ?, is_after_photo = 1, photo_type = 'after', category = 'final' WHERE id = ?",
+  )
+    .bind(beforeId, afterId)
+    .run();
+  await env.DB.prepare(
+    "UPDATE photos SET is_before_photo = 1, photo_type = 'before', category = 'before' WHERE id = ?",
+  )
+    .bind(beforeId)
+    .run();
+
+  await writeAudit(env, {
+    userEmail: user.email,
+    action: "photo.pair",
+    entityType: "photo",
+    entityId: afterId,
+    details: { before_id: beforeId, after_id: afterId },
+  });
+  return jsonResponse({ ok: true, before_id: beforeId, after_id: afterId });
+}
+
+// ─── POST /api/photos/unpair ─────────────────────────────────────────────────
+// Body: { after_id }. Clears the before_after_pair_id link on the after photo.
+export async function handlePhotoUnpair(env: Env, request: Request): Promise<Response> {
+  const guarded = await guard(request, env, [...CAPTURE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return jsonErr(400, "invalid_json");
+  }
+  const afterId = str(body.after_id);
+  if (!afterId) return jsonErr(400, "after_id_required");
+  const row = await env.DB.prepare(
+    "SELECT id, before_after_pair_id FROM photos WHERE id = ?",
+  )
+    .bind(afterId)
+    .first<{ id: string; before_after_pair_id: string | null }>();
+  if (!row) return jsonErr(404, "not_found");
+  await env.DB.prepare(
+    "UPDATE photos SET before_after_pair_id = NULL, is_after_photo = 0 WHERE id = ?",
+  )
+    .bind(afterId)
+    .run();
+  await writeAudit(env, {
+    userEmail: user.email,
+    action: "photo.unpair",
+    entityType: "photo",
+    entityId: afterId,
+    details: { was_paired_to: row.before_after_pair_id },
+  });
+  return jsonResponse({ ok: true, after_id: afterId, unpaired: true });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

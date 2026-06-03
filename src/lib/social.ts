@@ -53,6 +53,8 @@ export const SETTING_IG_ACCOUNT_ID = "social_instagram_account_id";
 export const SETTING_GEMINI_KEY = "social_gemini_api_key";
 /** @deprecated Use SETTING_GEMINI_KEY — kept for migration reference only. */
 export const SETTING_REPLICATE_KEY = SETTING_GEMINI_KEY;
+/** When "false" / "0", disables Imagen even if Google credentials are present. */
+export const SETTING_IMAGE_GEN_ENABLED = "image_gen_enabled";
 export const SETTING_IMAGE_GEN_COUNT = "social_image_gen_count";
 
 /** Default brand voice — owner can override via the settings row without a deploy. */

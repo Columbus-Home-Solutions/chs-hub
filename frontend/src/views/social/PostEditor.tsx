@@ -64,8 +64,8 @@ export function PostEditor({ postId, onClose, onChanged }: Props) {
         scheduled_date: scheduled ? fromLocalInput(scheduled) : null,
       });
       toast.push("success", "Saved.");
-      onChanged();
-      void load();
+      onClose();
+      window.setTimeout(onChanged, 0);
     } catch (e) {
       toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
@@ -97,12 +97,14 @@ export function PostEditor({ postId, onClose, onChanged }: Props) {
   const regenImage = async () => {
     setBusy(true);
     try {
-      const r = await api.post<{ ok: boolean; unconfigured?: boolean; message?: string }>(
-        `/api/social-posts/${postId}/generate-image`,
-        {},
-      );
+      const r = await api.post<{
+        ok: boolean;
+        unconfigured?: boolean;
+        message?: string;
+        error?: string;
+      }>(`/api/social-posts/${postId}/generate-image`, {});
       if (!r.ok) {
-        toast.push("warning", r.message ?? "Image generation unavailable.");
+        toast.push("warning", r.message ?? r.error ?? "Image generation unavailable.");
       } else {
         toast.push("success", "Image generated.");
         onChanged();

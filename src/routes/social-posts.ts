@@ -429,7 +429,10 @@ export async function handleSocialPostGenerateImage(request: Request, env: Env, 
 
   const result = await generateAndStoreImage(env, id, prompt);
   if (!result.ok) {
-    return json({ ok: false, unconfigured: result.unconfigured, error: result.error });
+    const message = result.unconfigured
+      ? "Image generation isn't configured — set Google Imagen credentials or attach a photo manually."
+      : result.error ?? "Image generation failed.";
+    return json({ ok: false, unconfigured: result.unconfigured, error: result.error, message });
   }
   await logSocialAudit(env, user.email, "social_post_image_generated", id, {
     monthly_count: result.monthly_count,

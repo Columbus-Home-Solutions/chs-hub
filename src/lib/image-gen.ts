@@ -2,13 +2,9 @@
  * AI image generation for non-job posts (Sprint 16, Deliverable D).
  *
  * Provider: Google Imagen 3 via Vertex AI, authenticated with a service account.
- * Requires GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, and GOOGLE_PROJECT_ID secrets.
- *
- * Gated on configured credentials: absent secrets → callers receive a
- * "configure image API / attach manually" state and the post still flows through
- * the queue. Per-image cost means generation is NEVER speculative (business
- * rule #7): it fires only on an explicit "Generate Image" request or as part of
- * an owner-initiated schedule, and bumps the monthly cost counter on success.
+ * Credentials resolve from GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY +
+ * GOOGLE_PROJECT_ID secrets, or from GOOGLE_SERVICE_ACCOUNT_JSON (same SA as
+ * Drive/Sheets). Gated on `image_gen_enabled` in system_settings when set.
  *
  * The bytes land in R2 under a deterministic key derived from the post id;
  * `ai_generated_image_url` is stamped to GET /api/social-posts/:id/image.
@@ -16,7 +12,7 @@
 
 import type { Env } from "../env.js";
 import { putImage, streamObject } from "./r2.js";
-import { bumpImageGenCount } from "./social.js";
+import { bumpImageGenCount, getSetting, SETTING_IMAGE_GEN_ENABLED } from "./social.js";
 import { getGoogleAccessToken } from "./google-auth.js";
 
 /** Deterministic R2 key for a post's generated image. */
@@ -24,12 +20,48 @@ export function socialImageKey(postId: string): string {
   return `social-images/${postId}.png`;
 }
 
-export function imageGenConfigured(env: Env): boolean {
-  return !!(
-    env.GOOGLE_CLIENT_EMAIL &&
-    env.GOOGLE_PRIVATE_KEY &&
-    env.GOOGLE_PROJECT_ID
-  );
+interface GoogleServiceAccountCreds {
+  clientEmail: string;
+  privateKey: string;
+  projectId: string;
+}
+
+/** Resolve Vertex/Imagen service account creds from env secrets or SA JSON blob. */
+export function resolveGoogleServiceAccount(env: Env): GoogleServiceAccountCreds | null {
+  const email = env.GOOGLE_CLIENT_EMAIL?.trim();
+  const key = env.GOOGLE_PRIVATE_KEY?.trim();
+  const project = env.GOOGLE_PROJECT_ID?.trim();
+  if (email && key && project) {
+    return { clientEmail: email, privateKey: key, projectId: project };
+  }
+
+  const jsonRaw = env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
+  if (!jsonRaw) return null;
+
+  try {
+    const parsed = JSON.parse(jsonRaw) as {
+      client_email?: string;
+      private_key?: string;
+      project_id?: string;
+    };
+    if (parsed.client_email && parsed.private_key && parsed.project_id) {
+      return {
+        clientEmail: parsed.client_email,
+        privateKey: parsed.private_key,
+        projectId: parsed.project_id,
+      };
+    }
+  } catch {
+    /* invalid JSON */
+  }
+  return null;
+}
+
+/** True when Imagen credentials are present and image_gen_enabled is not off. */
+export async function imageGenConfigured(env: Env): Promise<boolean> {
+  const flag = (await getSetting(env, SETTING_IMAGE_GEN_ENABLED))?.trim().toLowerCase();
+  if (flag === "false" || flag === "0") return false;
+  return resolveGoogleServiceAccount(env) !== null;
 }
 
 export interface ImageGenResult {
@@ -53,7 +85,7 @@ export async function generateAndStoreImage(
   postId: string,
   prompt: string,
 ): Promise<ImageGenResult> {
-  if (!imageGenConfigured(env)) {
+  if (!(await imageGenConfigured(env))) {
     return { ok: false, url: null, unconfigured: true, error: "imagen_not_configured" };
   }
 
@@ -78,21 +110,20 @@ export async function streamSocialImage(env: Env, postId: string): Promise<Respo
 }
 
 async function generateImageViaImagen(prompt: string, env: Env): Promise<Uint8Array> {
-  const { GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, GOOGLE_PROJECT_ID } = env;
-
-  if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY || !GOOGLE_PROJECT_ID) {
+  const creds = resolveGoogleServiceAccount(env);
+  if (!creds) {
     throw new Error("Google service account credentials not configured");
   }
 
   const accessToken = await getGoogleAccessToken(
-    GOOGLE_CLIENT_EMAIL,
-    GOOGLE_PRIVATE_KEY,
+    creds.clientEmail,
+    creds.privateKey,
     "https://www.googleapis.com/auth/cloud-platform",
   );
 
   const endpoint =
     `https://us-central1-aiplatform.googleapis.com/v1/projects/` +
-    `${GOOGLE_PROJECT_ID}/locations/us-central1/publishers/google/` +
+    `${creds.projectId}/locations/us-central1/publishers/google/` +
     `models/imagen-3.0-generate-001:predict`;
 
   const response = await fetch(endpoint, {

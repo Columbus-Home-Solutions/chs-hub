@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -28,7 +28,18 @@ export function SocialMedia(_props: RoutableProps) {
   const [editId, setEditId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [creating, setCreating] = useState(false);
+  const suppressEditUntil = useRef(0);
   const bump = () => setRefreshKey((k) => k + 1);
+
+  const openEditor = (id: string) => {
+    if (Date.now() < suppressEditUntil.current) return;
+    setEditId(id);
+  };
+
+  const closeEditor = () => {
+    suppressEditUntil.current = Date.now() + 400;
+    setEditId(null);
+  };
 
   const newPost = async () => {
     setCreating(true);
@@ -39,7 +50,7 @@ export function SocialMedia(_props: RoutableProps) {
         platform: "both",
       });
       bump();
-      setEditId(r.post.id);
+      openEditor(r.post.id);
     } catch (e) {
       toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
@@ -75,17 +86,17 @@ export function SocialMedia(_props: RoutableProps) {
         ))}
       </div>
 
-      {tab === "dashboard" && <DashboardTab refreshKey={refreshKey} onEdit={setEditId} onGoTab={setTab} />}
+      {tab === "dashboard" && <DashboardTab refreshKey={refreshKey} onEdit={openEditor} onGoTab={setTab} />}
       {tab === "calendar" && (
-        <ContentCalendar onEdit={setEditId} refreshKey={refreshKey} onChanged={bump} />
+        <ContentCalendar onEdit={openEditor} refreshKey={refreshKey} onChanged={bump} />
       )}
-      {tab === "queue" && <ApprovalQueue onEdit={setEditId} refreshKey={refreshKey} />}
-      {tab === "history" && <PublishedHistory onEdit={setEditId} refreshKey={refreshKey} />}
+      {tab === "queue" && <ApprovalQueue onEdit={openEditor} refreshKey={refreshKey} />}
+      {tab === "history" && <PublishedHistory onEdit={openEditor} refreshKey={refreshKey} />}
 
       {editId && (
         <PostEditor
           postId={editId}
-          onClose={() => setEditId(null)}
+          onClose={closeEditor}
           onChanged={bump}
         />
       )}

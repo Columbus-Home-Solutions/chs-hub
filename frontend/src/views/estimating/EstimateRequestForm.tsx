@@ -1,6 +1,7 @@
 import type { RoutableProps } from "preact-router";
-import { useMemo, useState } from "preact/hooks";
+import { useMemo, useState, useCallback } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
+import { AddressAutocomplete } from "../../components/AddressAutocomplete";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
@@ -39,11 +40,36 @@ export function EstimateRequestForm(_props: RoutableProps) {
   const [city, setCity] = useState("");
   const [state, setState] = useState("Arkansas");
   const [zip, setZip] = useState("");
+  const [lat, setLat] = useState<number | null>(null);
+  const [lon, setLon] = useState<number | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const handleAddressSelect = useCallback((result: {
+    street: string;
+    city: string;
+    state: string;
+    zip: string;
+    lat: number | null;
+    lon: number | null;
+  }) => {
+    setPropertyAddress(result.street);
+    setCity(result.city);
+    setState(result.state || "Arkansas");
+    setZip(result.zip);
+    setLat(result.lat);
+    setLon(result.lon);
+    setErrors((p) => ({
+      ...p,
+      property_address: "",
+      property_city: "",
+      property_zip: "",
+    }));
+  }, []);
+
   const [jobType, setJobType] = useState("");
   const [leadSource, setLeadSource] = useState("");
   const [notes, setNotes] = useState("");
 
-  const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
   const matches = useMemo(() => {
@@ -103,6 +129,8 @@ export function EstimateRequestForm(_props: RoutableProps) {
         property_city: city,
         property_state: state || "Arkansas",
         property_zip: zip,
+        lat,
+        lon,
         job_type: jobType,
         lead_source: leadSource,
         notes,
@@ -252,15 +280,14 @@ export function EstimateRequestForm(_props: RoutableProps) {
         <div style={{ height: "var(--space-lg)" }} />
 
         <Card title="Property & Job">
-          <FormField
-            label="Property address"
-            required
-            error={errors.property_address}
-            inputProps={{
-              value: propertyAddress,
-              onInput: (e) => setPropertyAddress((e.target as HTMLInputElement).value),
-            }}
-          />
+          <FormField label="Property address" required error={errors.property_address}>
+            <AddressAutocomplete
+              initialValue={propertyAddress}
+              onInputChange={setPropertyAddress}
+              error={!!errors.property_address}
+              onSelect={handleAddressSelect}
+            />
+          </FormField>
           <div class="form-row">
             <FormField
               label="City"

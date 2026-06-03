@@ -1,8 +1,9 @@
-import { useState } from "preact/hooks";
+import { useCallback, useState } from "preact/hooks";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
+import { AddressAutocomplete } from "../../components/AddressAutocomplete";
 import { useForm } from "../../hooks/useForm";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
@@ -54,6 +55,16 @@ export function ClientForm({ open, mode, initial, onClose, onSaved }: ClientForm
   );
   const toast = useToast();
   const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
+
+  const handleMailingAddressSelect = useCallback(
+    (result: { street: string; city: string; state: string; zip: string }) => {
+      setValue("mailing_address", result.street);
+      setValue("mailing_city", result.city);
+      setValue("mailing_state", result.state);
+      setValue("mailing_zip", result.zip);
+    },
+    [setValue],
+  );
 
   const validate = (): boolean => {
     const e: Partial<Record<keyof FormValues, string>> = {};
@@ -214,13 +225,15 @@ export function ClientForm({ open, mode, initial, onClose, onSaved }: ClientForm
               />
             </FormField>
           </div>
-          <FormField
-            label="Mailing address"
-            inputProps={{
-              value: values.mailing_address,
-              onInput: (e) => setValue("mailing_address", (e.target as HTMLInputElement).value),
-            }}
-          />
+          <FormField label="Mailing address">
+            {open && (
+              <AddressAutocomplete
+                initialValue={values.mailing_address}
+                onInputChange={(street) => setValue("mailing_address", street)}
+                onSelect={handleMailingAddressSelect}
+              />
+            )}
+          </FormField>
           <div class="form-row">
             <FormField
               label="City"

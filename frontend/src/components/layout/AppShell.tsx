@@ -1,9 +1,11 @@
 import type { ComponentChildren } from "preact";
+import { useRouter } from "preact-router";
 import { Sidebar } from "./Sidebar";
 import { TopNav } from "./TopNav";
 import { MOBILE_TABS, go, isActive } from "../../lib/nav";
 
 export function AppShell({ children }: { children: ComponentChildren }) {
+  const [{ url }] = useRouter();
   return (
     <div class="app-shell">
       <TopNav />
@@ -17,7 +19,7 @@ export function AppShell({ children }: { children: ComponentChildren }) {
         {MOBILE_TABS.map((tab) => (
           <button
             key={tab.path}
-            class={`bottom-tabs__btn${isActive(tab.path) ? " bottom-tabs__btn--active" : ""}`}
+            class={`bottom-tabs__btn${isActive(tab.path, url) ? " bottom-tabs__btn--active" : ""}`}
             onClick={() => go(tab.path)}
           >
             <span class="bottom-tabs__icon">{tab.icon}</span>

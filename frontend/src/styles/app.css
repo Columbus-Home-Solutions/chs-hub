@@ -2824,3 +2824,8 @@
     grid-template-columns: 90px 1fr 28px;
   }
 }
+
+.address-autocomplete {
+  width: 100%;
+  position: relative;
+}

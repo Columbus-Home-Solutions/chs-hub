@@ -17,8 +17,8 @@ export function go(path: string): void {
 }
 
 /** Is the given app-relative path the active route (prefix match for sections)? */
-export function isActive(path: string): boolean {
-  const current = getCurrentUrl();
+export function isActive(path: string, currentPath?: string): boolean {
+  const current = currentPath ?? getCurrentUrl() ?? "";
   const target = to(path);
   if (path === "/") return current === BASE || current === `${BASE}/`;
   return current === target || current.startsWith(target + "/");
@@ -33,18 +33,18 @@ export interface NavItem {
   capability?: Capability;
 }
 
-// Sidebar nav (Dashboard spec). For Sprint 2 only Clients, Subcontractors and
-// Settings route to real pages; the rest are "Coming soon" placeholders.
-// `capability` gates visibility per the Sprint 17 RBAC matrix (owner sees all).
+// Sidebar nav. All items enabled as of Sprint 18; capability gates visibility
+// per the Sprint 17 RBAC matrix (owner sees all). Financial and Photos link to
+// the Jobs pipeline — both features live inside the Job detail tabs.
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", path: "/", icon: "🏠", enabled: true },
   { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
   { label: "Schedule", path: "/schedule", icon: "📅", enabled: true },
-  { label: "Financial", path: "/financial", icon: "💰", enabled: false, capability: "view_financials" },
+  { label: "Financial", path: "/financial", icon: "💰", enabled: true, capability: "view_financials" },
   { label: "Clients", path: "/clients", icon: "👥", enabled: true, capability: "manage_clients" },
   { label: "Estimating", path: "/estimating", icon: "📋", enabled: true, capability: "manage_estimates" },
   { label: "Subcontractors", path: "/subcontractors", icon: "🔧", enabled: true },
-  { label: "Photos", path: "/photos", icon: "📸", enabled: false, capability: "field_ops" },
+  { label: "Photos", path: "/photos", icon: "📸", enabled: true, capability: "field_ops" },
   { label: "Documents", path: "/documents", icon: "📄", enabled: true },
   { label: "Social", path: "/social", icon: "📱", enabled: true, capability: "manage_estimates" },
   { label: "Settings", path: "/settings", icon: "⚙️", enabled: true, capability: "system_admin" },

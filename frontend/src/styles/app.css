@@ -1973,6 +1973,10 @@
      global bottom nav and the quick-capture bar stacked above it. */
   .job-detail { padding-bottom: var(--capture-bar-height); }
 }
+.job-detail__reversal-banner {
+  margin-bottom: var(--space-md);
+  color: var(--color-text);
+}
 
 /* ─── Schedule grid (Sprint 13) ─────────────────────────────────────── */
 .sched-grid {

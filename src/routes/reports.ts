@@ -176,6 +176,7 @@ async function buildExpenseSection(env: Env, year: string): Promise<string[]> {
 interface SubExpenseRow {
   sub_id: string | null;
   company: string | null;
+  tax_id: string | null;
   total_paid: number;
 }
 
@@ -186,7 +187,8 @@ async function buildSubcontractorSection(env: Env, year: string): Promise<string
   const subRows = (
     await env.DB.prepare(
       `SELECT e.sub_id,
-              COALESCE(s.company, s.primary_contact, 'Unknown') AS company,
+              COALESCE(s.company_name, s.company, s.primary_contact, 'Unknown') AS company,
+              s.tax_id,
               SUM(COALESCE(e.amount, 0)) AS total_paid
        FROM expenses e
        LEFT JOIN subcontractors s ON s.id = e.sub_id
@@ -219,7 +221,7 @@ async function buildSubcontractorSection(env: Env, year: string): Promise<string
 
   for (const r of subRows) {
     const required = r.total_paid >= 600 ? "YES" : "NO";
-    lines.push(row(r.company, "", fmt(r.total_paid), required));
+    lines.push(row(r.company, r.tax_id ?? "", fmt(r.total_paid), required));
   }
   for (const r of flaggedRows) {
     const required = r.total_paid >= 600 ? "YES" : "NO";

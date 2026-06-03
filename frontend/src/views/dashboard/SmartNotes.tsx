@@ -41,7 +41,7 @@ export function SmartNotes() {
   const [category, setCategory] = useState("");
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [notesCollapsed, setNotesCollapsed] = useState(false);
+  const [notesCollapsed, setNotesCollapsed] = useState(true);
   const recRef = useRef<SpeechRecognitionLike | null>(null);
 
   const toggleVoice = () => {
@@ -207,7 +207,7 @@ export function SmartNotes() {
               ▾
             </span>
             Recent Notes
-            {notes.length > 0 && !notesCollapsed && (
+            {notes.length > 0 && (
               <span style={{ marginLeft: "auto", opacity: 0.6 }}>{notes.length}</span>
             )}
           </button>

@@ -33,6 +33,49 @@ function twiml(): Response {
   });
 }
 
+const OPT_OUT_KEYWORDS = new Set(["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"]);
+const OPT_IN_KEYWORDS = new Set(["START", "UNSTOP", "YES"]);
+
+async function readClientPrefs(
+  env: Env,
+  clientId: string,
+): Promise<Record<string, unknown>> {
+  const row = await env.DB.prepare("SELECT notification_preferences FROM clients WHERE id = ?")
+    .bind(clientId)
+    .first<{ notification_preferences: string | null }>();
+  if (!row?.notification_preferences) return {};
+  try {
+    const parsed = JSON.parse(row.notification_preferences);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function mergeClientSmsPrefs(
+  env: Env,
+  clientId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const prefs = await readClientPrefs(env, clientId);
+  const merged = { ...prefs, ...patch };
+  await env.DB.prepare(
+    "UPDATE clients SET notification_preferences = ?, updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(JSON.stringify(merged), clientId)
+    .run();
+}
+
+function classifyInboundKeyword(body: string): "stop" | "start" | "help" | null {
+  const normalized = body.trim().toUpperCase();
+  if (OPT_OUT_KEYWORDS.has(normalized)) return "stop";
+  if (OPT_IN_KEYWORDS.has(normalized)) return "start";
+  if (normalized === "HELP" || normalized === "INFO") return "help";
+  return null;
+}
+
 async function audit(env: Env, action: string, details: unknown): Promise<void> {
   try {
     await env.DB.prepare(
@@ -99,6 +142,24 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
 
   if (client) {
     const name = [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || client.name || "Client";
+    const keyword = classifyInboundKeyword(body);
+    if (keyword === "stop") {
+      await mergeClientSmsPrefs(env, client.id, {
+        sms_opt_out: true,
+        sms_opt_out_at: new Date().toISOString(),
+        sms_opt_out_source: "inbound_stop",
+      });
+      await audit(env, "sms_opt_out_inbound", { client_id: client.id, message_sid: messageSid });
+    } else if (keyword === "start") {
+      await mergeClientSmsPrefs(env, client.id, {
+        sms_opt_out: false,
+        sms_opt_out_source: "inbound_start",
+      });
+      await audit(env, "sms_opt_in_inbound", { client_id: client.id, message_sid: messageSid });
+    } else if (keyword === "help") {
+      await audit(env, "sms_help_inbound", { client_id: client.id, message_sid: messageSid });
+    }
+
     const commId = crypto.randomUUID();
     await env.DB.prepare(
       `INSERT INTO communications (

@@ -33,6 +33,7 @@ import { runWcSpreadsheetSync, getWcStatus } from "./services/wc-spreadsheet.js"
 import { runQboSweep, getQboStatus } from "./lib/qbo-sync.js";
 import {
   handleIntegrationsList,
+  handleImageGenStatus,
   handleIntegrationDetail,
   handleQboConnect,
   handleQboCallback,
@@ -223,6 +224,7 @@ import {
 import { handleTwilioInbound, handleTwilioStatus } from "./routes/webhooks-twilio.js";
 import { processNotifications } from "./lib/notification-engine.js";
 import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
+import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
 import {
   handleSubcontractorCreate,
   handleSubcontractorGet,
@@ -412,6 +414,22 @@ async function fetchAssetWithDashboardInject(
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    // ── workers.dev ingest lockdown (Pre-Launch H3) ─────────────────────
+    // Photo/receipt ingest is Access-gated on dashboard.* only. The workers.dev
+    // hostname bypasses Access — block credential-light POST ingest here.
+    if (url.hostname.endsWith(".workers.dev") && request.method === "POST") {
+      const ingest =
+        url.pathname === "/api/photos" ||
+        url.pathname === "/api/photos/batch" ||
+        url.pathname === "/api/photos/receipt";
+      if (ingest) {
+        return new Response(
+          JSON.stringify({ error: "forbidden", message: "Photo ingest is not accepted on this host." }),
+          { status: 403, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } },
+        );
+      }
+    }
 
     // ── Public-host routing guard (Sprint 9 hotfix) ──────────────────────
     // client.homesolutionsar.com is a NON-Access custom domain that serves ONLY
@@ -700,6 +718,9 @@ export default {
     // ── Integrations / QuickBooks Online (Sprint 14) ─────────────────
     if (url.pathname === "/api/integrations" && request.method === "GET") {
       return handleIntegrationsList(request, env);
+    }
+    if (url.pathname === "/api/integrations/image-gen/status" && request.method === "GET") {
+      return handleImageGenStatus(request, env);
     }
     if (url.pathname === "/api/integrations/quickbooks/connect" && request.method === "POST") {
       return handleQboConnect(request, env);
@@ -1730,6 +1751,12 @@ async function runInvoiceBilling(env: Env): Promise<void> {
     );
   } catch (err) {
     console.error("[cron 15 7 * * *] invoice_billing failed:", (err as Error).message);
+  }
+
+  try {
+    await runWeeklyPhotoSummary(env);
+  } catch (err) {
+    console.error("[cron 15 7 * * *] weekly_photo_summary failed:", (err as Error).message);
   }
 }
 

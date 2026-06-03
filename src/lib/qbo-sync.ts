@@ -244,6 +244,7 @@ export async function buildQboInvoice(env: Env, inv: InvoiceRow): Promise<Record
   return {
     CustomerRef: { value: inv.qbo_customer_id },
     DocNumber: inv.invoice_number != null ? String(inv.invoice_number) : undefined,
+    PrivateNote: `CHS-INV:${inv.id}`,
     Line,
   };
 }
@@ -304,6 +305,7 @@ export function buildQboPurchase(
   if (e.qbo_vendor_id) {
     purchase.EntityRef = { value: e.qbo_vendor_id, type: "Vendor" };
   }
+  purchase.PrivateNote = `CHS-EXP:${e.id}`;
   return purchase;
 }
 
@@ -355,6 +357,38 @@ export async function runQboSweep(env: Env): Promise<SweepResult> {
   return result;
 }
 
+function qboEscapeLiteral(value: string): string {
+  return value.replace(/'/g, "\\'");
+}
+
+async function findExistingQboInvoice(
+  env: Env,
+  conn: QboConnection,
+  invoiceId: string,
+): Promise<string | null> {
+  const note = `CHS-INV:${invoiceId}`;
+  const rows = await qboQuery<{ Id: string }>(
+    env,
+    conn,
+    `SELECT Id FROM Invoice WHERE PrivateNote = '${qboEscapeLiteral(note)}' MAXRESULTS 1`,
+  );
+  return rows[0]?.Id ?? null;
+}
+
+async function findExistingQboPurchase(
+  env: Env,
+  conn: QboConnection,
+  expenseId: string,
+): Promise<string | null> {
+  const note = `CHS-EXP:${expenseId}`;
+  const rows = await qboQuery<{ Id: string }>(
+    env,
+    conn,
+    `SELECT Id FROM Purchase WHERE PrivateNote = '${qboEscapeLiteral(note)}' MAXRESULTS 1`,
+  );
+  return rows[0]?.Id ?? null;
+}
+
 async function sweepInvoices(env: Env, conn: QboConnection, result: SweepResult): Promise<void> {
   // Invoices link to a client through their job (jobs.client_id); the direct
   // invoices.client_id column is only sparsely populated, so resolve via the job
@@ -375,6 +409,16 @@ async function sweepInvoices(env: Env, conn: QboConnection, result: SweepResult)
       continue;
     }
     try {
+      const existingId = await findExistingQboInvoice(env, conn, inv.id);
+      if (existingId) {
+        await env.DB.prepare(
+          `UPDATE invoices SET qbo_invoice_id = ?, qbo_synced_at = ? WHERE id = ? AND qbo_invoice_id IS NULL`,
+        )
+          .bind(existingId, new Date().toISOString(), inv.id)
+          .run();
+        result.invoices.pushed++;
+        continue;
+      }
       const body = await buildQboInvoice(env, inv);
       const created = (await qboFetch(env, conn, `/invoice?minorversion=70`, {
         method: "POST",
@@ -473,6 +517,16 @@ async function sweepExpenses(env: Env, conn: QboConnection, result: SweepResult)
       continue;
     }
     try {
+      const existingId = await findExistingQboPurchase(env, conn, e.id);
+      if (existingId) {
+        await env.DB.prepare(
+          `UPDATE expenses SET pushed_to_qbo = 1, qbo_transaction_id = ? WHERE id = ? AND qbo_transaction_id IS NULL`,
+        )
+          .bind(existingId, e.id)
+          .run();
+        result.expenses.pushed++;
+        continue;
+      }
       const body = buildQboPurchase(e, accountId, paymentAccountId);
       const created = (await qboFetch(env, conn, `/purchase?minorversion=70`, {
         method: "POST",

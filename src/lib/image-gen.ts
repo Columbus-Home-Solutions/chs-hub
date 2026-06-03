@@ -15,7 +15,44 @@ import { putImage, streamObject } from "./r2.js";
 import { bumpImageGenCount, getSetting, SETTING_IMAGE_GEN_ENABLED } from "./social.js";
 import { getGoogleAccessToken } from "./google-auth.js";
 
-/** Deterministic R2 key for a post's generated image. */
+/** Style suffix appended to every Imagen prompt (after sanitization). */
+const IMAGEN_STYLE_SUFFIX =
+  "Photorealistic, natural lighting, professional quality. " +
+  "No text, no words, no letters, no watermarks, no logos. " +
+  "Focus on the scene, materials, and craftsmanship.";
+
+const VARIATION_SEEDS = [
+  "Wide shot showing the full scope of the work.",
+  "Close-up detail highlighting the quality of materials and finish.",
+  "Natural daylight, warm tones, welcoming atmosphere.",
+  "Dramatic angle emphasizing the transformation.",
+  "Bright, airy feel — fresh and clean result.",
+];
+
+/** Strip text-overlay instructions that Imagen renders as garbled copy. */
+export function sanitizeImagePrompt(prompt: string): string {
+  const textPatterns = [
+    /\b(text|words?|letters?|typography|font|caption|title|label|overlay|watermark|logo|banner|headline|copy)\b/gi,
+    /add(ing)?\s+(text|words?|a\s+title)/gi,
+    /with\s+(text|words?|the\s+(words?|text))/gi,
+    /"[^"]*"/g,
+  ];
+  let sanitized = prompt;
+  for (const pattern of textPatterns) {
+    sanitized = sanitized.replace(pattern, "");
+  }
+  return sanitized.replace(/\s{2,}/g, " ").trim();
+}
+
+function pickVariation(): string {
+  return VARIATION_SEEDS[Math.floor(Math.random() * VARIATION_SEEDS.length)]!;
+}
+
+function assembleImagenPrompt(callerPrompt: string): string {
+  const base = sanitizeImagePrompt(callerPrompt);
+  return [base, IMAGEN_STYLE_SUFFIX, pickVariation()].filter(Boolean).join(" ");
+}
+
 export function socialImageKey(postId: string): string {
   return `social-images/${postId}.png`;
 }
@@ -115,6 +152,8 @@ async function generateImageViaImagen(prompt: string, env: Env): Promise<Uint8Ar
     throw new Error("Google service account credentials not configured");
   }
 
+  const finalPrompt = assembleImagenPrompt(prompt);
+
   const accessToken = await getGoogleAccessToken(
     creds.clientEmail,
     creds.privateKey,
@@ -133,7 +172,7 @@ async function generateImageViaImagen(prompt: string, env: Env): Promise<Uint8Ar
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      instances: [{ prompt }],
+      instances: [{ prompt: finalPrompt }],
       parameters: { sampleCount: 1, aspectRatio: "1:1" },
     }),
   });

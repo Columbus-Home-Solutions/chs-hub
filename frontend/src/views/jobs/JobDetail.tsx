@@ -125,6 +125,29 @@ export function JobDetail({ id }: DetailProps) {
         </div>
       </div>
 
+      {job.conversion_reversed && (
+        <div class="job-detail__reversal-banner callout callout--warning" role="status">
+          ⚠ This job&apos;s conversion has been reversed.
+          {job.reversal_reason && (
+            <>
+              {" "}
+              Reason: {job.reversal_reason}
+            </>
+          )}
+          {job.reversed_at && (
+            <>
+              {" "}
+              Reversed:{" "}
+              {new Date(job.reversed_at).toLocaleDateString("en-US", {
+                month: "numeric",
+                day: "numeric",
+                year: "numeric",
+              })}
+            </>
+          )}
+        </div>
+      )}
+
       <div class="job-tabs">
         {TABS.map((t) => (
           <button

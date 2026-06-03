@@ -166,6 +166,7 @@ export function SubForm({
   const [tradeVal, setTradeVal] = useState(sub?.trade ?? "general");
   const [phone, setPhone] = useState(sub?.phone ?? "");
   const [email, setEmail] = useState(sub?.email ?? "");
+  const [taxId, setTaxId] = useState(sub?.tax_id ?? "");
   const [license, setLicense] = useState(sub?.license_number ?? "");
   const [insurance, setInsurance] = useState(sub?.insurance_on_file ?? false);
   const [w9, setW9] = useState(sub?.w9_on_file ?? false);
@@ -186,6 +187,7 @@ export function SubForm({
         trade: tradeVal,
         phone,
         email,
+        tax_id: taxId,
         license_number: license,
         insurance_on_file: insurance,
         w9_on_file: w9,
@@ -257,6 +259,14 @@ export function SubForm({
           }}
         />
       </div>
+      <FormField
+        label="Tax ID / EIN"
+        inputProps={{
+          value: taxId,
+          placeholder: "XX-XXXXXXX",
+          onInput: (e) => setTaxId((e.target as HTMLInputElement).value),
+        }}
+      />
       <FormField
         label="License number"
         inputProps={{ value: license, onInput: (e) => setLicense((e.target as HTMLInputElement).value) }}

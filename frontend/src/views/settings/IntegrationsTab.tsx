@@ -38,14 +38,28 @@ function statusTone(s: string): "success" | "warning" | "error" | "neutral" {
 export function IntegrationsTab() {
   const toast = useToast();
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [imageGen, setImageGen] = useState<{
+    credentials_present: boolean;
+    enabled: boolean;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [imageGenBusy, setImageGenBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const r = await api.get<{ integrations: Connection[] }>("/api/integrations");
-      setConnections(r.integrations);
+      const [integrations, status, settings] = await Promise.all([
+        api.get<{ integrations: Connection[] }>("/api/integrations"),
+        api.get<{ credentials_present: boolean; enabled: boolean }>("/api/integrations/image-gen/status"),
+        api.get<{ settings: Array<{ key: string; value: string; value_type: string }> }>("/api/settings"),
+      ]);
+      setConnections(integrations.integrations);
+      const setting = settings.settings.find((s) => s.key === "image_gen_enabled");
+      setImageGen({
+        credentials_present: status.credentials_present,
+        enabled: setting ? setting.value === "true" || setting.value === "1" : status.enabled,
+      });
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -81,10 +95,54 @@ export function IntegrationsTab() {
     }
   };
 
+  const toggleImageGen = async () => {
+    if (!imageGen) return;
+    setImageGenBusy(true);
+    const next = !imageGen.enabled;
+    try {
+      await api.put("/api/settings/image_gen_enabled", { value: next });
+      setImageGen({ ...imageGen, enabled: next });
+      toast.push("success", `AI image generation ${next ? "enabled" : "disabled"}`);
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setImageGenBusy(false);
+    }
+  };
+
   if (loading) return <Spinner center />;
 
   return (
     <div>
+      <div class="card" style={{ marginBottom: "var(--space-md)" }}>
+        <div class="card__body">
+          <div class="flex items-center gap-sm" style={{ justifyContent: "space-between" }}>
+            <div class="flex items-center gap-sm">
+              <span style={{ fontSize: "1.4rem" }}>🖼️</span>
+              <strong>AI Image Generation (Imagen)</strong>
+            </div>
+            <Badge tone={imageGen?.credentials_present ? "success" : "neutral"}>
+              {imageGen?.credentials_present ? "Connected" : "Not configured"}
+            </Badge>
+          </div>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
+            Generate lifestyle images for social media posts via Google Vertex AI.
+          </p>
+          <div class="flex items-center gap-sm">
+            <label class="form-label" style={{ margin: 0 }}>
+              Enabled
+            </label>
+            <input
+              type="checkbox"
+              checked={imageGen?.enabled ?? false}
+              disabled={imageGenBusy || !imageGen}
+              onChange={() => void toggleImageGen()}
+            />
+            {imageGenBusy && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>Saving…</span>}
+          </div>
+        </div>
+      </div>
+
       <Card
         title="Integrations"
         actions={

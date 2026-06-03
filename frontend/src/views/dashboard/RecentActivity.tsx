@@ -22,7 +22,7 @@ function relativeTime(iso: string): string {
 }
 
 export function RecentActivity({ entries, loading, error }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   if (loading) {
     return (

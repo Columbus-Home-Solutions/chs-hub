@@ -36,7 +36,7 @@ You are building a custom construction management platform for Columbus Home Sol
 ```
 chs-hub/
 ├── src/
-│   ├── worker.ts                  # Main Worker entry — route dispatcher
+│   ├── index.ts                   # Main Worker entry — route dispatcher + host-aware public guard
 │   ├── routes/                    # API route handlers by module
 │   │   ├── clients.ts
 │   │   ├── estimates.ts
@@ -47,28 +47,24 @@ chs-hub/
 │   │   ├── notifications.ts
 │   │   ├── social.ts
 │   │   ├── settings.ts
-│   │   ├── portal.ts             # Public portal routes (token auth)
-│   │   └── webhooks.ts           # Stripe, Twilio, etc.
+│   │   ├── portal.ts             # Public portal API — handlePortalApi (token auth)
+│   │   ├── public-quote.ts       # Public quote pages + Stripe webhook
+│   │   └── public-pay.ts         # Public payment pages
 │   ├── middleware/
 │   │   ├── auth.ts               # Cloudflare Access → user resolution
 │   │   ├── roles.ts              # Role-based access control checks
 │   │   └── audit.ts              # Audit log middleware
-│   ├── services/                  # Business logic (not route-specific)
+│   ├── services/                  # Legacy WC sync helpers (see lib/ for core logic)
+│   │   ├── wc-spreadsheet.ts     # Google Sheets sync orchestration
+│   │   └── wc-dates.ts           # WC date helpers
+│   ├── lib/                       # Business logic (not route-specific)
 │   │   ├── quote-to-job.ts       # Estimate → Job conversion engine
-│   │   ├── billing-engine.ts     # Cost-plus cycle management
+│   │   ├── cost-plus.ts          # Cost-plus billing math
 │   │   ├── notification-engine.ts # Template → render → send
 │   │   ├── receipt-ai.ts         # Claude API receipt processing
 │   │   ├── smart-notes.ts        # Claude API note processing
-│   │   ├── wc-spreadsheet.ts     # Google Sheets sync
-│   │   └── drive-mirror.ts       # Google Drive file mirroring
-│   ├── lib/
-│   │   ├── db.ts                 # D1 query helpers
-│   │   ├── r2.ts                 # R2 storage helpers
-│   │   ├── stripe.ts             # Stripe API wrapper
-│   │   ├── twilio.ts             # Twilio SMS wrapper
-│   │   ├── resend.ts             # Email sending
-│   │   ├── claude.ts             # Anthropic API wrapper
-│   │   └── uuid.ts               # crypto.randomUUID() helper
+│   │   ├── wc/                   # Google Sheets sync internals
+│   │   └── google/               # Google Drive file mirroring
 │   └── types/
 │       └── index.ts              # TypeScript interfaces for all entities
 ├── frontend/                      # Preact SPA — built by Vite
@@ -140,13 +136,10 @@ chs-hub/
 │   │   ├── manifest.json         # PWA manifest
 │   │   └── sw.js                 # Service Worker (offline sync)
 │   └── package.json
-├── portal/                        # Client portal — separate Preact app (lightweight)
-│   ├── index.html
-│   ├── vite.config.ts
-│   └── src/
-│       ├── main.tsx
-│       ├── PortalApp.tsx
-│       └── components/
+│   (Client portal is NOT a separate app. It is a Vite entry inside frontend/:
+│    frontend/portal.html → frontend/src/portal-main.tsx → frontend/src/views/portal/*,
+│    built to public/app/ alongside the quote + pay entries. Same pattern as
+│    frontend/quote.html and frontend/pay.html. Public portal API: src/routes/portal.ts.)
 ├── migrations/                    # D1 SQL migration files
 │   ├── 0001_initial.sql          # (existing chs-hub migrations)
 │   ├── ...
@@ -538,19 +531,25 @@ await env.DB.prepare(
 
 ## URL & Domain Structure
 
-Everything runs through a single Cloudflare Workers route:
+The platform runs as one Worker across two custom hosts (Sprint 9.1 split) plus the workers.dev fallback. `app.homesolutionsar.com` is NOT a configured route. A host-aware guard in src/index.ts enforces what each host may serve:
 
 ```
-app.homesolutionsar.com                 # The CHS platform
-app.homesolutionsar.com/api/*           # API routes (Workers)
-app.homesolutionsar.com/portal/*        # Client portal (public, token auth)
-app.homesolutionsar.com/estimate/*      # Estimate delivery pages (public, token auth)
-app.homesolutionsar.com/share/*         # Shared document links (public, token auth)
+dashboard.homesolutionsar.com           # Internal app — Access-gated. Serves /app + all /api/*
+client.homesolutionsar.com              # Public token host — NO Access (token is the security boundary)
+  ├── /pay/*        + public pay API     # Sprint 9
+  ├── /quote/*      + public quote API    # Sprint 5
+  ├── /portal/*     + /api/portal/*       # Sprint 12 (client portal)
+  ├── estimate token routes
+  └── /api/webhooks/stripe                # everything else on this host → 404
+chs-hub.tony-bc5.workers.dev            # Bypasses Access — automated checks only
 ```
 
-Portal and estimate URLs sent to clients:
-- Portal: `https://app.homesolutionsar.com/portal/{portal_token}`
-- Estimate: `https://app.homesolutionsar.com/estimate/{estimate_token}`
+Client-facing URLs are built from APP_PUBLIC_ORIGIN (one origin shared by all three):
+- Portal:   `https://client.homesolutionsar.com/portal/{portal_token}`
+- Quote:    `https://client.homesolutionsar.com/quote/{quote_token}`
+- Pay:      `https://client.homesolutionsar.com/pay/{payment_token}`   (per-invoice token, distinct from portal_token)
+
+🔴 APP_PUBLIC_ORIGIN currently points at a dead hostname — pay/quote/portal links will NOT resolve for a real client until the hostname → DNS → route → guard work is done (Pre-Launch). Verify in the meantime by hitting client.homesolutionsar.com directly.
 
 ---
 

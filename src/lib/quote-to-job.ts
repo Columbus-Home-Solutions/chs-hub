@@ -394,9 +394,15 @@ export type ReversalOutcome =
  * Reverse a job conversion (bounced check / NSF / chargeback / refund). The
  * INVERSE of convertQuoteToJob() and its mirror in audit discipline: it
  * FLAGS-AND-PRESERVES, it never deletes. The job row is KEPT and flagged
- * (conversion_reversed=1 + reason + reversed_at); every non-void invoice on the
- * job is voided (preserved for audit); payments, tasks, the estimate, and the
- * job itself are untouched. A full audit_log row records the reversal.
+ * (conversion_reversed=1 + reason + reversed_at); targeted invoices are voided
+ * (preserved for audit); original payment rows are preserved and balanced by
+ * negative reversal rows when a voided invoice had been paid. Tasks, the
+ * estimate, and the job itself are untouched. Audit rows record the reversal
+ * and each balancing payment.
+ *
+ * Reason-aware void scope (Pre-Launch H1):
+ *   nsf | bounced_check → void deposit invoice only + net its payment(s)
+ *   chargeback | refund | dispute | default → void all open invoices + net all paid
  *
  * Trigger paths (both land here): a manual O-only action, and the Stripe
  * charge.refunded / charge.dispute.created webhook branch.
@@ -420,30 +426,121 @@ export async function reverseJobConversion(
   }
 
   const nowIso = new Date().toISOString();
-  const openInvoices = await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM invoices WHERE job_id = ? AND status != 'void'",
-  )
-    .bind(jobId)
-    .first<{ n: number }>();
-  const voidedInvoices = openInvoices?.n ?? 0;
+  const normalizedReason = reason.trim().toLowerCase();
+  const depositOnly =
+    normalizedReason === "nsf" ||
+    normalizedReason === "bounced_check" ||
+    normalizedReason === "bounced check";
 
-  // One atomic batch. NO deletes anywhere: the job is flagged, invoices are
-  // voided (rows preserved), payments are never touched.
-  await env.DB.batch([
+  const openInvoices = (
+    await env.DB.prepare(
+      `SELECT id, invoice_type, status
+         FROM invoices
+        WHERE job_id = ? AND status != 'void'
+        ORDER BY created_at ASC`,
+    )
+      .bind(jobId)
+      .all<{ id: string; invoice_type: string | null; status: string | null }>()
+  ).results ?? [];
+
+  let toVoid = openInvoices;
+  if (depositOnly) {
+    const depositInvoices = openInvoices.filter((i) => (i.invoice_type ?? "").toLowerCase() === "deposit");
+    toVoid = depositInvoices.length > 0 ? depositInvoices : openInvoices.slice(0, 1);
+  }
+
+  const voidIds = toVoid.map((i) => i.id);
+  const voidedInvoices = voidIds.length;
+
+  const paymentsToNet: { id: string; invoice_id: string; amount: number }[] = [];
+  if (voidIds.length > 0) {
+    const placeholders = voidIds.map(() => "?").join(", ");
+    const payRows = (
+      await env.DB.prepare(
+        `SELECT id, invoice_id, amount FROM payments
+          WHERE job_id = ? AND invoice_id IN (${placeholders})
+            AND amount > 0
+            AND COALESCE(payment_method, '') != 'reversal'`,
+      )
+        .bind(jobId, ...voidIds)
+        .all<{ id: string; invoice_id: string | null; amount: number | null }>()
+    ).results ?? [];
+    for (const p of payRows) {
+      if (!p.invoice_id || p.amount == null || p.amount <= 0) continue;
+      paymentsToNet.push({ id: p.id, invoice_id: p.invoice_id, amount: p.amount });
+    }
+  }
+
+  const stmts: D1PreparedStatement[] = [
     env.DB.prepare(
       "UPDATE jobs SET conversion_reversed = 1, reversal_reason = ?, reversed_at = ?, updated_at = ? WHERE id = ?",
     ).bind(reason, nowIso, nowIso, jobId),
-    env.DB.prepare("UPDATE invoices SET status = 'void' WHERE job_id = ? AND status != 'void'").bind(jobId),
+  ];
+
+  for (const invId of voidIds) {
+    stmts.push(
+      env.DB.prepare("UPDATE invoices SET status = 'void' WHERE id = ? AND status != 'void'").bind(invId),
+    );
+  }
+
+  for (const p of paymentsToNet) {
+    const reversalId = crypto.randomUUID();
+    const negAmount = -Math.abs(p.amount);
+    stmts.push(
+      env.DB.prepare(
+        `INSERT INTO payments (
+           id, job_id, invoice_id, amount, payment_method, received_date,
+           notes, synced_at, created_at, collected_at
+         ) VALUES (?, ?, ?, ?, 'reversal', date('now'), ?, ?, ?, ?)`,
+      ).bind(
+        reversalId,
+        jobId,
+        p.invoice_id,
+        negAmount,
+        `Reversal: ${reason}`,
+        nowIso,
+        nowIso,
+        nowIso,
+      ),
+    );
+    stmts.push(
+      env.DB.prepare(
+        "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, 'reversal_payment_inserted', 'payment', ?, ?, ?)",
+      ).bind(
+        crypto.randomUUID(),
+        reversedBy ?? "system@reverse-conversion",
+        reversalId,
+        JSON.stringify({
+          invoice_id: p.invoice_id,
+          original_payment_id: p.id,
+          original_amount: p.amount,
+          reversal_amount: negAmount,
+          reason,
+        }),
+        nowIso,
+      ),
+    );
+  }
+
+  stmts.push(
     env.DB.prepare(
       "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, 'job_conversion_reversed', 'job', ?, ?, ?)",
     ).bind(
       crypto.randomUUID(),
       reversedBy ?? "system@reverse-conversion",
       jobId,
-      JSON.stringify({ reason, voided_invoices: voidedInvoices, preserved: true }),
+      JSON.stringify({
+        reason,
+        voided_invoices: voidedInvoices,
+        deposit_only: depositOnly,
+        reversal_payments: paymentsToNet.length,
+        preserved: true,
+      }),
       nowIso,
     ),
-  ]);
+  );
+
+  await env.DB.batch(stmts);
 
   return { ok: true, jobId, jobNumber: job.job_number, voidedInvoices, alreadyReversed: false };
 }

@@ -80,6 +80,7 @@ interface RawSub {
   notes: string | null;
   is_active: number | null;
   active_status: string | null;
+  tax_id: string | null;
 }
 
 /** Normalize a raw row (legacy + canonical columns) into the canonical shape. */
@@ -102,6 +103,7 @@ function shape(row: RawSub) {
     rating: row.rating,
     notes: row.notes,
     is_active: isActive,
+    tax_id: row.tax_id,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -273,9 +275,9 @@ export async function handleSubcontractorCreate(request: Request, env: Env): Pro
     `INSERT INTO subcontractors (
       id, created_at, updated_at,
       company_name, contact_name, trade, phone, email, license_number,
-      insurance_on_file, w9_on_file, hourly_rate, flat_rate_notes, rating, notes, is_active,
+      insurance_on_file, w9_on_file, hourly_rate, flat_rate_notes, rating, notes, is_active, tax_id,
       company, primary_contact, insurance_verified, active_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -294,6 +296,7 @@ export async function handleSubcontractorCreate(request: Request, env: Env): Pro
       body.rating == null ? null : Math.max(1, Math.min(5, Math.round(Number(body.rating)))) || null,
       str(body.notes),
       isActive,
+      str(body.tax_id),
       companyName,
       contactName,
       insurance,
@@ -370,6 +373,7 @@ export async function handleSubcontractorUpdate(
     );
   }
   if ("notes" in body) set("notes", str(body.notes));
+  if ("tax_id" in body) set("tax_id", str(body.tax_id));
   if ("is_active" in body) {
     const v = bool(body.is_active);
     set("is_active", v);

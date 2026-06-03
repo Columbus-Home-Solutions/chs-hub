@@ -311,10 +311,14 @@ export async function handleJobDetail(env: Env, id: string): Promise<Response> {
   // the owner UI can flag a reversed/on-hold job, and build the client portal URL
   // (Sprint 12) from the SAME public origin pay/quote links use.
   const reversal = await env.DB.prepare(
-    "SELECT conversion_reversed, reversal_reason FROM jobs WHERE id = ?",
+    "SELECT conversion_reversed, reversal_reason, reversed_at FROM jobs WHERE id = ?",
   )
     .bind(id)
-    .first<{ conversion_reversed: number | null; reversal_reason: string | null }>();
+    .first<{
+      conversion_reversed: number | null;
+      reversal_reason: string | null;
+      reversed_at: string | null;
+    }>();
   const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
   const portalUrl = card.portal_token ? `${origin}/portal/${card.portal_token}` : null;
 
@@ -326,6 +330,7 @@ export async function handleJobDetail(env: Env, id: string): Promise<Response> {
       client_email: client?.email ?? null,
       conversion_reversed: (reversal?.conversion_reversed ?? 0) === 1,
       reversal_reason: reversal?.reversal_reason ?? null,
+      reversed_at: reversal?.reversed_at ?? null,
       portal_url: portalUrl,
     },
     financial: {

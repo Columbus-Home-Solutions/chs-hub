@@ -543,7 +543,30 @@ async function dispatchRow(env: Env, row: LogRow, stats: ProcessStats): Promise<
     }
   }
 
-  // (2) Opt-out check for non-transactional sends (§6.3).
+  // (2) Hard SMS opt-out — suppresses ALL SMS, including transactional (Pre-Launch H2).
+  if (row.channel === "sms" && row.client_id) {
+    if (await isSmsHardOptOut(env, row.client_id)) {
+      await suppressRow(env, row.id, "sms_opt_out");
+      stats.suppressed++;
+      return;
+    }
+  }
+
+  // (3) SMS quiet hours — defer outside 08:00–21:00 America/Chicago (Pre-Launch H2).
+  if (row.channel === "sms") {
+    if (isOutsideSmsQuietHours()) {
+      const nextWindow = nextCentral8amIso();
+      await env.DB.prepare(
+        "UPDATE notification_logs SET scheduled_for = ?, error_message = ? WHERE id = ?",
+      )
+        .bind(nextWindow, "deferred: quiet hours", row.id)
+        .run();
+      stats.deferred++;
+      return;
+    }
+  }
+
+  // (4) Opt-out check for non-transactional sends (§6.3) — email + legacy marketing prefs.
   if (!TRANSACTIONAL_EVENTS.has(row.trigger_event) && row.client_id && row.channel !== "in_app") {
     const optedOut = await isOptedOut(env, row.client_id, row.channel);
     if (optedOut) {
@@ -553,7 +576,7 @@ async function dispatchRow(env: Env, row: LogRow, stats: ProcessStats): Promise<
     }
   }
 
-  // (3) SMS rate limit (§6.4): max 5/client/day. Over cap → DEFER to tomorrow.
+  // (5) SMS rate limit (§6.4): max 5/client/day. Over cap → DEFER to tomorrow.
   if (row.channel === "sms" && row.client_id) {
     const sentToday = await smsSentToday(env, row.client_id);
     if (sentToday >= SMS_DAILY_LIMIT) {
@@ -568,7 +591,7 @@ async function dispatchRow(env: Env, row: LogRow, stats: ProcessStats): Promise<
     }
   }
 
-  // (4) Dispatch by channel (with simulate fallback).
+  // (6) Dispatch by channel (with simulate fallback).
   const mode = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase();
   const live = mode === "live";
   const outcome = await sendByChannel(env, row, live);
@@ -791,6 +814,7 @@ async function isOptedOut(env: Env, clientId: string, channel: string): Promise<
   if (!c?.notification_preferences) return false; // NULL = all enabled
   try {
     const prefs = JSON.parse(c.notification_preferences) as Record<string, unknown>;
+    if (prefs.sms_opt_out === true && channel === "sms") return true;
     if (prefs.marketing === false) return true;
     if (channel === "sms" && prefs.sms === false) return true;
     if (channel === "email" && prefs.email === false) return true;
@@ -798,6 +822,74 @@ async function isOptedOut(env: Env, clientId: string, channel: string): Promise<
     return false;
   }
   return false;
+}
+
+/** Hard inbound STOP opt-out — beats transactional SMS sends (Pre-Launch H2). */
+async function isSmsHardOptOut(env: Env, clientId: string): Promise<boolean> {
+  const c = await env.DB.prepare("SELECT notification_preferences FROM clients WHERE id = ?")
+    .bind(clientId)
+    .first<{ notification_preferences: string | null }>();
+  if (!c?.notification_preferences) return false;
+  try {
+    const prefs = JSON.parse(c.notification_preferences) as Record<string, unknown>;
+    return prefs.sms_opt_out === true;
+  } catch {
+    return false;
+  }
+}
+
+function getCentralHour(now = new Date()): number {
+  return parseInt(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Chicago",
+      hour: "numeric",
+      hour12: false,
+    }).format(now),
+    10,
+  );
+}
+
+function centralDateParts(now = new Date()): { y: number; m: number; d: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  return {
+    y: Number(parts.find((p) => p.type === "year")!.value),
+    m: Number(parts.find((p) => p.type === "month")!.value),
+    d: Number(parts.find((p) => p.type === "day")!.value),
+  };
+}
+
+/** True when SMS must not send now (outside 08:00–21:00 Central). */
+function isOutsideSmsQuietHours(now = new Date()): boolean {
+  const h = getCentralHour(now);
+  return h < 8 || h >= 21;
+}
+
+/** Next 08:00 America/Chicago as ISO (DST-correct via Intl scan). */
+function nextCentral8amIso(now = new Date()): string {
+  let { y, m, d } = centralDateParts(now);
+  const hour = getCentralHour(now);
+  if (hour >= 21) {
+    const bump = new Date(Date.UTC(y, m - 1, d + 1, 12, 0, 0));
+    ({ y, m, d } = centralDateParts(bump));
+  }
+  return centralWallClockToUtcIso(y, m, d, 8);
+}
+
+function centralWallClockToUtcIso(y: number, m: number, d: number, hour: number): string {
+  const start = Date.UTC(y, m - 1, d - 1, 6, 0, 0);
+  const end = Date.UTC(y, m - 1, d + 2, 6, 0, 0);
+  for (let t = start; t <= end; t += 60_000) {
+    const dt = new Date(t);
+    if (getCentralHour(dt) !== hour) continue;
+    const p = centralDateParts(dt);
+    if (p.y === y && p.m === m && p.d === d) return dt.toISOString();
+  }
+  return new Date(Date.UTC(y, m - 1, d, 13, 0, 0)).toISOString();
 }
 
 async function smsSentToday(env: Env, clientId: string): Promise<number> {
@@ -1208,9 +1300,9 @@ export async function triggerChangeOrderApproved(
   }
 }
 
-/** Sprint 8 (photos): weekly photo summary is a cron over active jobs' photos. */
+/** @deprecated Use runWeeklyPhotoSummary (src/lib/weekly-photo-summary.ts) on the nightly cron. */
 export function triggerWeeklyPhotoSummary(_env: Env): void {
-  // TODO(Sprint 8): weekly_photo_summary depends on the photo timeline per job.
+  /* wired — see runWeeklyPhotoSummary */
 }
 
 // ─── scheduled-trigger scan (cron recompute-from-D1) ──────────────────────────
@@ -1220,9 +1312,9 @@ export function triggerWeeklyPhotoSummary(_env: Env): void {
  * and enqueue what's now due. Idempotency is the dedupe_key — re-running every
  * 15 min never double-enqueues. Returns the number of rows enqueued.
  *
- * Dormant by design (no source module yet): weekly_photo_summary (Sprint 8),
- * all invoice/financial reminders (Sprint 9), sub-scheduling (Sprint 13). Those
- * branches are intentionally absent — see the seam stubs above.
+ * weekly_photo_summary runs on the nightly cron (Monday gate) via
+ * runWeeklyPhotoSummary. Invoice/financial reminders (Sprint 9) and
+ * sub-scheduling (Sprint 13) remain in their own trigger paths.
  */
 async function scanScheduledTriggers(env: Env): Promise<number> {
   let enqueued = 0;

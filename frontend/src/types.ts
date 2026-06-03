@@ -138,6 +138,7 @@ export interface Subcontractor {
   flat_rate_notes: string | null;
   rating: number | null;
   notes: string | null;
+  tax_id: string | null;
   is_active: boolean;
   created_at: string | null;
   updated_at: string | null;
@@ -679,6 +680,7 @@ export interface JobDetailResponse {
     client_email: string | null;
     conversion_reversed: boolean;
     reversal_reason: string | null;
+    reversed_at: string | null;
     portal_url: string | null;
   };
   financial: {

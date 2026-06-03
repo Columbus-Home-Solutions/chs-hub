@@ -5,10 +5,16 @@ import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
+import { Modal } from "../../components/ui/Modal";
 import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
+import { useAuth } from "../../store/auth";
+import { isOwner } from "../../lib/rbac";
 import type { Subcontractor } from "../../types";
 import { SubForm } from "./SubcontractorList";
+
+const CURRENT_YEAR = new Date().getFullYear();
+const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3];
 
 interface PaymentLine {
   id: string;
@@ -42,10 +48,13 @@ interface SubDetailResponse {
 }
 
 export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
+  const { user } = useAuth();
   const { data, loading, error, refetch } = useApi<SubDetailResponse>(
     id ? `/api/subcontractors/${id}` : null,
   );
   const [editing, setEditing] = useState(false);
+  const [cpaModalOpen, setCpaModalOpen] = useState(false);
+  const [cpaYear, setCpaYear] = useState(String(CURRENT_YEAR));
 
   if (loading) return <Spinner center />;
   if (error || !data) {
@@ -80,7 +89,16 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
 
       <div class="detail-grid">
         <div class="stack">
-          <Card title="Payments">
+          <Card
+            title="Payments"
+            actions={
+              isOwner(user) ? (
+                <Button size="sm" variant="secondary" onClick={() => setCpaModalOpen(true)}>
+                  ⬇ CPA Export
+                </Button>
+              ) : undefined
+            }
+          >
             <div class="fin-summary">
               <div class="fin-stat fin-stat--success">
                 <div class="fin-stat__label">Paid in {p.year}</div>
@@ -175,6 +193,10 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
                 <span class="kv__value">{s.email ?? "—"}</span>
               </div>
               <div class="kv__row">
+                <span class="kv__label">Tax ID / EIN</span>
+                <span class="kv__value">{s.tax_id ?? "—"}</span>
+              </div>
+              <div class="kv__row">
                 <span class="kv__label">License</span>
                 <span class="kv__value">{s.license_number ?? "—"}</span>
               </div>
@@ -227,6 +249,50 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
             refetch();
           }}
         />
+      )}
+
+      {cpaModalOpen && (
+        <Modal
+          open
+          title="Download CPA Export"
+          onClose={() => setCpaModalOpen(false)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setCpaModalOpen(false)}>
+                Cancel
+              </Button>
+              <a
+                href={`/api/reports/cpa-export?year=${cpaYear}`}
+                download
+                class="btn btn--primary"
+                onClick={() => setCpaModalOpen(false)}
+              >
+                Download CSV
+              </a>
+            </>
+          }
+        >
+          <div style={{ marginBottom: "var(--space-sm)" }}>
+            <label class="form-label">Tax Year</label>
+            <select
+              class="form-input"
+              value={cpaYear}
+              onChange={(e) => setCpaYear((e.target as HTMLSelectElement).value)}
+            >
+              {YEAR_OPTIONS.map((y) => (
+                <option key={y} value={String(y)}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>
+            Full-year CPA export (same as Financial → CPA Export).{" "}
+            <strong>{s.company_name ?? "This sub"}</strong> appears in Section 3 — 1099
+            Candidates — when they have payments in the selected year. Tax ID is included when
+            set.
+          </p>
+        </Modal>
       )}
     </div>
   );

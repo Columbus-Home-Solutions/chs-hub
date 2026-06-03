@@ -23,10 +23,29 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 export function SocialMedia(_props: RoutableProps) {
+  const toast = useToast();
   const [tab, setTab] = useState<Tab>("dashboard");
   const [editId, setEditId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [creating, setCreating] = useState(false);
   const bump = () => setRefreshKey((k) => k + 1);
+
+  const newPost = async () => {
+    setCreating(true);
+    try {
+      const r = await api.post<{ post: SocialPost }>("/api/social-posts", {
+        caption: "",
+        post_type: "manual",
+        platform: "both",
+      });
+      bump();
+      setEditId(r.post.id);
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
     <div>
@@ -38,8 +57,8 @@ export function SocialMedia(_props: RoutableProps) {
           </p>
         </div>
         <div class="view-header__right">
-          <Button variant="primary" onClick={() => void createDraft(setEditId, bump)}>
-            + New post
+          <Button variant="primary" onClick={() => void newPost()} disabled={creating}>
+            {creating ? "Creating…" : "+ New post"}
           </Button>
         </div>
       </div>
@@ -72,20 +91,6 @@ export function SocialMedia(_props: RoutableProps) {
       )}
     </div>
   );
-}
-
-async function createDraft(setEditId: (id: string) => void, bump: () => void) {
-  try {
-    const r = await api.post<{ post: SocialPost }>("/api/social-posts", {
-      caption: "",
-      post_type: "manual",
-      platform: "both",
-    });
-    bump();
-    setEditId(r.post.id);
-  } catch {
-    /* toast handled where relevant; swallow to avoid unhandled rejection */
-  }
 }
 
 // ─── Dashboard tab ───────────────────────────────────────────────────────────

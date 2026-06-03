@@ -144,8 +144,10 @@ export async function handleSocialPostCreate(request: Request, env: Env): Promis
   const body = await readJson(request);
   if (!body) return err(400, "bad_request", "Body must be JSON");
 
-  const caption = str(body.caption);
-  if (!caption) return err(400, "bad_request", "caption is required.");
+  // A manually created post starts as a draft and may have an empty caption —
+  // the owner writes or AI-generates it in the editor. Approval enforces a
+  // non-empty caption (see approveOne), so an empty draft can never publish.
+  const caption = str(body.caption) ?? "";
 
   const postType = (str(body.post_type) ?? "manual") as PostType;
   if (!POST_TYPE_SET.has(postType)) {
@@ -299,6 +301,9 @@ async function approveOne(env: Env, id: string, actor: string): Promise<ApproveO
       error: "invalid_state",
       details: `Cannot approve a post in '${row.status}'.`,
     };
+  }
+  if (!str(row.caption)) {
+    return { ok: false, status: 400, error: "empty_caption", details: "Add a caption before approving." };
   }
   await env.DB.prepare(
     "UPDATE social_posts SET status = 'approved', approved_by = ?, approved_date = datetime('now'), rejection_reason = NULL WHERE id = ?",

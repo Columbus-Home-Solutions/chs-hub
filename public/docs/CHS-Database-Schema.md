@@ -1128,11 +1128,15 @@ Migrations continue from the existing chs-hub sequence (0011+). Recommended appr
 0038_prod_parity_seed.sql    — DATA-ONLY, idempotent (INSERT OR IGNORE; no schema ALTERs).
                                Sprint 17 captures 9 rows that were hand-inserted on prod and
                                were absent from any committed migration, so fresh local builds
-                               match prod: 5 document_templates (seed-tpl-s15-* — warranty +
-                               closeout docs), 1 notification_templates row (seed-ntpl-s15-cp,
+                               match prod: 5 document_templates (ids tpl-s15-* — service,
+                               cost-plus, change-order, lien-waiver, warranty), 1
+                               notification_templates row (id nt-completion-package-sent-email,
                                trigger_event 'completion_package_sent' — the reconciled key),
                                and 3 social system_settings (social_brand_voice,
                                social_publish_mode='SIMULATE', social_image_gen_count).
+                               IDs were aligned to the exact prod ids during the S17 deploy
+                               (verified via remote PRAGMA) — INSERT OR IGNORE is a genuine
+                               no-op on prod (keys on the PK), not a duplicate insert.
 ```
 
 > **Sprint 14 note:** `integration_connections` was reused as-is for the QBO connection

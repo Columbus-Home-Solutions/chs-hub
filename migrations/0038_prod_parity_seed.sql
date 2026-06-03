@@ -15,9 +15,11 @@
 --
 -- Contents (9 rows):
 --   • 5 document_templates  (S15: Service Agreement, Cost-Plus Agreement,
---     Change Order, Lien Waiver, Warranty Certificate) — ids seed-tpl-s15-*.
+--     Change Order, Lien Waiver, Warranty Certificate) — ids tpl-s15-* (the
+--     exact ids hand-inserted on prod, so INSERT OR IGNORE is a true no-op there).
 --   • 1 notification_templates (completion-package; reconciled key
---     `completion_package_sent` — the key the live send path fires) — seed-ntpl-s15-cp.
+--     `completion_package_sent` — the key the live send path fires) —
+--     id nt-completion-package-sent-email (the prod id).
 --   • 3 system_settings (S16 social): social_brand_voice, social_publish_mode
 --     (SIMULATE), social_image_gen_count.
 --
@@ -26,7 +28,7 @@
 -- ── 5 document templates (S15) ───────────────────────────────────────────────
 INSERT OR IGNORE INTO document_templates (id, name, template_type, content, merge_fields, is_active, version)
 VALUES
-  ('seed-tpl-s15-service', 'Service Agreement', 'service_agreement',
+  ('tpl-s15-service', 'Service Agreement', 'service_agreement',
    '{{company_name}}
 SERVICE AGREEMENT
 Residential Construction & Remodeling
@@ -53,7 +55,7 @@ Contractor provides a one-year workmanship warranty on completed work beginning 
 By signing below (in person or electronically), both parties agree to all terms stated in this document. This Agreement is governed by the laws of the State of Arkansas.',
    '["company_name","client_name","property_address","job_title","contract_total","today_date","payment_schedule"]', 1, 1),
 
-  ('seed-tpl-s15-costplus', 'Cost-Plus Billing Agreement', 'cost_plus_agreement',
+  ('tpl-s15-costplus', 'Cost-Plus Billing Agreement', 'cost_plus_agreement',
    '{{company_name}}
 COST-PLUS BILLING AGREEMENT
 Pay-As-You-Progress Construction Billing
@@ -73,7 +75,7 @@ A deposit of {{deposit_amount}} is required to schedule the project and is appli
 This Cost-Plus Billing Agreement is supplemental to the Service Agreement and is governed by the laws of the State of Arkansas.',
    '["company_name","client_name","property_address","job_title","contract_total","deposit_amount","today_date"]', 1, 1),
 
-  ('seed-tpl-s15-changeorder', 'Change Order', 'change_order',
+  ('tpl-s15-changeorder', 'Change Order', 'change_order',
    '{{company_name}}
 CHANGE ORDER
 
@@ -85,7 +87,7 @@ Date: {{today_date}}
 This Change Order documents a modification to the agreed scope of work, including the change described, its cost impact, and any effect on the project timeline. It requires Client signature before the modified work proceeds.',
    '["company_name","client_name","property_address","job_title","today_date"]', 1, 1),
 
-  ('seed-tpl-s15-lienwaiver', 'Lien Waiver', 'lien_waiver',
+  ('tpl-s15-lienwaiver', 'Lien Waiver', 'lien_waiver',
    '{{company_name}}
 LIEN WAIVER AND RELEASE
 
@@ -99,7 +101,7 @@ Date: {{today_date}}
 The undersigned subcontractor acknowledges receipt of the payment amount stated above and, to that extent, waives and releases any mechanic''s lien, stop-payment notice, or bond right against the property described above for labor and materials furnished through the date of this waiver.',
    '["company_name","job_title","property_address","sub_name","waiver_type","payment_amount","today_date"]', 1, 1),
 
-  ('seed-tpl-s15-warranty', 'Warranty Certificate', 'other',
+  ('tpl-s15-warranty', 'Warranty Certificate', 'other',
    '{{company_name}}
 CERTIFICATE OF WARRANTY
 
@@ -118,7 +120,7 @@ Issued: {{today_date}}
 INSERT OR IGNORE INTO notification_templates
   (id, trigger_event, name, recipient_type, channel, subject, body_template, merge_fields, is_active, delay_minutes, phase, sort_order)
 VALUES
-  ('seed-ntpl-s15-cp', 'completion_package_sent', 'Completion Package Ready', 'client', 'email',
+  ('nt-completion-package-sent-email', 'completion_package_sent', 'Completion Package Ready', 'client', 'email',
    'Your project completion package is ready',
    'Hi {{client_name}}, your completion package for {{job_title}} is ready: {{portal_link}}',
    '["client_name","job_title","portal_link"]', 1, 0, 'closeout', 90);

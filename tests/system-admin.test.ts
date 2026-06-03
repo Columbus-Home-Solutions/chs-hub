@@ -15,21 +15,26 @@ describe("0038_prod_parity_seed migration", () => {
     expect(sql).not.toMatch(/OR REPLACE INTO/i);
   });
 
-  it("seeds the 5 S15 document templates by their prod ids", () => {
+  it("seeds the 5 S15 document templates by their exact prod ids", () => {
+    // These must match the ids hand-inserted on prod (verified via remote
+    // PRAGMA during the S17 deploy) so INSERT OR IGNORE is a true no-op there.
     for (const id of [
-      "seed-tpl-s15-service",
-      "seed-tpl-s15-costplus",
-      "seed-tpl-s15-changeorder",
-      "seed-tpl-s15-lienwaiver",
-      "seed-tpl-s15-warranty",
+      "'tpl-s15-service'",
+      "'tpl-s15-costplus'",
+      "'tpl-s15-changeorder'",
+      "'tpl-s15-lienwaiver'",
+      "'tpl-s15-warranty'",
     ]) {
       expect(sql).toContain(id);
     }
+    // Guard against the local-only `seed-` prefix sneaking back in.
+    expect(sql).not.toContain("seed-tpl-s15-");
   });
 
-  it("seeds the completion-package template with the reconciled key", () => {
-    expect(sql).toContain("seed-ntpl-s15-cp");
+  it("seeds the completion-package template with the reconciled key + prod id", () => {
+    expect(sql).toContain("nt-completion-package-sent-email");
     expect(sql).toContain("completion_package_sent");
+    expect(sql).not.toContain("seed-ntpl-s15-cp");
   });
 
   it("seeds the 3 social system_settings respecting value_type", () => {

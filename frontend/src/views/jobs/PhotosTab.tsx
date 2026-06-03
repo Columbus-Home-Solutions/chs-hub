@@ -203,7 +203,7 @@ export function PhotosTab({ jobId }: { jobId: string }) {
                     <img src={p.thumb_url} alt={p.caption ?? p.photo_type} loading="lazy" />
                     <span class="photo-thumb__type">{TYPE_LABEL[p.photo_type] ?? p.photo_type}</span>
                     {p.receipt && <span class="photo-thumb__badge">💵</span>}
-                    {p.is_annotated && <span class="photo-thumb__badge photo-thumb__badge--annot">✏️</span>}
+                    {(p.is_annotated || !!p.annotation_data) && <span class="photo-thumb__badge photo-thumb__badge--annot">✏️</span>}
                     {p.before_after_pair_id && <span class="photo-thumb__badge photo-thumb__badge--pair">↔️</span>}
                   </button>
                 );
@@ -260,6 +260,10 @@ function PhotoDetailModal({
   // The paired "before" photo, if this one is an "after" in a pair.
   const pairedBefore = p.before_after_pair_id
     ? photos.find((x) => x.id === p.before_after_pair_id) ?? null
+    : null;
+  // The paired "after" photo, if this one is a "before" in someone else's pair.
+  const pairedAfter = !pairedBefore
+    ? photos.find((x) => x.before_after_pair_id === p.id) ?? null
     : null;
 
   const annotatedSvg = (() => {
@@ -354,6 +358,8 @@ function PhotoDetailModal({
       <div class="photo-detail">
         {pairedBefore ? (
           <BeforeAfterSlider beforeUrl={pairedBefore.original_url} afterUrl={p.original_url} />
+        ) : pairedAfter ? (
+          <BeforeAfterSlider beforeUrl={p.original_url} afterUrl={pairedAfter.original_url} />
         ) : annotatedSvg && showAnnotated ? (
           <div class="photo-detail__img" dangerouslySetInnerHTML={{ __html: annotatedSvg }} />
         ) : (
@@ -385,8 +391,8 @@ function PhotoDetailModal({
                 {showAnnotated ? "Show original" : "Show annotated"}
               </Button>
             )}
-            {pairedBefore ? (
-              <Button variant="tertiary" size="sm" disabled={busy} onClick={unpair}>↔️ Unpair</Button>
+            {pairedBefore || pairedAfter ? (
+              <Button variant="tertiary" size="sm" disabled={busy} onClick={pairedBefore ? unpair : () => { void api.post(`/api/photos/unpair`, { after_id: pairedAfter!.id }).then(() => { toast.push("success", "Pair removed"); onChanged(); }).catch((err: unknown) => toast.push("error", (err as Error).message)); }}>↔️ Unpair</Button>
             ) : (
               <Button variant="secondary" size="sm" onClick={() => setPairing((v) => !v)}>
                 ↔️ Before/After
@@ -394,10 +400,10 @@ function PhotoDetailModal({
             )}
           </div>
 
-          {pairing && !pairedBefore && (
+          {pairing && !pairedBefore && !pairedAfter && (
             <div class="stack" style={{ marginTop: "var(--space-2)" }}>
               <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-                Pick the <strong>“before”</strong> photo — this one becomes the “after”.
+                Tap a photo below to set it as the <strong>Before</strong>. This photo becomes the <strong>After</strong>. The slider appears on both once paired.
               </div>
               <div class="photo-grid">
                 {photos

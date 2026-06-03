@@ -107,4 +107,18 @@ export interface Env {
   // Test spreadsheet ID used in dev when the wc_spreadsheet_id setting is blank.
   // NEVER point this at the production WC workbook.
   WC_TEST_SHEET_ID?: string;
+
+  // ─── Social Media Engine (Sprint 16) ───────────────────────────
+  // Publish gate, the social analog of NOTIFICATIONS_DISPATCH_MODE. ONLY the
+  // exact value "live" calls the real Facebook/Instagram Graph APIs; anything
+  // else (incl. unset) SIMULATES — stamps synthetic post ids/urls, marks
+  // published, logs [SIMULATE]. Flipping to "live" is a deliberate Pre-Launch
+  // step (FB Page token + IG Business id in settings, app review, go-ahead).
+  // Read from env first, then the system_settings 'social_publish_mode' row.
+  SOCIAL_PUBLISH_MODE?: string;
+  // Replicate API key for AI image generation (Flux 1.1 Pro). Secret. Absent ⇒
+  // image generation degrades to a "configure image API / attach manually"
+  // state and the post still flows through the queue. Falls back to the
+  // system_settings 'social_replicate_api_key' row when the secret is unset.
+  REPLICATE_API_KEY?: string;
 }

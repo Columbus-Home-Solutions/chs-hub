@@ -568,6 +568,111 @@ export interface BillingScheduleRow {
   status: string;
 }
 
+// ─── Social Media Engine (Sprint 16) ────────────────────────────────────────
+
+export type SocialPostType =
+  | "job_completion"
+  | "seasonal_tips"
+  | "tips_tricks"
+  | "promotion"
+  | "review_highlight"
+  | "manual";
+
+export type SocialPostStatus =
+  | "draft"
+  | "pending_approval"
+  | "approved"
+  | "scheduled"
+  | "published"
+  | "rejected"
+  | "failed";
+
+export type SocialPlatform = "both" | "facebook_only" | "instagram_only";
+
+export interface SocialPhotoRef {
+  id: string;
+  caption: string | null;
+  photo_type: string | null;
+  is_before_photo: boolean;
+  is_after_photo: boolean;
+  thumb_url: string;
+  original_url: string;
+}
+
+export interface SocialPost {
+  id: string;
+  post_type: SocialPostType;
+  status: SocialPostStatus;
+  caption: string;
+  hashtags: string[];
+  platform: SocialPlatform;
+  scheduled_date: string | null;
+  published_date: string | null;
+  job_id: string | null;
+  photo_ids: string[];
+  ai_generated_image_url: string | null;
+  facebook_post_id: string | null;
+  instagram_post_id: string | null;
+  facebook_url: string | null;
+  instagram_url: string | null;
+  rejection_reason: string | null;
+  generated_by: string;
+  approved_by: string | null;
+  approved_date: string | null;
+  created_at: string;
+  has_image: boolean;
+  photos?: SocialPhotoRef[];
+}
+
+export interface ContentSchedule {
+  id: string;
+  month: number;
+  year: number;
+  status: "draft" | "active" | "completed";
+  generated_date: string;
+  notes: string | null;
+  created_at: string;
+  total_posts_planned: number;
+  job_completion_count: number;
+  seasonal_count: number;
+  tips_count: number;
+}
+
+export const SOCIAL_POST_TYPES: { value: SocialPostType; label: string }[] = [
+  { value: "job_completion", label: "Job Completion" },
+  { value: "seasonal_tips", label: "Seasonal / Tips" },
+  { value: "tips_tricks", label: "Tips & Tricks" },
+  { value: "promotion", label: "Promotion" },
+  { value: "review_highlight", label: "Review Highlight" },
+  { value: "manual", label: "Manual" },
+];
+
+export const SOCIAL_PLATFORMS: { value: SocialPlatform; label: string }[] = [
+  { value: "both", label: "Facebook + Instagram" },
+  { value: "facebook_only", label: "Facebook only" },
+  { value: "instagram_only", label: "Instagram only" },
+];
+
+export const SOCIAL_STATUSES: SocialPostStatus[] = [
+  "draft",
+  "pending_approval",
+  "approved",
+  "scheduled",
+  "published",
+  "rejected",
+  "failed",
+];
+
+// Calendar colour-coding by content type (spec §5.2).
+export const SOCIAL_TYPE_COLORS: Record<SocialPostType, string> = {
+  job_completion: "#3b82f6", // blue
+  seasonal_tips: "#22c55e", // green
+  tips_tricks: "#f97316", // orange
+  promotion: "#a855f7",
+  review_highlight: "#eab308",
+  manual: "#64748b",
+};
+
 export interface JobDetailResponse {
   job: JobCard & {
     client_phone: string | null;

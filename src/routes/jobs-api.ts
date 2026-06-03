@@ -27,6 +27,7 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerJobStatusChanged } from "../lib/wc/triggers.js";
 import { reverseJobConversion } from "../lib/quote-to-job.js";
+import { maybeGenerateJobCompletionPost } from "../lib/social-jobs.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const REVERSE_ROLES = ["owner"] as const;
@@ -478,6 +479,16 @@ export async function handleJobStatus(request: Request, env: Env, id: string): P
 
   await logAudit(env, user.email, "job_status_changed", "job", id, { from, to: target });
   triggerJobStatusChanged(env, id, from, target);
+
+  // Sprint 16 — Social Media auto-gen seam. On reaching `complete`, draft a
+  // pending_approval job-completion post if the job has social-ready photos
+  // (else notify "flag photos?"). NEVER auto-publishes; non-fatal so a social
+  // hiccup can't block the status change.
+  if (target === "complete") {
+    await maybeGenerateJobCompletionPost(env, id, user.email).catch((e) =>
+      console.error("[jobs-api] social auto-gen failed:", (e as Error).message),
+    );
+  }
 
   return handleJobDetail(env, id);
 }

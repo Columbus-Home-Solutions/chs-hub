@@ -337,6 +337,28 @@ import {
   handlePermitDelete,
 } from "./routes/permits.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
+// ── Social Media Engine (Sprint 16) ─────────────────────────────────────────
+import {
+  handleSocialPostList,
+  handleSocialQueue,
+  handleSocialPostGet,
+  handleSocialPostCreate,
+  handleSocialPostUpdate,
+  handleSocialPostApprove,
+  handleSocialPostApproveBatch,
+  handleSocialPostReject,
+  handleSocialPostDelete,
+  handleSocialPostRegenerate,
+  handleSocialPostGenerateImage,
+  handleSocialImage,
+} from "./routes/social-posts.js";
+import {
+  handleContentScheduleList,
+  handleContentScheduleGet,
+  handleContentScheduleGenerate,
+} from "./routes/content-schedules.js";
+import { handleSocialPostPublish } from "./routes/social-publish.js";
+import { publishDuePosts } from "./lib/social-publish.js";
 
 async function fetchAssetWithDashboardInject(
   env: Env,
@@ -1331,6 +1353,61 @@ export default {
       if (request.method === "DELETE") return handleSubItemDelete(request, env, sid);
     }
 
+    // ── Social Media Engine (Sprint 16) ──────────────────────────────
+    // Owner-facing /app only — no client/portal/public surface. Fixed /
+    // sub-resource paths before the bare :id route.
+    if (url.pathname === "/api/social-posts") {
+      if (request.method === "GET") return handleSocialPostList(env, url);
+      if (request.method === "POST") return handleSocialPostCreate(request, env);
+    }
+    if (url.pathname === "/api/social-posts/queue" && request.method === "GET") {
+      return handleSocialQueue(env);
+    }
+    if (url.pathname === "/api/social-posts/approve-batch" && request.method === "POST") {
+      return handleSocialPostApproveBatch(request, env);
+    }
+    const spApprove = url.pathname.match(/^\/api\/social-posts\/([^/]+)\/approve$/);
+    if (spApprove && request.method === "POST") {
+      return handleSocialPostApprove(request, env, decodeURIComponent(spApprove[1]));
+    }
+    const spReject = url.pathname.match(/^\/api\/social-posts\/([^/]+)\/reject$/);
+    if (spReject && request.method === "POST") {
+      return handleSocialPostReject(request, env, decodeURIComponent(spReject[1]));
+    }
+    const spRegen = url.pathname.match(/^\/api\/social-posts\/([^/]+)\/regenerate$/);
+    if (spRegen && request.method === "POST") {
+      return handleSocialPostRegenerate(request, env, decodeURIComponent(spRegen[1]));
+    }
+    const spGenImage = url.pathname.match(/^\/api\/social-posts\/([^/]+)\/generate-image$/);
+    if (spGenImage && request.method === "POST") {
+      return handleSocialPostGenerateImage(request, env, decodeURIComponent(spGenImage[1]));
+    }
+    const spImage = url.pathname.match(/^\/api\/social-posts\/([^/]+)\/image$/);
+    if (spImage && (request.method === "GET" || request.method === "HEAD")) {
+      return handleSocialImage(env, decodeURIComponent(spImage[1]));
+    }
+    const spPublish = url.pathname.match(/^\/api\/social-posts\/([^/]+)\/publish$/);
+    if (spPublish && request.method === "POST") {
+      return handleSocialPostPublish(request, env, decodeURIComponent(spPublish[1]));
+    }
+    const spById = url.pathname.match(/^\/api\/social-posts\/([^/]+)$/);
+    if (spById) {
+      const sid = decodeURIComponent(spById[1]);
+      if (request.method === "GET") return handleSocialPostGet(env, sid);
+      if (request.method === "PUT") return handleSocialPostUpdate(request, env, sid);
+      if (request.method === "DELETE") return handleSocialPostDelete(request, env, sid);
+    }
+    if (url.pathname === "/api/content-schedules" && request.method === "GET") {
+      return handleContentScheduleList(env);
+    }
+    if (url.pathname === "/api/content-schedules/generate" && request.method === "POST") {
+      return handleContentScheduleGenerate(request, env);
+    }
+    const csById = url.pathname.match(/^\/api\/content-schedules\/([^/]+)$/);
+    if (csById && request.method === "GET") {
+      return handleContentScheduleGet(env, decodeURIComponent(csById[1]));
+    }
+
     // ── System settings ──────────────────────────────────────────────
     if (url.pathname === "/api/settings" && request.method === "GET") {
       return handleSettingsList(env);
@@ -1503,6 +1580,12 @@ async function runQboSyncSweep(env: Env): Promise<void> {
 // Notification Processor (Sprint 7) — drains the queued notification_logs rows
 // that are due, after recomputing time-based triggers (quote follow-ups,
 // work_starting, appointment reminders) from D1. Failures are non-fatal.
+//
+// Sprint 16: the Social Post Publisher folds into THIS same */15 tick (the
+// account is capped at 5 cron triggers — see wrangler.toml). The same tick
+// drains the notification queue AND publishes due approved social posts
+// (SIMULATE unless SOCIAL_PUBLISH_MODE='live'). The standalone "*/15 Social
+// Post Publisher" cron entry in the Route Map is SUPERSEDED by this fold.
 async function runNotificationProcessor(env: Env): Promise<void> {
   try {
     const s = await processNotifications(env);
@@ -1511,6 +1594,19 @@ async function runNotificationProcessor(env: Env): Promise<void> {
     );
   } catch (err) {
     console.error("[cron */15 * * * *] notifications failed:", (err as Error).message);
+  }
+
+  // Social Post Publisher (Sprint 16) — publish approved posts whose
+  // scheduled_date is due, honoring backoff windows. Non-fatal.
+  try {
+    const p = await publishDuePosts(env);
+    if (p.scanned > 0) {
+      console.log(
+        `[cron */15 * * * *] social_publish: scanned=${p.scanned} published=${p.published} retried=${p.retried} failed=${p.failed} backoff=${p.skipped_backoff} in ${p.duration_ms}ms`,
+      );
+    }
+  } catch (err) {
+    console.error("[cron */15 * * * *] social_publish failed:", (err as Error).message);
   }
 }
 

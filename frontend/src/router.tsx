@@ -20,6 +20,7 @@ import { JobDetail } from "./views/jobs/JobDetail";
 import { ScheduleCalendar } from "./views/jobs/ScheduleCalendar";
 import { NotificationSettings } from "./views/notifications/NotificationSettings";
 import { NotificationLogs } from "./views/notifications/NotificationLogs";
+import { SocialMedia } from "./views/social/SocialMedia";
 import { Placeholder } from "./views/Placeholder";
 
 export function AppRouter() {
@@ -47,7 +48,7 @@ export function AppRouter() {
       <Placeholder path={`${BASE}/financial`} title="Financial" />
       <Placeholder path={`${BASE}/photos`} title="Photos" />
       <HubFiles path={`${BASE}/documents`} />
-      <Placeholder path={`${BASE}/social`} title="Social" />
+      <SocialMedia path={`${BASE}/social`} />
       <NotFound default />
     </Router>
   );

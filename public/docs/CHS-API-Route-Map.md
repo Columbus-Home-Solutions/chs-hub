@@ -545,6 +545,7 @@ remains a labeled seam. Push is **exactly-once**, keyed on the `qbo_*_id` column
 | POST | `/api/social-posts` | O/OA | Create manual post |
 | PUT | `/api/social-posts/:id` | O/OA | Update post (caption, hashtags, timing, platform) |
 | POST | `/api/social-posts/:id/approve` | O | Approve post |
+| POST | `/api/social-posts/approve-batch` | O | Approve many posts at once (`{ ids: [] }`); skips already-published/rejected |
 | POST | `/api/social-posts/:id/reject` | O | Reject post with reason |
 | POST | `/api/social-posts/:id/regenerate` | O | Regenerate caption via Claude |
 | DELETE | `/api/social-posts/:id` | O | Delete post from queue |
@@ -561,7 +562,8 @@ remains a labeled seam. Push is **exactly-once**, keyed on the `qbo_*_id` column
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/social-posts/:id/generate-image` | O | Generate AI image for a post (Replicate/Flux Pro) |
+| POST | `/api/social-posts/:id/generate-image` | O | Generate AI image for a post (Replicate/Flux Pro). Degrades gracefully (`{ ok:false, unconfigured:true }`) when no Replicate key is set |
+| GET | `/api/social-posts/:id/image` | O/OA | Stream the post's AI-generated image from R2 |
 
 ### Publishing (Cron-triggered, but can be manual)
 
@@ -635,7 +637,7 @@ Not REST endpoints, but Worker cron triggers that need to be implemented.
 | 0 0 * * * | Late Fee Calculator | Update late fee amounts on overdue invoices |
 | ~~0 0 * * * QBO Sync~~ | **SUPERSEDED (Sprint 14)** | Cloudflare Free plan caps at **5 cron triggers** and all 5 are full. The QBO push runs as a **dirty-flag reconcile sweep folded into the existing `15 7 * * *` nightly handler** (after invoice billing) + the on-demand `POST /api/quickbooks/sync`. **No standalone QBO cron.** |
 
-**As-built cron triggers (wrangler.toml — exactly 5):** `*/15 * * * *` (notifications), `*/30 * * * *` (Jobber tick + WC Spreadsheet sync), `15 * * * *` (heartbeat + DLQ replay + drive mirror), `15 7 * * *` (backup → invoice billing → **QBO push sweep**), `0 12 * * *` (daily summary).
+**As-built cron triggers (wrangler.toml — exactly 5):** `*/15 * * * *` (notifications + **social-post publisher** — Sprint 16 folded the due-post sweep into this existing trigger, no new cron), `*/30 * * * *` (Jobber tick + WC Spreadsheet sync), `15 * * * *` (heartbeat + DLQ replay + drive mirror), `15 7 * * *` (backup → invoice billing → **QBO push sweep**), `0 12 * * *` (daily summary).
 
 ---
 
@@ -652,10 +654,10 @@ Not REST endpoints, but Worker cron triggers that need to be implemented.
 | Documents | 13 |
 | Smart Notes | 7 |
 | Notifications | 8 |
-| Social Media | 10 |
+| Social Media | 16 |
 | Client Portal | 12 |
 | Subcontractors | 4 |
 | Webhooks | 5 |
-| **Total** | **~173 endpoints** |
+| **Total** | **~179 endpoints** |
 
 Plus 11 cron jobs.

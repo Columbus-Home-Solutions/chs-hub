@@ -1,58 +1,90 @@
 import type { RoutableProps } from "preact-router";
 import { useAuth } from "../store/auth";
-import { Card } from "../components/ui/Card";
-import { Button } from "../components/ui/Button";
-import { go } from "../lib/nav";
+import { useWeather } from "../store/weather";
+import { useApi } from "../hooks/useApi";
+import type { KpiTile, ActionItem, PipelineData, ScheduleEntry, ActivityEntry } from "./dashboard/types";
+
+import { KpiTiles } from "./dashboard/KpiTiles";
+import { WeatherAlerts } from "./dashboard/WeatherAlerts";
+import { ActionItems } from "./dashboard/ActionItems";
+import { PipelineSummary } from "./dashboard/PipelineSummary";
+import { LeadPipeline } from "./dashboard/LeadPipeline";
+import { SmartNotes } from "./dashboard/SmartNotes";
+import { TodaySchedule } from "./dashboard/TodaySchedule";
+import { RecentActivity } from "./dashboard/RecentActivity";
 
 export function Dashboard(_props: RoutableProps) {
   const { user } = useAuth();
+  const weather = useWeather();
   const name = user?.first_name || "there";
+
+  // All fetches fire in parallel — no waterfall.
+  const kpis = useApi<{ tiles: KpiTile[] }>("/api/dashboard/kpis");
+  const actionItems = useApi<{ items: ActionItem[] }>("/api/dashboard/action-items");
+  const pipeline = useApi<PipelineData>("/api/dashboard/pipeline");
+  const schedule = useApi<{ entries: ScheduleEntry[] }>("/api/dashboard/schedule");
+  const activity = useApi<{ entries: ActivityEntry[]; bellCount: number }>("/api/dashboard/activity");
+
   return (
-    <div>
+    <div class="dashboard">
+      {/* Page header */}
       <div class="view-header">
         <div>
           <h1 class="view-title">Welcome back, {name}</h1>
-          <p class="view-subtitle">
-            The CHS platform foundation is live. Clients and subcontractors are ready to use.
-          </p>
+          <p class="view-subtitle">Here's what needs your attention today.</p>
         </div>
       </div>
 
-      <div class="detail-grid">
-        <Card title="Getting started">
-          <p class="text--secondary" style={{ fontSize: "var(--text-sm)", marginTop: 0 }}>
-            This is the new internal app, running alongside the existing dashboard. The full
-            dashboard home screen — KPIs, pipeline, and quick capture — is built in a later sprint.
-          </p>
-          <div class="flex gap-sm mt-md flex-wrap">
-            <Button variant="primary" onClick={() => go("/clients")}>
-              View clients
-            </Button>
-            <Button variant="secondary" onClick={() => go("/subcontractors")}>
-              View subcontractors
-            </Button>
-            <Button variant="tertiary" onClick={() => go("/settings")}>
-              Settings
-            </Button>
-          </div>
-        </Card>
+      {/* KPI strip — full width, renders first */}
+      <KpiTiles
+        tiles={kpis.data?.tiles ?? []}
+        loading={kpis.loading}
+      />
 
-        <Card title="Status">
-          <div class="kv">
-            <div class="kv__row">
-              <span class="kv__label">Clients</span>
-              <span class="kv__value">Live</span>
-            </div>
-            <div class="kv__row">
-              <span class="kv__label">Subcontractors</span>
-              <span class="kv__value">Live</span>
-            </div>
-            <div class="kv__row">
-              <span class="kv__label">Jobs / Estimates</span>
-              <span class="kv__value text--muted">Coming soon</span>
-            </div>
+      {/* Two-column content area */}
+      <div class="dashboard__columns">
+        {/* Primary column (~60%) */}
+        <div class="dashboard__primary">
+          {/* Weather: renders only when alerts exist */}
+          {weather && (weather.scheduleAlerts?.length ?? 0) > 0 && (
+            <WeatherAlerts
+              scheduleAlerts={weather.scheduleAlerts}
+              forecast={weather.forecast}
+            />
+          )}
+
+          <ActionItems
+            items={actionItems.data?.items ?? []}
+            loading={actionItems.loading}
+            error={actionItems.error}
+          />
+
+          <PipelineSummary
+            data={pipeline.data ?? { leads: [], jobs: [], conversionRate: 0, unpaidTotal: 0 }}
+            loading={pipeline.loading}
+            error={pipeline.error}
+          />
+
+          {/* LeadPipeline Kanban — desktop only, hidden on mobile via CSS */}
+          <div class="dashboard__desktop-only">
+            <LeadPipeline />
           </div>
-        </Card>
+        </div>
+
+        {/* Secondary column (~40%) */}
+        <div class="dashboard__secondary">
+          <SmartNotes />
+          <TodaySchedule
+            entries={schedule.data?.entries ?? []}
+            loading={schedule.loading}
+            error={schedule.error}
+          />
+          <RecentActivity
+            entries={activity.data?.entries ?? []}
+            loading={activity.loading}
+            error={activity.error}
+          />
+        </div>
       </div>
     </div>
   );

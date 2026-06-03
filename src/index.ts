@@ -63,6 +63,8 @@ import {
   handleTaskComplete,
 } from "./routes/jobs-api.js";
 import { handleKpis } from "./routes/kpis.js";
+import { handleWeather } from "./routes/weather.js";
+import { handleDashboard } from "./routes/dashboard.js";
 import {
   handleNoteCreate,
   handleNoteDelete,
@@ -515,6 +517,22 @@ export default {
     if (url.pathname === "/api/kpis" && request.method === "GET") {
       const payload = await handleKpis(env);
       return jsonResponse(payload);
+    }
+
+    if (url.pathname === "/api/weather" && request.method === "GET") {
+      try {
+        const payload = await handleWeather(env);
+        return jsonResponse(payload);
+      } catch {
+        // NWS failure must never surface as an error to the client.
+        return jsonResponse({ current: null, forecast: [], scheduleAlerts: [] });
+      }
+    }
+
+    // ── Dashboard API (Sprint 14) ─────────────────────────────────────────
+    if (url.pathname.startsWith("/api/dashboard/") && request.method === "GET") {
+      const dashResp = await handleDashboard(env, url);
+      if (dashResp) return dashResp;
     }
 
     if (url.pathname === "/api/search" && request.method === "GET") {

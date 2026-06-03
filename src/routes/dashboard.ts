@@ -1,0 +1,718 @@
+/**
+ * Dashboard API routes (Sprint 14).
+ *
+ *   GET /api/dashboard/kpis           → { tiles: KpiTile[] }           5-min cache
+ *   GET /api/dashboard/action-items   → { items: ActionItem[] }         fresh
+ *   GET /api/dashboard/pipeline       → { leads, jobs, conversionRate, unpaidTotal }  5-min cache
+ *   GET /api/dashboard/schedule       → { entries: ScheduleEntry[] }    fresh
+ *   GET /api/dashboard/activity       → { entries: ActivityEntry[], bellCount: number } fresh
+ *
+ * Role: O/PM/OA (enforced by RBAC middleware in index.ts).
+ */
+
+import type { Env } from "../env.js";
+import { buildJobCosting } from "../lib/job-costing.js";
+
+// ── helpers ────────────────────────────────────────────────────────────────
+
+function json(body: unknown, init: ResponseInit = {}): Response {
+  const h = new Headers(init.headers);
+  h.set("content-type", "application/json; charset=utf-8");
+  h.set("cache-control", "no-store");
+  return new Response(JSON.stringify(body), { ...init, headers: h });
+}
+
+/** ISO date for today in UTC ("YYYY-MM-DD"). */
+function todayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Sunday-start week boundaries (ISO strings). */
+function currentWeekRange(now = new Date()): { start: string; end: string; prevStart: string; prevEnd: string } {
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  const dow = now.getUTCDay(); // 0 = Sunday
+  const weekStart = new Date(Date.UTC(y, m, d - dow));
+  const weekEnd = new Date(Date.UTC(y, m, d - dow + 7));
+  const prevStart = new Date(Date.UTC(y, m, d - dow - 7));
+  const prevEnd = weekStart;
+  return {
+    start: weekStart.toISOString().slice(0, 10),
+    end: weekEnd.toISOString().slice(0, 10),
+    prevStart: prevStart.toISOString().slice(0, 10),
+    prevEnd: prevEnd.toISOString().slice(0, 10),
+  };
+}
+
+/** Jan 1 of current year (ISO date string). */
+function yearStart(): string {
+  return `${new Date().getUTCFullYear()}-01-01`;
+}
+
+// ── In-memory caches (5-minute TTL) ──────────────────────────────────────
+
+interface Cached<T> { data: T; expiresAt: number }
+const kpiCache = new Map<string, Cached<unknown>>();
+const pipelineCache = new Map<string, Cached<unknown>>();
+const CACHE_TTL_MS = 5 * 60 * 1_000;
+
+function cacheGet<T>(map: Map<string, Cached<unknown>>, key: string): T | null {
+  const c = map.get(key);
+  if (!c || c.expiresAt < Date.now()) return null;
+  return c.data as T;
+}
+function cacheSet<T>(map: Map<string, Cached<unknown>>, key: string, data: T): void {
+  map.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+}
+
+// ── KPI handler ───────────────────────────────────────────────────────────
+
+interface KpiTile {
+  id: string;
+  label: string;
+  value: number | string;
+  subtitle: string;
+  link: string;
+  deltaDir?: "up" | "down" | null;
+  deltaPct?: number | null;
+}
+
+export async function handleDashboardKpis(env: Env): Promise<Response> {
+  const cached = cacheGet<{ tiles: KpiTile[] }>(kpiCache, "kpis");
+  if (cached) return json(cached);
+
+  const now = new Date();
+  const week = currentWeekRange(now);
+  const ys = yearStart();
+
+  const [
+    jobsRow,
+    quotesRow,
+    invoicesRow,
+    cashWeekRow,
+    cashPrevRow,
+    ytdRevenueRow,
+    ytdExpensesRow,
+    ytdStripeFeesRow,
+  ] = await Promise.all([
+    env.DB.prepare(
+      "SELECT COUNT(*) as cnt, COALESCE(SUM(contract_total), 0) as total FROM jobs WHERE status = 'in_progress'"
+    ).first<{ cnt: number; total: number }>(),
+    env.DB.prepare(
+      "SELECT COUNT(*) as cnt, COALESCE(SUM(total), 0) as total FROM estimates WHERE status = 'sent'"
+    ).first<{ cnt: number; total: number }>(),
+    env.DB.prepare(
+      `SELECT COUNT(*) as cnt,
+              COALESCE(SUM(total_due - COALESCE(paid_amount, 0)), 0) as total,
+              COUNT(*) FILTER (WHERE status = 'past_due') as past_due_count
+       FROM invoices WHERE status IN ('sent', 'viewed', 'partial', 'past_due')`
+    ).first<{ cnt: number; total: number; past_due_count: number }>(),
+    env.DB.prepare(
+      "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE received_date >= ? AND received_date < ?"
+    ).bind(week.start, week.end).first<{ total: number }>(),
+    env.DB.prepare(
+      "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE received_date >= ? AND received_date < ?"
+    ).bind(week.prevStart, week.prevEnd).first<{ total: number }>(),
+    env.DB.prepare(
+      "SELECT COALESCE(SUM(amount), 0) as revenue FROM payments WHERE received_date >= ?"
+    ).bind(ys).first<{ revenue: number }>(),
+    env.DB.prepare(
+      "SELECT COALESCE(SUM(amount), 0) as expenses FROM expenses WHERE incurred_date >= ?"
+    ).bind(ys).first<{ expenses: number }>(),
+    env.DB.prepare(
+      "SELECT COALESCE(SUM(stripe_fee), 0) as fees FROM payments WHERE stripe_fee > 0 AND received_date >= ?"
+    ).bind(ys).first<{ fees: number }>(),
+  ]);
+
+  const cashThis = cashWeekRow?.total ?? 0;
+  const cashPrev = cashPrevRow?.total ?? 0;
+  let deltaDir: "up" | "down" | null = null;
+  let deltaPct: number | null = null;
+  if (cashPrev > 0) {
+    deltaPct = Math.round(((cashThis - cashPrev) / cashPrev) * 100);
+    deltaDir = deltaPct >= 0 ? "up" : "down";
+    deltaPct = Math.abs(deltaPct);
+  }
+
+  const ytdRevenue = ytdRevenueRow?.revenue ?? 0;
+  const ytdExpenses = (ytdExpensesRow?.expenses ?? 0) + (ytdStripeFeesRow?.fees ?? 0);
+  const ytdProfit = ytdRevenue - ytdExpenses;
+  const ytdMarginPct = ytdRevenue > 0 ? Math.round((ytdProfit / ytdRevenue) * 100) : 0;
+
+  const pastDueCount = invoicesRow?.past_due_count ?? 0;
+  const invoiceSubtitle = pastDueCount > 0
+    ? `${invoicesRow?.cnt ?? 0} open · ${pastDueCount} past due`
+    : `${invoicesRow?.cnt ?? 0} open`;
+
+  const tiles: KpiTile[] = [
+    {
+      id: "jobs_in_progress",
+      label: "Jobs In Progress",
+      value: jobsRow?.cnt ?? 0,
+      subtitle: `$${((jobsRow?.total ?? 0) / 1000).toFixed(0)}k in contracts`,
+      link: "/jobs?status=in_progress",
+    },
+    {
+      id: "quotes_outstanding",
+      label: "Quotes Outstanding",
+      value: `$${((quotesRow?.total ?? 0) / 1000).toFixed(0)}k`,
+      subtitle: `${quotesRow?.cnt ?? 0} open estimates`,
+      link: "/estimating?status=sent",
+    },
+    {
+      id: "unpaid_invoices",
+      label: "Unpaid Invoices",
+      value: `$${((invoicesRow?.total ?? 0) / 1000).toFixed(0)}k`,
+      subtitle: invoiceSubtitle,
+      link: "/financial?tab=invoices&status=unpaid",
+      deltaDir: pastDueCount > 0 ? "down" : null,
+    },
+    {
+      id: "cash_this_week",
+      label: "Cash This Week",
+      value: `$${((cashThis) / 1000).toFixed(0)}k`,
+      subtitle: deltaDir ? `${deltaDir === "up" ? "↑" : "↓"}${deltaPct}% vs. last week` : "vs. last week",
+      link: "/financial?tab=payments",
+      deltaDir,
+      deltaPct,
+    },
+    {
+      id: "ytd_revenue",
+      label: "YTD Revenue",
+      value: `$${(ytdRevenue / 1000).toFixed(0)}k`,
+      subtitle: `$${(ytdExpenses / 1000).toFixed(0)}k expenses`,
+      link: "/financial",
+    },
+    {
+      id: "ytd_profit",
+      label: "YTD Profit",
+      value: `$${(ytdProfit / 1000).toFixed(0)}k`,
+      subtitle: `${ytdMarginPct}% margin`,
+      link: "/financial",
+      deltaDir: ytdProfit >= 0 ? "up" : "down",
+    },
+  ];
+
+  const result = { tiles };
+  cacheSet(kpiCache, "kpis", result);
+  return json(result);
+}
+
+// ── Action items handler ──────────────────────────────────────────────────
+
+interface ActionItem {
+  id: string;
+  priority: "high" | "medium" | "low";
+  type: string;
+  title: string;
+  meta: Record<string, unknown>;
+  link: string;
+  createdAt: string;
+}
+
+/** Days between two ISO date strings. */
+function daysBetween(a: string, b: string): number {
+  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000);
+}
+
+export async function handleDashboardActionItems(env: Env): Promise<Response> {
+  const today = todayUtc();
+  const dueSoonDate = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+
+  // All sub-queries run in parallel.
+  const [
+    pastDueInvoices,
+    dueSoonInvoices,
+    endingCycles,
+    newLeads,
+    followUpLeads,
+    pendingSocial,
+    pendingChangOrders,
+    warrantyJobs,
+    inProgressJobsWithEstimate,
+  ] = await Promise.all([
+    // HIGH: invoices past due
+    env.DB.prepare(
+      `SELECT i.id, i.job_id, i.due_date, i.total_due - COALESCE(i.paid_amount, 0) AS balance,
+              c.first_name, c.last_name
+       FROM invoices i
+       JOIN clients c ON i.client_id = c.id
+       WHERE i.status = 'past_due'
+       ORDER BY i.due_date ASC LIMIT 10`
+    ).all<{ id: string; job_id: string; due_date: string; balance: number; first_name: string; last_name: string }>(),
+
+    // MEDIUM: invoices due in 2 days
+    env.DB.prepare(
+      `SELECT i.id, i.job_id, i.due_date, i.total_due - COALESCE(i.paid_amount, 0) AS balance,
+              c.first_name, c.last_name
+       FROM invoices i
+       JOIN clients c ON i.client_id = c.id
+       WHERE i.status IN ('sent','viewed','partial')
+         AND i.due_date = ?
+       ORDER BY i.due_date ASC LIMIT 10`,
+    ).bind(dueSoonDate).all<{ id: string; job_id: string; due_date: string; balance: number; first_name: string; last_name: string }>(),
+
+    // MEDIUM: billing cycles ending within 2 days
+    env.DB.prepare(
+      `SELECT bc.id, bc.job_id, bc.period_end, j.title as job_title
+       FROM billing_cycles bc
+       JOIN jobs j ON bc.job_id = j.id
+       WHERE bc.status = 'active'
+         AND bc.period_end <= ?
+       ORDER BY bc.period_end ASC LIMIT 10`,
+    ).bind(dueSoonDate).all<{ id: string; job_id: string; period_end: string; job_title: string }>(),
+
+    // MEDIUM: new leads (last 7 days)
+    env.DB.prepare(
+      `SELECT er.id, c.first_name, c.last_name, er.lead_source, er.created_at
+       FROM estimate_requests er
+       JOIN clients c ON er.client_id = c.id
+       WHERE er.status = 'new_request'
+         AND er.created_at >= datetime('now', '-7 days')
+       ORDER BY er.created_at ASC LIMIT 10`,
+    ).all<{ id: string; first_name: string; last_name: string; lead_source: string; created_at: string }>(),
+
+    // MEDIUM: follow-up due
+    env.DB.prepare(
+      `SELECT er.id, c.first_name, c.last_name, er.created_at
+       FROM estimate_requests er
+       JOIN clients c ON er.client_id = c.id
+       WHERE er.status = 'follow_up'
+       ORDER BY er.created_at ASC LIMIT 10`,
+    ).all<{ id: string; first_name: string; last_name: string; created_at: string }>(),
+
+    // LOW: social posts pending approval
+    env.DB.prepare(
+      `SELECT id, caption, created_at FROM social_posts
+       WHERE status = 'pending_approval'
+       ORDER BY created_at ASC LIMIT 5`,
+    ).all<{ id: string; caption: string; created_at: string }>(),
+
+    // LOW: change orders pending signature
+    env.DB.prepare(
+      `SELECT co.id, co.title, co.job_id, co.created_at, j.title as job_title
+       FROM change_orders co
+       JOIN jobs j ON co.job_id = j.id
+       WHERE co.status = 'sent'
+         AND co.client_signature IS NULL
+       ORDER BY co.created_at ASC LIMIT 5`,
+    ).all<{ id: string; title: string; job_id: string; created_at: string; job_title: string }>(),
+
+    // LOW: warranty 11-month reminder (335–395 days post-completion)
+    env.DB.prepare(
+      `SELECT id, title, actual_end_date
+       FROM jobs
+       WHERE status = 'complete'
+         AND actual_end_date <= date('now', '-335 days')
+         AND actual_end_date >= date('now', '-395 days')
+       ORDER BY actual_end_date ASC LIMIT 5`,
+    ).all<{ id: string; title: string; actual_end_date: string }>(),
+
+    // For budget alerts — in-progress jobs with an estimate
+    env.DB.prepare(
+      `SELECT id, title, estimate_id FROM jobs
+       WHERE status = 'in_progress'
+         AND estimate_id IS NOT NULL
+       LIMIT 20`,
+    ).all<{ id: string; title: string; estimate_id: string }>(),
+  ]);
+
+  const items: ActionItem[] = [];
+
+  // HIGH: invoice_past_due
+  for (const inv of pastDueInvoices.results ?? []) {
+    const clientName = `${inv.first_name ?? ""} ${inv.last_name ?? ""}`.trim();
+    const days = inv.due_date ? daysBetween(inv.due_date, today) : 0;
+    const amount = `$${Number(inv.balance).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    items.push({
+      id: `invoice_past_due_${inv.id}`,
+      priority: "high",
+      type: "invoice_past_due",
+      title: `Invoice past due: ${clientName} — ${amount} (${days} days)`,
+      meta: { invoiceId: inv.id, jobId: inv.job_id, balance: inv.balance, days },
+      link: `/jobs/${inv.job_id}`,
+      createdAt: inv.due_date ?? today,
+    });
+  }
+
+  // MEDIUM: invoice_due_soon
+  for (const inv of dueSoonInvoices.results ?? []) {
+    const clientName = `${inv.first_name ?? ""} ${inv.last_name ?? ""}`.trim();
+    const amount = `$${Number(inv.balance).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    items.push({
+      id: `invoice_due_soon_${inv.id}`,
+      priority: "medium",
+      type: "invoice_due_soon",
+      title: `Invoice due in 2 days: ${clientName} — ${amount}`,
+      meta: { invoiceId: inv.id, jobId: inv.job_id, balance: inv.balance },
+      link: `/jobs/${inv.job_id}`,
+      createdAt: inv.due_date ?? today,
+    });
+  }
+
+  // MEDIUM: cost_plus_cycle
+  for (const cycle of endingCycles.results ?? []) {
+    items.push({
+      id: `cost_plus_cycle_${cycle.id}`,
+      priority: "medium",
+      type: "cost_plus_cycle",
+      title: `Cost-plus cycle ending: ${cycle.job_title} — reconcile by ${cycle.period_end}`,
+      meta: { cycleId: cycle.id, jobId: cycle.job_id, periodEnd: cycle.period_end },
+      link: `/jobs/${cycle.job_id}`,
+      createdAt: cycle.period_end,
+    });
+  }
+
+  // MEDIUM: new_lead
+  for (const lead of newLeads.results ?? []) {
+    const clientName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
+    items.push({
+      id: `new_lead_${lead.id}`,
+      priority: "medium",
+      type: "new_lead",
+      title: `New lead: ${clientName} — ${lead.lead_source ?? "unknown source"}`,
+      meta: { requestId: lead.id, leadSource: lead.lead_source },
+      link: "/estimating",
+      createdAt: lead.created_at,
+    });
+  }
+
+  // MEDIUM: follow_up_due
+  for (const lead of followUpLeads.results ?? []) {
+    const clientName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
+    items.push({
+      id: `follow_up_due_${lead.id}`,
+      priority: "medium",
+      type: "follow_up_due",
+      title: `Quote follow-up due: ${clientName}`,
+      meta: { requestId: lead.id },
+      link: "/estimating",
+      createdAt: lead.created_at,
+    });
+  }
+
+  // MEDIUM: job_budget_alert — use buildJobCosting for each in-progress job
+  // Capped to first 10 jobs to stay within budget on every dashboard load.
+  const budgetJobs = (inProgressJobsWithEstimate.results ?? []).slice(0, 10);
+  const budgetAlerts: ActionItem[] = [];
+  await Promise.allSettled(
+    budgetJobs.map(async (j) => {
+      try {
+        const costing = await buildJobCosting(env, j.id);
+        if (!costing.has_budget) return;
+        for (const line of costing.lines) {
+          if (line.budget > 0 && line.actual > line.budget * 1.1) {
+            const overPct = Math.round(((line.actual - line.budget) / line.budget) * 100);
+            budgetAlerts.push({
+              id: `job_budget_alert_${j.id}_${line.line_item_id}`,
+              priority: "medium",
+              type: "job_budget_alert",
+              title: `Budget alert: ${j.title} — over on ${line.name} by ${overPct}%`,
+              meta: { jobId: j.id, lineItemId: line.line_item_id, overPct },
+              link: `/jobs/${j.id}`,
+              createdAt: today,
+            });
+          }
+        }
+      } catch {
+        // Per spec: budget alert failures must not crash other action items.
+      }
+    })
+  );
+  items.push(...budgetAlerts);
+
+  // LOW: social_approval
+  for (const post of pendingSocial.results ?? []) {
+    const preview = (post.caption ?? "").slice(0, 60);
+    items.push({
+      id: `social_approval_${post.id}`,
+      priority: "low",
+      type: "social_approval",
+      title: `Social post ready for approval: ${preview}${preview.length === 60 ? "…" : ""}`,
+      meta: { postId: post.id },
+      link: "/social",
+      createdAt: post.created_at,
+    });
+  }
+
+  // LOW: change_order_pending
+  for (const co of pendingChangOrders.results ?? []) {
+    items.push({
+      id: `change_order_pending_${co.id}`,
+      priority: "low",
+      type: "change_order_pending",
+      title: `Change order pending signature: ${co.job_title} — ${co.title}`,
+      meta: { changeOrderId: co.id, jobId: co.job_id },
+      link: `/jobs/${co.job_id}`,
+      createdAt: co.created_at,
+    });
+  }
+
+  // LOW: warranty_checkin
+  for (const job of warrantyJobs.results ?? []) {
+    items.push({
+      id: `warranty_checkin_${job.id}`,
+      priority: "low",
+      type: "warranty_checkin",
+      title: `Warranty reminder: ${job.title} — 11-month check-in`,
+      meta: { jobId: job.id, actualEndDate: job.actual_end_date },
+      link: `/jobs/${job.id}`,
+      createdAt: job.actual_end_date ?? today,
+    });
+  }
+
+  // Sort: high → medium → low, then oldest-first within each tier.
+  const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
+  items.sort((a, b) => {
+    const pd = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+    if (pd !== 0) return pd;
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+  });
+
+  return json({ items: items.slice(0, 8) });
+}
+
+// ── Pipeline handler ───────────────────────────────────────────────────────
+
+const LEAD_STATUS_LABELS: Record<string, string> = {
+  new_request: "New Leads",
+  appointment_set: "Appt Set",
+  visit_done: "Visit Done",
+  building: "Building",
+  sent: "Estimate Sent",
+  follow_up: "Follow Up",
+};
+
+const JOB_STATUS_LABELS: Record<string, string> = {
+  deposit_paid: "Deposit Paid",
+  scheduled: "Scheduled",
+  in_progress: "In Progress",
+  punch_list: "Punch List",
+  complete: "Complete",
+};
+
+interface PipelineStage {
+  status: string;
+  label: string;
+  count: number;
+}
+
+export async function handleDashboardPipeline(env: Env): Promise<Response> {
+  const cached = cacheGet<unknown>(pipelineCache, "pipeline");
+  if (cached) return json(cached);
+
+  const week = currentWeekRange();
+
+  const [leadRows, jobRows, convRows, unpaidRow] = await Promise.all([
+    env.DB.prepare(
+      `SELECT status, COUNT(*) as count
+       FROM estimate_requests
+       WHERE status NOT IN ('converted', 'lost', 'cancelled')
+       GROUP BY status`
+    ).all<{ status: string; count: number }>(),
+    env.DB.prepare(
+      `SELECT status, COUNT(*) as count
+       FROM jobs
+       WHERE status NOT IN ('closed')
+       GROUP BY status`
+    ).all<{ status: string; count: number }>(),
+    env.DB.prepare(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'converted') as converted,
+         COUNT(*) as total
+       FROM estimate_requests
+       WHERE created_at >= ?`
+    ).bind(week.start).first<{ converted: number; total: number }>(),
+    env.DB.prepare(
+      `SELECT COALESCE(SUM(total_due - COALESCE(paid_amount, 0)), 0) as unpaid
+       FROM invoices WHERE status IN ('sent', 'viewed', 'partial', 'past_due')`
+    ).first<{ unpaid: number }>(),
+  ]);
+
+  // Map lead stages in order.
+  const leadOrder = ["new_request", "appointment_set", "visit_done", "building", "sent", "follow_up"];
+  const leadCountMap = new Map((leadRows.results ?? []).map((r) => [r.status, r.count]));
+  const leads: PipelineStage[] = leadOrder
+    .filter((s) => LEAD_STATUS_LABELS[s])
+    .map((s) => ({ status: s, label: LEAD_STATUS_LABELS[s]!, count: leadCountMap.get(s) ?? 0 }));
+
+  // Map job stages in order.
+  const jobOrder = ["deposit_paid", "scheduled", "in_progress", "punch_list", "complete"];
+  const jobCountMap = new Map((jobRows.results ?? []).map((r) => [r.status, r.count]));
+  const jobs: PipelineStage[] = jobOrder
+    .filter((s) => JOB_STATUS_LABELS[s])
+    .map((s) => ({ status: s, label: JOB_STATUS_LABELS[s]!, count: jobCountMap.get(s) ?? 0 }));
+
+  const total = convRows?.total ?? 0;
+  const converted = convRows?.converted ?? 0;
+  const conversionRate = total > 0 ? Math.round((converted / total) * 100) : 0;
+  const unpaidTotal = unpaidRow?.unpaid ?? 0;
+
+  const result = { leads, jobs, conversionRate, unpaidTotal };
+  cacheSet(pipelineCache, "pipeline", result);
+  return json(result);
+}
+
+// ── Schedule handler ───────────────────────────────────────────────────────
+
+interface ScheduleEntry {
+  type: "schedule" | "appointment";
+  id: string;
+  startTime: string | null;
+  label: string;
+  description: string | null;
+  link: string;
+}
+
+export async function handleDashboardSchedule(env: Env): Promise<Response> {
+  const today = todayUtc();
+
+  const [schedRows, apptRows] = await Promise.all([
+    env.DB.prepare(
+      `SELECT se.id, se.start_time, se.trade_or_work, j.title as job_title, j.id as job_id, j.job_number
+       FROM schedule_entries se
+       JOIN jobs j ON se.job_id = j.id
+       WHERE se.scheduled_date = ?
+         AND se.status != 'cancelled'
+       ORDER BY se.start_time ASC`,
+    ).bind(today).all<{ id: string; start_time: string; trade_or_work: string; job_title: string; job_id: string; job_number: string }>(),
+
+    env.DB.prepare(
+      `SELECT er.id, er.appointment_date, c.first_name, c.last_name, er.property_address
+       FROM estimate_requests er
+       JOIN clients c ON er.client_id = c.id
+       WHERE DATE(er.appointment_date) = ?
+         AND er.status NOT IN ('converted', 'lost', 'cancelled')
+       ORDER BY er.appointment_date ASC`,
+    ).bind(today).all<{ id: string; appointment_date: string; first_name: string; last_name: string; property_address: string }>(),
+  ]);
+
+  const entries: ScheduleEntry[] = [];
+
+  for (const row of schedRows.results ?? []) {
+    entries.push({
+      type: "schedule",
+      id: row.id,
+      startTime: row.start_time ?? null,
+      label: row.job_title ?? `Job #${row.job_number}`,
+      description: row.trade_or_work ?? null,
+      link: `/jobs/${row.job_id}`,
+    });
+  }
+
+  for (const row of apptRows.results ?? []) {
+    const clientName = `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim();
+    entries.push({
+      type: "appointment",
+      id: row.id,
+      startTime: null, // estimate_requests has no appointment_time column
+      label: `Estimate appointment: ${clientName}`,
+      description: row.property_address ?? null,
+      link: "/estimating",
+    });
+  }
+
+  // Sort by startTime (nulls last).
+  entries.sort((a, b) => {
+    if (!a.startTime && !b.startTime) return 0;
+    if (!a.startTime) return 1;
+    if (!b.startTime) return -1;
+    return a.startTime.localeCompare(b.startTime);
+  });
+
+  return json({ entries });
+}
+
+// ── Activity handler ───────────────────────────────────────────────────────
+
+interface ActivityEntry {
+  id: string;
+  icon: string;
+  description: string;
+  createdAt: string;
+  link: string | null;
+}
+
+const ACTION_MAP: Record<string, { icon: string; template: string }> = {
+  payment_received: { icon: "💰", template: "Payment received" },
+  invoice_paid: { icon: "💰", template: "Invoice paid" },
+  estimate_request_created: { icon: "📋", template: "New lead" },
+  estimate_sent: { icon: "📋", template: "Estimate sent" },
+  job_status_changed: { icon: "🏗️", template: "Job status changed" },
+  task_completed: { icon: "✅", template: "Task completed" },
+  smart_note_processed: { icon: "📝", template: "Smart Note processed" },
+  change_order_approved: { icon: "📄", template: "Change order approved" },
+  photo_uploaded: { icon: "📷", template: "Photos added" },
+  document_uploaded: { icon: "📄", template: "Document uploaded" },
+  job_created: { icon: "🏗️", template: "Job created" },
+  invoice_created: { icon: "💰", template: "Invoice created" },
+  payment_recorded: { icon: "💰", template: "Payment recorded" },
+};
+
+function describeAction(action: string, details: string | null, entityType: string | null): string {
+  const entry = ACTION_MAP[action];
+  if (entry) return entry.template;
+  // Fallback: humanise the raw action string.
+  return action.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function iconForAction(action: string): string {
+  return ACTION_MAP[action]?.icon ?? "🔔";
+}
+
+function linkForEntry(entityType: string | null, entityId: string | null): string | null {
+  if (!entityType || !entityId) return null;
+  switch (entityType) {
+    case "job": return `/jobs/${entityId}`;
+    case "invoice": return "/financial?tab=invoices";
+    case "payment": return "/financial?tab=payments";
+    case "estimate_request": return `/estimating/${entityId}`;
+    case "smart_note": return null;
+    default: return null;
+  }
+}
+
+export async function handleDashboardActivity(env: Env): Promise<Response> {
+  const [auditRows, bellCountRow] = await Promise.all([
+    env.DB.prepare(
+      `SELECT id, action, entity_type, entity_id, details, created_at
+       FROM audit_logs
+       ORDER BY created_at DESC
+       LIMIT 10`
+    ).all<{ id: string; action: string; entity_type: string | null; entity_id: string | null; details: string | null; created_at: string }>(),
+
+    env.DB.prepare(
+      `SELECT COUNT(*) as cnt
+       FROM notification_logs
+       WHERE created_at >= datetime('now', '-24 hours')
+         AND status IN ('sent', 'delivered')`
+    ).first<{ cnt: number }>(),
+  ]);
+
+  const entries: ActivityEntry[] = (auditRows.results ?? []).map((row) => ({
+    id: row.id,
+    icon: iconForAction(row.action),
+    description: describeAction(row.action, row.details, row.entity_type),
+    createdAt: row.created_at,
+    link: linkForEntry(row.entity_type, row.entity_id),
+  }));
+
+  const bellCount = bellCountRow?.cnt ?? 0;
+
+  return json({ entries, bellCount });
+}
+
+// ── Main router ────────────────────────────────────────────────────────────
+
+export async function handleDashboard(env: Env, url: URL): Promise<Response | null> {
+  const path = url.pathname;
+
+  if (path === "/api/dashboard/kpis") return handleDashboardKpis(env);
+  if (path === "/api/dashboard/action-items") return handleDashboardActionItems(env);
+  if (path === "/api/dashboard/pipeline") return handleDashboardPipeline(env);
+  if (path === "/api/dashboard/schedule") return handleDashboardSchedule(env);
+  if (path === "/api/dashboard/activity") return handleDashboardActivity(env);
+
+  return null;
+}

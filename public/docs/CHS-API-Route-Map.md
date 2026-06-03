@@ -37,6 +37,18 @@ Role checks are documented per endpoint:
 
 ---
 
+## 0. Dashboard
+
+| Method | Route | Role | Description |
+|--------|-------|------|-------------|
+| GET | `/api/dashboard/kpis` | O/PM/OA | All 6 KPI tile values in one response. 5-minute in-memory cache. |
+| GET | `/api/dashboard/action-items` | O/PM/OA | Computed action items (9 types) sorted by priority then age. Cap 8 items. Fresh on every call. |
+| GET | `/api/dashboard/pipeline` | O/PM/OA | Lead + job pipeline stage counts, conversion rate, unpaid total. 5-minute cache. |
+| GET | `/api/dashboard/schedule` | O/PM/OA | Today's schedule entries + estimate appointments merged. Fresh on every call. |
+| GET | `/api/dashboard/activity` | O/PM/OA | Last 10 audit log entries + `bellCount` (24-hour notification approximation). Fresh on every call. |
+
+---
+
 ## 1. System & Admin
 
 ### Settings

@@ -1906,7 +1906,7 @@ async function handleHealth(env: Env): Promise<Response> {
 }
 
 // GET /api/health/heartbeat — lightweight readiness probe for the CHS
-// platform. Confirms D1 connectivity, reports how many of the 40 unified-schema
+// platform. Confirms D1 connectivity, reports how many of the 41 unified-schema
 // tables are present, and the number of seeded system settings.
 const PLATFORM_TABLES = [
   "users", "system_settings", "audit_logs", "integration_connections",
@@ -1920,6 +1920,7 @@ const PLATFORM_TABLES = [
   "notification_templates", "notification_logs",
   "social_posts", "content_schedules",
   "subcontractors", "smart_notes", "dead_letter_queue",
+  "device_tokens",
 ];
 
 async function handleHeartbeat(env: Env): Promise<Response> {

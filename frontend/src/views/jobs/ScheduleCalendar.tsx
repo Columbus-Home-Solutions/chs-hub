@@ -7,25 +7,13 @@ import { Spinner } from "../../components/ui/Spinner";
 import { go } from "../../lib/nav";
 import { formatDate, formatStatus } from "../../lib/format";
 import { useWeather, weatherEmoji } from "../../store/weather";
+import {
+  type CalendarEvent,
+  CALENDAR_LEGEND,
+  eventTypeLabel,
+  getCalendarColor,
+} from "../../lib/calendar-colors";
 
-/**
- * Schedule Calendar — cross-job view (Sprint 13, spec §5.5). Day / week / month,
- * color-coded by job. Click a day to see that day's work; click an entry to jump
- * to its job. Reuses the token-styled grid — no calendar library.
- */
-
-interface CalEntry {
-  id: string;
-  job_id: string;
-  job_title: string | null;
-  job_number: number | null;
-  scheduled_date: string | null;
-  trade_or_work: string | null;
-  sub_name: string | null;
-  start_time: string | null;
-  end_time: string | null;
-  status: string;
-}
 type Mode = "day" | "week" | "month";
 
 function iso(d: Date): string {
@@ -46,17 +34,21 @@ function monthGridRange(d: Date): { from: Date; to: Date } {
   const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
   return { from: startOfWeek(first), to: addDays(startOfWeek(last), 6) };
 }
-// Stable per-job hue so each job keeps one color across the grid.
-function jobHue(jobId: string): number {
-  let h = 0;
-  for (let i = 0; i < jobId.length; i++) h = (h * 31 + jobId.charCodeAt(i)) % 360;
-  return h;
+
+function formatEventTime(e: CalendarEvent): string {
+  if (e.start_time) return `${e.start_time}${e.end_time ? `–${e.end_time}` : ""}`;
+  return "";
+}
+
+function assigneeLabel(e: CalendarEvent): string | null {
+  return e.assigned_user_name ?? e.assigned_sub_name ?? null;
 }
 
 export function ScheduleCalendar(_props: RoutableProps) {
   const [mode, setMode] = useState<Mode>("month");
   const [anchor, setAnchor] = useState<Date>(new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [activeEvent, setActiveEvent] = useState<CalendarEvent | null>(null);
   const weather = useWeather();
   const forecastMap = useMemo(
     () => new Map((weather?.forecast ?? []).map((d) => [d.date, d])),
@@ -77,16 +69,15 @@ export function ScheduleCalendar(_props: RoutableProps) {
     return { from: g.from, to: g.to, gridFrom: g.from, gridTo: g.to };
   }, [mode, anchor]);
 
-  const { data, loading } = useApi<{ entries: CalEntry[] }>(
-    `/api/schedule?from=${iso(range.from)}&to=${iso(range.to)}`,
+  const { data, loading } = useApi<{ events: CalendarEvent[] }>(
+    `/api/calendar/events?from=${iso(range.from)}&to=${iso(range.to)}`,
   );
 
   const byDay = useMemo(() => {
-    const map = new Map<string, CalEntry[]>();
-    for (const e of data?.entries ?? []) {
-      if (!e.scheduled_date) continue;
-      if (!map.has(e.scheduled_date)) map.set(e.scheduled_date, []);
-      map.get(e.scheduled_date)!.push(e);
+    const map = new Map<string, CalendarEvent[]>();
+    for (const e of data?.events ?? []) {
+      if (!map.has(e.date)) map.set(e.date, []);
+      map.get(e.date)!.push(e);
     }
     return map;
   }, [data]);
@@ -109,18 +100,32 @@ export function ScheduleCalendar(_props: RoutableProps) {
 
   const selectedEntries = selectedDay ? byDay.get(selectedDay) ?? [] : [];
 
+  const openEvent = (e: CalendarEvent, ev: Event) => {
+    ev.stopPropagation();
+    setActiveEvent(e);
+  };
+
   return (
     <div class="view">
       <div class="view-header">
         <div>
           <h1 class="view-title">Schedule</h1>
-          <p class="view-subtitle">Cross-job calendar</p>
+          <p class="view-subtitle">Jobs, warranty calls, estimates &amp; meetings</p>
         </div>
         <div class="view-header__right flex gap-sm">
           <Button variant="tertiary" size="sm" onClick={() => go("/jobs")}>
             Jobs →
           </Button>
         </div>
+      </div>
+
+      <div class="cal-legend">
+        {CALENDAR_LEGEND.map((item) => (
+          <span class="cal-legend__item" key={item.label}>
+            <span class="cal-legend__dot" style={{ background: item.color }} />
+            {item.label}
+          </span>
+        ))}
       </div>
 
       <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap", marginBottom: "var(--space-md)" }}>
@@ -191,18 +196,17 @@ export function ScheduleCalendar(_props: RoutableProps) {
                     {entries.slice(0, mode === "month" ? 3 : 50).map((e) => (
                       <button
                         class="cal-chip"
-                        key={e.id}
-                        style={{ borderLeftColor: `hsl(${jobHue(e.job_id)}, 70%, 55%)` }}
-                        title={`${e.job_title ?? "Job"} · ${e.trade_or_work ?? ""}`}
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          go(`/jobs/${e.job_id}`);
-                        }}
+                        key={`${e.type}-${e.id}`}
+                        style={{ borderLeftColor: getCalendarColor(e) }}
+                        title={e.title}
+                        onClick={(ev) => openEvent(e, ev)}
                       >
-                        <span class="cal-chip__work">{e.trade_or_work}</span>
-                        <span class="cal-chip__job">
-                          {e.job_number != null ? `JOB-${String(e.job_number).padStart(3, "0")}` : ""}
-                        </span>
+                        <span class="cal-chip__work">{e.title}</span>
+                        {e.job_number != null && (
+                          <span class="cal-chip__job">
+                            JOB-{String(e.job_number).padStart(3, "0")}
+                          </span>
+                        )}
                       </button>
                     ))}
                     {mode === "month" && entries.length > 3 && (
@@ -216,28 +220,70 @@ export function ScheduleCalendar(_props: RoutableProps) {
         </div>
       )}
 
+      {activeEvent && (
+        <div class="cal-popover-backdrop" onClick={() => setActiveEvent(null)}>
+          <div class="cal-popover" onClick={(e) => e.stopPropagation()}>
+            <div class="cal-popover__title">{activeEvent.title}</div>
+            <div class="cal-popover__meta">
+              {eventTypeLabel(activeEvent.type)}
+              {activeEvent.date ? ` · ${formatDate(activeEvent.date)}` : ""}
+              {formatEventTime(activeEvent) ? ` · ${formatEventTime(activeEvent)}` : ""}
+            </div>
+            {assigneeLabel(activeEvent) && (
+              <div class="cal-popover__meta">Assigned: {assigneeLabel(activeEvent)}</div>
+            )}
+            {activeEvent.description && (
+              <div class="cal-popover__desc">{activeEvent.description}</div>
+            )}
+            <div class="flex gap-sm" style={{ marginTop: "var(--space-sm)" }}>
+              {activeEvent.meet_link && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => window.open(activeEvent.meet_link!, "_blank", "noopener,noreferrer")}
+                >
+                  Join Meeting
+                </Button>
+              )}
+              {activeEvent.link_path && (
+                <Button variant="secondary" size="sm" onClick={() => go(activeEvent.link_path!)}>
+                  View details
+                </Button>
+              )}
+              <Button variant="tertiary" size="sm" onClick={() => setActiveEvent(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedDay && (
-        <Card title={`Work on ${formatDate(selectedDay)}`}>
+        <Card title={`Events on ${formatDate(selectedDay)}`}>
           {selectedEntries.length === 0 ? (
             <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-              No scheduled work this day.
+              Nothing scheduled this day.
             </p>
           ) : (
             <div class="invoice-list">
               {selectedEntries.map((e) => (
-                <div class="invoice-row" key={e.id} onClick={() => go(`/jobs/${e.job_id}`)} style={{ cursor: "pointer" }}>
+                <div
+                  class="invoice-row"
+                  key={`${e.type}-${e.id}`}
+                  onClick={() => setActiveEvent(e)}
+                  style={{ cursor: "pointer" }}
+                >
                   <div class="invoice-row__main">
                     <div class="invoice-row__title">
-                      <span style={{ color: `hsl(${jobHue(e.job_id)}, 70%, 60%)` }}>●</span> {e.trade_or_work}
+                      <span style={{ color: getCalendarColor(e) }}>●</span> {e.title}
                     </div>
                     <div class="invoice-row__meta">
-                      {e.job_number != null ? `JOB-${String(e.job_number).padStart(3, "0")} · ` : ""}
-                      {e.job_title ?? ""}
-                      {e.start_time ? ` · ${e.start_time}${e.end_time ? `–${e.end_time}` : ""}` : ""}
-                      {e.sub_name ? ` · ${e.sub_name}` : ""}
+                      {eventTypeLabel(e.type)}
+                      {e.job_number != null ? ` · JOB-${String(e.job_number).padStart(3, "0")}` : ""}
+                      {formatEventTime(e) ? ` · ${formatEventTime(e)}` : ""}
+                      {assigneeLabel(e) ? ` · ${assigneeLabel(e)}` : ""}
                     </div>
                   </div>
-                  <span class={`er-status`}>{formatStatus(e.status)}</span>
                 </div>
               ))}
             </div>

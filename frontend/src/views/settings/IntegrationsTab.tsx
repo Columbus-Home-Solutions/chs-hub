@@ -26,6 +26,7 @@ const SERVICE_META: Record<string, { label: string; icon: string }> = {
   instagram: { label: "Instagram", icon: "📸" },
   wc_spreadsheet: { label: "WC Spreadsheet", icon: "📊" },
   google_drive: { label: "Google Drive", icon: "🗂️" },
+  google_calendar: { label: "Google Calendar", icon: "📆" },
 };
 
 function statusTone(s: string): "success" | "warning" | "error" | "neutral" {
@@ -51,18 +52,61 @@ export function IntegrationsTab() {
   const [busy, setBusy] = useState<string | null>(null);
   const [imageGenBusy, setImageGenBusy] = useState(false);
   const [socialTestBusy, setSocialTestBusy] = useState(false);
+  const [gcal, setGcal] = useState<{
+    connected: boolean;
+    status: string;
+    last_sync: string | null;
+    credentials_present: boolean;
+    client_id_configured: boolean;
+    client_secret_configured: boolean;
+  } | null>(null);
+  const [icalUrl, setIcalUrl] = useState<string | null>(null);
+  const [gcalBusy, setGcalBusy] = useState(false);
+  const [icalBusy, setIcalBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [integrations, status, socialStatus, settings] = await Promise.all([
+      const results = await Promise.allSettled([
         api.get<{ integrations: Connection[] }>("/api/integrations"),
         api.get<{ credentials_present: boolean; enabled: boolean }>("/api/integrations/image-gen/status"),
         api.get<{ connected: boolean; publish_mode: "live" | "simulate"; page_label: string }>(
           "/api/social/status",
         ),
         api.get<{ settings: Array<{ key: string; value: string; value_type: string }> }>("/api/settings"),
+        api.get<{
+          connected: boolean;
+          status: string;
+          last_sync: string | null;
+          credentials_present: boolean;
+          client_id_configured: boolean;
+          client_secret_configured: boolean;
+        }>("/api/google-calendar/status"),
+        api.get<{ url: string }>("/api/calendar/ical/settings"),
       ]);
+
+      const pick = <T,>(i: number, fallback: T): T =>
+        results[i]?.status === "fulfilled" ? (results[i] as PromiseFulfilledResult<T>).value : fallback;
+
+      const integrations = pick(0, { integrations: [] as Connection[] });
+      const status = pick(1, { credentials_present: false, enabled: false });
+      const socialStatus = pick(2, { connected: false, publish_mode: "simulate" as const, page_label: "" });
+      const settings = pick(3, { settings: [] as Array<{ key: string; value: string; value_type: string }> });
+      const gcalStatus = pick(4, {
+        connected: false,
+        status: "disconnected",
+        last_sync: null,
+        credentials_present: false,
+        client_id_configured: false,
+        client_secret_configured: false,
+      });
+      const icalSettings = pick(5, { url: null as string | null });
+
+      const failed = results.filter((r) => r.status === "rejected");
+      if (failed.length > 0) {
+        toast.push("error", errMsg((failed[0] as PromiseRejectedResult).reason));
+      }
+
       setConnections(integrations.integrations);
       const setting = settings.settings.find((s) => s.key === "image_gen_enabled");
       setImageGen({
@@ -74,6 +118,8 @@ export function IntegrationsTab() {
         publish_mode: socialStatus.publish_mode,
         page_label: socialStatus.page_label,
       });
+      setGcal(gcalStatus);
+      setIcalUrl(icalSettings.url);
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -124,6 +170,55 @@ export function IntegrationsTab() {
       toast.push("error", errMsg(e));
     } finally {
       setSocialTestBusy(false);
+    }
+  };
+
+  const connectGcal = async () => {
+    setGcalBusy(true);
+    try {
+      const r = await api.post<{ authorize_url: string }>("/api/integrations/google-calendar/connect");
+      window.open(r.authorize_url, "_blank", "noopener,noreferrer");
+      toast.push("info", "Complete Google authorization in the new tab, then refresh this page.");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const syncGcal = async () => {
+    setGcalBusy(true);
+    try {
+      const r = await api.post<{ ok: boolean; upserted?: number }>("/api/google-calendar/sync");
+      toast.push("success", r.ok ? `Synced ${r.upserted ?? 0} Meet event(s)` : "Sync failed");
+      void load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const copyIcal = async () => {
+    if (!icalUrl) return;
+    try {
+      await navigator.clipboard.writeText(icalUrl);
+      toast.push("success", "iCal URL copied");
+    } catch {
+      toast.push("error", "Could not copy — select and copy manually");
+    }
+  };
+
+  const regenerateIcal = async () => {
+    setIcalBusy(true);
+    try {
+      const r = await api.post<{ url: string }>("/api/calendar/ical/regenerate");
+      setIcalUrl(r.url);
+      toast.push("success", "New iCal URL generated — update Google Calendar subscription");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setIcalBusy(false);
     }
   };
 
@@ -211,6 +306,94 @@ export function IntegrationsTab() {
               onChange={() => void toggleImageGen()}
             />
             {imageGenBusy && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>Saving…</span>}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style={{ marginBottom: "var(--space-md)" }}>
+        <div class="card__body">
+          <div class="flex items-center gap-sm" style={{ justifyContent: "space-between" }}>
+            <div class="flex items-center gap-sm">
+              <span style={{ fontSize: "1.4rem" }}>📆</span>
+              <strong>Google Calendar (Meet events)</strong>
+            </div>
+            <Badge tone={gcal?.connected ? "success" : "neutral"}>
+              {gcal?.connected ? "Connected" : gcal?.credentials_present ? "Not connected" : "Not configured"}
+            </Badge>
+          </div>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
+            Read-only sync of Google Meet events into CHS. Uses the same Google OAuth Web client as dashboard
+            sign-in.
+          </p>
+          {gcal && !gcal.credentials_present && (
+            <div
+              class="text--muted"
+              style={{
+                fontSize: "var(--text-sm)",
+                marginBottom: "var(--space-sm)",
+                padding: "var(--space-sm)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "var(--radius-sm)",
+              }}
+            >
+              <strong style={{ color: "var(--color-text-primary)" }}>Setup required before Connect works:</strong>
+              <ul style={{ margin: "var(--space-xs) 0 0", paddingLeft: "1.2rem" }}>
+                <li>
+                  Client ID ({gcal.client_id_configured ? "✓ set" : "✗ missing"}):{" "}
+                  <code>DASHBOARD_OAUTH_CLIENT_ID</code> in wrangler.toml
+                </li>
+                <li>
+                  Client secret ({gcal.client_secret_configured ? "✓ set" : "✗ missing or empty"}): run{" "}
+                  <code>npx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET</code> and paste the secret from Google
+                  Cloud → Credentials → your Web client
+                </li>
+              </ul>
+            </div>
+          )}
+          {gcal?.last_sync && (
+            <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
+              Last sync: {new Date(gcal.last_sync).toLocaleString()}
+            </p>
+          )}
+          <div class="flex gap-sm" style={{ marginTop: "var(--space-sm)" }}>
+            {!gcal?.connected ? (
+              <Button size="sm" variant="primary" disabled={gcalBusy || !gcal?.credentials_present} onClick={() => void connectGcal()}>
+                Connect Google Calendar
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void syncGcal()}>
+                  Sync now
+                </Button>
+                <Button size="sm" variant="tertiary" disabled={busy === "google_calendar"} onClick={() => void disconnect("google_calendar")}>
+                  Disconnect
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style={{ marginBottom: "var(--space-md)" }}>
+        <div class="card__body">
+          <div class="flex items-center gap-sm">
+            <span style={{ fontSize: "1.4rem" }}>🔗</span>
+            <strong>iCal feed (CHS → Google Calendar)</strong>
+          </div>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
+            Paste this URL into Google Calendar → Other calendars → From URL. Includes scheduled jobs, warranty
+            calls, and estimate visits.
+          </p>
+          {icalUrl && (
+            <input class="input" readOnly value={icalUrl} style={{ fontSize: "var(--text-xs)", marginBottom: "var(--space-sm)" }} />
+          )}
+          <div class="flex gap-sm">
+            <Button size="sm" variant="secondary" disabled={!icalUrl} onClick={() => void copyIcal()}>
+              Copy URL
+            </Button>
+            <Button size="sm" variant="tertiary" disabled={icalBusy} onClick={() => void regenerateIcal()}>
+              Regenerate token
+            </Button>
           </div>
         </div>
       </div>

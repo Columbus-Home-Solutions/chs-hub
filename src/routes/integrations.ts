@@ -46,6 +46,11 @@ import {
 } from "../lib/qbo-sync.js";
 import { resolveGoogleServiceAccount } from "../lib/image-gen.js";
 import { getSetting, SETTING_IMAGE_GEN_ENABLED } from "../lib/social.js";
+import { GCAL_SERVICE } from "../lib/google-calendar-auth.js";
+import {
+  handleGcalConnect,
+  handleGcalDisconnect,
+} from "./google-calendar.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -370,6 +375,7 @@ export async function handleIntegrationConnect(
   service: string,
 ): Promise<Response> {
   if (service === QBO_SERVICE) return handleQboConnect(request, env);
+  if (service === GCAL_SERVICE) return handleGcalConnect(request, env);
 
   let body: { configuration?: Record<string, unknown> } = {};
   try {
@@ -411,6 +417,7 @@ export async function handleIntegrationDisconnect(
   service: string,
 ): Promise<Response> {
   if (service === QBO_SERVICE) return handleQboDisconnect(request, env);
+  if (service === GCAL_SERVICE) return handleGcalDisconnect(request, env);
 
   const now = new Date().toISOString();
   await env.DB.prepare(

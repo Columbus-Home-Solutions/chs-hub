@@ -125,6 +125,8 @@ const ROUTE_RULES: RouteRule[] = [
   { method: "*", pattern: /^\/api\/users(\/.*)?$/, roles: O }, // user management CRUD
   { method: "*", pattern: /^\/api\/settings(\/.*)?$/, roles: O }, // system settings
   { method: "*", pattern: /^\/api\/integrations(\/.*)?$/, roles: O },
+  { method: "*", pattern: /^\/api\/google-calendar(\/.*)?$/, roles: O },
+  { method: "*", pattern: /^\/api\/calendar\/ical(\/.*)?$/, roles: O },
   { method: "GET", pattern: /^\/api\/social\/(status|test-connection)$/, roles: O },
   { method: "*", pattern: /^\/api\/quickbooks(\/.*)?$/, roles: O },
   { method: "*", pattern: /^\/api\/wc-spreadsheet(\/.*)?$/, roles: O },
@@ -144,6 +146,10 @@ const ROUTE_RULES: RouteRule[] = [
   { method: "*", pattern: /^\/api\/estimate-requests(\/.*)?$/, roles: O_PM },
   { method: "*", pattern: /^\/api\/line-items(\/.*)?$/, roles: O_PM },
   { method: "*", pattern: /^\/api\/sub-items(\/.*)?$/, roles: O_PM },
+
+  { method: "POST", pattern: /^\/api\/warranty-calls(\/.*)?$/, roles: O_PM_OA },
+  { method: "PATCH", pattern: /^\/api\/warranty-calls(\/.*)?$/, roles: O_PM_OA },
+  { method: "DELETE", pattern: /^\/api\/warranty-calls(\/.*)?$/, roles: O_PM_OA },
 
   // ── Social media engine — OWNER + PM ───────────────────────────────────────
   { method: "*", pattern: /^\/api\/social-posts(\/.*)?$/, roles: O_PM },
@@ -190,6 +196,7 @@ const RBAC_EXEMPT_EXACT = new Set<string>([
   "/api/file-link", // create share link
   "/api/jobber/status",
   "/api/debug/sheets-inspect",
+  "/api/calendar/ical", // token-gated iCal feed (no Access)
 ]);
 
 /** Is this an /api path that the user-RBAC gate should evaluate? */

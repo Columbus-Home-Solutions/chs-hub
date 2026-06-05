@@ -17,6 +17,7 @@ import { FinancialTab } from "./FinancialTab";
 import { ChangeOrdersTab } from "./ChangeOrdersTab";
 import { ScheduleTab } from "./ScheduleTab";
 import { PermitsTab } from "./PermitsTab";
+import { WarrantyTab } from "./WarrantyTab";
 import { SmartNotesPanel } from "./SmartNotesPanel";
 import { QuickCaptureBar } from "./QuickCaptureBar";
 import { useToast } from "../../store/toast";
@@ -45,6 +46,7 @@ type TabKey =
   | "financial"
   | "change_orders"
   | "permits"
+  | "warranty"
   | "photos"
   | "documents"
   | "daily_logs"
@@ -58,6 +60,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "financial", label: "Financial" },
   { key: "change_orders", label: "Change Orders" },
   { key: "permits", label: "Permits" },
+  { key: "warranty", label: "Warranty" },
   { key: "photos", label: "Photos" },
   { key: "documents", label: "Documents" },
   { key: "daily_logs", label: "Daily Logs" },
@@ -168,6 +171,7 @@ export function JobDetail({ id }: DetailProps) {
         <ChangeOrdersTab jobId={id} portalToken={data.job.portal_token} />
       )}
       {tab === "permits" && id && <PermitsTab jobId={id} />}
+      {tab === "warranty" && id && <WarrantyTab jobId={id} />}
       {tab === "photos" && id && <PhotosTab jobId={id} />}
       {tab === "documents" && id && <DocumentsTab jobId={id} clientId={data.job.client_id} />}
       {tab === "daily_logs" && id && <DailyLogsTab jobId={id} />}

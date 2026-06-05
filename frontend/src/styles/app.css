@@ -2092,6 +2092,52 @@
 .cal-chip__work { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cal-chip__job { color: var(--color-text-muted); font-size: var(--text-xs); flex-shrink: 0; }
 
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-md);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+.cal-legend__item { display: inline-flex; align-items: center; gap: var(--space-2xs); }
+.cal-legend__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cal-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--space-md);
+}
+.cal-popover {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  max-width: 420px;
+  width: 100%;
+  padding: var(--space-md);
+}
+.cal-popover__title { font-weight: var(--weight-semibold); margin-bottom: var(--space-xs); }
+.cal-popover__meta { font-size: var(--text-sm); color: var(--color-text-secondary); }
+.cal-popover__desc { font-size: var(--text-sm); margin-top: var(--space-sm); }
+
+.schedule-row--static {
+  cursor: default;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
 /* ── Weather integration ─────────────────────────────────────────────────── */
 
 /* Calendar day cell weather indicator */

@@ -351,6 +351,26 @@ import {
   handlePermitUpdate,
   handlePermitDelete,
 } from "./routes/permits.js";
+import {
+  handleWarrantyCallsList,
+  handleWarrantyCallDetail,
+  handleWarrantyCallCreate,
+  handleWarrantyCallUpdate,
+  handleWarrantyCallDelete,
+  handleJobWarrantyCalls,
+} from "./routes/warranty-calls.js";
+import { handleCalendarEvents } from "./routes/calendar-events.js";
+import {
+  handleGcalStatus,
+  handleGcalEvents,
+  handleGcalSync,
+  handleGcalConnect,
+  handleGcalCallback,
+  handleGcalDisconnect,
+  handleDashboardMeetings,
+} from "./routes/google-calendar.js";
+import { handleIcalFeed, handleIcalSettings, handleIcalRegenerate } from "./routes/calendar-ical.js";
+import { syncGoogleCalendarEvents } from "./lib/google-calendar-sync.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 // ── Social Media Engine (Sprint 16) ─────────────────────────────────────────
 import {
@@ -731,10 +751,16 @@ export default {
     if (url.pathname === "/api/integrations/quickbooks/connect" && request.method === "POST") {
       return handleQboConnect(request, env);
     }
+    if (url.pathname === "/api/integrations/google-calendar/connect" && request.method === "POST") {
+      return handleGcalConnect(request, env);
+    }
     // Callback is Access-gated (browser redirect); matched before the generic
     // /api/integrations/:service detail route.
     if (url.pathname === "/api/integrations/quickbooks/callback" && request.method === "GET") {
       return handleQboCallback(request, env);
+    }
+    if (url.pathname === "/api/integrations/google-calendar/callback" && request.method === "GET") {
+      return handleGcalCallback(request, env);
     }
     if (url.pathname === "/api/integrations/quickbooks/disconnect" && request.method === "POST") {
       return handleQboDisconnect(request, env);
@@ -957,6 +983,11 @@ export default {
       if (request.method === "GET") return handleJobPermits(env, jid);
       if (request.method === "POST") return handlePermitCreate(request, env, jid);
     }
+    // Warranty calls per job.
+    const jobWarranty = url.pathname.match(/^\/api\/jobs\/([^/]+)\/warranty-calls$/);
+    if (jobWarranty && request.method === "GET") {
+      return handleJobWarrantyCalls(env, decodeURIComponent(jobWarranty[1]));
+    }
     const jobById = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (jobById) {
       const jid = decodeURIComponent(jobById[1]);
@@ -1007,6 +1038,27 @@ export default {
     }
 
     // ── Scheduling (Sprint 13) ───────────────────────────────────────
+    if (url.pathname === "/api/calendar/events" && request.method === "GET") {
+      return handleCalendarEvents(env, url);
+    }
+    if (url.pathname === "/api/calendar/ical" && request.method === "GET") {
+      return handleIcalFeed(env, url);
+    }
+    if (url.pathname === "/api/calendar/ical/settings" && request.method === "GET") {
+      return handleIcalSettings(request, env);
+    }
+    if (url.pathname === "/api/calendar/ical/regenerate" && request.method === "POST") {
+      return handleIcalRegenerate(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/status" && request.method === "GET") {
+      return handleGcalStatus(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/events" && request.method === "GET") {
+      return handleGcalEvents(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/sync" && request.method === "POST") {
+      return handleGcalSync(request, env);
+    }
     if (url.pathname === "/api/schedule" && request.method === "GET") {
       return handleScheduleFeed(env, url);
     }
@@ -1015,6 +1067,21 @@ export default {
       const sid = decodeURIComponent(scheduleById[1]);
       if (request.method === "PUT") return handleScheduleUpdate(request, env, sid);
       if (request.method === "DELETE") return handleScheduleDelete(request, env, sid);
+    }
+
+    // ── Warranty calls ─────────────────────────────────────────────────
+    if (url.pathname === "/api/warranty-calls" && request.method === "GET") {
+      return handleWarrantyCallsList(env, url);
+    }
+    if (url.pathname === "/api/warranty-calls" && request.method === "POST") {
+      return handleWarrantyCallCreate(request, env);
+    }
+    const warrantyById = url.pathname.match(/^\/api\/warranty-calls\/([^/]+)$/);
+    if (warrantyById) {
+      const wid = decodeURIComponent(warrantyById[1]);
+      if (request.method === "GET") return handleWarrantyCallDetail(env, wid);
+      if (request.method === "PATCH") return handleWarrantyCallUpdate(request, env, wid);
+      if (request.method === "DELETE") return handleWarrantyCallDelete(request, env, wid);
     }
 
     // ── Permits (Sprint 13) ──────────────────────────────────────────
@@ -1840,6 +1907,18 @@ async function runNotificationProcessor(env: Env): Promise<void> {
     }
   } catch (err) {
     console.error("[cron */15 * * * *] social_publish failed:", (err as Error).message);
+  }
+
+  // Google Calendar sync (Meet events only) — read-only, non-fatal.
+  try {
+    const g = await syncGoogleCalendarEvents(env);
+    if (g.fetched > 0 || g.deleted > 0) {
+      console.log(
+        `[cron */15 * * * *] gcal_sync: fetched=${g.fetched} upserted=${g.upserted} deleted=${g.deleted} in ${g.duration_ms}ms`,
+      );
+    }
+  } catch (err) {
+    console.error("[cron */15 * * * *] gcal_sync failed:", (err as Error).message);
   }
 }
 

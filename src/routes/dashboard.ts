@@ -14,6 +14,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { buildJobCosting, computeYtdEarnedRevenue, computeYtdOperatingCosts, jobCogsOnly } from "../lib/job-costing.js";
+import { handleDashboardMeetings } from "./google-calendar.js";
 
 const DISMISSED_SETTING_KEY = "dashboard_dismissed_action_items";
 const DISMISS_ROLES = ["owner", "office_admin"] as const;
@@ -813,6 +814,7 @@ export async function handleDashboard(
   if (path === "/api/dashboard/action-items") return handleDashboardActionItems(env);
   if (path === "/api/dashboard/pipeline") return handleDashboardPipeline(env);
   if (path === "/api/dashboard/schedule") return handleDashboardSchedule(env);
+  if (path === "/api/dashboard/meetings") return handleDashboardMeetings(env);
   if (path === "/api/dashboard/activity") return handleDashboardActivity(env);
 
   return null;

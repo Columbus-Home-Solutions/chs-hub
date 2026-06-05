@@ -19,6 +19,8 @@ import { JobPipeline } from "./views/jobs/JobPipeline";
 import { JobDetail } from "./views/jobs/JobDetail";
 import { JobMap } from "./views/jobs/JobMap";
 import { ScheduleCalendar } from "./views/jobs/ScheduleCalendar";
+import { WarrantyCalls } from "./views/warranty/WarrantyCalls";
+import { WarrantyCallDetail } from "./views/warranty/WarrantyCallDetail";
 import { NotificationSettings } from "./views/notifications/NotificationSettings";
 import { NotificationLogs } from "./views/notifications/NotificationLogs";
 import { SocialMedia } from "./views/social/SocialMedia";
@@ -48,6 +50,8 @@ export function AppRouter() {
       <JobPipeline path={`${BASE}/jobs`} />
       <JobMap path={`${BASE}/jobs/map`} />
       <ScheduleCalendar path={`${BASE}/schedule`} />
+      <WarrantyCalls path={`${BASE}/warranty-calls`} />
+      <WarrantyCallDetail path={`${BASE}/warranty-calls/:id`} />
       <JobDetail path={`${BASE}/jobs/:id`} />
       <FinancialDashboard path={`${BASE}/financial`} />
       <PhotoLibrary path={`${BASE}/photos`} />

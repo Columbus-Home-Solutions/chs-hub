@@ -12,6 +12,7 @@ import { PipelineSummary } from "./dashboard/PipelineSummary";
 import { LeadPipeline } from "./dashboard/LeadPipeline";
 import { SmartNotes } from "./dashboard/SmartNotes";
 import { TodaySchedule } from "./dashboard/TodaySchedule";
+import { UpcomingMeetings } from "./dashboard/UpcomingMeetings";
 import { RecentActivity } from "./dashboard/RecentActivity";
 import { JobsMapWidget } from "./dashboard/JobsMapWidget";
 import { WeatherForecastCard } from "./dashboard/WeatherForecastCard";
@@ -85,6 +86,7 @@ export function Dashboard(_props: RoutableProps) {
             loading={schedule.loading}
             error={schedule.error}
           />
+          <UpcomingMeetings />
           <SmartNotes />
           <JobsMapWidget />
           <RecentActivity

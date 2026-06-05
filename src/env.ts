@@ -24,6 +24,10 @@ export interface Env {
 
   // Dashboard `index.html` — replace %%OAUTH_CLIENT_ID%% at the edge (wrangler [vars]).
   DASHBOARD_OAUTH_CLIENT_ID?: string;
+  /** Google OAuth client secret for Calendar user OAuth (wrangler secret). */
+  GOOGLE_OAUTH_CLIENT_SECRET?: string;
+  /** Override redirect URI for Google Calendar OAuth callback. */
+  GOOGLE_CALENDAR_REDIRECT_URI?: string;
 
   /** Google Shared Drive ID (API `driveId`) — optional; enables D1/R2 → Drive mirror. */
   DRIVE_SHARED_DRIVE_ID?: string;

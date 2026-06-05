@@ -26,6 +26,8 @@ import {
   simulatedInstagram,
   publicImageUrl,
   publicPublishOrigin,
+  isScheduledDateDue,
+  scheduledDateForCompare,
   MAX_PUBLISH_ATTEMPTS,
   type PlatformOutcome,
 } from "../src/lib/social-publish";
@@ -256,6 +258,14 @@ describe("social-publish state machine (Sprint 16)", () => {
   it("composes caption + hashtags into the publish text", () => {
     expect(composePublishText("Hello", ["#A", "#B"])).toBe("Hello\n\n#A #B");
     expect(composePublishText("Hello", [])).toBe("Hello");
+  });
+
+  it("compares legacy sqlite datetime vs ISO scheduled_date reliably", () => {
+    const now = "2026-06-05T23:00:00.000Z";
+    expect(isScheduledDateDue("2026-06-05 22:35:40", now)).toBe(true);
+    expect(isScheduledDateDue("2026-06-05T22:35:40.000Z", now)).toBe(true);
+    expect(isScheduledDateDue("2026-06-06 08:00:00", now)).toBe(false);
+    expect(scheduledDateForCompare("2026-06-05 22:35:40")).toBe("2026-06-05T22:35:40Z");
   });
 
   it("pickHashtagsForPlatform caps facebook at 5 and instagram at 15", () => {

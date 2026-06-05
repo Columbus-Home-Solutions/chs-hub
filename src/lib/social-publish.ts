@@ -168,6 +168,17 @@ export function composePublishText(caption: string, hashtags: string[]): string 
   return tags ? `${caption}\n\n${tags}` : caption;
 }
 
+/** Normalize legacy `YYYY-MM-DD HH:MM:SS` rows to ISO for reliable string compare. */
+export function scheduledDateForCompare(scheduledDate: string): string {
+  const s = scheduledDate.trim();
+  if (s.includes("T")) return s;
+  return `${s.replace(" ", "T")}Z`;
+}
+
+export function isScheduledDateDue(scheduledDate: string, nowIso: string): boolean {
+  return scheduledDateForCompare(scheduledDate) <= nowIso;
+}
+
 // ─── mode resolution (env → settings → default) ───────────────────────────────
 
 export async function resolvePublishMode(env: Env): Promise<PublishMode> {
@@ -196,6 +207,14 @@ async function loadDlq(env: Env, postId: string): Promise<DlqRow | null> {
   )
     .bind(dlqId(postId))
     .first<DlqRow>();
+}
+
+async function recordPublishError(env: Env, postId: string, error: string): Promise<void> {
+  const msg = error.trim().slice(0, 2000);
+  if (!msg) return;
+  await env.DB.prepare("UPDATE social_posts SET rejection_reason = ? WHERE id = ?")
+    .bind(msg, postId)
+    .run();
 }
 
 async function upsertDlq(
@@ -458,7 +477,8 @@ export async function publishPost(
 
   if (decision.finalStatus === "published") {
     await env.DB.prepare(
-      "UPDATE social_posts SET status = 'published', published_date = datetime('now'), image_variation_index = 0 WHERE id = ?",
+      `UPDATE social_posts SET status = 'published', published_date = datetime('now'),
+              image_variation_index = 0, rejection_reason = NULL WHERE id = ?`,
     )
       .bind(postId)
       .run();
@@ -476,8 +496,10 @@ export async function publishPost(
   await upsertDlq(env, postId, nextRetryCount, decision.dlqStatus ?? "pending", decision.nextRetryAt, errorSummary);
 
   if (decision.exhausted) {
-    await env.DB.prepare("UPDATE social_posts SET status = 'failed' WHERE id = ?")
-      .bind(postId)
+    await env.DB.prepare(
+      "UPDATE social_posts SET status = 'failed', rejection_reason = ? WHERE id = ?",
+    )
+      .bind(errorSummary.slice(0, 2000) || "Publish failed after max retries.", postId)
       .run();
     await logSocialAudit(env, actor, "social_post_failed", postId, {
       mode,
@@ -493,6 +515,7 @@ export async function publishPost(
     return { ok: false, status: "failed", reason: errorSummary, outcomes, mode };
   }
 
+  await recordPublishError(env, postId, errorSummary);
   await logSocialAudit(env, actor, "social_post_publish_retry", postId, {
     mode,
     attempt: nextRetryCount,
@@ -503,6 +526,7 @@ export async function publishPost(
 }
 
 export interface PublishSweepStats {
+  eligible: number;
   scanned: number;
   published: number;
   retried: number;
@@ -512,12 +536,23 @@ export interface PublishSweepStats {
 }
 
 /**
+ * SQL expression: compare scheduled_date to now regardless of legacy
+ * `YYYY-MM-DD HH:MM:SS` vs ISO `...T...Z` storage formats.
+ */
+const SCHEDULED_DATE_COMPARE_SQL = `
+  CASE WHEN instr(s.scheduled_date, 'T') > 0
+       THEN s.scheduled_date
+       ELSE replace(s.scheduled_date, ' ', 'T') || 'Z'
+  END`;
+
+/**
  * Cron drain: publish every approved post whose scheduled_date is due, honoring
  * any open backoff window. Folded into the existing 15-min handler (no new cron).
  */
 export async function publishDuePosts(env: Env): Promise<PublishSweepStats> {
   const started = Date.now();
   const stats: PublishSweepStats = {
+    eligible: 0,
     scanned: 0,
     published: 0,
     retried: 0,
@@ -526,38 +561,78 @@ export async function publishDuePosts(env: Env): Promise<PublishSweepStats> {
     duration_ms: 0,
   };
   const now = new Date().toISOString();
+  const mode = await resolvePublishMode(env);
 
   const { results } = await env.DB.prepare(
-    `SELECT s.id, d.next_retry_at AS dlq_next, d.status AS dlq_status
+    `SELECT s.id, s.scheduled_date, d.next_retry_at AS dlq_next, d.status AS dlq_status,
+            d.error_message AS dlq_error
        FROM social_posts s
        LEFT JOIN dead_letter_queue d
          ON d.id = 'splpub:' || s.id AND d.operation = 'social_publish'
       WHERE s.status = 'approved'
         AND s.scheduled_date IS NOT NULL
-        AND s.scheduled_date <= ?
+        AND (${SCHEDULED_DATE_COMPARE_SQL}) <= ?
       ORDER BY s.scheduled_date ASC
       LIMIT 50`,
   )
     .bind(now)
-    .all<{ id: string; dlq_next: string | null; dlq_status: string | null }>();
+    .all<{
+      id: string;
+      scheduled_date: string;
+      dlq_next: string | null;
+      dlq_status: string | null;
+      dlq_error: string | null;
+    }>();
 
-  for (const row of results ?? []) {
-    stats.scanned++;
+  const rows = results ?? [];
+  stats.eligible = rows.length;
+  console.log(
+    `[social-publish] cron start: eligible=${stats.eligible} now=${now} mode=${mode}` +
+      (stats.eligible === 0 ? "" : ` ids=[${rows.map((r) => r.id.slice(0, 8)).join(",")}]`),
+  );
+
+  for (const row of rows) {
     // Respect an open backoff window.
     if (row.dlq_status === "pending" && row.dlq_next && row.dlq_next > now) {
       stats.skipped_backoff++;
+      console.log(
+        `[social-publish] skip backoff post=${row.id} scheduled=${row.scheduled_date} until=${row.dlq_next}` +
+          (row.dlq_error ? ` last_error=${row.dlq_error.slice(0, 120)}` : ""),
+      );
       continue;
     }
+    stats.scanned++;
     try {
       const r = await publishPost(env, row.id, "cron:social_publisher");
       if (r.status === "published") stats.published++;
       else if (r.status === "failed") stats.failed++;
       else stats.retried++;
+      if (!r.ok && r.reason) {
+        console.warn(`[social-publish] post ${row.id} attempt: status=${r.status} reason=${r.reason}`);
+      }
     } catch (err) {
-      console.error(`[social-publish] post ${row.id} threw:`, (err as Error).message);
+      const message = (err as Error).message;
+      console.error(`[social-publish] post ${row.id} threw:`, message);
+      await recordPublishError(env, row.id, message);
+      try {
+        const prior = await loadDlq(env, row.id);
+        await upsertDlq(
+          env,
+          row.id,
+          (prior?.retry_count ?? 0) + 1,
+          "pending",
+          new Date(Date.now() + nextBackoffMs(prior?.retry_count ?? 0)).toISOString(),
+          message,
+        );
+      } catch (dlqErr) {
+        console.error(`[social-publish] post ${row.id} dlq write failed:`, (dlqErr as Error).message);
+      }
     }
   }
 
   stats.duration_ms = Date.now() - started;
+  console.log(
+    `[social-publish] cron done: eligible=${stats.eligible} scanned=${stats.scanned} published=${stats.published} retried=${stats.retried} failed=${stats.failed} backoff=${stats.skipped_backoff} in ${stats.duration_ms}ms`,
+  );
   return stats;
 }

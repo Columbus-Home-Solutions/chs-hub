@@ -1900,11 +1900,9 @@ async function runNotificationProcessor(env: Env): Promise<void> {
   // scheduled_date is due, honoring backoff windows. Non-fatal.
   try {
     const p = await publishDuePosts(env);
-    if (p.scanned > 0) {
-      console.log(
-        `[cron */15 * * * *] social_publish: scanned=${p.scanned} published=${p.published} retried=${p.retried} failed=${p.failed} backoff=${p.skipped_backoff} in ${p.duration_ms}ms`,
-      );
-    }
+    console.log(
+      `[cron */15 * * * *] social_publish: eligible=${p.eligible} scanned=${p.scanned} published=${p.published} retried=${p.retried} failed=${p.failed} backoff=${p.skipped_backoff} in ${p.duration_ms}ms`,
+    );
   } catch (err) {
     console.error("[cron */15 * * * *] social_publish failed:", (err as Error).message);
   }

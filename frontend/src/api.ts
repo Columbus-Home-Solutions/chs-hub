@@ -43,6 +43,11 @@ export const api = {
       await fetch(url, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(body ?? {}) }),
     );
   },
+  async patch<T>(url: string, body?: unknown): Promise<T> {
+    return parse<T>(
+      await fetch(url, { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify(body ?? {}) }),
+    );
+  },
   async del<T>(url: string): Promise<T> {
     return parse<T>(await fetch(url, { method: "DELETE", headers: { Accept: "application/json" } }));
   },

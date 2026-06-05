@@ -252,7 +252,7 @@ async function draftAndInsert(
       : ctx.kind === "job_completion"
         ? `Another project complete! Free estimates — call us!`
         : `${planned.topic ?? "Home tips"} — from your central-Arkansas remodeling team.`;
-    const hashRes = await generateHashtags(env, ctx, `${id}`).catch(() => ({
+    const hashRes = await generateHashtags(env, ctx, `${id}`, "both").catch(() => ({
       ok: true,
       hashtags: fallbackHashtags(id),
       fallback: true,

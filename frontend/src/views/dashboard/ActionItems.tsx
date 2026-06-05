@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
-import { route } from "preact-router";
+import { go } from "../../lib/nav";
+import { api, ApiError } from "../../api";
 import type { ActionItem } from "./types";
 
 interface Props {
@@ -7,6 +8,7 @@ interface Props {
   loading: boolean;
   error: string | null;
   mobile?: boolean;
+  onDismiss?: (id: string) => void;
 }
 
 const PRIORITY_ICON: Record<string, string> = {
@@ -32,11 +34,25 @@ function relativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
-export function ActionItems({ items, loading, error, mobile }: Props) {
+export function ActionItems({ items, loading, error, mobile, onDismiss }: Props) {
   const [showAll, setShowAll] = useState(false);
+  const [dismissing, setDismissing] = useState<string | null>(null);
   const maxItems = mobile ? 5 : 8;
   const visible = showAll ? items : items.slice(0, maxItems);
   const overflow = items.length - maxItems;
+
+  const dismiss = async (e: Event, id: string) => {
+    e.stopPropagation();
+    setDismissing(id);
+    try {
+      await api.patch(`/api/dashboard/action-items/${encodeURIComponent(id)}/dismiss`, {});
+      onDismiss?.(id);
+    } catch (err) {
+      console.error("Dismiss failed:", err instanceof ApiError ? err.message : err);
+    } finally {
+      setDismissing(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -83,15 +99,26 @@ export function ActionItems({ items, loading, error, mobile }: Props) {
         ) : (
           <>
             {visible.map((item) => (
-              <button
-                key={item.id}
-                class={`action-item action-item--${item.priority}`}
-                onClick={() => route(item.link)}
-              >
-                <span class="action-item__icon">{PRIORITY_ICON[item.type] ?? "🔔"}</span>
-                <span class="action-item__title">{item.title}</span>
-                <span class="action-item__time">{relativeTime(item.createdAt)}</span>
-              </button>
+              <div key={item.id} class={`action-item action-item--${item.priority}`}>
+                <button
+                  type="button"
+                  class="action-item__main"
+                  onClick={() => go(item.link)}
+                >
+                  <span class="action-item__icon">{PRIORITY_ICON[item.type] ?? "🔔"}</span>
+                  <span class="action-item__title">{item.title}</span>
+                  <span class="action-item__time">{relativeTime(item.createdAt)}</span>
+                </button>
+                <button
+                  type="button"
+                  class="action-item__dismiss"
+                  title="Dismiss"
+                  disabled={dismissing === item.id}
+                  onClick={(e) => void dismiss(e, item.id)}
+                >
+                  ✕
+                </button>
+              </div>
             ))}
             {!showAll && overflow > 0 && (
               <button

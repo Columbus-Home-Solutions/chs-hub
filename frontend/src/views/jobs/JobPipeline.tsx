@@ -1,12 +1,16 @@
 import type { RoutableProps } from "preact-router";
-import { useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
+import { Button } from "../../components/ui/Button";
+import { ViewToggle } from "../../components/ViewToggle";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
-import { formatCurrency, formatStatus } from "../../lib/format";
+import { searchParam } from "../../lib/url-params";
+import { loadStoredView, storeView, truncate, useClientSort } from "../../lib/list-view";
+import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
 import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
@@ -30,9 +34,36 @@ function canMove(from: JobStatus, to: JobStatus): boolean {
 export function JobPipeline(_props: RoutableProps) {
   const { data, loading, error, refetch } = useApi<JobPipelineResponse>("/api/jobs/pipeline");
   const toast = useToast();
+  const [viewMode, setViewMode] = useState(() => loadStoredView("chs_jobs_view"));
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<JobStatus | null>(null);
   const [activeStage, setActiveStage] = useState<JobStatus>("deposit_paid");
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "">("");
+
+  useEffect(() => {
+    const s = searchParam("status");
+    if (s && JOB_STAGES.some((st) => st.key === s)) {
+      setActiveStage(s as JobStatus);
+      setStatusFilter(s as JobStatus);
+    }
+  }, []);
+
+  const allJobs = useMemo(() => {
+    if (!data) return [];
+    return JOB_STAGES.flatMap((s) => data.pipeline[s.key] ?? []);
+  }, [data]);
+
+  const listJobs = useMemo(() => {
+    if (!statusFilter) return allJobs;
+    return allJobs.filter((j) => j.status === statusFilter);
+  }, [allJobs, statusFilter]);
+
+  const { sorted, sortKey, sortDir, toggle } = useClientSort(listJobs, "job_number", "desc");
+
+  const setView = (mode: "list" | "kanban") => {
+    setViewMode(mode);
+    storeView("chs_jobs_view", mode);
+  };
 
   const moveTo = async (id: string, status: JobStatus) => {
     try {
@@ -63,15 +94,56 @@ export function JobPipeline(_props: RoutableProps) {
             {data ? `${total(data)} active jobs in the pipeline` : "Job pipeline"}
           </p>
         </div>
-        <button class="btn btn--secondary btn--sm" onClick={() => go("/jobs/map")}>
-          🗺 Map View
-        </button>
+        <div class="view-header__right flex gap-sm items-center">
+          <ViewToggle value={viewMode} onChange={setView} />
+          <button class="btn btn--secondary btn--sm" onClick={() => go("/jobs/map")}>
+            🗺 Map View
+          </button>
+        </div>
       </div>
 
       {loading && <Spinner center />}
       {error && <div class="empty-state">Couldn't load the pipeline: {error}</div>}
 
-      {!loading && !error && data && (
+      {!loading && !error && data && viewMode === "list" && (
+        <table class="data-table">
+          <thead>
+            <tr>
+              <SortTh label="Job #" col="job_number" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Client" col="client_name" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Title" col="title" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Status" col="status" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Contract" col="contract_total" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Target End" col="target_end_date" active={sortKey} dir={sortDir} onSort={toggle} />
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 && (
+              <tr><td colSpan={7} class="text--muted">No jobs match this filter.</td></tr>
+            )}
+            {sorted.map((j) => (
+              <tr key={j.id}>
+                <td>
+                  <button type="button" class="link-btn" onClick={() => go(`/jobs/${j.id}`)}>
+                    {j.job_display ?? "JOB"}
+                  </button>
+                </td>
+                <td>{j.client_name ?? "—"}</td>
+                <td>{truncate(j.title)}</td>
+                <td><Badge status={j.status}>{formatStatus(j.status)}</Badge></td>
+                <td>{formatCurrency(j.contract_total)}</td>
+                <td>{j.target_end_date ? formatDate(j.target_end_date) : "—"}</td>
+                <td>
+                  <Button size="sm" variant="tertiary" onClick={() => go(`/jobs/${j.id}`)}>View</Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {!loading && !error && data && viewMode === "kanban" && (
         <>
           <div class="pipeline-tabs">
             {JOB_STAGES.map((s) => (
@@ -190,4 +262,27 @@ function findStatus(data: JobPipelineResponse | null, id: string): JobStatus | n
     if ((data.pipeline[stage.key] ?? []).some((j) => j.id === id)) return stage.key;
   }
   return null;
+}
+
+function SortTh({
+  label,
+  col,
+  active,
+  dir,
+  onSort,
+}: {
+  label: string;
+  col: string;
+  active: string;
+  dir: "asc" | "desc";
+  onSort: (col: string) => void;
+}) {
+  return (
+    <th>
+      <button type="button" class="data-table__sort" onClick={() => onSort(col)}>
+        {label}
+        {active === col ? (dir === "asc" ? " ↑" : " ↓") : ""}
+      </button>
+    </th>
+  );
 }

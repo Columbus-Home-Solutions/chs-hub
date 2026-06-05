@@ -3,6 +3,7 @@
  *
  *   GET /api/dashboard/kpis           → { tiles: KpiTile[] }           5-min cache
  *   GET /api/dashboard/action-items   → { items: ActionItem[] }         fresh
+ *   PATCH /api/dashboard/action-items/:id/dismiss → { ok: true }        owner/admin
  *   GET /api/dashboard/pipeline       → { leads, jobs, conversionRate, unpaidTotal }  5-min cache
  *   GET /api/dashboard/schedule       → { entries: ScheduleEntry[] }    fresh
  *   GET /api/dashboard/activity       → { entries: ActivityEntry[], bellCount: number } fresh
@@ -11,7 +12,11 @@
  */
 
 import type { Env } from "../env.js";
-import { buildJobCosting } from "../lib/job-costing.js";
+import { guard } from "../middleware/guard.js";
+import { buildJobCosting, computeYtdEarnedRevenue, computeYtdOperatingCosts, jobCogsOnly } from "../lib/job-costing.js";
+
+const DISMISSED_SETTING_KEY = "dashboard_dismissed_action_items";
+const DISMISS_ROLES = ["owner", "office_admin"] as const;
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -20,6 +25,52 @@ function json(body: unknown, init: ResponseInit = {}): Response {
   h.set("content-type", "application/json; charset=utf-8");
   h.set("cache-control", "no-store");
   return new Response(JSON.stringify(body), { ...init, headers: h });
+}
+
+/** Persist dismissed action-item ids in system_settings (no migration). */
+async function loadDismissedIds(env: Env): Promise<Set<string>> {
+  const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key = ?")
+    .bind(DISMISSED_SETTING_KEY)
+    .first<{ value: string }>();
+  if (!row?.value) return new Set();
+  try {
+    const parsed = JSON.parse(row.value) as string[];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+async function saveDismissedIds(env: Env, ids: Set<string>): Promise<void> {
+  const value = JSON.stringify([...ids]);
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO system_settings (key, value, value_type, category, label, description, updated_at)
+     VALUES (?, ?, 'string', 'dashboard', 'Dismissed action items', 'User-dismissed dashboard alerts', datetime('now'))`,
+  )
+    .bind(DISMISSED_SETTING_KEY, value)
+    .run();
+}
+
+function actionItemLink(type: string, meta: Record<string, unknown>): string {
+  switch (type) {
+    case "invoice_past_due":
+      return "/financial?tab=invoices&filter=overdue";
+    case "invoice_due_soon":
+      return "/financial?tab=invoices&filter=due_soon";
+    case "social_approval":
+      return "/social?tab=queue";
+    case "new_lead":
+      return "/estimating?status=new_request";
+    case "follow_up_due":
+      return "/estimating?status=follow_up";
+    case "cost_plus_cycle":
+    case "job_budget_alert":
+    case "change_order_pending":
+    case "warranty_checkin":
+      return meta.jobId ? `/jobs/${meta.jobId}` : "/jobs";
+    default:
+      return meta.jobId ? `/jobs/${meta.jobId}` : "/";
+  }
 }
 
 /** ISO date for today in UTC ("YYYY-MM-DD"). */
@@ -48,6 +99,20 @@ function currentWeekRange(now = new Date()): { start: string; end: string; prevS
 /** Jan 1 of current year (ISO date string). */
 function yearStart(): string {
   return `${new Date().getUTCFullYear()}-01-01`;
+}
+
+function formatCompactUsd(n: number): string {
+  if (n >= 1000) return `$${(n / 1000).toFixed(0)}k`;
+  return `$${Math.round(n)}`;
+}
+
+function formatYtdCogsSubtitle(costs: Awaited<ReturnType<typeof computeYtdOperatingCosts>>): string {
+  const parts: string[] = [];
+  if (costs.expenses > 0) parts.push(`${formatCompactUsd(costs.expenses)} expenses`);
+  if (costs.labor_from_time > 0) parts.push(`${formatCompactUsd(costs.labor_from_time)} labor`);
+  if (costs.stripe_fees > 0) parts.push(`${formatCompactUsd(costs.stripe_fees)} fees`);
+  if (parts.length === 0) return "Log expenses & time to track COGS";
+  return `${parts.join(" · ")} COGS`;
 }
 
 // ── In-memory caches (5-minute TTL) ──────────────────────────────────────
@@ -93,8 +158,8 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
     cashWeekRow,
     cashPrevRow,
     ytdRevenueRow,
-    ytdExpensesRow,
-    ytdStripeFeesRow,
+    ytdCosts,
+    ytdEarnedRevenue,
   ] = await Promise.all([
     env.DB.prepare(
       "SELECT COUNT(*) as cnt, COALESCE(SUM(contract_total), 0) as total FROM jobs WHERE status = 'in_progress'"
@@ -117,12 +182,8 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
     env.DB.prepare(
       "SELECT COALESCE(SUM(amount), 0) as revenue FROM payments WHERE received_date >= ?"
     ).bind(ys).first<{ revenue: number }>(),
-    env.DB.prepare(
-      "SELECT COALESCE(SUM(amount), 0) as expenses FROM expenses WHERE incurred_date >= ?"
-    ).bind(ys).first<{ expenses: number }>(),
-    env.DB.prepare(
-      "SELECT COALESCE(SUM(stripe_fee), 0) as fees FROM payments WHERE stripe_fee > 0 AND received_date >= ?"
-    ).bind(ys).first<{ fees: number }>(),
+    computeYtdOperatingCosts(env, ys),
+    computeYtdEarnedRevenue(env, ys),
   ]);
 
   const cashThis = cashWeekRow?.total ?? 0;
@@ -136,9 +197,15 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
   }
 
   const ytdRevenue = ytdRevenueRow?.revenue ?? 0;
-  const ytdExpenses = (ytdExpensesRow?.expenses ?? 0) + (ytdStripeFeesRow?.fees ?? 0);
-  const ytdProfit = ytdRevenue - ytdExpenses;
+  const ytdCogs = ytdCosts.total_cogs;
+  const ytdJobCogs = jobCogsOnly(ytdCosts);
+  const ytdProfit = ytdRevenue - ytdCogs;
   const ytdMarginPct = ytdRevenue > 0 ? Math.round((ytdProfit / ytdRevenue) * 100) : 0;
+  const ytdCogsSubtitle = formatYtdCogsSubtitle(ytdCosts);
+
+  const ytdEarned = ytdEarnedRevenue ?? 0;
+  const ytdEarnedProfit = ytdEarned - ytdJobCogs;
+  const ytdEarnedMarginPct = ytdEarned > 0 ? Math.round((ytdEarnedProfit / ytdEarned) * 100) : 0;
 
   const pastDueCount = invoicesRow?.past_due_count ?? 0;
   const invoiceSubtitle = pastDueCount > 0
@@ -165,7 +232,7 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
       label: "Unpaid Invoices",
       value: `$${((invoicesRow?.total ?? 0) / 1000).toFixed(0)}k`,
       subtitle: invoiceSubtitle,
-      link: "/financial?tab=invoices&status=unpaid",
+      link: "/financial?tab=invoices&filter=unpaid",
       deltaDir: pastDueCount > 0 ? "down" : null,
     },
     {
@@ -179,18 +246,26 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
     },
     {
       id: "ytd_revenue",
-      label: "YTD Revenue",
+      label: "YTD Collected",
       value: `$${(ytdRevenue / 1000).toFixed(0)}k`,
-      subtitle: `$${(ytdExpenses / 1000).toFixed(0)}k expenses`,
+      subtitle: ytdCogsSubtitle,
       link: "/financial",
     },
     {
       id: "ytd_profit",
-      label: "YTD Profit",
+      label: "Cash Profit",
       value: `$${(ytdProfit / 1000).toFixed(0)}k`,
-      subtitle: `${ytdMarginPct}% margin`,
+      subtitle: `${ytdMarginPct}% margin on collections`,
       link: "/financial",
       deltaDir: ytdProfit >= 0 ? "up" : "down",
+    },
+    {
+      id: "ytd_earned_margin",
+      label: "Earned Margin",
+      value: `$${(ytdEarnedProfit / 1000).toFixed(0)}k`,
+      subtitle: `${ytdEarnedMarginPct}% on $${(ytdEarned / 1000).toFixed(0)}k invoiced`,
+      link: "/financial?tab=reports",
+      deltaDir: ytdEarnedProfit >= 0 ? "up" : "down",
     },
   ];
 
@@ -219,6 +294,7 @@ function daysBetween(a: string, b: string): number {
 export async function handleDashboardActionItems(env: Env): Promise<Response> {
   const today = todayUtc();
   const dueSoonDate = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+  const dismissed = await loadDismissedIds(env);
 
   // All sub-queries run in parallel.
   const [
@@ -331,7 +407,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: "invoice_past_due",
       title: `Invoice past due: ${clientName} — ${amount} (${days} days)`,
       meta: { invoiceId: inv.id, jobId: inv.job_id, balance: inv.balance, days },
-      link: `/jobs/${inv.job_id}`,
+      link: actionItemLink("invoice_past_due", { jobId: inv.job_id }),
       createdAt: inv.due_date ?? today,
     });
   }
@@ -346,7 +422,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: "invoice_due_soon",
       title: `Invoice due in 2 days: ${clientName} — ${amount}`,
       meta: { invoiceId: inv.id, jobId: inv.job_id, balance: inv.balance },
-      link: `/jobs/${inv.job_id}`,
+      link: actionItemLink("invoice_due_soon", { jobId: inv.job_id }),
       createdAt: inv.due_date ?? today,
     });
   }
@@ -359,7 +435,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: "cost_plus_cycle",
       title: `Cost-plus cycle ending: ${cycle.job_title} — reconcile by ${cycle.period_end}`,
       meta: { cycleId: cycle.id, jobId: cycle.job_id, periodEnd: cycle.period_end },
-      link: `/jobs/${cycle.job_id}`,
+      link: actionItemLink("cost_plus_cycle", { jobId: cycle.job_id }),
       createdAt: cycle.period_end,
     });
   }
@@ -373,7 +449,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: "new_lead",
       title: `New lead: ${clientName} — ${lead.lead_source ?? "unknown source"}`,
       meta: { requestId: lead.id, leadSource: lead.lead_source },
-      link: "/estimating",
+      link: actionItemLink("new_lead", {}),
       createdAt: lead.created_at,
     });
   }
@@ -387,7 +463,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: "follow_up_due",
       title: `Quote follow-up due: ${clientName}`,
       meta: { requestId: lead.id },
-      link: "/estimating",
+      link: actionItemLink("follow_up_due", {}),
       createdAt: lead.created_at,
     });
   }
@@ -410,7 +486,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
               type: "job_budget_alert",
               title: `Budget alert: ${j.title} — over on ${line.name} by ${overPct}%`,
               meta: { jobId: j.id, lineItemId: line.line_item_id, overPct },
-              link: `/jobs/${j.id}`,
+              link: actionItemLink("job_budget_alert", { jobId: j.id }),
               createdAt: today,
             });
           }
@@ -418,7 +494,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       } catch {
         // Per spec: budget alert failures must not crash other action items.
       }
-    })
+    }),
   );
   items.push(...budgetAlerts);
 
@@ -431,7 +507,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: "social_approval",
       title: `Social post ready for approval: ${preview}${preview.length === 60 ? "…" : ""}`,
       meta: { postId: post.id },
-      link: "/social",
+      link: actionItemLink("social_approval", {}),
       createdAt: post.created_at,
     });
   }
@@ -444,7 +520,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: "change_order_pending",
       title: `Change order pending signature: ${co.job_title} — ${co.title}`,
       meta: { changeOrderId: co.id, jobId: co.job_id },
-      link: `/jobs/${co.job_id}`,
+      link: actionItemLink("change_order_pending", { jobId: co.job_id }),
       createdAt: co.created_at,
     });
   }
@@ -457,20 +533,36 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: "warranty_checkin",
       title: `Warranty reminder: ${job.title} — 11-month check-in`,
       meta: { jobId: job.id, actualEndDate: job.actual_end_date },
-      link: `/jobs/${job.id}`,
+      link: actionItemLink("warranty_checkin", { jobId: job.id }),
       createdAt: job.actual_end_date ?? today,
     });
   }
 
+  const visible = items.filter((i) => !dismissed.has(i.id));
+
   // Sort: high → medium → low, then oldest-first within each tier.
   const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
-  items.sort((a, b) => {
+  visible.sort((a, b) => {
     const pd = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
     if (pd !== 0) return pd;
     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
   });
 
-  return json({ items: items.slice(0, 8) });
+  return json({ items: visible.slice(0, 8) });
+}
+
+export async function handleDashboardActionItemDismiss(
+  request: Request,
+  env: Env,
+  itemId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...DISMISS_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const dismissed = await loadDismissedIds(env);
+  dismissed.add(itemId);
+  await saveDismissedIds(env, dismissed);
+  return json({ ok: true, id: itemId });
 }
 
 // ── Pipeline handler ───────────────────────────────────────────────────────
@@ -705,8 +797,17 @@ export async function handleDashboardActivity(env: Env): Promise<Response> {
 
 // ── Main router ────────────────────────────────────────────────────────────
 
-export async function handleDashboard(env: Env, url: URL): Promise<Response | null> {
+export async function handleDashboard(
+  env: Env,
+  url: URL,
+  request?: Request,
+): Promise<Response | null> {
   const path = url.pathname;
+
+  const dismissMatch = path.match(/^\/api\/dashboard\/action-items\/([^/]+)\/dismiss$/);
+  if (dismissMatch && request?.method === "PATCH") {
+    return handleDashboardActionItemDismiss(request, env, decodeURIComponent(dismissMatch[1]!));
+  }
 
   if (path === "/api/dashboard/kpis") return handleDashboardKpis(env);
   if (path === "/api/dashboard/action-items") return handleDashboardActionItems(env);

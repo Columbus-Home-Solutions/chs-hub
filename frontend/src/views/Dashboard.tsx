@@ -1,4 +1,5 @@
 import type { RoutableProps } from "preact-router";
+import { useState } from "preact/hooks";
 import { useAuth } from "../store/auth";
 import { useWeather } from "../store/weather";
 import { useApi } from "../hooks/useApi";
@@ -23,6 +24,8 @@ export function Dashboard(_props: RoutableProps) {
   // All fetches fire in parallel — no waterfall.
   const kpis = useApi<{ tiles: KpiTile[] }>("/api/dashboard/kpis");
   const actionItems = useApi<{ items: ActionItem[] }>("/api/dashboard/action-items");
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const visibleActionItems = (actionItems.data?.items ?? []).filter((i) => !dismissedIds.has(i.id));
   const pipeline = useApi<PipelineData>("/api/dashboard/pipeline");
   const schedule = useApi<{ entries: ScheduleEntry[] }>("/api/dashboard/schedule");
   const activity = useApi<{ entries: ActivityEntry[]; bellCount: number }>("/api/dashboard/activity");
@@ -56,9 +59,10 @@ export function Dashboard(_props: RoutableProps) {
           )}
 
           <ActionItems
-            items={actionItems.data?.items ?? []}
+            items={visibleActionItems}
             loading={actionItems.loading}
             error={actionItems.error}
+            onDismiss={(id) => setDismissedIds((prev) => new Set(prev).add(id))}
           />
 
           <PipelineSummary

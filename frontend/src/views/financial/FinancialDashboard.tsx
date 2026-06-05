@@ -7,14 +7,18 @@
  */
 
 import type { RoutableProps } from "preact-router";
-import { useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { useApi } from "../../hooks/useApi";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { go } from "../../lib/nav";
+import { readSearchParams } from "../../lib/url-params";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
+import { FinancialReports } from "./FinancialReports";
+
+type FinTab = "invoices" | "reports";
 
 interface InvoiceRow {
   id: string;
@@ -48,10 +52,12 @@ const TONE: Record<string, "neutral" | "info" | "success" | "warning" | "error">
 
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
+  { value: "__unpaid__", label: "Unpaid (open)" },
+  { value: "past_due", label: "Past due" },
+  { value: "__due_soon__", label: "Due in 2 days" },
   { value: "draft", label: "Draft" },
   { value: "sent", label: "Sent" },
   { value: "partial", label: "Partial" },
-  { value: "past_due", label: "Past due" },
   { value: "paid", label: "Paid" },
   { value: "void", label: "Void" },
 ];
@@ -62,20 +68,52 @@ const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_
 export function FinancialDashboard(_props: RoutableProps) {
   const invoicesResp = useApi<{ total: number; invoices: InvoiceRow[] }>("/api/invoices");
   const jobsResp = useApi<{ total: number; jobs: JobStub[] }>("/api/jobs");
+  const [tab, setTab] = useState<FinTab>("invoices");
   const [statusFilter, setStatusFilter] = useState("");
   const [cpaModalOpen, setCpaModalOpen] = useState(false);
   const [cpaYear, setCpaYear] = useState(String(CURRENT_YEAR));
 
-  if (invoicesResp.loading || jobsResp.loading) return <Spinner center />;
+  useEffect(() => {
+    const params = readSearchParams();
+    const urlTab = params.get("tab");
+    if (urlTab === "reports") setTab("reports");
+    else if (urlTab === "invoices" || urlTab === "payments") setTab("invoices");
+
+    const filter = params.get("filter") ?? params.get("status");
+    if (filter === "unpaid") setStatusFilter("__unpaid__");
+    else if (filter === "overdue") setStatusFilter("past_due");
+    else if (filter === "due_soon") setStatusFilter("__due_soon__");
+    else if (filter && STATUS_OPTIONS.some((o) => o.value === filter)) setStatusFilter(filter);
+  }, []);
 
   const invoices = invoicesResp.data?.invoices ?? [];
   const jobMap = new Map<string, JobStub>(
     (jobsResp.data?.jobs ?? []).map((j) => [j.id, j]),
   );
 
-  const filtered = statusFilter
-    ? invoices.filter((inv) => inv.status === statusFilter)
-    : invoices;
+  const dueSoonDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    return d.toISOString().slice(0, 10);
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (statusFilter === "__unpaid__") {
+      return invoices.filter((inv) =>
+        ["sent", "viewed", "partial", "past_due"].includes(inv.status ?? ""),
+      );
+    }
+    if (statusFilter === "__due_soon__") {
+      return invoices.filter(
+        (inv) =>
+          ["sent", "viewed", "partial"].includes(inv.status ?? "") && inv.due_date === dueSoonDate,
+      );
+    }
+    if (statusFilter) return invoices.filter((inv) => inv.status === statusFilter);
+    return invoices;
+  }, [invoices, statusFilter, dueSoonDate]);
+
+  if (invoicesResp.loading || jobsResp.loading) return <Spinner center />;
 
   // Summary totals across the filtered set.
   const totalInvoiced = filtered.reduce((s, inv) => s + (inv.total_due ?? 0), 0);
@@ -95,6 +133,28 @@ export function FinancialDashboard(_props: RoutableProps) {
           ⬇ CPA Export
         </button>
       </div>
+
+      <div class="segmented" style={{ marginBottom: "var(--space-lg)" }}>
+        <button
+          type="button"
+          class={`segmented__btn${tab === "invoices" ? " segmented__btn--active" : ""}`}
+          onClick={() => setTab("invoices")}
+        >
+          Invoices
+        </button>
+        <button
+          type="button"
+          class={`segmented__btn${tab === "reports" ? " segmented__btn--active" : ""}`}
+          onClick={() => setTab("reports")}
+        >
+          Reports
+        </button>
+      </div>
+
+      {tab === "reports" ? (
+        <FinancialReports />
+      ) : (
+        <>
 
       <Modal
         open={cpaModalOpen}
@@ -202,6 +262,8 @@ export function FinancialDashboard(_props: RoutableProps) {
             );
           })}
         </div>
+      )}
+        </>
       )}
     </div>
   );

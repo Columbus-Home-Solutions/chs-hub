@@ -26,19 +26,37 @@ export function SocialMedia(_props: RoutableProps) {
   const toast = useToast();
   const [tab, setTab] = useState<Tab>("dashboard");
   const [editId, setEditId] = useState<string | null>(null);
+  const [editIntent, setEditIntent] = useState<"default" | "approve">("default");
   const [refreshKey, setRefreshKey] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [publishMode, setPublishMode] = useState<"live" | "simulate">("simulate");
   const suppressEditUntil = useRef(0);
   const bump = () => setRefreshKey((k) => k + 1);
 
-  const openEditor = (id: string) => {
+  useEffect(() => {
+    void api
+      .get<{ publish_mode: "live" | "simulate" }>("/api/social/status")
+      .then((r) => setPublishMode(r.publish_mode))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t === "queue" || t === "approval") setTab("queue");
+    else if (t === "calendar") setTab("calendar");
+    else if (t === "history") setTab("history");
+  }, []);
+
+  const openEditor = (id: string, intent: "default" | "approve" = "default") => {
     if (Date.now() < suppressEditUntil.current) return;
+    setEditIntent(intent);
     setEditId(id);
   };
 
   const closeEditor = () => {
     suppressEditUntil.current = Date.now() + 400;
     setEditId(null);
+    setEditIntent("default");
   };
 
   const newPost = async () => {
@@ -64,7 +82,8 @@ export function SocialMedia(_props: RoutableProps) {
         <div>
           <h1 class="view-title">Social Media</h1>
           <p class="view-subtitle">
-            AI-assisted content for Facebook &amp; Instagram. Publishing runs in SIMULATE mode.
+            AI-assisted content for Facebook &amp; Instagram. Publishing is{" "}
+            {publishMode === "live" ? "LIVE" : "SIMULATE"} mode.
           </p>
         </div>
         <div class="view-header__right">
@@ -96,6 +115,8 @@ export function SocialMedia(_props: RoutableProps) {
       {editId && (
         <PostEditor
           postId={editId}
+          intent={editIntent}
+          publishMode={publishMode}
           onClose={closeEditor}
           onChanged={bump}
         />

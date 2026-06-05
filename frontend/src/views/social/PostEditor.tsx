@@ -15,6 +15,9 @@ import {
 
 interface Props {
   postId: string;
+  /** When "approve", primary action is Approve & Schedule (save then approve). */
+  intent?: "default" | "approve";
+  publishMode?: "live" | "simulate";
   onClose: () => void;
   /** Called after any persisted change so the parent list can refresh. */
   onChanged: () => void;
@@ -22,7 +25,7 @@ interface Props {
 
 /** Post editor (spec §5.4): preview, caption + char count, hashtags, platform,
  *  schedule picker, regenerate caption/image, per-platform preview. */
-export function PostEditor({ postId, onClose, onChanged }: Props) {
+export function PostEditor({ postId, intent = "default", publishMode = "simulate", onClose, onChanged }: Props) {
   const toast = useToast();
   const [post, setPost] = useState<SocialPost | null>(null);
   const [loading, setLoading] = useState(true);
@@ -53,19 +56,67 @@ export function PostEditor({ postId, onClose, onChanged }: Props) {
   }, [postId]);
 
   const published = post?.status === "published";
+  const canApprove =
+    post?.status === "pending_approval" || post?.status === "draft" || post?.status === "rejected";
+
+  const persistFields = async (): Promise<boolean> => {
+    const trimmed = caption.trim();
+    if (!trimmed) {
+      toast.push("error", "Add a caption before saving or approving.");
+      return false;
+    }
+    await api.put(`/api/social-posts/${postId}`, {
+      caption: trimmed,
+      hashtags: hashtags.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean),
+      platform,
+      scheduled_date: scheduled ? fromLocalInput(scheduled) : null,
+    });
+    return true;
+  };
 
   const save = async () => {
     setBusy(true);
     try {
-      await api.put(`/api/social-posts/${postId}`, {
-        caption,
-        hashtags: hashtags.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean),
-        platform,
-        scheduled_date: scheduled ? fromLocalInput(scheduled) : null,
-      });
+      if (!(await persistFields())) return;
       toast.push("success", "Saved.");
+      onChanged();
       onClose();
-      window.setTimeout(onChanged, 0);
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approveAndSchedule = async () => {
+    setBusy(true);
+    try {
+      if (!(await persistFields())) return;
+      await api.post(`/api/social-posts/${postId}/approve`, {});
+      toast.push("success", "Approved and scheduled.");
+      onChanged();
+      onClose();
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const regenHashtags = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ ok: boolean; unavailable?: boolean; hashtags?: string[]; message?: string }>(
+        `/api/social-posts/${postId}/regenerate`,
+        { hashtags_only: true },
+      );
+      if (!r.ok) {
+        toast.push("warning", r.message ?? "AI unavailable — edit manually.");
+      } else if (r.hashtags?.length) {
+        setHashtags(r.hashtags.join(" "));
+        toast.push("success", "Hashtags regenerated.");
+        onChanged();
+      }
     } catch (e) {
       toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
@@ -117,15 +168,22 @@ export function PostEditor({ postId, onClose, onChanged }: Props) {
     }
   };
 
-  const doAction = async (action: "approve" | "reject" | "publish") => {
+  const doAction = async (action: "reject" | "publish") => {
     setBusy(true);
     try {
       const bodyReason =
         action === "reject" ? { rejection_reason: prompt("Reason for rejection?") ?? "" } : {};
       await api.post(`/api/social-posts/${postId}/${action}`, bodyReason);
-      toast.push("success", `Post ${action === "publish" ? "published (simulated)" : action + "d"}.`);
+      toast.push(
+        "success",
+        action === "publish"
+          ? publishMode === "live"
+            ? "Published."
+            : "Published (simulated)."
+          : "Rejected.",
+      );
       onChanged();
-      if (action === "publish") onClose();
+      if (action === "publish" || action === "reject") onClose();
       else void load();
     } catch (e) {
       toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
@@ -141,7 +199,13 @@ export function PostEditor({ postId, onClose, onChanged }: Props) {
   return (
     <Modal
       open
-      title={post ? `${formatStatus(post.post_type)} post` : "Post"}
+      title={
+        post
+          ? intent === "approve"
+            ? `Review & approve — ${formatStatus(post.post_type)}`
+            : `${formatStatus(post.post_type)} post`
+          : "Post"
+      }
       onClose={onClose}
       footer={
         post && (
@@ -151,19 +215,23 @@ export function PostEditor({ postId, onClose, onChanged }: Props) {
                 Save
               </Button>
             )}
-            {(post.status === "pending_approval" || post.status === "draft" || post.status === "rejected") && (
-              <Button variant="primary" onClick={() => doAction("approve")} disabled={busy}>
-                Approve
+            {canApprove && (
+              <Button
+                variant={intent === "approve" ? "primary" : "secondary"}
+                onClick={() => void approveAndSchedule()}
+                disabled={busy}
+              >
+                Approve &amp; Schedule
               </Button>
             )}
             {post.status === "pending_approval" && (
-              <Button variant="danger" onClick={() => doAction("reject")} disabled={busy}>
+              <Button variant="danger" onClick={() => void doAction("reject")} disabled={busy}>
                 Reject
               </Button>
             )}
             {(post.status === "approved" || post.status === "failed") && (
-              <Button variant="primary" onClick={() => doAction("publish")} disabled={busy}>
-                Publish now (SIMULATE)
+              <Button variant="primary" onClick={() => void doAction("publish")} disabled={busy}>
+                {publishMode === "live" ? "Publish now" : "Publish now (SIMULATE)"}
               </Button>
             )}
           </div>
@@ -230,7 +298,14 @@ export function PostEditor({ postId, onClose, onChanged }: Props) {
           </div>
 
           <div>
-            <label class="form-label">Hashtags</label>
+            <div class="flex items-center justify-between gap-sm" style={{ marginBottom: "var(--space-xs)" }}>
+              <label class="form-label" style={{ margin: 0 }}>Hashtags</label>
+              {!published && (
+                <Button size="sm" variant="tertiary" onClick={regenHashtags} disabled={busy}>
+                  ✨ Regenerate Hashtags
+                </Button>
+              )}
+            </div>
             <textarea
               class="form-input"
               rows={2}

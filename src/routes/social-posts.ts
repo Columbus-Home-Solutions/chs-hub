@@ -24,9 +24,9 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { generateAndStoreImage, streamSocialImage } from "../lib/image-gen.js";
 import {
-  buildImagePrompt,
   generateCaptions,
   generateHashtags,
+  generateImageSubjectPrompt,
   type CaptionContext,
 } from "../lib/social-ai.js";
 import {
@@ -51,6 +51,14 @@ const OWNER_ONLY = ["owner"] as const;
 
 const POST_TYPE_SET = new Set<string>(POST_TYPES);
 const PLATFORM_SET = new Set<string>(PLATFORMS);
+
+/** Store scheduled_date as UTC ISO for cron comparisons. */
+function normalizeScheduledDate(value: unknown): string | null {
+  const raw = str(value);
+  if (!raw) return null;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? raw : d.toISOString();
+}
 
 const SELECT = "SELECT * FROM social_posts";
 
@@ -166,7 +174,8 @@ export async function handleSocialPostCreate(request: Request, env: Env): Promis
   const photoIds = Array.isArray(body.photo_ids) ? JSON.stringify(body.photo_ids.map(String)) : null;
 
   const id = crypto.randomUUID();
-  await env.DB.prepare(
+  const scheduledDate = normalizeScheduledDate(body.scheduled_date);
+  const insert = await env.DB.prepare(
     `INSERT INTO social_posts
        (id, post_type, status, caption, hashtags, platform, scheduled_date,
         job_id, photo_ids, generated_by, created_at)
@@ -179,11 +188,16 @@ export async function handleSocialPostCreate(request: Request, env: Env): Promis
       caption,
       hashtags,
       platform,
-      str(body.scheduled_date),
+      scheduledDate,
       str(body.job_id),
       photoIds,
     )
     .run();
+
+  if (!insert.success) {
+    console.error("[social-posts] create insert failed:", insert.error);
+    return err(500, "insert_failed", insert.error ?? "Failed to create post.");
+  }
 
   await logSocialAudit(env, user.email, "social_post_created", id, { post_type: postType, status });
   const row = await loadRow(env, id);
@@ -223,7 +237,7 @@ export async function handleSocialPostUpdate(request: Request, env: Env, id: str
   }
   if ("scheduled_date" in body) {
     sets.push("scheduled_date = ?");
-    binds.push(str(body.scheduled_date));
+    binds.push(normalizeScheduledDate(body.scheduled_date));
   }
   if ("platform" in body) {
     const p = str(body.platform);
@@ -364,41 +378,54 @@ export async function handleSocialPostRegenerate(request: Request, env: Env, id:
   if (row.status === "published") return err(409, "already_published", "Cannot regenerate a published post.");
 
   const body = await readJson(request);
-  const alsoHashtags = body?.hashtags === true || body?.regenerate_hashtags === true;
+  const hashtagsOnly = body?.hashtags_only === true;
+  const alsoHashtags =
+    hashtagsOnly || body?.hashtags === true || body?.regenerate_hashtags === true;
 
   const ctx = await buildContextForPost(env, row);
-  const captionRes = await generateCaptions(env, ctx);
-  if (!captionRes.ok) {
-    // Graceful degrade — never 500; tell the UI to fall back to manual entry.
-    return json({
-      ok: false,
-      unavailable: true,
-      message: "AI is unavailable right now — edit the caption manually.",
-      error: captionRes.error,
-    });
+
+  let newCaption: string | null = null;
+  if (!hashtagsOnly) {
+    const captionRes = await generateCaptions(env, ctx);
+    if (!captionRes.ok) {
+      return json({
+        ok: false,
+        unavailable: true,
+        message: "AI is unavailable right now — edit the caption manually.",
+        error: captionRes.error,
+      });
+    }
+    newCaption = captionRes.options[0] ?? null;
   }
 
-  const newCaption = captionRes.options[0];
   let hashtags: string[] | null = null;
   if (alsoHashtags) {
-    const h = await generateHashtags(env, ctx, `${id}:${Date.now()}`);
+    const h = await generateHashtags(env, ctx, `${id}:${Date.now()}`, row.platform as Platform);
     hashtags = h.hashtags;
   }
 
-  const sets = ["caption = ?"];
-  const binds: unknown[] = [newCaption];
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  if (newCaption != null) {
+    sets.push("caption = ?");
+    binds.push(newCaption);
+  }
   if (hashtags) {
     sets.push("hashtags = ?");
     binds.push(JSON.stringify(hashtags));
   }
+  if (sets.length === 0) {
+    return json({ ok: false, unavailable: true, message: "Nothing to regenerate." });
+  }
   binds.push(id);
   await env.DB.prepare(`UPDATE social_posts SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
   await logSocialAudit(env, user.email, "social_post_regenerated", id, {
-    options: captionRes.options.length,
+    options: newCaption ? 1 : 0,
     hashtags: Boolean(hashtags),
+    hashtags_only: hashtagsOnly,
   });
 
-  return json({ ok: true, options: captionRes.options, hashtags, applied: newCaption });
+  return json({ ok: true, hashtags, applied: newCaption, hashtags_only: hashtagsOnly });
 }
 
 // ─── POST /api/social-posts/:id/generate-image ──────────────────────────────
@@ -422,10 +449,13 @@ export async function handleSocialPostGenerateImage(request: Request, env: Env, 
   }
 
   const ctx = await buildContextForPost(env, row);
-  const prompt =
-    ctx.kind === "job_completion"
-      ? `A clean, photorealistic image representing a completed ${ctx.jobType ?? "home improvement"} project. Bright natural light, no text overlays.`
-      : buildImagePrompt(ctx);
+  const variationIndex = row.image_variation_index ?? 0;
+
+  await env.DB.prepare("UPDATE social_posts SET image_variation_index = ? WHERE id = ?")
+    .bind(variationIndex + 1, id)
+    .run();
+
+  const prompt = await generateImageSubjectPrompt(env, ctx, variationIndex);
 
   const result = await generateAndStoreImage(env, id, prompt);
   if (!result.ok) {

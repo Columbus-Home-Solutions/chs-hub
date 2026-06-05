@@ -152,7 +152,8 @@ async function generateImageViaImagen(prompt: string, env: Env): Promise<Uint8Ar
     throw new Error("Google service account credentials not configured");
   }
 
-  const finalPrompt = assembleImagenPrompt(prompt);
+  let finalPrompt = assembleImagenPrompt(prompt);
+  finalPrompt = `${finalPrompt} Style variant ${Math.floor(Math.random() * 99999)}.`;
 
   const accessToken = await getGoogleAccessToken(
     creds.clientEmail,

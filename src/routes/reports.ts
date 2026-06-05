@@ -392,3 +392,315 @@ export async function handleCpaExport(request: Request, env: Env): Promise<Respo
     },
   });
 }
+
+// ── Financial dashboard reports (owner-only JSON) ───────────────────────────
+
+const CLIENT_NAME_SQL =
+  "COALESCE(NULLIF(TRIM(c.first_name || ' ' || c.last_name), ''), c.name) AS client_name";
+
+function reportJson(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
+function reportErr(status: number, message: string): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+type AgingBucket = "current" | "days_1_30" | "days_31_60" | "days_61_90" | "days_90_plus";
+
+function agingBucket(daysOverdue: number): AgingBucket {
+  if (daysOverdue <= 0) return "current";
+  if (daysOverdue <= 30) return "days_1_30";
+  if (daysOverdue <= 60) return "days_31_60";
+  if (daysOverdue <= 90) return "days_61_90";
+  return "days_90_plus";
+}
+
+export async function handleAgedReceivables(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+
+  const rows = (
+    await env.DB.prepare(
+      `SELECT i.id, i.invoice_number, i.total_due, i.paid_amount, i.due_date, i.status,
+              ${CLIENT_NAME_SQL},
+              j.job_number, j.title AS job_title,
+              CAST(julianday('now') - julianday(i.due_date) AS INTEGER) AS days_overdue
+       FROM invoices i
+       JOIN jobs j ON i.job_id = j.id
+       JOIN clients c ON j.client_id = c.id
+       WHERE i.status IN ('sent', 'viewed', 'partial', 'past_due')
+       ORDER BY days_overdue DESC`,
+    ).all<{
+      id: string;
+      invoice_number: number | null;
+      total_due: number;
+      paid_amount: number | null;
+      due_date: string;
+      status: string;
+      client_name: string;
+      job_number: number | null;
+      job_title: string | null;
+      days_overdue: number;
+    }>()
+  ).results ?? [];
+
+  const summary = {
+    current: { count: 0, total: 0 },
+    days_1_30: { count: 0, total: 0 },
+    days_31_60: { count: 0, total: 0 },
+    days_61_90: { count: 0, total: 0 },
+    days_90_plus: { count: 0, total: 0 },
+    grand_total: 0,
+  };
+
+  const invoices = rows.map((r) => {
+    const balance = (r.total_due ?? 0) - (r.paid_amount ?? 0);
+    const bucket = agingBucket(r.days_overdue ?? 0);
+    summary[bucket].count += 1;
+    summary[bucket].total += balance;
+    summary.grand_total += balance;
+    return {
+      id: r.id,
+      invoice_number: r.invoice_number,
+      invoice_display: r.invoice_number ? `INV-${String(r.invoice_number).padStart(4, "0")}` : r.id.slice(0, 8),
+      balance_due: balance,
+      due_date: r.due_date,
+      status: r.status,
+      client_name: r.client_name,
+      job_number: r.job_number,
+      job_title: r.job_title,
+      days_overdue: r.days_overdue,
+      aging_bucket: bucket,
+    };
+  });
+
+  return reportJson({ summary, invoices });
+}
+
+export async function handleProjectedIncome(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+
+  const today = new Date();
+  const weekEnd = new Date(today);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const todayStr = today.toISOString().slice(0, 10);
+  const weekEndStr = weekEnd.toISOString().slice(0, 10);
+  const monthEndStr = monthEnd.toISOString().slice(0, 10);
+
+  const rows = (
+    await env.DB.prepare(
+      `SELECT i.id, i.invoice_number, i.total_due, i.paid_amount, i.due_date, i.status,
+              ${CLIENT_NAME_SQL},
+              j.job_number, j.title AS job_title
+       FROM invoices i
+       JOIN jobs j ON i.job_id = j.id
+       JOIN clients c ON j.client_id = c.id
+       WHERE i.status IN ('draft', 'sent', 'viewed', 'partial')
+       ORDER BY i.due_date ASC`,
+    ).all<{
+      id: string;
+      invoice_number: number | null;
+      total_due: number;
+      paid_amount: number | null;
+      due_date: string | null;
+      status: string;
+      client_name: string;
+      job_number: number | null;
+      job_title: string | null;
+    }>()
+  ).results ?? [];
+
+  let totalProjected = 0;
+  let dueThisWeek = 0;
+  let dueThisMonth = 0;
+  let overdue = 0;
+
+  const invoices = rows.map((r) => {
+    const balance = (r.total_due ?? 0) - (r.paid_amount ?? 0);
+    totalProjected += balance;
+    const due = r.due_date ?? "";
+    if (due && due < todayStr) overdue += balance;
+    else if (due && due >= todayStr && due <= weekEndStr) dueThisWeek += balance;
+    if (due && due >= todayStr && due <= monthEndStr) dueThisMonth += balance;
+    return {
+      id: r.id,
+      invoice_number: r.invoice_number,
+      invoice_display: r.invoice_number ? `INV-${String(r.invoice_number).padStart(4, "0")}` : r.id.slice(0, 8),
+      balance_due: balance,
+      due_date: r.due_date,
+      status: r.status,
+      client_name: r.client_name,
+      job_number: r.job_number,
+      job_title: r.job_title,
+    };
+  });
+
+  return reportJson({
+    summary: { total_projected: totalProjected, due_this_week: dueThisWeek, due_this_month: dueThisMonth, overdue },
+    invoices,
+  });
+}
+
+export async function handleClientReengagement(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+
+  const rows = (
+    await env.DB.prepare(
+      `SELECT c.id,
+              ${CLIENT_NAME_SQL},
+              c.email, c.phone,
+              MAX(j.actual_end_date) AS last_job_completed,
+              COUNT(CASE WHEN j.status = 'complete' THEN j.id END) AS total_jobs,
+              COALESCE(SUM(CASE WHEN j.status = 'complete' THEN j.contract_total ELSE 0 END), 0) AS total_revenue
+       FROM clients c
+       LEFT JOIN jobs j ON j.client_id = c.id AND j.status = 'complete'
+       GROUP BY c.id
+       HAVING last_job_completed < date('now', '-12 months') OR last_job_completed IS NULL
+       ORDER BY last_job_completed DESC`,
+    ).all<{
+      id: string;
+      client_name: string;
+      email: string | null;
+      phone: string | null;
+      last_job_completed: string | null;
+      total_jobs: number;
+      total_revenue: number;
+    }>()
+  ).results ?? [];
+
+  let neverConverted = 0;
+  let inactive12 = 0;
+  for (const r of rows) {
+    if (!r.last_job_completed) neverConverted += 1;
+    else inactive12 += 1;
+  }
+
+  return reportJson({
+    summary: { total_clients: rows.length, never_converted: neverConverted, inactive_12_months: inactive12 },
+    clients: rows.map((r) => ({
+      id: r.id,
+      name: r.client_name,
+      email: r.email,
+      phone: r.phone,
+      last_job_completed: r.last_job_completed,
+      total_jobs: r.total_jobs,
+      total_revenue: r.total_revenue,
+    })),
+  });
+}
+
+export async function handleJobRevenue(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+
+  const url = new URL(request.url);
+  const yearParam = url.searchParams.get("year");
+  const year = yearParam ? String(parseInt(yearParam, 10)) : String(new Date().getFullYear());
+  if (Number.isNaN(Number(year)) || Number(year) < 2020) {
+    return reportErr(400, "Invalid year");
+  }
+
+  const rows = (
+    await env.DB.prepare(
+      `SELECT j.id, j.job_number, j.title,
+              ${CLIENT_NAME_SQL},
+              j.contract_total, j.status, j.actual_end_date AS completed_date,
+              COALESCE(SUM(p.amount), 0) AS total_collected,
+              COALESCE(exp.total_expenses, 0) AS total_expenses
+       FROM jobs j
+       JOIN clients c ON j.client_id = c.id
+       LEFT JOIN invoices i ON i.job_id = j.id
+       LEFT JOIN payments p ON p.invoice_id = i.id
+       LEFT JOIN (
+         SELECT job_id, SUM(amount) AS total_expenses
+         FROM expenses
+         WHERE is_active IS NULL OR is_active != 0
+         GROUP BY job_id
+       ) exp ON exp.job_id = j.id
+       WHERE j.status != 'closed'
+         AND strftime('%Y', j.created_at) = ?
+       GROUP BY j.id
+       ORDER BY j.actual_end_date DESC`,
+    )
+      .bind(year)
+      .all<{
+        id: string;
+        job_number: number | null;
+        title: string | null;
+        client_name: string;
+        contract_total: number | null;
+        status: string;
+        completed_date: string | null;
+        total_collected: number;
+        total_expenses: number;
+      }>()
+  ).results ?? [];
+
+  let totalRevenue = 0;
+  let totalCollected = 0;
+  let totalExpenses = 0;
+
+  const jobs = rows.map((r) => {
+    const contract = r.contract_total ?? 0;
+    const collected = r.total_collected ?? 0;
+    const expenses = r.total_expenses ?? 0;
+    const grossProfit = collected - expenses;
+    totalRevenue += contract;
+    totalCollected += collected;
+    totalExpenses += expenses;
+    return {
+      id: r.id,
+      job_number: r.job_number,
+      job_display: r.job_number ? `JOB-${String(r.job_number).padStart(3, "0")}` : r.id.slice(0, 8),
+      title: r.title,
+      client_name: r.client_name,
+      contract_value: contract,
+      status: r.status,
+      completed_date: r.completed_date,
+      total_collected: collected,
+      total_expenses: expenses,
+      gross_profit: grossProfit,
+    };
+  });
+
+  return reportJson({
+    summary: {
+      total_revenue: totalRevenue,
+      total_collected: totalCollected,
+      total_expenses: totalExpenses,
+      gross_profit: totalCollected - totalExpenses,
+      job_count: jobs.length,
+    },
+    jobs,
+  });
+}
+
+export async function handleFinancialReports(
+  request: Request,
+  env: Env,
+  url: URL,
+): Promise<Response | null> {
+  if (url.pathname === "/api/reports/aged-receivables" && request.method === "GET") {
+    return handleAgedReceivables(request, env);
+  }
+  if (url.pathname === "/api/reports/projected-income" && request.method === "GET") {
+    return handleProjectedIncome(request, env);
+  }
+  if (url.pathname === "/api/reports/client-reengagement" && request.method === "GET") {
+    return handleClientReengagement(request, env);
+  }
+  if (url.pathname === "/api/reports/job-revenue" && request.method === "GET") {
+    return handleJobRevenue(request, env);
+  }
+  return null;
+}

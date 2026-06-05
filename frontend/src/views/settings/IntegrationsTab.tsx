@@ -42,16 +42,25 @@ export function IntegrationsTab() {
     credentials_present: boolean;
     enabled: boolean;
   } | null>(null);
+  const [social, setSocial] = useState<{
+    connected: boolean;
+    publish_mode: "live" | "simulate";
+    page_label: string;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [imageGenBusy, setImageGenBusy] = useState(false);
+  const [socialTestBusy, setSocialTestBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [integrations, status, settings] = await Promise.all([
+      const [integrations, status, socialStatus, settings] = await Promise.all([
         api.get<{ integrations: Connection[] }>("/api/integrations"),
         api.get<{ credentials_present: boolean; enabled: boolean }>("/api/integrations/image-gen/status"),
+        api.get<{ connected: boolean; publish_mode: "live" | "simulate"; page_label: string }>(
+          "/api/social/status",
+        ),
         api.get<{ settings: Array<{ key: string; value: string; value_type: string }> }>("/api/settings"),
       ]);
       setConnections(integrations.integrations);
@@ -59,6 +68,11 @@ export function IntegrationsTab() {
       setImageGen({
         credentials_present: status.credentials_present,
         enabled: setting ? setting.value === "true" || setting.value === "1" : status.enabled,
+      });
+      setSocial({
+        connected: socialStatus.connected,
+        publish_mode: socialStatus.publish_mode,
+        page_label: socialStatus.page_label,
       });
     } catch (e) {
       toast.push("error", errMsg(e));
@@ -95,6 +109,24 @@ export function IntegrationsTab() {
     }
   };
 
+  const testSocial = async () => {
+    setSocialTestBusy(true);
+    try {
+      const r = await api.get<{ ok: boolean; page_name?: string; error?: string }>(
+        "/api/social/test-connection",
+      );
+      if (r.ok) {
+        toast.push("success", r.page_name ? `Connected: ${r.page_name}` : "Facebook connection OK");
+      } else {
+        toast.push("error", r.error ?? "Connection test failed");
+      }
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setSocialTestBusy(false);
+    }
+  };
+
   const toggleImageGen = async () => {
     if (!imageGen) return;
     setImageGenBusy(true);
@@ -114,6 +146,46 @@ export function IntegrationsTab() {
 
   return (
     <div>
+      <div class="card" style={{ marginBottom: "var(--space-md)" }}>
+        <div class="card__body">
+          <div class="flex items-center gap-sm" style={{ justifyContent: "space-between" }}>
+            <div class="flex items-center gap-sm">
+              <span style={{ fontSize: "1.4rem" }}>📘</span>
+              <strong>Facebook &amp; Instagram</strong>
+            </div>
+            <Badge tone={social?.connected ? "success" : "neutral"}>
+              {social?.connected ? "Connected" : "Not connected"}
+            </Badge>
+          </div>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
+            Publish job completion posts and manage social content. Page tokens are configured via system
+            settings (not in the browser).
+          </p>
+          <div class="kv" style={{ marginTop: "var(--space-sm)" }}>
+            <div class="kv__row">
+              <span class="kv__label">Page</span>
+              <span class="kv__value">{social?.page_label ?? "—"}</span>
+            </div>
+            <div class="kv__row">
+              <span class="kv__label">Publish mode</span>
+              <span class="kv__value">
+                <Badge tone={social?.publish_mode === "live" ? "success" : "warning"}>
+                  {social?.publish_mode === "live" ? "LIVE" : "SIMULATE"}
+                </Badge>
+              </span>
+            </div>
+          </div>
+          <div class="flex gap-sm" style={{ marginTop: "var(--space-sm)" }}>
+            <Button size="sm" variant="secondary" disabled={socialTestBusy} onClick={() => void testSocial()}>
+              Test Connection
+            </Button>
+            <Button size="sm" variant="tertiary" onClick={() => go("/social")}>
+              View Posts
+            </Button>
+          </div>
+        </div>
+      </div>
+
       <div class="card" style={{ marginBottom: "var(--space-md)" }}>
         <div class="card__body">
           <div class="flex items-center gap-sm" style={{ justifyContent: "space-between" }}>

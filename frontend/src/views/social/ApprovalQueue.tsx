@@ -10,7 +10,7 @@ import { formatStatus, formatDateTime } from "../../lib/format";
 import { SOCIAL_POST_TYPES, SOCIAL_TYPE_COLORS, type SocialPost } from "../../types";
 
 interface Props {
-  onEdit: (id: string) => void;
+  onEdit: (id: string, intent?: "default" | "approve") => void;
   /** Bumped by the parent to force a reload after external changes. */
   refreshKey: number;
 }
@@ -48,18 +48,8 @@ export function ApprovalQueue({ onEdit, refreshKey }: Props) {
 
   const visible = posts.filter((p) => !typeFilter || p.post_type === typeFilter);
 
-  const saveInline = async (p: SocialPost) => {
-    const d = drafts[p.id];
-    if (!d) return;
-    await api.put(`/api/social-posts/${p.id}`, {
-      caption: d.caption,
-      hashtags: d.hashtags.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean),
-    });
-  };
-
-  const act = async (p: SocialPost, action: "approve" | "reject" | "delete", editFirst = false) => {
+  const act = async (p: SocialPost, action: "approve" | "reject" | "delete") => {
     try {
-      if (editFirst) await saveInline(p);
       if (action === "delete") {
         await api.del(`/api/social-posts/${p.id}`);
         toast.push("success", "Deleted.");
@@ -69,7 +59,7 @@ export function ApprovalQueue({ onEdit, refreshKey }: Props) {
         toast.push("success", "Rejected.");
       } else {
         await api.post(`/api/social-posts/${p.id}/approve`, {});
-        toast.push("success", editFirst ? "Edited & approved." : "Approved.");
+        toast.push("success", "Approved.");
       }
       void load();
     } catch (e) {
@@ -139,7 +129,7 @@ export function ApprovalQueue({ onEdit, refreshKey }: Props) {
             onDraft={(d) => setDrafts((prev) => ({ ...prev, [p.id]: d }))}
             onEdit={() => onEdit(p.id)}
             onApprove={() => act(p, "approve")}
-            onEditApprove={() => act(p, "approve", true)}
+            onEditApprove={() => onEdit(p.id, "approve")}
             onReject={() => act(p, "reject")}
             onDelete={() => act(p, "delete")}
           />
@@ -233,10 +223,10 @@ function QueueCard(props: {
         />
 
         <div class="flex gap-sm flex-wrap mt-md">
-          <Button size="sm" variant="primary" onClick={props.onApprove}>
+          <Button size="sm" variant="secondary" onClick={props.onApprove}>
             Approve
           </Button>
-          <Button size="sm" variant="secondary" onClick={props.onEditApprove}>
+          <Button size="sm" variant="primary" onClick={props.onEditApprove}>
             Edit &amp; Approve
           </Button>
           <Button size="sm" variant="tertiary" onClick={props.onEdit}>

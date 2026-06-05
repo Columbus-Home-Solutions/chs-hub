@@ -14,7 +14,7 @@ export function KpiTiles({ tiles, loading }: Props) {
   if (loading) {
     return (
       <div class="kpi-strip">
-        {[...Array(6)].map((_, i) => <SkeletonTile key={i} />)}
+        {[...Array(7)].map((_, i) => <SkeletonTile key={i} />)}
       </div>
     );
   }

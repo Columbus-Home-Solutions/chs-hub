@@ -5,6 +5,8 @@ import {
   buildHashtagPrompt,
   parseCaptions,
   parseHashtags,
+  parseHashtagsForPlatform,
+  buildImagePrompt,
   fallbackHashtags,
 } from "../src/lib/social-ai";
 import { DEFAULT_BRAND_VOICE } from "../src/lib/social";
@@ -16,14 +18,18 @@ import {
   nextBackoffMs,
   decidePublishOutcome,
   composePublishText,
+  pickHashtagsForPlatform,
   buildFacebookPhotoRequest,
   buildInstagramContainerRequest,
   buildInstagramPublishRequest,
   simulatedFacebook,
   simulatedInstagram,
+  publicImageUrl,
+  publicPublishOrigin,
   MAX_PUBLISH_ATTEMPTS,
   type PlatformOutcome,
 } from "../src/lib/social-publish";
+import type { SocialPostRow } from "../src/lib/social.js";
 
 // ─── Deliverable B: caption + hashtag generation ──────────────────────────────
 
@@ -59,10 +65,40 @@ describe("social-ai caption generation (Sprint 16)", () => {
     expect(opts.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("hashtag prompt instructs variety + mix of local/trade/general", () => {
+  it("hashtag prompt without pool instructs variety + mix of local/trade/general", () => {
     const p = buildHashtagPrompt({ kind: "tips_tricks", topic: "budgeting a remodel" });
     expect(p).toMatch(/VARY/);
     expect(p).toContain("#LittleRock");
+  });
+
+  it("hashtag prompt with pool instructs brand + local picks", () => {
+    const pool = {
+      brand: ["#ColumbusHomeSolutions"],
+      local: ["#LittleRock"],
+      general: ["#HomeRemodel"],
+    };
+    const p = buildHashtagPrompt(
+      { kind: "tips_tricks", topic: "budgeting a remodel" },
+      "both",
+      pool,
+    );
+    expect(p).toContain("2-3 brand tags");
+    expect(p).toContain("ColumbusHomeSolutions");
+    expect(p).toContain("facebook_hashtags");
+  });
+
+  it("parseHashtagsForPlatform prefers instagram set for both", () => {
+    const text =
+      '{"facebook_hashtags":["#A","#B","#C"],"instagram_hashtags":["#A","#B","#C","#D","#E","#F","#G","#H","#I"]}';
+    const tags = parseHashtagsForPlatform(text, "both");
+    expect(tags.length).toBe(9);
+  });
+
+  it("image prompt includes subject angle by variation index", () => {
+    const a = buildImagePrompt({ kind: "manual", topic: "deck staining" }, 0);
+    const b = buildImagePrompt({ kind: "manual", topic: "deck staining" }, 1);
+    expect(a).not.toBe(b);
+    expect(a).toContain("homeowner");
   });
 
   it("parses hashtags and normalizes a missing leading #", () => {
@@ -222,6 +258,12 @@ describe("social-publish state machine (Sprint 16)", () => {
     expect(composePublishText("Hello", [])).toBe("Hello");
   });
 
+  it("pickHashtagsForPlatform caps facebook at 5 and instagram at 15", () => {
+    const tags = Array.from({ length: 20 }, (_, i) => `#Tag${i}`);
+    expect(pickHashtagsForPlatform(tags, "facebook").length).toBe(5);
+    expect(pickHashtagsForPlatform(tags, "instagram").length).toBe(15);
+  });
+
   it("builds the documented Graph request shapes (IG two-step)", () => {
     const fb = buildFacebookPhotoRequest({
       pageId: "PAGE",
@@ -244,5 +286,22 @@ describe("social-publish state machine (Sprint 16)", () => {
     const p = buildInstagramPublishRequest({ igAccountId: "IG", accessToken: "TOK", creationId: "CID" });
     expect(p.url).toContain("/IG/media_publish");
     expect(p.body).toMatchObject({ creation_id: "CID" });
+  });
+
+  it("publicImageUrl uses client host + /api/public paths for Graph fetches", () => {
+    const env = { APP_PUBLIC_ORIGIN: "https://client.homesolutionsar.com" } as import("../src/env.js").Env;
+    expect(publicPublishOrigin(env)).toBe("https://client.homesolutionsar.com");
+    const post = {
+      id: "post-1",
+      ai_generated_image_url: "/api/social-posts/post-1/image",
+      photo_ids: '["ph-1","ph-2"]',
+    } as SocialPostRow;
+    expect(publicImageUrl(env, post)).toBe(
+      "https://client.homesolutionsar.com/api/public/social-posts/post-1/image",
+    );
+    const photoPost = { id: "p2", ai_generated_image_url: null, photo_ids: '["ph-9"]' } as SocialPostRow;
+    expect(publicImageUrl(env, photoPost)).toBe(
+      "https://client.homesolutionsar.com/api/public/social/photos/ph-9",
+    );
   });
 });

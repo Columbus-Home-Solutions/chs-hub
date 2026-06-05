@@ -155,6 +155,13 @@ export function buildInstagramPublishRequest(args: {
   };
 }
 
+/** Trim hashtags for the target network (stored set is the full Instagram-scale list). */
+export function pickHashtagsForPlatform(tags: string[], platform: "facebook" | "instagram"): string[] {
+  const clean = tags.filter(Boolean);
+  if (platform === "facebook") return clean.slice(0, 5);
+  return clean.slice(0, 15);
+}
+
 /** Compose the full caption (caption + hashtags) sent to the platforms. */
 export function composePublishText(caption: string, hashtags: string[]): string {
   const tags = hashtags.filter(Boolean).join(" ");
@@ -226,17 +233,30 @@ async function upsertDlq(
 
 // ─── per-platform attempts ─────────────────────────────────────────────────────
 
-function publicImageUrl(env: Env, post: SocialPostRow): string | null {
-  const origin = (env.APP_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
+/** Origin for URLs Facebook/Instagram fetch (public host, not Access-gated dashboard). */
+export function publicPublishOrigin(env: Env): string {
+  return (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
+}
+
+/**
+ * Absolute image URL for Graph API. Uses /api/public/* routes on APP_PUBLIC_ORIGIN
+ * so Meta can fetch without Cloudflare Access.
+ */
+export function publicImageUrl(env: Env, post: SocialPostRow): string | null {
+  const origin = publicPublishOrigin(env);
   if (post.ai_generated_image_url) {
-    return post.ai_generated_image_url.startsWith("http")
-      ? post.ai_generated_image_url
-      : `${origin}${post.ai_generated_image_url}`;
+    if (post.ai_generated_image_url.startsWith("http")) return post.ai_generated_image_url;
+    if (
+      post.ai_generated_image_url.includes("/social-posts/") &&
+      post.ai_generated_image_url.endsWith("/image")
+    ) {
+      return `${origin}/api/public/social-posts/${post.id}/image`;
+    }
+    return `${origin}${post.ai_generated_image_url}`;
   }
   const photoIds = parseJsonArray(post.photo_ids);
   if (photoIds.length > 0) {
-    // Prefer the after photo (last) for the hero image.
-    return `${origin}/api/photos/${photoIds[photoIds.length - 1]}`;
+    return `${origin}/api/public/social/photos/${photoIds[photoIds.length - 1]}`;
   }
   return null;
 }
@@ -253,6 +273,9 @@ async function attemptFacebook(
   }
   const pageId = await getSetting(env, "social_facebook_page_id");
   const token = await getSetting(env, "social_facebook_page_token");
+  console.log(
+    `[social-publish] facebook credentials source=system_settings pageId=${pageId ? "set" : "missing"} token=${token ? "set" : "missing"}`,
+  );
   const imageUrl = publicImageUrl(env, post);
   if (!pageId || !token || !imageUrl) {
     return { platform: "facebook", ok: false, error: "facebook_not_connected" };
@@ -264,8 +287,21 @@ async function attemptFacebook(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req.body),
     });
-    const data = (await res.json()) as { id?: string; post_id?: string; error?: { message?: string } };
+    const data = (await res.json()) as {
+      id?: string;
+      post_id?: string;
+      error?: { message?: string; code?: number };
+    };
     if (!res.ok || data.error) {
+      if (data.error?.code === 200) {
+        return {
+          platform: "facebook",
+          ok: false,
+          error:
+            "Facebook publish failed: Page token is missing pages_manage_posts permission. " +
+            "Regenerate the token with correct scopes and re-seed social_facebook_page_token.",
+        };
+      }
       return { platform: "facebook", ok: false, error: data.error?.message ?? `http_${res.status}` };
     }
     const id = data.post_id ?? data.id ?? "";
@@ -287,6 +323,9 @@ async function attemptInstagram(
   }
   const igId = await getSetting(env, "social_instagram_account_id");
   const token = await getSetting(env, "social_facebook_page_token");
+  console.log(
+    `[social-publish] instagram credentials source=system_settings accountId=${igId ?? "missing"} token=${token ? "set" : "missing"}`,
+  );
   const imageUrl = publicImageUrl(env, post);
   if (!igId || !token || !imageUrl) {
     return { platform: "instagram", ok: false, error: "instagram_not_connected" };
@@ -299,8 +338,17 @@ async function attemptInstagram(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(c.body),
     });
-    const cData = (await cRes.json()) as { id?: string; error?: { message?: string } };
+    const cData = (await cRes.json()) as { id?: string; error?: { message?: string; code?: number } };
     if (!cRes.ok || cData.error || !cData.id) {
+      if (cData.error?.code === 10) {
+        return {
+          platform: "instagram",
+          ok: false,
+          error:
+            "Instagram publish failed: app lacks permission (code 10). " +
+            "Ensure the Page token includes pages_manage_posts and the IG account is linked.",
+        };
+      }
       return { platform: "instagram", ok: false, error: cData.error?.message ?? `container_http_${cRes.status}` };
     }
     // Step 2: publish the container (IG can't take a direct upload).
@@ -360,15 +408,27 @@ export async function publishPost(
 
   const mode = await resolvePublishMode(env);
   const targets = platformTargets(post.platform);
-  const text = composePublishText(post.caption, parseJsonArray(post.hashtags));
+  const allTags = parseJsonArray(post.hashtags);
 
   // Per-platform idempotency: skip a platform already published.
   const needFb = targets.facebook && !post.facebook_post_id;
   const needIg = targets.instagram && !post.instagram_post_id;
 
   const outcomes: PlatformOutcome[] = [];
-  if (needFb) outcomes.push(await attemptFacebook(env, post, mode, text));
-  if (needIg) outcomes.push(await attemptInstagram(env, post, mode, text));
+  if (needFb) {
+    const text = composePublishText(
+      post.caption,
+      pickHashtagsForPlatform(allTags, "facebook"),
+    );
+    outcomes.push(await attemptFacebook(env, post, mode, text));
+  }
+  if (needIg) {
+    const text = composePublishText(
+      post.caption,
+      pickHashtagsForPlatform(allTags, "instagram"),
+    );
+    outcomes.push(await attemptInstagram(env, post, mode, text));
+  }
 
   // Persist each platform's success immediately (so a later retry skips it).
   for (const o of outcomes) {
@@ -398,7 +458,7 @@ export async function publishPost(
 
   if (decision.finalStatus === "published") {
     await env.DB.prepare(
-      "UPDATE social_posts SET status = 'published', published_date = datetime('now') WHERE id = ?",
+      "UPDATE social_posts SET status = 'published', published_date = datetime('now'), image_variation_index = 0 WHERE id = ?",
     )
       .bind(postId)
       .run();

@@ -373,6 +373,8 @@ import {
   handleContentScheduleGenerate,
 } from "./routes/content-schedules.js";
 import { handleSocialPostPublish } from "./routes/social-publish.js";
+import { handleSocialStatus, handleSocialTestConnection } from "./routes/social-connection.js";
+import { handlePublicSocialImage, handlePublicSocialPhoto } from "./routes/public-social.js";
 import { publishDuePosts } from "./lib/social-publish.js";
 import { enforceRbac } from "./lib/rbac.js";
 import {
@@ -394,7 +396,7 @@ import {
 } from "./routes/dlq.js";
 import { handleBackupStatus, handleBackupTrigger } from "./routes/backup.js";
 import { handleAdminHealth } from "./routes/health.js";
-import { handleCpaExport } from "./routes/reports.js";
+import { handleCpaExport, handleFinancialReports } from "./routes/reports.js";
 import { handleMapsConfig } from "./routes/config.js";
 import {
   handleIntegrationTest,
@@ -458,6 +460,8 @@ export default {
         p.startsWith("/app/assets/") ||
         p.startsWith("/api/public/pay/") ||
         p.startsWith("/api/public/quote/") ||
+        p.startsWith("/api/public/social-posts/") ||
+        p.startsWith("/api/public/social/") ||
         p.startsWith("/api/portal/") ||
         p === "/api/webhooks/stripe";
       if (!allowed) {
@@ -555,9 +559,11 @@ export default {
     }
 
     // ── Dashboard API (Sprint 14) ─────────────────────────────────────────
-    if (url.pathname.startsWith("/api/dashboard/") && request.method === "GET") {
-      const dashResp = await handleDashboard(env, url);
-      if (dashResp) return dashResp;
+    if (url.pathname.startsWith("/api/dashboard/")) {
+      if (request.method === "GET" || request.method === "PATCH") {
+        const dashResp = await handleDashboard(env, url, request);
+        if (dashResp) return dashResp;
+      }
     }
 
     if (url.pathname === "/api/search" && request.method === "GET") {
@@ -1055,6 +1061,16 @@ export default {
       return handlePublicPayIntent(request, env, decodeURIComponent(publicPayIntent[1]));
     }
 
+    // ── Public social images (Graph API fetches, no Access) ─────────────
+    const publicSocialImage = url.pathname.match(/^\/api\/public\/social-posts\/([^/]+)\/image$/);
+    if (publicSocialImage && (request.method === "GET" || request.method === "HEAD")) {
+      return handlePublicSocialImage(env, decodeURIComponent(publicSocialImage[1]));
+    }
+    const publicSocialPhoto = url.pathname.match(/^\/api\/public\/social\/photos\/([^/]+)$/);
+    if (publicSocialPhoto && (request.method === "GET" || request.method === "HEAD")) {
+      return handlePublicSocialPhoto(env, decodeURIComponent(publicSocialPhoto[1]));
+    }
+
     // ── Client Portal API (Sprint 12, PUBLIC token-gated) ────────────
     // All /api/portal/* routes (landing, photos, invoices, pay, budget,
     // messages, deferred seams). The dispatcher returns null when nothing
@@ -1223,6 +1239,10 @@ export default {
     }
 
     // ── Financial reports / CPA export ───────────────────────────────
+    if (url.pathname.startsWith("/api/reports/") && request.method === "GET") {
+      const finReport = await handleFinancialReports(request, env, url);
+      if (finReport) return finReport;
+    }
     if (url.pathname === "/api/reports/cpa-export" && request.method === "GET") {
       return handleCpaExport(request, env);
     }
@@ -1550,6 +1570,14 @@ export default {
       const sid = decodeURIComponent(subItemById[1]);
       if (request.method === "PUT") return handleSubItemUpdate(request, env, sid);
       if (request.method === "DELETE") return handleSubItemDelete(request, env, sid);
+    }
+
+    // ── Social connection (Pre-Launch live flip, owner only) ─────────
+    if (url.pathname === "/api/social/status" && request.method === "GET") {
+      return handleSocialStatus(request, env);
+    }
+    if (url.pathname === "/api/social/test-connection" && request.method === "GET") {
+      return handleSocialTestConnection(request, env);
     }
 
     // ── Social Media Engine (Sprint 16) ──────────────────────────────

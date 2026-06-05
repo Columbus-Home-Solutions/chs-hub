@@ -328,3 +328,71 @@ export async function buildJobCosting(env: Env, jobId: string): Promise<JobCosti
     },
   };
 }
+
+/** YTD operating costs for dashboard profit KPI (matches per-job costing sources). */
+export interface YtdOperatingCosts {
+  /** Non-void job expenses (materials, subs, fuel, manual labor, etc.). */
+  expenses: number;
+  /** Closed time-entry labor_cost (separate from expense rows — see computeJobActuals). */
+  labor_from_time: number;
+  /** Stripe processing fees on collected payments. */
+  stripe_fees: number;
+  /** expenses + labor_from_time + stripe_fees */
+  total_cogs: number;
+}
+
+export async function computeYtdOperatingCosts(
+  env: Env,
+  yearStartDate: string,
+): Promise<YtdOperatingCosts> {
+  const [expRow, laborRow, feeRow] = await Promise.all([
+    env.DB.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS v FROM expenses
+       WHERE COALESCE(incurred_date, incurred_at) >= ?
+         AND COALESCE(is_active, 1) = 1`,
+    )
+      .bind(yearStartDate)
+      .first<{ v: number }>(),
+    env.DB.prepare(
+      `SELECT COALESCE(SUM(labor_cost), 0) AS v FROM time_entries
+       WHERE clock_out IS NOT NULL
+         AND substr(COALESCE(clock_in, ''), 1, 10) >= ?`,
+    )
+      .bind(yearStartDate)
+      .first<{ v: number }>(),
+    env.DB.prepare(
+      `SELECT COALESCE(SUM(stripe_fee), 0) AS v FROM payments
+       WHERE stripe_fee > 0 AND received_date >= ?`,
+    )
+      .bind(yearStartDate)
+      .first<{ v: number }>(),
+  ]);
+
+  const expenses = round2(expRow?.v ?? 0);
+  const labor_from_time = round2(laborRow?.v ?? 0);
+  const stripe_fees = round2(feeRow?.v ?? 0);
+  return {
+    expenses,
+    labor_from_time,
+    stripe_fees,
+    total_cogs: round2(expenses + labor_from_time + stripe_fees),
+  };
+}
+
+/** Job COGS only (expenses + labor) — used for accrual/earned margin vs. invoiced revenue. */
+export function jobCogsOnly(costs: YtdOperatingCosts): number {
+  return round2(costs.expenses + costs.labor_from_time);
+}
+
+/** Invoiced revenue YTD (accrual): sent/viewed/partial/past_due/paid, excluding draft & void. */
+export async function computeYtdEarnedRevenue(env: Env, yearStartDate: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COALESCE(SUM(COALESCE(total_due, amount, 0)), 0) AS v
+     FROM invoices
+     WHERE status NOT IN ('draft', 'void')
+       AND COALESCE(issued_date, sent_date, created_at) >= ?`,
+  )
+    .bind(yearStartDate)
+    .first<{ v: number }>();
+  return round2(row?.v ?? 0);
+}

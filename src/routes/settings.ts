@@ -31,8 +31,24 @@ function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body, null, 2), { ...init, headers });
 }
 
+const REDACTED_SETTING_KEYS = new Set([
+  "social_facebook_page_token",
+  "stripe_secret_key",
+  "stripe_webhook_secret",
+  "social_gemini_api_key",
+]);
+
+function isRedactedSettingKey(key: string): boolean {
+  if (REDACTED_SETTING_KEYS.has(key)) return true;
+  const k = key.toLowerCase();
+  return k.includes("token") || k.includes("secret") || k.endsWith("_key");
+}
+
 /** Map a stored setting row to a typed `value` alongside the raw string. */
 function shape(row: SettingRow) {
+  if (isRedactedSettingKey(row.key)) {
+    return { ...row, value: "", typed_value: null, redacted: true as const };
+  }
   let typed: unknown = row.value;
   try {
     if (row.value_type === "number") typed = Number(row.value);

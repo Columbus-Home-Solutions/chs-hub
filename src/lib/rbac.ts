@@ -125,6 +125,7 @@ const ROUTE_RULES: RouteRule[] = [
   { method: "*", pattern: /^\/api\/users(\/.*)?$/, roles: O }, // user management CRUD
   { method: "*", pattern: /^\/api\/settings(\/.*)?$/, roles: O }, // system settings
   { method: "*", pattern: /^\/api\/integrations(\/.*)?$/, roles: O },
+  { method: "GET", pattern: /^\/api\/social\/(status|test-connection)$/, roles: O },
   { method: "*", pattern: /^\/api\/quickbooks(\/.*)?$/, roles: O },
   { method: "*", pattern: /^\/api\/wc-spreadsheet(\/.*)?$/, roles: O },
   { method: "*", pattern: /^\/api\/audit-logs(\/.*)?$/, roles: O },

@@ -136,7 +136,7 @@ export async function maybeGenerateJobCompletionPost(
       ? captionRes.options[0]
       : `Another ${job.job_type ?? "project"} complete${job.property_city ? ` in ${job.property_city}` : ""}! Free estimates — call us!`;
 
-    const hashRes = await generateHashtags(env, ctx, jobId).catch(() => ({
+    const hashRes = await generateHashtags(env, ctx, jobId, "both").catch(() => ({
       ok: true,
       hashtags: fallbackHashtags(jobId, job.job_type),
       fallback: true,

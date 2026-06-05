@@ -56,6 +56,7 @@ export const SETTING_REPLICATE_KEY = SETTING_GEMINI_KEY;
 /** When "false" / "0", disables Imagen even if Google credentials are present. */
 export const SETTING_IMAGE_GEN_ENABLED = "image_gen_enabled";
 export const SETTING_IMAGE_GEN_COUNT = "social_image_gen_count";
+export const SETTING_HASHTAG_POOL = "social_hashtag_pool";
 
 /** Default brand voice — owner can override via the settings row without a deploy. */
 export const DEFAULT_BRAND_VOICE =
@@ -149,6 +150,7 @@ export interface SocialPostRow {
   approved_by: string | null;
   approved_date: string | null;
   created_at: string;
+  image_variation_index?: number | null;
 }
 
 export function shapeSocialPost(row: SocialPostRow) {
@@ -173,6 +175,7 @@ export function shapeSocialPost(row: SocialPostRow) {
     approved_by: row.approved_by,
     approved_date: row.approved_date,
     created_at: row.created_at,
+    image_variation_index: row.image_variation_index ?? 0,
     // engagement_data stays a future seam (analytics not built this sprint).
     has_image: Boolean(row.ai_generated_image_url) || parseJsonArray(row.photo_ids).length > 0,
   };

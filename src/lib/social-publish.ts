@@ -8,9 +8,9 @@
  * No live social account is touched this sprint.
  *
  * The machine: approved → (due) → published | failed.
- *   - Per-platform branch on `platform` (both / facebook_only / instagram_only).
- *   - Instagram TWO-STEP: create a media container on Facebook's servers, then
- *     publish the container (IG cannot take a direct upload).
+ *   - All live publishing goes through the Instagram Graph API (two-step container
+ *     + media_publish). Facebook delivery uses `also_share_to_facebook` on the
+ *     IG container — no direct Pages `/photos` call (avoids pages_manage_posts).
  *   - Idempotency: a `published` post is never re-published. Per-platform partial
  *     success is recorded on the post (facebook_post_id / instagram_post_id); on
  *     retry only the still-missing platform is attempted.
@@ -28,17 +28,24 @@ import {
   getSetting,
   logSocialAudit,
   parseJsonArray,
+  resolveInstagramAccessToken,
+  SETTING_IG_ACCOUNT_ID,
   SETTING_PUBLISH_MODE,
   type Platform,
   type SocialPostRow,
 } from "./social.js";
+
+/** CHS Instagram Business Account — used when social_instagram_account_id is unset. */
+export const DEFAULT_IG_BUSINESS_ACCOUNT_ID = "17841451185371306";
 
 export const MAX_PUBLISH_ATTEMPTS = 3;
 // Exponential backoff between attempts: 1 min / 5 min / 30 min (mirrors the
 // notification engine's backoff ladder).
 export const PUBLISH_BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000];
 
-const GRAPH_BASE = "https://graph.facebook.com/v21.0";
+const INSTAGRAM_GRAPH_BASE = "https://graph.instagram.com/v25.0";
+/** Legacy Facebook Graph host — only used by deprecated Page /photos helper. */
+const FACEBOOK_GRAPH_BASE = "https://graph.facebook.com/v21.0";
 
 // ─── pure helpers (unit-tested) ────────────────────────────────────────────────
 
@@ -118,8 +125,60 @@ export function simulatedInstagram(postId: string): PlatformOutcome {
   return { platform: "instagram", ok: true, postId: id, url: `https://www.instagram.com/p/${id}` };
 }
 
+export interface InstagramPublishResult {
+  ok: boolean;
+  instagramPostId?: string;
+  instagramUrl?: string;
+  facebookPostId?: string;
+  facebookUrl?: string;
+  error?: string;
+}
+
+/** Simulated IG publish; when cross-posting, also returns a synthetic FB id. */
+export function simulatedInstagramPublish(
+  postId: string,
+  shareToFacebook: boolean,
+): InstagramPublishResult {
+  const stamp = Date.now();
+  const igId = `SIMIG-${postId.slice(0, 8)}-${stamp}`;
+  const fbId = shareToFacebook ? `SIMFB-${postId.slice(0, 8)}-${stamp}` : undefined;
+  return {
+    ok: true,
+    instagramPostId: igId,
+    instagramUrl: `https://www.instagram.com/p/${igId}`,
+    facebookPostId: fbId,
+    facebookUrl: fbId ? `https://www.facebook.com/${fbId}` : undefined,
+  };
+}
+
+/** Extract IG + FB ids from a Graph media_publish (or follow-up GET) payload. */
+export function parseInstagramPublishResponse(data: Record<string, unknown>): {
+  instagramPostId: string | null;
+  facebookPostId: string | null;
+} {
+  const instagramPostId =
+    (typeof data.id === "string" && data.id) ||
+    (typeof data.ig_media_id === "string" && data.ig_media_id) ||
+    null;
+  let facebookPostId =
+    (typeof data.facebook_post_id === "string" && data.facebook_post_id) ||
+    (typeof data.fb_post_id === "string" && data.fb_post_id) ||
+    (typeof data.post_id_on_facebook === "string" && data.post_id_on_facebook) ||
+    (typeof data.crossposted_facebook_post_id === "string" && data.crossposted_facebook_post_id) ||
+    null;
+  if (!facebookPostId) {
+    const shares = data.shares as { data?: Array<{ id?: string }> } | undefined;
+    const shareId = shares?.data?.[0]?.id;
+    if (typeof shareId === "string" && shareId.trim()) {
+      facebookPostId = shareId.trim();
+    }
+  }
+  return { instagramPostId, facebookPostId };
+}
+
 // Graph API request-shape builders (documented; exercised only when live).
 
+/** @deprecated Direct Page /photos publish removed — use Instagram cross-post instead. */
 export function buildFacebookPhotoRequest(args: {
   pageId: string;
   accessToken: string;
@@ -127,7 +186,7 @@ export function buildFacebookPhotoRequest(args: {
   caption: string;
 }): { url: string; body: Record<string, unknown> } {
   return {
-    url: `${GRAPH_BASE}/${args.pageId}/photos`,
+    url: `${FACEBOOK_GRAPH_BASE}/${args.pageId}/photos`,
     body: { url: args.imageUrl, caption: args.caption, access_token: args.accessToken },
   };
 }
@@ -137,10 +196,19 @@ export function buildInstagramContainerRequest(args: {
   accessToken: string;
   imageUrl: string;
   caption: string;
+  alsoShareToFacebook?: boolean;
 }): { url: string; body: Record<string, unknown> } {
+  const body: Record<string, unknown> = {
+    image_url: args.imageUrl,
+    caption: args.caption,
+    access_token: args.accessToken,
+  };
+  if (args.alsoShareToFacebook) {
+    body.also_share_to_facebook = true;
+  }
   return {
-    url: `${GRAPH_BASE}/${args.igAccountId}/media`,
-    body: { image_url: args.imageUrl, caption: args.caption, access_token: args.accessToken },
+    url: `${INSTAGRAM_GRAPH_BASE}/${args.igAccountId}/media`,
+    body,
   };
 }
 
@@ -150,9 +218,21 @@ export function buildInstagramPublishRequest(args: {
   creationId: string;
 }): { url: string; body: Record<string, unknown> } {
   return {
-    url: `${GRAPH_BASE}/${args.igAccountId}/media_publish`,
+    url: `${INSTAGRAM_GRAPH_BASE}/${args.igAccountId}/media_publish`,
     body: { creation_id: args.creationId, access_token: args.accessToken },
   };
+}
+
+/** GET URL to resolve a Facebook cross-post id from a published IG media id. */
+export function buildInstagramMediaLookupUrl(args: {
+  instagramPostId: string;
+  accessToken: string;
+}): string {
+  const params = new URLSearchParams({
+    fields: "id,timestamp,permalink,shares",
+    access_token: args.accessToken,
+  });
+  return `${INSTAGRAM_GRAPH_BASE}/${args.instagramPostId}?${params.toString()}`;
 }
 
 /** Trim hashtags for the target network (stored set is the full Instagram-scale list). */
@@ -280,78 +360,101 @@ export function publicImageUrl(env: Env, post: SocialPostRow): string | null {
   return null;
 }
 
-async function attemptFacebook(
-  env: Env,
-  post: SocialPostRow,
-  mode: PublishMode,
-  text: string,
-): Promise<PlatformOutcome> {
-  if (mode !== "live") {
-    console.log(`[social-publish] [SIMULATE] facebook post ${post.id}`);
-    return simulatedFacebook(post.id);
-  }
-  const pageId = await getSetting(env, "social_facebook_page_id");
-  const token = await getSetting(env, "social_facebook_page_token");
-  console.log(
-    `[social-publish] facebook credentials source=system_settings pageId=${pageId ? "set" : "missing"} token=${token ? "set" : "missing"}`,
-  );
-  const imageUrl = publicImageUrl(env, post);
-  if (!pageId || !token || !imageUrl) {
-    return { platform: "facebook", ok: false, error: "facebook_not_connected" };
-  }
-  try {
-    const req = buildFacebookPhotoRequest({ pageId, accessToken: token, imageUrl, caption: text });
-    const res = await fetch(req.url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req.body),
-    });
-    const data = (await res.json()) as {
-      id?: string;
-      post_id?: string;
-      error?: { message?: string; code?: number };
-    };
-    if (!res.ok || data.error) {
-      if (data.error?.code === 200) {
-        return {
-          platform: "facebook",
-          ok: false,
-          error:
-            "Facebook publish failed: Page token is missing pages_manage_posts permission. " +
-            "Regenerate the token with correct scopes and re-seed social_facebook_page_token.",
-        };
-      }
-      return { platform: "facebook", ok: false, error: data.error?.message ?? `http_${res.status}` };
-    }
-    const id = data.post_id ?? data.id ?? "";
-    return { platform: "facebook", ok: true, postId: id, url: `https://www.facebook.com/${id}` };
-  } catch (e) {
-    return { platform: "facebook", ok: false, error: (e as Error).message };
-  }
+async function resolveInstagramAccountId(env: Env): Promise<string> {
+  const configured = (await getSetting(env, SETTING_IG_ACCOUNT_ID))?.trim();
+  return configured || DEFAULT_IG_BUSINESS_ACCOUNT_ID;
 }
 
-async function attemptInstagram(
+async function fetchFacebookCrosspostId(
+  igMediaId: string,
+  accessToken: string,
+  postId?: string,
+): Promise<string | null> {
+  const url = buildInstagramMediaLookupUrl({ instagramPostId: igMediaId, accessToken });
+  const res = await fetch(url);
+  let data: Record<string, unknown>;
+  try {
+    data = (await res.json()) as Record<string, unknown>;
+  } catch {
+    console.warn(
+      `[social-publish] facebook cross-post lookup invalid json post=${postId ?? igMediaId} instagram=${igMediaId}`,
+    );
+    return null;
+  }
+  if (!res.ok) {
+    console.warn(
+      `[social-publish] facebook cross-post lookup failed post=${postId ?? igMediaId} http=${res.status} response=${JSON.stringify(redactForLog(data))}`,
+    );
+    return null;
+  }
+  const fbId = parseInstagramPublishResponse(data).facebookPostId;
+  if (!fbId) {
+    console.warn(
+      `[social-publish] facebook cross-post id missing post=${postId ?? igMediaId} instagram=${igMediaId} response=${JSON.stringify(redactForLog(data))}`,
+    );
+  }
+  return fbId;
+}
+
+/** Strip tokens before logging Graph API payloads. */
+function redactForLog(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(redactForLog);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = k === "access_token" ? "[REDACTED]" : redactForLog(v);
+  }
+  return out;
+}
+
+function logInstagramGraphFailure(
+  stage: "container" | "publish",
+  postId: string,
+  httpStatus: number,
+  data: unknown,
+): void {
+  console.error(
+    `[social-publish] instagram ${stage} failed post=${postId} http=${httpStatus} response=${JSON.stringify(redactForLog(data))}`,
+  );
+}
+
+/**
+ * Publish via Instagram Graph API. When shareToFacebook is true, sets
+ * also_share_to_facebook on the container so Meta cross-posts to the linked Page.
+ */
+async function attemptInstagramPublish(
   env: Env,
   post: SocialPostRow,
   mode: PublishMode,
   text: string,
-): Promise<PlatformOutcome> {
+  shareToFacebook: boolean,
+): Promise<InstagramPublishResult> {
   if (mode !== "live") {
-    console.log(`[social-publish] [SIMULATE] instagram (two-step) post ${post.id}`);
-    return simulatedInstagram(post.id);
+    console.log(
+      `[social-publish] [SIMULATE] instagram post ${post.id}` +
+        (shareToFacebook ? " + facebook cross-post" : ""),
+    );
+    return simulatedInstagramPublish(post.id, shareToFacebook);
   }
-  const igId = await getSetting(env, "social_instagram_account_id");
-  const token = await getSetting(env, "social_facebook_page_token");
-  console.log(
-    `[social-publish] instagram credentials source=system_settings accountId=${igId ?? "missing"} token=${token ? "set" : "missing"}`,
-  );
+
+  const igId = await resolveInstagramAccountId(env);
+  const token = await resolveInstagramAccessToken(env);
   const imageUrl = publicImageUrl(env, post);
-  if (!igId || !token || !imageUrl) {
-    return { platform: "instagram", ok: false, error: "instagram_not_connected" };
+  console.log(
+    `[social-publish] instagram publish accountId=${igId} token=${token ? "set" : "missing"} crosspost_fb=${shareToFacebook}`,
+  );
+  if (!token || !imageUrl) {
+    return { ok: false, error: "instagram_not_connected" };
   }
+
   try {
-    // Step 1: create the media container on Facebook's servers.
-    const c = buildInstagramContainerRequest({ igAccountId: igId, accessToken: token, imageUrl, caption: text });
+    const c = buildInstagramContainerRequest({
+      igAccountId: igId,
+      accessToken: token,
+      imageUrl,
+      caption: text,
+      alsoShareToFacebook: shareToFacebook,
+    });
     const cRes = await fetch(c.url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -359,36 +462,58 @@ async function attemptInstagram(
     });
     const cData = (await cRes.json()) as { id?: string; error?: { message?: string; code?: number } };
     if (!cRes.ok || cData.error || !cData.id) {
-      if (cData.error?.code === 10) {
-        return {
-          platform: "instagram",
-          ok: false,
-          error:
-            "Instagram publish failed: app lacks permission (code 10). " +
-            "Ensure the Page token includes pages_manage_posts and the IG account is linked.",
-        };
-      }
-      return { platform: "instagram", ok: false, error: cData.error?.message ?? `container_http_${cRes.status}` };
+      logInstagramGraphFailure("container", post.id, cRes.status, cData);
+      return {
+        ok: false,
+        error: cData.error?.message ?? `container_http_${cRes.status}`,
+      };
     }
-    // Step 2: publish the container (IG can't take a direct upload).
+
     const p = buildInstagramPublishRequest({ igAccountId: igId, accessToken: token, creationId: cData.id });
     const pRes = await fetch(p.url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(p.body),
     });
-    const pData = (await pRes.json()) as { id?: string; error?: { message?: string } };
-    if (!pRes.ok || pData.error || !pData.id) {
-      return { platform: "instagram", ok: false, error: pData.error?.message ?? `publish_http_${pRes.status}` };
+    const pData = (await pRes.json()) as Record<string, unknown> & {
+      error?: { message?: string };
+    };
+    if (!pRes.ok || pData.error) {
+      logInstagramGraphFailure("publish", post.id, pRes.status, pData);
+      const err = pData.error as { message?: string } | undefined;
+      return { ok: false, error: err?.message ?? `publish_http_${pRes.status}` };
     }
+
+    let { instagramPostId, facebookPostId } = parseInstagramPublishResponse(pData);
+    if (!instagramPostId) {
+      logInstagramGraphFailure("publish", post.id, pRes.status, pData);
+      return { ok: false, error: "publish_missing_instagram_id" };
+    }
+
+    if (shareToFacebook && !facebookPostId) {
+      facebookPostId = await fetchFacebookCrosspostId(instagramPostId, token, post.id);
+    }
+
+    if (shareToFacebook && instagramPostId && !facebookPostId) {
+      console.warn(
+        `[social-publish] instagram published but facebook cross-post id unavailable post=${post.id} instagram=${instagramPostId}`,
+      );
+    }
+
     return {
-      platform: "instagram",
       ok: true,
-      postId: pData.id,
-      url: `https://www.instagram.com/p/${pData.id}`,
+      instagramPostId,
+      instagramUrl: `https://www.instagram.com/p/${instagramPostId}`,
+      facebookPostId: facebookPostId ?? undefined,
+      facebookUrl: facebookPostId ? `https://www.facebook.com/${facebookPostId}` : undefined,
     };
   } catch (e) {
-    return { platform: "instagram", ok: false, error: (e as Error).message };
+    console.error(
+      `[social-publish] instagram publish exception post=${post.id}:`,
+      (e as Error).message,
+      (e as Error).stack,
+    );
+    return { ok: false, error: (e as Error).message };
   }
 }
 
@@ -429,25 +554,100 @@ export async function publishPost(
   const targets = platformTargets(post.platform);
   const allTags = parseJsonArray(post.hashtags);
 
-  // Per-platform idempotency: skip a platform already published.
-  const needFb = targets.facebook && !post.facebook_post_id;
+  // Per-platform idempotency: skip platforms already published.
   const needIg = targets.instagram && !post.instagram_post_id;
+  const needFb = targets.facebook && !post.facebook_post_id;
 
   const outcomes: PlatformOutcome[] = [];
-  if (needFb) {
+  let instagramPublishSucceeded = !!post.instagram_post_id;
+  if (needIg || (needFb && !post.instagram_post_id)) {
+    // All live paths go through Instagram; Facebook delivery is IG cross-post.
+    const shareToFacebook = needFb;
+    const hashtagPlatform: "facebook" | "instagram" =
+      targets.instagram ? "instagram" : "facebook";
     const text = composePublishText(
       post.caption,
-      pickHashtagsForPlatform(allTags, "facebook"),
+      pickHashtagsForPlatform(allTags, hashtagPlatform),
     );
-    outcomes.push(await attemptFacebook(env, post, mode, text));
+    const result = await attemptInstagramPublish(env, post, mode, text, shareToFacebook);
+
+    if (!result.ok) {
+      if (needIg) outcomes.push({ platform: "instagram", ok: false, error: result.error });
+      if (needFb) outcomes.push({ platform: "facebook", ok: false, error: result.error });
+    } else {
+      // Persist IG id whenever returned (idempotency + FB cross-post recovery).
+      if (result.instagramPostId) {
+        instagramPublishSucceeded = true;
+        await env.DB.prepare(
+          "UPDATE social_posts SET instagram_post_id = ?, instagram_url = ? WHERE id = ?",
+        )
+          .bind(result.instagramPostId, result.instagramUrl ?? null, postId)
+          .run();
+      }
+      if (needIg && result.instagramPostId) {
+        outcomes.push({
+          platform: "instagram",
+          ok: true,
+          postId: result.instagramPostId,
+          url: result.instagramUrl,
+        });
+      } else if (needIg) {
+        outcomes.push({ platform: "instagram", ok: false, error: "publish_missing_instagram_id" });
+      }
+      if (needFb) {
+        if (result.facebookPostId) {
+          outcomes.push({
+            platform: "facebook",
+            ok: true,
+            postId: result.facebookPostId,
+            url: result.facebookUrl,
+          });
+        } else if (result.instagramPostId) {
+          // IG publish succeeded — missing FB cross-post id is non-blocking.
+          console.warn(
+            `[social-publish] marking published without facebook_post_id post=${postId} instagram=${result.instagramPostId}`,
+          );
+        }
+      }
+    }
+  } else if (needFb && post.instagram_post_id) {
+    // IG already published — try once to recover the Facebook cross-post id.
+    if (mode !== "live") {
+      const sim = simulatedInstagramPublish(post.id, true);
+      outcomes.push({
+        platform: "facebook",
+        ok: true,
+        postId: sim.facebookPostId,
+        url: sim.facebookUrl,
+      });
+    } else {
+      const token = await resolveInstagramAccessToken(env);
+      if (!token) {
+        console.warn(
+          `[social-publish] marking published without facebook_post_id (no token) post=${postId} instagram=${post.instagram_post_id}`,
+        );
+      } else {
+        const fbId = await fetchFacebookCrosspostId(post.instagram_post_id, token, postId);
+        if (fbId) {
+          outcomes.push({
+            platform: "facebook",
+            ok: true,
+            postId: fbId,
+            url: `https://www.facebook.com/${fbId}`,
+          });
+        } else {
+          console.warn(
+            `[social-publish] marking published without facebook_post_id post=${postId} instagram=${post.instagram_post_id}`,
+          );
+        }
+      }
+    }
   }
-  if (needIg) {
-    const text = composePublishText(
-      post.caption,
-      pickHashtagsForPlatform(allTags, "instagram"),
-    );
-    outcomes.push(await attemptInstagram(env, post, mode, text));
-  }
+
+  // When IG publish succeeded, missing FB cross-post id must not block completion.
+  const blockingFailures = outcomes.filter(
+    (o) => !o.ok && !(o.platform === "facebook" && instagramPublishSucceeded),
+  );
 
   // Persist each platform's success immediately (so a later retry skips it).
   for (const o of outcomes) {
@@ -458,7 +658,8 @@ export async function publishPost(
       )
         .bind(o.postId ?? null, o.url ?? null, postId)
         .run();
-    } else {
+    } else if (needIg) {
+      // IG id may already be persisted above when facebook_only cross-posted first.
       await env.DB.prepare(
         "UPDATE social_posts SET instagram_post_id = ?, instagram_url = ? WHERE id = ?",
       )
@@ -469,9 +670,8 @@ export async function publishPost(
 
   const prior = await loadDlq(env, postId);
   const priorRetryCount = prior?.retry_count ?? 0;
-  const decision = decidePublishOutcome(outcomes, priorRetryCount);
-  const errorSummary = outcomes
-    .filter((o) => !o.ok)
+  const decision = decidePublishOutcome(blockingFailures, priorRetryCount);
+  const errorSummary = blockingFailures
     .map((o) => `${o.platform}:${o.error}`)
     .join("; ");
 

@@ -25,6 +25,23 @@ export function formatDateTime(dateStr: string | null | undefined): string {
   });
 }
 
+/** `datetime-local` input value from an ISO timestamp (local timezone). */
+export function isoToDatetimeLocal(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** ISO timestamp from a `datetime-local` input value, or null when empty. */
+export function datetimeLocalToIso(local: string | null | undefined): string | null {
+  if (!local?.trim()) return null;
+  const d = new Date(local);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
 export function formatStatus(status: string | null | undefined): string {
   if (!status) return "—";
   return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());

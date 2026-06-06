@@ -11,7 +11,7 @@ import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
-import { formatDateTime, formatStatus } from "../../lib/format";
+import { formatDateTime, formatStatus, isoToDatetimeLocal, datetimeLocalToIso } from "../../lib/format";
 
 interface WarrantyCall {
   id: string;
@@ -70,7 +70,6 @@ export function WarrantyCalls(_props: RoutableProps) {
   const [tab, setTab] = useState<Tab>("open");
   const [creating, setCreating] = useState(false);
   const [scheduling, setScheduling] = useState<WarrantyCall | null>(null);
-  const [scheduleValue, setScheduleValue] = useState("");
 
   const { data, loading, error, refetch } = useApi<{ warranty_calls: WarrantyCall[] }>(
     `/api/warranty-calls?status=${tab}`,
@@ -81,21 +80,6 @@ export function WarrantyCalls(_props: RoutableProps) {
     try {
       await api.patch(`/api/warranty-calls/${id}`, { status: "completed" });
       toast.push("success", "Warranty call completed");
-      void refetch();
-    } catch (e) {
-      toast.push("error", errMsg(e));
-    }
-  };
-
-  const saveSchedule = async () => {
-    if (!scheduling) return;
-    try {
-      await api.patch(`/api/warranty-calls/${scheduling.id}`, {
-        scheduled_date: scheduleValue ? new Date(scheduleValue).toISOString() : null,
-        status: scheduleValue ? "scheduled" : scheduling.status,
-      });
-      toast.push("success", "Schedule updated");
-      setScheduling(null);
       void refetch();
     } catch (e) {
       toast.push("error", errMsg(e));
@@ -175,12 +159,9 @@ export function WarrantyCalls(_props: RoutableProps) {
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => {
-                    setScheduling(c);
-                    setScheduleValue(c.scheduled_date ? c.scheduled_date.slice(0, 16) : "");
-                  }}
+                  onClick={() => setScheduling(c)}
                 >
-                  Schedule
+                  {c.scheduled_date ? "Change" : "Schedule"}
                 </Button>
                 <Button variant="secondary" size="sm" onClick={() => go(`/warranty-calls/${c.id}`)}>
                   View
@@ -203,24 +184,14 @@ export function WarrantyCalls(_props: RoutableProps) {
       )}
 
       {scheduling && (
-        <Modal open title="Schedule warranty call" onClose={() => setScheduling(null)}>
-          <FormField label="Date & time">
-            <input
-              type="datetime-local"
-              class="input"
-              value={scheduleValue}
-              onInput={(e) => setScheduleValue((e.target as HTMLInputElement).value)}
-            />
-          </FormField>
-          <div class="flex gap-sm" style={{ marginTop: "var(--space-md)" }}>
-            <Button variant="primary" onClick={() => void saveSchedule()}>
-              Save
-            </Button>
-            <Button variant="tertiary" onClick={() => setScheduling(null)}>
-              Cancel
-            </Button>
-          </div>
-        </Modal>
+        <WarrantyScheduleModal
+          call={scheduling}
+          onClose={() => setScheduling(null)}
+          onSaved={() => {
+            setScheduling(null);
+            void refetch();
+          }}
+        />
       )}
     </div>
   );
@@ -263,7 +234,7 @@ function WarrantyFormModal({
         title: title.trim(),
         description: description.trim() || null,
         assigned_to: assignedTo || null,
-        scheduled_date: scheduled ? new Date(scheduled).toISOString() : null,
+        scheduled_date: datetimeLocalToIso(scheduled),
       });
       toast.push("success", "Warranty call logged");
       onSaved();
@@ -333,3 +304,83 @@ function WarrantyFormModal({
 }
 
 export { WarrantyFormModal };
+
+interface ScheduleCall {
+  id: string;
+  status: string;
+  scheduled_date: string | null;
+}
+
+export function buildWarrantySchedulePatch(
+  call: ScheduleCall,
+  localValue: string,
+): Record<string, unknown> {
+  const scheduledDate = datetimeLocalToIso(localValue);
+  const body: Record<string, unknown> = { scheduled_date: scheduledDate };
+  if (scheduledDate) {
+    if (call.status !== "completed" && call.status !== "cancelled") {
+      body.status = "scheduled";
+    }
+  } else {
+    body.scheduled_end = null;
+    if (call.status === "scheduled") body.status = "open";
+  }
+  return body;
+}
+
+export function WarrantyScheduleModal({
+  call,
+  onClose,
+  onSaved,
+}: {
+  call: ScheduleCall;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [value, setValue] = useState(() => isoToDatetimeLocal(call.scheduled_date));
+  const [busy, setBusy] = useState(false);
+
+  const save = async (localValue: string) => {
+    setBusy(true);
+    try {
+      await api.patch(`/api/warranty-calls/${call.id}`, buildWarrantySchedulePatch(call, localValue));
+      toast.push("success", localValue ? "Schedule updated" : "Schedule removed");
+      onSaved();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      title={call.scheduled_date ? "Change schedule" : "Schedule warranty call"}
+      onClose={onClose}
+    >
+      <FormField label="Date & time">
+        <input
+          type="datetime-local"
+          class="input"
+          value={value}
+          onInput={(e) => setValue((e.target as HTMLInputElement).value)}
+        />
+      </FormField>
+      <div class="flex gap-sm" style={{ marginTop: "var(--space-md)", flexWrap: "wrap" }}>
+        <Button variant="primary" disabled={busy} onClick={() => void save(value)}>
+          Save
+        </Button>
+        {call.scheduled_date && (
+          <Button variant="secondary" disabled={busy} onClick={() => void save("")}>
+            Remove schedule
+          </Button>
+        )}
+        <Button variant="tertiary" disabled={busy} onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+    </Modal>
+  );
+}

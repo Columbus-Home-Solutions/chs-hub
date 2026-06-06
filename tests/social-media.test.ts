@@ -22,8 +22,12 @@ import {
   buildFacebookPhotoRequest,
   buildInstagramContainerRequest,
   buildInstagramPublishRequest,
+  buildInstagramMediaLookupUrl,
   simulatedFacebook,
   simulatedInstagram,
+  simulatedInstagramPublish,
+  parseInstagramPublishResponse,
+  DEFAULT_IG_BUSINESS_ACCOUNT_ID,
   publicImageUrl,
   publicPublishOrigin,
   isScheduledDateDue,
@@ -253,6 +257,33 @@ describe("social-publish state machine (Sprint 16)", () => {
     const ig = simulatedInstagram("abcdef1234");
     expect(ig.postId).toMatch(/^SIMIG-/);
     expect(ig.url).toContain("instagram.com");
+    const cross = simulatedInstagramPublish("abcdef1234", true);
+    expect(cross.instagramPostId).toMatch(/^SIMIG-/);
+    expect(cross.facebookPostId).toMatch(/^SIMFB-/);
+    expect(simulatedInstagramPublish("abcdef1234", false).facebookPostId).toBeUndefined();
+  });
+
+  it("parseInstagramPublishResponse extracts IG and FB ids from Graph payloads", () => {
+    expect(
+      parseInstagramPublishResponse({ id: "1789", facebook_post_id: "101_202" }),
+    ).toEqual({ instagramPostId: "1789", facebookPostId: "101_202" });
+    expect(
+      parseInstagramPublishResponse({ crossposted_facebook_post_id: "101_303" }),
+    ).toEqual({ instagramPostId: null, facebookPostId: "101_303" });
+    expect(
+      parseInstagramPublishResponse({
+        id: "1789",
+        shares: { data: [{ id: "101_404" }] },
+      }),
+    ).toEqual({ instagramPostId: "1789", facebookPostId: "101_404" });
+  });
+
+  it("instagram-only success publishes even when facebook cross-post id is absent", () => {
+    const outcomes: PlatformOutcome[] = [
+      { platform: "instagram", ok: true, postId: "1789" },
+    ];
+    expect(decidePublishOutcome(outcomes, 0).finalStatus).toBe("published");
+    expect(decidePublishOutcome([], 2).finalStatus).toBe("published");
   });
 
   it("composes caption + hashtags into the publish text", () => {
@@ -274,7 +305,7 @@ describe("social-publish state machine (Sprint 16)", () => {
     expect(pickHashtagsForPlatform(tags, "instagram").length).toBe(15);
   });
 
-  it("builds the documented Graph request shapes (IG two-step)", () => {
+  it("builds the documented Graph request shapes (IG two-step + FB cross-post flag)", () => {
     const fb = buildFacebookPhotoRequest({
       pageId: "PAGE",
       accessToken: "TOK",
@@ -289,13 +320,23 @@ describe("social-publish state machine (Sprint 16)", () => {
       accessToken: "TOK",
       imageUrl: "https://x/img.jpg",
       caption: "hi",
+      alsoShareToFacebook: true,
     });
-    expect(c.url).toContain("/IG/media");
-    expect(c.body).toMatchObject({ image_url: "https://x/img.jpg" });
+    expect(c.url).toBe("https://graph.instagram.com/v25.0/IG/media");
+    expect(c.body).toMatchObject({
+      image_url: "https://x/img.jpg",
+      also_share_to_facebook: true,
+    });
+    expect(DEFAULT_IG_BUSINESS_ACCOUNT_ID).toBe("17841451185371306");
 
     const p = buildInstagramPublishRequest({ igAccountId: "IG", accessToken: "TOK", creationId: "CID" });
-    expect(p.url).toContain("/IG/media_publish");
+    expect(p.url).toBe("https://graph.instagram.com/v25.0/IG/media_publish");
     expect(p.body).toMatchObject({ creation_id: "CID" });
+
+    const lookup = buildInstagramMediaLookupUrl({ instagramPostId: "MEDIA123", accessToken: "TOK" });
+    expect(lookup).toBe(
+      "https://graph.instagram.com/v25.0/MEDIA123?fields=id%2Ctimestamp%2Cpermalink%2Cshares&access_token=TOK",
+    );
   });
 
   it("publicImageUrl uses client host + /api/public paths for Graph fetches", () => {

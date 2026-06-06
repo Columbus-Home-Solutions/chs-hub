@@ -50,6 +50,8 @@ export const SETTING_PUBLISH_MODE = "social_publish_mode";
 export const SETTING_FB_PAGE_ID = "social_facebook_page_id";
 export const SETTING_FB_TOKEN = "social_facebook_page_token";
 export const SETTING_IG_ACCOUNT_ID = "social_instagram_account_id";
+/** Instagram User access token for Graph API container + media_publish (not the Page token). */
+export const SETTING_IG_USER_TOKEN = "social_instagram_user_token";
 export const SETTING_GEMINI_KEY = "social_gemini_api_key";
 /** @deprecated Use SETTING_GEMINI_KEY — kept for migration reference only. */
 export const SETTING_REPLICATE_KEY = SETTING_GEMINI_KEY;
@@ -234,6 +236,13 @@ export async function getSetting(env: Env, key: string): Promise<string | null> 
   } catch {
     return null;
   }
+}
+
+/** Instagram Graph API token: prefer User token, fall back to Page token when unset. */
+export async function resolveInstagramAccessToken(env: Env): Promise<string | null> {
+  const igUser = (await getSetting(env, SETTING_IG_USER_TOKEN))?.trim();
+  if (igUser) return igUser;
+  return (await getSetting(env, SETTING_FB_TOKEN))?.trim() || null;
 }
 
 /** Brand-voice system prompt: settings row → env → built-in default. */

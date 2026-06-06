@@ -11,6 +11,7 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatDateTime, formatStatus } from "../../lib/format";
+import { WarrantyScheduleModal } from "./WarrantyCalls";
 
 interface DetailProps extends RoutableProps {
   id?: string;
@@ -45,6 +46,7 @@ export function WarrantyCallDetail({ id }: DetailProps) {
   );
   const [notesDraft, setNotesDraft] = useState("");
   const [notesBusy, setNotesBusy] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
 
   if (loading) return <Spinner center />;
   if (error || !data?.warranty_call) {
@@ -110,9 +112,9 @@ export function WarrantyCallDetail({ id }: DetailProps) {
               Mark completed
             </Button>
           )}
-          {c.status === "open" && (
-            <Button variant="secondary" size="sm" onClick={() => void patch({ status: "scheduled" })}>
-              Mark scheduled
+          {c.status !== "completed" && c.status !== "cancelled" && (
+            <Button variant="secondary" size="sm" onClick={() => setScheduling(true)}>
+              {c.scheduled_date ? "Change schedule" : "Schedule"}
             </Button>
           )}
         </div>
@@ -144,7 +146,35 @@ export function WarrantyCallDetail({ id }: DetailProps) {
           </div>
           <div class="kv__row">
             <span class="kv__label">Scheduled</span>
-            <span class="kv__value">{c.scheduled_date ? formatDateTime(c.scheduled_date) : "Not scheduled"}</span>
+            <span class="kv__value">
+              {c.scheduled_date ? formatDateTime(c.scheduled_date) : "Not scheduled"}
+              {c.status !== "completed" && c.status !== "cancelled" && (
+                <>
+                  {" · "}
+                  <button class="link-btn" type="button" onClick={() => setScheduling(true)}>
+                    {c.scheduled_date ? "Change" : "Set date"}
+                  </button>
+                  {c.scheduled_date && (
+                    <>
+                      {" · "}
+                      <button
+                        class="link-btn"
+                        type="button"
+                        onClick={() =>
+                          void patch({
+                            scheduled_date: null,
+                            scheduled_end: null,
+                            ...(c.status === "scheduled" ? { status: "open" } : {}),
+                          })
+                        }
+                      >
+                        Remove
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+            </span>
           </div>
           {c.completed_date && (
             <div class="kv__row">
@@ -167,6 +197,17 @@ export function WarrantyCallDetail({ id }: DetailProps) {
           </FormField>
         </div>
       </Card>
+
+      {scheduling && (
+        <WarrantyScheduleModal
+          call={c}
+          onClose={() => setScheduling(false)}
+          onSaved={() => {
+            setScheduling(false);
+            void refetch();
+          }}
+        />
+      )}
 
       <Card title="Notes">
         {c.notes ? (

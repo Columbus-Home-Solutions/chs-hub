@@ -33,6 +33,7 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 
 const REDACTED_SETTING_KEYS = new Set([
   "social_facebook_page_token",
+  "social_instagram_user_token",
   "stripe_secret_key",
   "stripe_webhook_secret",
   "social_gemini_api_key",

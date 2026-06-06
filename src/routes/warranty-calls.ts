@@ -215,7 +215,9 @@ export async function handleWarrantyCallUpdate(request: Request, env: Env, id: s
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
 
-  const existing = await env.DB.prepare("SELECT id FROM warranty_calls WHERE id = ?").bind(id).first<{ id: string }>();
+  const existing = await env.DB.prepare("SELECT id, status FROM warranty_calls WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; status: string }>();
   if (!existing) return err(404, "not_found", "Warranty call not found.");
 
   const body = await readJson(request);
@@ -238,6 +240,10 @@ export async function handleWarrantyCallUpdate(request: Request, env: Env, id: s
       binds.push(str(body[f]));
     }
   }
+  if ("scheduled_date" in body && !str(body.scheduled_date) && !("scheduled_end" in body)) {
+    sets.push("scheduled_end = ?");
+    binds.push(null);
+  }
   if ("status" in body) {
     const s = str(body.status);
     if (!s || !STATUSES.has(s)) return err(400, "bad_request", "Invalid status.");
@@ -245,6 +251,15 @@ export async function handleWarrantyCallUpdate(request: Request, env: Env, id: s
     binds.push(s);
     if (s === "completed") {
       sets.push("completed_date = datetime('now')");
+    }
+  } else if ("scheduled_date" in body) {
+    const scheduledDate = str(body.scheduled_date);
+    if (scheduledDate && existing.status === "open") {
+      sets.push("status = ?");
+      binds.push("scheduled");
+    } else if (!scheduledDate && existing.status === "scheduled") {
+      sets.push("status = ?");
+      binds.push("open");
     }
   }
   if (sets.length === 0) return err(400, "bad_request", "No editable fields supplied.");

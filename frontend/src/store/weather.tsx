@@ -38,6 +38,15 @@ export interface WeatherDay {
   windSpeed: string;
 }
 
+export interface WeatherHour {
+  time: string;
+  temperature: number;
+  condition: string;
+  icon: WeatherIcon;
+  precipChance: number;
+  windSpeed: string;
+}
+
 export interface ScheduleAlert {
   date: string;
   alertType: "rain" | "freeze" | "wind";
@@ -50,6 +59,7 @@ export interface ScheduleAlert {
 export interface WeatherData {
   current: WeatherCurrent | null;
   forecast: WeatherDay[];
+  hourlyToday: WeatherHour[];
   scheduleAlerts: ScheduleAlert[];
 }
 
@@ -79,7 +89,13 @@ export function WeatherProvider({ children }: { children: ComponentChildren }) {
   const load = () => {
     fetch("/api/weather")
       .then((r) => (r.ok ? r.json() as Promise<WeatherData> : Promise.resolve(null)))
-      .then((d) => setData(d ?? null))
+      .then((d) =>
+        setData(
+          d
+            ? { ...d, hourlyToday: d.hourlyToday ?? [] }
+            : null,
+        ),
+      )
       .catch(() => setData(null));
   };
 

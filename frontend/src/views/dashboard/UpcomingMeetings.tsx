@@ -35,7 +35,7 @@ export function UpcomingMeetings() {
         </div>
         <div class="dash-card__body">
           {[...Array(2)].map((_, i) => (
-            <div key={i} class="schedule-row schedule-row--skeleton" aria-hidden="true" />
+            <div key={i} class="meeting-row meeting-row--skeleton" aria-hidden="true" />
           ))}
         </div>
       </div>
@@ -74,15 +74,17 @@ export function UpcomingMeetings() {
           </div>
         ) : (
           meetings.map((m) => (
-            <div key={m.id} class="schedule-row schedule-row--static">
-              <div class="schedule-row__info" style={{ flex: 1 }}>
-                <span class="schedule-row__label">{m.title}</span>
-                <span class="schedule-row__desc">{formatMeetingWhen(m.start_time)}</span>
+            <div key={m.id} class="meeting-row">
+              <div class="meeting-row__header">
+                <span class="meeting-row__title">{m.title}</span>
+                <span class="meeting-row__when">{formatMeetingWhen(m.start_time)}</span>
               </div>
               {m.meet_link && (
                 <Button
-                  variant="secondary"
+                  variant="primary"
                   size="sm"
+                  block
+                  class="meeting-row__join"
                   onClick={() => window.open(m.meet_link!, "_blank", "noopener,noreferrer")}
                 >
                   Join

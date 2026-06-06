@@ -53,6 +53,15 @@ interface ForecastDay {
   windSpeed: string;
 }
 
+interface WeatherHour {
+  time: string;          // ISO startTime from NWS
+  temperature: number;
+  condition: string;
+  icon: WeatherIcon;
+  precipChance: number;
+  windSpeed: string;
+}
+
 interface ScheduleAlert {
   date: string;
   alertType: "rain" | "freeze" | "wind";
@@ -71,6 +80,8 @@ interface WeatherResponse {
     updatedAt: string;
   } | null;
   forecast: Array<ForecastDay>;
+  /** Hourly periods for the current calendar day (NWS local date). */
+  hourlyToday: Array<WeatherHour>;
   scheduleAlerts: ScheduleAlert[];
 }
 
@@ -246,6 +257,22 @@ function buildForecast(periods: NwsPeriod[]): ForecastDay[] {
   return days;
 }
 
+/** Hourly NWS periods for the same local calendar day as the first hourly period. */
+function buildHourlyToday(periods: NwsPeriod[]): WeatherHour[] {
+  if (!periods.length) return [];
+  const todayKey = periods[0].startTime.slice(0, 10);
+  return periods
+    .filter((p) => p.startTime.slice(0, 10) === todayKey)
+    .map((p) => ({
+      time: p.startTime,
+      temperature: p.temperature,
+      condition: p.shortForecast,
+      icon: toIcon(p.shortForecast),
+      precipChance: p.probabilityOfPrecipitation?.value ?? 0,
+      windSpeed: p.windSpeed,
+    }));
+}
+
 // ─── Alert threshold checks ───────────────────────────────────────────────────
 
 // Thresholds: rain ≥ 40%, freeze ≤ 35°F high, wind ≥ 25 mph.
@@ -306,13 +333,13 @@ export async function handleWeather(env: Env): Promise<WeatherResponse> {
   const address = addrRow?.value ?? "";
 
   if (!address) {
-    return { current: null, forecast: [], scheduleAlerts: [] };
+    return { current: null, forecast: [], hourlyToday: [], scheduleAlerts: [] };
   }
 
   // Resolve grid-point (24 h cache).
   const gp = await resolveGridPoint(address);
   if (!gp) {
-    return { current: null, forecast: [], scheduleAlerts: [] };
+    return { current: null, forecast: [], hourlyToday: [], scheduleAlerts: [] };
   }
 
   // Fetch hourly + daily in parallel (both 30 min cached).
@@ -334,8 +361,9 @@ export async function handleWeather(env: Env): Promise<WeatherResponse> {
     };
   }
 
-  // 7-day forecast.
+  // 7-day forecast + today's hourly strip.
   const forecast = dailyPeriods ? buildForecast(dailyPeriods) : [];
+  const hourlyToday = hourlyPeriods ? buildHourlyToday(hourlyPeriods) : [];
 
   // Schedule cross-reference — computed fresh each call.
   const scheduleAlerts: ScheduleAlert[] = [];
@@ -358,5 +386,5 @@ export async function handleWeather(env: Env): Promise<WeatherResponse> {
     }
   }
 
-  return { current, forecast, scheduleAlerts };
+  return { current, forecast, hourlyToday, scheduleAlerts };
 }

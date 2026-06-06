@@ -240,9 +240,18 @@ export async function getSetting(env: Env, key: string): Promise<string | null> 
 
 /** Instagram Graph API token: prefer User token, fall back to Page token when unset. */
 export async function resolveInstagramAccessToken(env: Env): Promise<string | null> {
-  const igUser = (await getSetting(env, SETTING_IG_USER_TOKEN))?.trim();
-  if (igUser) return igUser;
-  return (await getSetting(env, SETTING_FB_TOKEN))?.trim() || null;
+  const igUserRaw = (await getSetting(env, SETTING_IG_USER_TOKEN))?.trim() ?? "";
+  if (igUserRaw) {
+    console.log(
+      `[social] resolveInstagramAccessToken social_instagram_user_token found=true length=${igUserRaw.length} source=social_instagram_user_token`,
+    );
+    return igUserRaw;
+  }
+  const pageRaw = (await getSetting(env, SETTING_FB_TOKEN))?.trim() ?? "";
+  console.log(
+    `[social] resolveInstagramAccessToken social_instagram_user_token found=false length=0 fallback=social_facebook_page_token found=${pageRaw.length > 0} length=${pageRaw.length}`,
+  );
+  return pageRaw || null;
 }
 
 /** Brand-voice system prompt: settings row → env → built-in default. */

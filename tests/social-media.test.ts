@@ -23,6 +23,10 @@ import {
   buildInstagramContainerRequest,
   buildInstagramPublishRequest,
   buildInstagramMediaLookupUrl,
+  buildFacebookPageFeedUrl,
+  parseInstagramMediaLookup,
+  matchFacebookFeedPostByTimestamp,
+  FB_CROSSPOST_TIMESTAMP_WINDOW_MS,
   simulatedFacebook,
   simulatedInstagram,
   simulatedInstagramPublish,
@@ -270,12 +274,39 @@ describe("social-publish state machine (Sprint 16)", () => {
     expect(
       parseInstagramPublishResponse({ crossposted_facebook_post_id: "101_303" }),
     ).toEqual({ instagramPostId: null, facebookPostId: "101_303" });
+  });
+
+  it("matches facebook feed posts to instagram publish time within 60s", () => {
+    const igTs = Date.parse("2026-06-05T18:00:00.000Z");
+    const feed = [
+      { id: "old", created_time: "2026-06-05T17:00:00+0000" },
+      { id: "match", created_time: "2026-06-05T18:00:30+0000", permalink_url: "https://fb.com/match" },
+      { id: "far", created_time: "2026-06-05T18:02:00+0000" },
+    ];
+    expect(matchFacebookFeedPostByTimestamp(igTs, feed)).toEqual({
+      postId: "match",
+      url: "https://fb.com/match",
+    });
+    expect(matchFacebookFeedPostByTimestamp(igTs, feed, 10_000)).toBeNull();
+    expect(FB_CROSSPOST_TIMESTAMP_WINDOW_MS).toBe(60_000);
+  });
+
+  it("parseInstagramMediaLookup reads timestamp and shared-to-feed flag", () => {
     expect(
-      parseInstagramPublishResponse({
+      parseInstagramMediaLookup({
         id: "1789",
-        shares: { data: [{ id: "101_404" }] },
+        timestamp: "2026-06-05T18:00:00+0000",
+        permalink: "https://instagram.com/p/abc",
+        is_shared_to_feed: true,
       }),
-    ).toEqual({ instagramPostId: "1789", facebookPostId: "101_404" });
+    ).toMatchObject({
+      id: "1789",
+      permalink: "https://instagram.com/p/abc",
+      isSharedToFeed: true,
+    });
+    expect(parseInstagramMediaLookup({ id: "1789", timestamp: "2026-06-05T18:00:00+0000" }).timestampMs).toBe(
+      Date.parse("2026-06-05T18:00:00+0000"),
+    );
   });
 
   it("instagram-only success publishes even when facebook cross-post id is absent", () => {
@@ -321,11 +352,13 @@ describe("social-publish state machine (Sprint 16)", () => {
       imageUrl: "https://x/img.jpg",
       caption: "hi",
       alsoShareToFacebook: true,
+      facebookPageId: "PAGE123",
     });
     expect(c.url).toBe("https://graph.instagram.com/v25.0/IG/media");
     expect(c.body).toMatchObject({
       image_url: "https://x/img.jpg",
       also_share_to_facebook: true,
+      page_id: "PAGE123",
     });
     expect(DEFAULT_IG_BUSINESS_ACCOUNT_ID).toBe("17841451185371306");
 
@@ -335,7 +368,12 @@ describe("social-publish state machine (Sprint 16)", () => {
 
     const lookup = buildInstagramMediaLookupUrl({ instagramPostId: "MEDIA123", accessToken: "TOK" });
     expect(lookup).toBe(
-      "https://graph.instagram.com/v25.0/MEDIA123?fields=id%2Ctimestamp%2Cpermalink%2Cshares&access_token=TOK",
+      "https://graph.instagram.com/v25.0/MEDIA123?fields=id%2Ctimestamp%2Cpermalink%2Cis_shared_to_feed&access_token=TOK",
+    );
+
+    const feed = buildFacebookPageFeedUrl({ pageId: "PAGE123", accessToken: "PTOK", limit: 5 });
+    expect(feed).toBe(
+      "https://graph.facebook.com/v25.0/PAGE123/feed?access_token=PTOK&limit=5&fields=id%2Ccreated_time%2Cpermalink_url",
     );
   });
 

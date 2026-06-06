@@ -2232,6 +2232,143 @@
   text-decoration: underline;
 }
 
+/* Dashboard weather forecast card + hourly popup */
+.weather-forecast-clickable {
+  cursor: pointer;
+}
+.weather-forecast-clickable:hover {
+  color: var(--color-brand);
+}
+.weather-forecast-collapse {
+  background: none;
+  border: none;
+  padding: 0 var(--space-xs);
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+.weather-forecast-strip {
+  display: flex;
+  overflow-x: auto;
+  gap: 0;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.weather-forecast-day {
+  flex: 0 0 auto;
+  width: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-sm) var(--space-xs);
+  border-right: 1px solid var(--color-border);
+}
+.weather-forecast-day--today {
+  background: var(--color-brand-subtle);
+}
+.weather-forecast-day__dow {
+  font-size: var(--text-xs, 11px);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.weather-forecast-day--today .weather-forecast-day__dow {
+  font-weight: 700;
+  color: var(--color-brand);
+}
+.weather-forecast-day__date {
+  font-size: var(--text-xs, 11px);
+  color: var(--color-text-muted);
+}
+.weather-forecast-day__emoji {
+  font-size: 22px;
+  line-height: 1.2;
+}
+.weather-forecast-day__high {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.weather-forecast-day__low {
+  font-size: var(--text-xs, 11px);
+  color: var(--color-text-muted);
+}
+.weather-forecast-day__precip {
+  font-size: var(--text-xs, 11px);
+}
+.weather-forecast-day__wind {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-align: center;
+  line-height: 1.2;
+}
+.weather-forecast-footer {
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 10px;
+  color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border);
+  text-align: right;
+}
+.weather-hourly-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+}
+.weather-hourly-row {
+  display: grid;
+  grid-template-columns: 4.5rem 2rem 3rem 1fr auto;
+  gap: var(--space-sm);
+  align-items: center;
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+}
+.weather-hourly-row:last-child {
+  border-bottom: none;
+}
+.weather-hourly-row__time {
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+.weather-hourly-row__icon {
+  font-size: 1.25rem;
+  line-height: 1;
+  text-align: center;
+}
+.weather-hourly-row__temp {
+  font-weight: 600;
+}
+.weather-hourly-row__cond {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs, 12px);
+}
+.weather-hourly-row__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: var(--text-xs, 11px);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+@media (max-width: 520px) {
+  .weather-hourly-row {
+    grid-template-columns: 4rem 2rem 2.5rem 1fr;
+    grid-template-rows: auto auto;
+  }
+  .weather-hourly-row__meta {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: var(--space-sm);
+  }
+}
+
 /* ── Dashboard Home Screen (Sprint 14) ─────────────────────────────────── */
 
 .dashboard {
@@ -2737,6 +2874,48 @@
   font-size: var(--text-sm);
   color: var(--color-text-muted);
   padding: var(--space-sm) 0;
+}
+
+/* ── Upcoming Meetings (dashboard) ── */
+.meeting-row {
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.meeting-row:last-child {
+  border-bottom: none;
+}
+.meeting-row__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+.meeting-row__title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  flex: 1;
+  min-width: 0;
+}
+.meeting-row__when {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.meeting-row__join {
+  margin-top: var(--space-xs);
+  color: #fff;
+}
+.meeting-row__join.btn--primary:hover:not(:disabled) {
+  color: #fff;
+}
+.meeting-row--skeleton {
+  height: 52px;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  border-bottom: none;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
 }
 
 /* ── Recent Activity ── */

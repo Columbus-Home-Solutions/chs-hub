@@ -29,6 +29,8 @@ import {
   logSocialAudit,
   parseJsonArray,
   resolveInstagramAccessToken,
+  SETTING_FB_PAGE_ID,
+  SETTING_FB_TOKEN,
   SETTING_IG_ACCOUNT_ID,
   SETTING_PUBLISH_MODE,
   type Platform,
@@ -44,8 +46,13 @@ export const MAX_PUBLISH_ATTEMPTS = 3;
 export const PUBLISH_BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000];
 
 const INSTAGRAM_GRAPH_BASE = "https://graph.instagram.com/v25.0";
-/** Legacy Facebook Graph host — only used by deprecated Page /photos helper. */
-const FACEBOOK_GRAPH_BASE = "https://graph.facebook.com/v21.0";
+const FACEBOOK_GRAPH_BASE = "https://graph.facebook.com/v25.0";
+/** Instagram error 9007: container still processing — wait before media_publish. */
+const IG_CONTAINER_PROCESSING_WAIT_MS = 5000;
+const IG_CONTAINER_NOT_READY_CODE = 9007;
+
+/** Match IG publish time to a Page feed post within this window (ms). */
+export const FB_CROSSPOST_TIMESTAMP_WINDOW_MS = 60_000;
 
 // ─── pure helpers (unit-tested) ────────────────────────────────────────────────
 
@@ -166,14 +173,65 @@ export function parseInstagramPublishResponse(data: Record<string, unknown>): {
     (typeof data.post_id_on_facebook === "string" && data.post_id_on_facebook) ||
     (typeof data.crossposted_facebook_post_id === "string" && data.crossposted_facebook_post_id) ||
     null;
-  if (!facebookPostId) {
-    const shares = data.shares as { data?: Array<{ id?: string }> } | undefined;
-    const shareId = shares?.data?.[0]?.id;
-    if (typeof shareId === "string" && shareId.trim()) {
-      facebookPostId = shareId.trim();
+  return { instagramPostId, facebookPostId };
+}
+
+export interface InstagramMediaLookup {
+  id: string | null;
+  timestampMs: number | null;
+  permalink: string | null;
+  isSharedToFeed: boolean | null;
+}
+
+export interface FacebookFeedPost {
+  id: string;
+  created_time: string;
+  permalink_url?: string;
+}
+
+/** Parse ISO or unix Graph API timestamps to epoch ms. */
+export function parseGraphTimestamp(value: unknown): number | null {
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? null : ms;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  return null;
+}
+
+export function parseInstagramMediaLookup(data: Record<string, unknown>): InstagramMediaLookup {
+  return {
+    id: typeof data.id === "string" ? data.id : null,
+    timestampMs: parseGraphTimestamp(data.timestamp),
+    permalink: typeof data.permalink === "string" ? data.permalink : null,
+    isSharedToFeed: typeof data.is_shared_to_feed === "boolean" ? data.is_shared_to_feed : null,
+  };
+}
+
+/** Find the Page feed post whose created_time is closest to the IG publish time. */
+export function matchFacebookFeedPostByTimestamp(
+  igTimestampMs: number,
+  feedPosts: FacebookFeedPost[],
+  windowMs: number = FB_CROSSPOST_TIMESTAMP_WINDOW_MS,
+): { postId: string; url: string | null } | null {
+  let best: { postId: string; url: string | null; delta: number } | null = null;
+  for (const post of feedPosts) {
+    if (!post.id) continue;
+    const createdMs = parseGraphTimestamp(post.created_time);
+    if (createdMs == null) continue;
+    const delta = Math.abs(createdMs - igTimestampMs);
+    if (delta <= windowMs && (!best || delta < best.delta)) {
+      best = {
+        postId: post.id,
+        url: typeof post.permalink_url === "string" ? post.permalink_url : null,
+        delta,
+      };
     }
   }
-  return { instagramPostId, facebookPostId };
+  if (!best) return null;
+  return { postId: best.postId, url: best.url };
 }
 
 // Graph API request-shape builders (documented; exercised only when live).
@@ -197,6 +255,7 @@ export function buildInstagramContainerRequest(args: {
   imageUrl: string;
   caption: string;
   alsoShareToFacebook?: boolean;
+  facebookPageId?: string;
 }): { url: string; body: Record<string, unknown> } {
   const body: Record<string, unknown> = {
     image_url: args.imageUrl,
@@ -205,6 +264,9 @@ export function buildInstagramContainerRequest(args: {
   };
   if (args.alsoShareToFacebook) {
     body.also_share_to_facebook = true;
+    if (args.facebookPageId) {
+      body.page_id = args.facebookPageId;
+    }
   }
   return {
     url: `${INSTAGRAM_GRAPH_BASE}/${args.igAccountId}/media`,
@@ -223,16 +285,30 @@ export function buildInstagramPublishRequest(args: {
   };
 }
 
-/** GET URL to resolve a Facebook cross-post id from a published IG media id. */
+/** GET URL to confirm a published IG media id and read its timestamp. */
 export function buildInstagramMediaLookupUrl(args: {
   instagramPostId: string;
   accessToken: string;
 }): string {
   const params = new URLSearchParams({
-    fields: "id,timestamp,permalink,shares",
+    fields: "id,timestamp,permalink,is_shared_to_feed",
     access_token: args.accessToken,
   });
   return `${INSTAGRAM_GRAPH_BASE}/${args.instagramPostId}?${params.toString()}`;
+}
+
+/** GET URL for recent Page feed posts (Facebook Page token). */
+export function buildFacebookPageFeedUrl(args: {
+  pageId: string;
+  accessToken: string;
+  limit?: number;
+}): string {
+  const params = new URLSearchParams({
+    access_token: args.accessToken,
+    limit: String(args.limit ?? 5),
+    fields: "id,created_time,permalink_url",
+  });
+  return `${FACEBOOK_GRAPH_BASE}/${args.pageId}/feed?${params.toString()}`;
 }
 
 /** Trim hashtags for the target network (stored set is the full Instagram-scale list). */
@@ -365,35 +441,78 @@ async function resolveInstagramAccountId(env: Env): Promise<string> {
   return configured || DEFAULT_IG_BUSINESS_ACCOUNT_ID;
 }
 
-async function fetchFacebookCrosspostId(
+async function resolveFacebookCrosspostFromFeed(
+  env: Env,
   igMediaId: string,
-  accessToken: string,
+  igUserToken: string,
   postId?: string,
-): Promise<string | null> {
-  const url = buildInstagramMediaLookupUrl({ instagramPostId: igMediaId, accessToken });
-  const res = await fetch(url);
-  let data: Record<string, unknown>;
+): Promise<{ facebookPostId: string | null; facebookUrl: string | null }> {
+  const logRef = postId ?? igMediaId;
+
+  const igRes = await fetch(
+    buildInstagramMediaLookupUrl({ instagramPostId: igMediaId, accessToken: igUserToken }),
+  );
+  let igData: Record<string, unknown>;
   try {
-    data = (await res.json()) as Record<string, unknown>;
+    igData = (await igRes.json()) as Record<string, unknown>;
   } catch {
     console.warn(
-      `[social-publish] facebook cross-post lookup invalid json post=${postId ?? igMediaId} instagram=${igMediaId}`,
+      `[social-publish] instagram media lookup invalid json post=${logRef} instagram=${igMediaId}`,
     );
-    return null;
+    return { facebookPostId: null, facebookUrl: null };
   }
-  if (!res.ok) {
+  if (!igRes.ok) {
     console.warn(
-      `[social-publish] facebook cross-post lookup failed post=${postId ?? igMediaId} http=${res.status} response=${JSON.stringify(redactForLog(data))}`,
+      `[social-publish] instagram media lookup failed post=${logRef} http=${igRes.status} response=${JSON.stringify(redactForLog(igData))}`,
     );
-    return null;
+    return { facebookPostId: null, facebookUrl: null };
   }
-  const fbId = parseInstagramPublishResponse(data).facebookPostId;
-  if (!fbId) {
+
+  const igMedia = parseInstagramMediaLookup(igData);
+  if (!igMedia.id || igMedia.timestampMs == null) {
     console.warn(
-      `[social-publish] facebook cross-post id missing post=${postId ?? igMediaId} instagram=${igMediaId} response=${JSON.stringify(redactForLog(data))}`,
+      `[social-publish] instagram media lookup missing id/timestamp post=${logRef} response=${JSON.stringify(redactForLog(igData))}`,
     );
+    return { facebookPostId: null, facebookUrl: null };
   }
-  return fbId;
+
+  const pageId = (await getSetting(env, SETTING_FB_PAGE_ID))?.trim();
+  const pageToken = (await getSetting(env, SETTING_FB_TOKEN))?.trim();
+  if (!pageId || !pageToken) {
+    console.warn(
+      `[social-publish] facebook feed lookup skipped (page id/token missing) post=${logRef}`,
+    );
+    return { facebookPostId: null, facebookUrl: null };
+  }
+
+  const feedRes = await fetch(buildFacebookPageFeedUrl({ pageId, accessToken: pageToken, limit: 5 }));
+  let feedData: Record<string, unknown>;
+  try {
+    feedData = (await feedRes.json()) as Record<string, unknown>;
+  } catch {
+    console.warn(`[social-publish] facebook feed lookup invalid json post=${logRef}`);
+    return { facebookPostId: null, facebookUrl: null };
+  }
+  if (!feedRes.ok) {
+    console.warn(
+      `[social-publish] facebook feed lookup failed post=${logRef} http=${feedRes.status} response=${JSON.stringify(redactForLog(feedData))}`,
+    );
+    return { facebookPostId: null, facebookUrl: null };
+  }
+
+  const feedPosts = (feedData.data as FacebookFeedPost[] | undefined) ?? [];
+  const match = matchFacebookFeedPostByTimestamp(igMedia.timestampMs, feedPosts);
+  if (!match) {
+    console.warn(
+      `[social-publish] no facebook feed post within ${FB_CROSSPOST_TIMESTAMP_WINDOW_MS / 1000}s of instagram publish post=${logRef} instagram=${igMediaId} ig_ts=${igMedia.timestampMs} feed_count=${feedPosts.length}`,
+    );
+    return { facebookPostId: null, facebookUrl: null };
+  }
+
+  return {
+    facebookPostId: match.postId,
+    facebookUrl: match.url ?? `https://www.facebook.com/${match.postId}`,
+  };
 }
 
 /** Strip tokens before logging Graph API payloads. */
@@ -444,16 +563,31 @@ async function attemptInstagramPublish(
     `[social-publish] instagram publish accountId=${igId} token=${token ? "set" : "missing"} crosspost_fb=${shareToFacebook}`,
   );
   if (!token || !imageUrl) {
+    const reasons: string[] = [];
+    if (!token) reasons.push("missing_access_token");
+    if (!imageUrl) reasons.push("missing_image_url");
+    console.warn(
+      `[social-publish] instagram_not_connected post=${post.id} reason=${reasons.join(",") || "unknown"} has_token=${!!token} has_image_url=${!!imageUrl}`,
+    );
     return { ok: false, error: "instagram_not_connected" };
   }
 
   try {
+    const socialFacebookPageId = shareToFacebook
+      ? (await getSetting(env, SETTING_FB_PAGE_ID))?.trim()
+      : undefined;
+    if (shareToFacebook && !socialFacebookPageId) {
+      console.warn(
+        `[social-publish] facebook cross-post missing social_facebook_page_id post=${post.id}`,
+      );
+    }
     const c = buildInstagramContainerRequest({
       igAccountId: igId,
       accessToken: token,
       imageUrl,
       caption: text,
       alsoShareToFacebook: shareToFacebook,
+      facebookPageId: socialFacebookPageId,
     });
     const cRes = await fetch(c.url, {
       method: "POST",
@@ -469,15 +603,31 @@ async function attemptInstagramPublish(
       };
     }
 
+    await new Promise((resolve) => setTimeout(resolve, IG_CONTAINER_PROCESSING_WAIT_MS));
+
     const p = buildInstagramPublishRequest({ igAccountId: igId, accessToken: token, creationId: cData.id });
-    const pRes = await fetch(p.url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(p.body),
-    });
-    const pData = (await pRes.json()) as Record<string, unknown> & {
-      error?: { message?: string };
+    const callMediaPublish = async () => {
+      const pRes = await fetch(p.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(p.body),
+      });
+      const pData = (await pRes.json()) as Record<string, unknown> & {
+        error?: { message?: string; code?: number };
+      };
+      return { pRes, pData };
     };
+
+    let { pRes, pData } = await callMediaPublish();
+    const firstPublishErrorCode = pData.error?.code;
+    if ((!pRes.ok || pData.error) && firstPublishErrorCode === IG_CONTAINER_NOT_READY_CODE) {
+      console.warn(
+        `[social-publish] instagram container not ready (9007), retrying after wait post=${post.id} creation_id=${cData.id}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, IG_CONTAINER_PROCESSING_WAIT_MS));
+      ({ pRes, pData } = await callMediaPublish());
+    }
+
     if (!pRes.ok || pData.error) {
       logInstagramGraphFailure("publish", post.id, pRes.status, pData);
       const err = pData.error as { message?: string } | undefined;
@@ -490,8 +640,11 @@ async function attemptInstagramPublish(
       return { ok: false, error: "publish_missing_instagram_id" };
     }
 
+    let facebookUrl: string | undefined;
     if (shareToFacebook && !facebookPostId) {
-      facebookPostId = await fetchFacebookCrosspostId(instagramPostId, token, post.id);
+      const cross = await resolveFacebookCrosspostFromFeed(env, instagramPostId, token, post.id);
+      facebookPostId = cross.facebookPostId;
+      facebookUrl = cross.facebookUrl ?? undefined;
     }
 
     if (shareToFacebook && instagramPostId && !facebookPostId) {
@@ -505,7 +658,7 @@ async function attemptInstagramPublish(
       instagramPostId,
       instagramUrl: `https://www.instagram.com/p/${instagramPostId}`,
       facebookPostId: facebookPostId ?? undefined,
-      facebookUrl: facebookPostId ? `https://www.facebook.com/${facebookPostId}` : undefined,
+      facebookUrl: facebookUrl ?? (facebookPostId ? `https://www.facebook.com/${facebookPostId}` : undefined),
     };
   } catch (e) {
     console.error(
@@ -627,13 +780,18 @@ export async function publishPost(
           `[social-publish] marking published without facebook_post_id (no token) post=${postId} instagram=${post.instagram_post_id}`,
         );
       } else {
-        const fbId = await fetchFacebookCrosspostId(post.instagram_post_id, token, postId);
-        if (fbId) {
+        const cross = await resolveFacebookCrosspostFromFeed(
+          env,
+          post.instagram_post_id,
+          token,
+          postId,
+        );
+        if (cross.facebookPostId) {
           outcomes.push({
             platform: "facebook",
             ok: true,
-            postId: fbId,
-            url: `https://www.facebook.com/${fbId}`,
+            postId: cross.facebookPostId,
+            url: cross.facebookUrl ?? `https://www.facebook.com/${cross.facebookPostId}`,
           });
         } else {
           console.warn(

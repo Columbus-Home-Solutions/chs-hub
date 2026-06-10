@@ -218,9 +218,24 @@ export function DocumentsTab({ token }: { token: string }) {
         <div key={cat} class="portal-doc-group">
           <div class="portal-doc-group__label">{DOC_CATEGORY_LABELS[cat] ?? formatStatus(cat)}</div>
           {groups[cat].map((d) => (
-            <div class="portal-invoice__history-row" key={d.id}>
-              <span>{d.title ?? "Document"}{d.is_signed ? " · Signed" : ""}</span>
-              <span class="quote-muted">{d.created_at ? formatDate(d.created_at) : ""}</span>
+            <div class="portal-invoice__history-row" key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>
+                {d.title ?? "Document"}
+                {d.is_signed ? <span class="portal-status portal-status--paid" style={{ marginLeft: "8px", fontSize: "0.75rem" }}>✓ Signed</span> : ""}
+              </span>
+              <span class="flex gap-sm" style={{ alignItems: "center" }}>
+                <span class="quote-muted" style={{ fontSize: "0.8rem" }}>{d.created_at ? formatDate(d.created_at) : ""}</span>
+                {d.is_signed ? (
+                  <a
+                    href={`/api/portal/${token}/documents/${d.id}/file`}
+                    download
+                    class="quote-btn"
+                    style={{ fontSize: "0.75rem", padding: "2px 10px" }}
+                  >
+                    Download
+                  </a>
+                ) : null}
+              </span>
             </div>
           ))}
         </div>

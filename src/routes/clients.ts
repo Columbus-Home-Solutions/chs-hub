@@ -8,6 +8,7 @@
  *   GET    /api/clients/:id/summary           computed totals (v_client_summary)
  *   POST   /api/clients                       create (runs repeat detection)
  *   PUT    /api/clients/:id                   update
+ *   DELETE /api/clients/:id                   cascade delete (guards on active jobs)
  *   GET    /api/clients/:id/properties        list properties
  *   POST   /api/clients/:id/properties        add property
  *   PUT    /api/properties/:id                update property
@@ -23,6 +24,7 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
+import { cascadeDeleteClient } from "../lib/cascade-delete.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -75,6 +77,7 @@ async function logAudit(
 interface ClientRow {
   id: string;
   name: string | null;
+  company_name: string | null;
   first_name: string | null;
   last_name: string | null;
   email: string | null;
@@ -109,6 +112,7 @@ function shapeClient(row: ClientRow) {
   return {
     id: row.id,
     name: displayName(row),
+    company_name: row.company_name,
     first_name: row.first_name,
     last_name: row.last_name,
     email: row.email,
@@ -185,6 +189,7 @@ export async function handleClientList(env: Env, url: URL): Promise<Response> {
     rows = rows.filter((r) => {
       const hay = [
         r.name,
+        r.company_name,
         r.first_name,
         r.last_name,
         r.email,
@@ -225,8 +230,17 @@ export async function handleClientGet(env: Env, id: string): Promise<Response> {
     .bind(id)
     .all();
 
+  const blockingJobs = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM jobs WHERE client_id = ? AND status NOT IN ('closed', 'cancelled')",
+  )
+    .bind(id)
+    .first<{ n: number }>();
+
   return json({
-    client: shapeClient(row),
+    client: {
+      ...shapeClient(row),
+      can_delete: (blockingJobs?.n ?? 0) === 0,
+    },
     properties: properties.results ?? [],
     jobs: jobs.results ?? [],
   });
@@ -375,16 +389,17 @@ export async function handleClientCreate(request: Request, env: Env): Promise<Re
 
   await env.DB.prepare(
     `INSERT INTO clients (
-      id, name, first_name, last_name, email, phone, phone_secondary,
+      id, name, company_name, first_name, last_name, email, phone, phone_secondary,
       mailing_address, mailing_city, mailing_state, mailing_zip,
       lead_source, high_level_contact_id, is_repeat_client, review_requested,
       google_review_left, notes, last_interaction_date,
       synced_at, created_at, updated_at, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       fullName,
+      str(body.company_name),
       firstName,
       lastName,
       email,
@@ -418,6 +433,7 @@ export async function handleClientCreate(request: Request, env: Env): Promise<Re
 const CLIENT_UPDATABLE = [
   "first_name",
   "last_name",
+  "company_name",
   "email",
   "phone",
   "phone_secondary",
@@ -718,4 +734,55 @@ export async function handleCommunicationCreate(request: Request, env: Env): Pro
 
   const row = await env.DB.prepare("SELECT * FROM communications WHERE id = ?").bind(id).first();
   return json({ communication: row }, { status: 201 });
+}
+
+// ─── DELETE /api/clients/:id ──────────────────────────────────────────────────
+
+export async function handleClientDelete(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const client = await env.DB.prepare(
+    `SELECT c.id, c.name, c.first_name, c.last_name, c.email, c.phone,
+            (SELECT COUNT(*) FROM jobs j WHERE j.client_id = c.id
+               AND j.status NOT IN ('closed', 'cancelled')) AS blocking_jobs
+     FROM clients c WHERE c.id = ?`,
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      name: string | null;
+      first_name: string | null;
+      last_name: string | null;
+      email: string | null;
+      phone: string | null;
+      blocking_jobs: number;
+    }>();
+  if (!client) return err(404, "not_found", "Client not found");
+
+  if ((client.blocking_jobs ?? 0) > 0) {
+    return json(
+      {
+        error: "cannot_delete_client_with_active_jobs",
+        message: "This client has active jobs. Close or cancel all jobs before deleting the client.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const displayName =
+    [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || client.name || "(unnamed)";
+
+  const { jobs_removed, estimates_removed } = await cascadeDeleteClient(env, id);
+
+  await logAudit(env, user.email, "client_deleted", "client", id, {
+    name: displayName,
+    email: client.email,
+    phone: client.phone,
+    jobs_removed,
+    estimates_removed,
+  });
+
+  return json({ ok: true, deleted: true, id });
 }

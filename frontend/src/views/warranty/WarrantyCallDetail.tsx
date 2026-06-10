@@ -186,7 +186,7 @@ export function WarrantyCallDetail({ id }: DetailProps) {
         <div style={{ marginTop: "var(--space-md)" }}>
           <FormField label="Description">
             <textarea
-              class="input"
+              class="form-input"
               rows={3}
               defaultValue={c.description ?? ""}
               onBlur={(e) => {
@@ -228,7 +228,7 @@ export function WarrantyCallDetail({ id }: DetailProps) {
         )}
         <FormField label="Add note">
           <textarea
-            class="input"
+            class="form-input"
             rows={2}
             value={notesDraft}
             onInput={(e) => setNotesDraft((e.target as HTMLTextAreaElement).value)}

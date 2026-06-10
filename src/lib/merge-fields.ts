@@ -51,6 +51,7 @@ export const MERGE_FIELD_CATALOG: readonly string[] = [
   "today_date",
   "company_name",
   "payment_schedule",
+  "contractor_name",
 ] as const;
 
 interface CompanySettings {
@@ -250,5 +251,6 @@ export function sampleMergeFields(): Record<string, string> {
     start_date: longDate(new Date().toISOString()),
     completion_date: longDate(new Date(Date.now() + 60 * 864e5).toISOString()),
     payment_schedule: "  • Materials Deposit — $9,700.00\n  • 50% at Rough-In — $19,400.00\n  • Final on Completion — $19,400.00",
+    contractor_name: "Tony Columbus, Owner",
   };
 }

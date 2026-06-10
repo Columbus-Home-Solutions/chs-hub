@@ -39,6 +39,7 @@ export function JobPipeline(_props: RoutableProps) {
   const [overStage, setOverStage] = useState<JobStatus | null>(null);
   const [activeStage, setActiveStage] = useState<JobStatus>("deposit_paid");
   const [statusFilter, setStatusFilter] = useState<JobStatus | "">("");
+  const [listSearch, setListSearch] = useState("");
 
   useEffect(() => {
     const s = searchParam("status");
@@ -54,9 +55,27 @@ export function JobPipeline(_props: RoutableProps) {
   }, [data]);
 
   const listJobs = useMemo(() => {
-    if (!statusFilter) return allJobs;
-    return allJobs.filter((j) => j.status === statusFilter);
-  }, [allJobs, statusFilter]);
+    let jobs = statusFilter ? allJobs.filter((j) => j.status === statusFilter) : allJobs;
+    const q = listSearch.trim().toLowerCase();
+    if (q) {
+      jobs = jobs.filter((j) => {
+        const hay = [
+          j.job_display,
+          j.job_number != null ? String(j.job_number) : "",
+          j.title,
+          j.client_name,
+          j.property_address,
+          j.property_city,
+          j.property_state,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    return jobs;
+  }, [allJobs, statusFilter, listSearch]);
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(listJobs, "job_number", "desc");
 
@@ -106,6 +125,16 @@ export function JobPipeline(_props: RoutableProps) {
       {error && <div class="empty-state">Couldn't load the pipeline: {error}</div>}
 
       {!loading && !error && data && viewMode === "list" && (
+        <>
+        <div style={{ marginBottom: "var(--space-md)", maxWidth: "360px" }}>
+          <input
+            class="form-input"
+            type="search"
+            placeholder="Search jobs (number, title, client, address)…"
+            value={listSearch}
+            onInput={(e) => setListSearch((e.target as HTMLInputElement).value)}
+          />
+        </div>
         <table class="data-table">
           <thead>
             <tr>
@@ -141,6 +170,7 @@ export function JobPipeline(_props: RoutableProps) {
             ))}
           </tbody>
         </table>
+        </>
       )}
 
       {!loading && !error && data && viewMode === "kanban" && (

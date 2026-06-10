@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { go } from "../../lib/nav";
 import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
@@ -26,7 +27,7 @@ export function MarkWonModal({
 }: {
   request: EstimateRequest | null;
   onClose: () => void;
-  onWon: (jobNumber?: number) => void;
+  onWon: (jobId?: string, jobNumber?: number) => void;
 }) {
   const toast = useToast();
   const [amount, setAmount] = useState("");
@@ -52,12 +53,13 @@ export function MarkWonModal({
     if (!request || !canWin || !amountValid || saving) return;
     setSaving(true);
     try {
-      const res = await api.post<{ job_number?: number }>(
+      const res = await api.post<{ job_id?: string; job_number?: number }>(
         `/api/estimate-requests/${request.id}/win`,
         { deposit_amount: amountNum, payment_method: method, reference: reference || null },
       );
       toast.push("success", "Marked as won — job created");
-      onWon(res.job_number);
+      onWon(res.job_id, res.job_number);
+      if (res.job_id) go(`/jobs/${res.job_id}`);
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
       setSaving(false);

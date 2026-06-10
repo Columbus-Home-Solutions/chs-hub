@@ -631,6 +631,7 @@ async function handleChangeOrderSign(
   env: Env,
   token: string,
   coId: string,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const job = await resolveJob(env, token);
   if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
@@ -647,7 +648,7 @@ async function handleChangeOrderSign(
 
   // Already signed/approved → idempotent no-op; return the applied result.
   if (co.status === "approved" || co.applied_at) {
-    const res = await applyChangeOrder(env, coId); // fast no-op path
+    const res = await applyChangeOrder(env, coId, ctx); // fast no-op path
     return json({ ok: true, already_applied: true, change_order: res?.change_order ?? null });
   }
   if (co.status !== "sent") {
@@ -674,8 +675,9 @@ async function handleChangeOrderSign(
     .run();
 
   // Auto-apply exactly once. Fires change_order_approved (SIMULATE) inside.
+  console.log(`[AUTOTRIGGER] portal change-order sign — coId=${coId}`);
   try {
-    const res = await applyChangeOrder(env, coId);
+    const res = await applyChangeOrder(env, coId, ctx);
     return json({ ok: true, already_applied: res?.already_applied ?? false, change_order: res?.change_order ?? null });
   } catch (e) {
     const msg = (e as Error).message;
@@ -743,6 +745,43 @@ async function handleCompletionPackage(env: Env, token: string): Promise<Respons
   });
 }
 
+// ─── GET /api/portal/:token/documents/:doc_id/file — signed PDF download ──────
+// Token-gated, no CF Access. Only streams documents that:
+//   1. Belong to the job identified by the portal token.
+//   2. Are is_signed = 1 (completed signed docs created by the BoldSign webhook).
+//   3. Are not from category lien_waiver (sub-facing; blocked from client portal).
+async function handlePortalDocFile(env: Env, token: string, docId: string): Promise<Response> {
+  const job = await resolveJob(env, token);
+  if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
+
+  const doc = await env.DB.prepare(
+    `SELECT title, r2_key, file_type, document_category, is_signed
+       FROM documents
+      WHERE id = ? AND job_id = ? AND COALESCE(is_active, 1) = 1`,
+  )
+    .bind(docId, job.id)
+    .first<{ title: string | null; r2_key: string; file_type: string | null; document_category: string; is_signed: number | null }>();
+
+  if (!doc) return err(404, "not_found", "Document not found.");
+  if (!doc.is_signed) return err(403, "not_signed", "Only signed documents are downloadable from the portal.");
+  if (doc.document_category === "lien_waiver") {
+    return err(403, "not_available", "This document is not available in the client portal.");
+  }
+
+  const obj = await env.FILES.get(doc.r2_key);
+  if (!obj) return err(404, "file_not_found", "Document file not available.");
+
+  const contentType = doc.file_type ?? "application/octet-stream";
+  const filename = doc.title ?? "signed-document.pdf";
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": contentType,
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Cache-Control": "private, no-cache",
+    },
+  });
+}
+
 // ─── dispatcher ────────────────────────────────────────────────────────────────
 
 /**
@@ -754,6 +793,7 @@ export async function handlePortalApi(
   request: Request,
   env: Env,
   url: URL,
+  ctx: ExecutionContext,
 ): Promise<Response | null> {
   const { method } = request;
   const p = url.pathname;
@@ -772,7 +812,7 @@ export async function handlePortalApi(
 
   const coSign = p.match(/^\/api\/portal\/([^/]+)\/change-orders\/([^/]+)\/sign$/);
   if (coSign && method === "POST") {
-    return handleChangeOrderSign(request, env, decodeURIComponent(coSign[1]), decodeURIComponent(coSign[2]));
+    return handleChangeOrderSign(request, env, decodeURIComponent(coSign[1]), decodeURIComponent(coSign[2]), ctx);
   }
 
   const pay = p.match(/^\/api\/portal\/([^/]+)\/pay\/([^/]+)$/);
@@ -805,6 +845,12 @@ export async function handlePortalApi(
 
   const documents = p.match(/^\/api\/portal\/([^/]+)\/documents$/);
   if (documents && method === "GET") return handleDocuments(env, decodeURIComponent(documents[1]));
+
+  // Signed document file download (Sprint 21: BoldSign completed PDFs).
+  const docFile = p.match(/^\/api\/portal\/([^/]+)\/documents\/([^/]+)\/file$/);
+  if (docFile && (method === "GET" || method === "HEAD")) {
+    return handlePortalDocFile(env, decodeURIComponent(docFile[1]), decodeURIComponent(docFile[2]));
+  }
 
   const completion = p.match(/^\/api\/portal\/([^/]+)\/completion-package$/);
   if (completion && method === "GET") return handleCompletionPackage(env, decodeURIComponent(completion[1]));

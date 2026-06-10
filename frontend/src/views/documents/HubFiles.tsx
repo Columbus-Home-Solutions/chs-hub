@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -63,7 +63,6 @@ export function HubFiles(_props: RoutableProps) {
   const load = async () => {
     setRows(null);
     const qs = new URLSearchParams();
-    if (search.trim()) qs.set("search", search.trim());
     if (category) qs.set("category", category);
     if (contextType) qs.set("context_type", contextType);
     try {
@@ -90,6 +89,13 @@ export function HubFiles(_props: RoutableProps) {
       toast.push("error", errMsg(e));
     }
   };
+
+  const filteredRows = useMemo(() => {
+    const all = rows ?? [];
+    const q = search.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((d) => d.title.toLowerCase().includes(q));
+  }, [rows, search]);
 
   const softDelete = async (d: DocRow) => {
     try {
@@ -118,13 +124,12 @@ export function HubFiles(_props: RoutableProps) {
 
       <Card>
         <div class="form-row" style={{ alignItems: "flex-end" }}>
-          <FormField label="Search (title / category)">
+          <FormField label="Search documents">
             <input
               class="form-input"
               value={search}
-              placeholder="e.g. permit, agreement…"
+              placeholder="Filter by filename…"
               onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
-              onKeyDown={(e) => e.key === "Enter" && void load()}
             />
           </FormField>
           <FormField label="Category">
@@ -148,7 +153,7 @@ export function HubFiles(_props: RoutableProps) {
             />
           </FormField>
           <Button variant="secondary" onClick={() => void load()}>
-            Search
+            Refresh
           </Button>
         </div>
       </Card>
@@ -157,7 +162,7 @@ export function HubFiles(_props: RoutableProps) {
 
       {!rows ? (
         <Spinner center />
-      ) : rows.length === 0 ? (
+      ) : filteredRows.length === 0 ? (
         <div class="empty-state">No documents match these filters.</div>
       ) : (
         <Card>
@@ -175,7 +180,7 @@ export function HubFiles(_props: RoutableProps) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((d) => (
+              {filteredRows.map((d) => (
                 <tr key={d.id}>
                   <td>
                     <a href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer">

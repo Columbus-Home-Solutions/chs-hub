@@ -64,6 +64,11 @@ interface PublicQuote {
   approved_date: string | null;
   include_contract: boolean;
   contract_text: string | null;
+  signature_required: boolean;
+  signature_complete: boolean;
+  contract_signature_mode: "none" | "typed" | "boldsign";
+  signature_status: string;
+  contract_document_id: string | null;
   convenience_fee_rate: number;
   stripe_enabled: boolean;
   stripe_publishable_key: string | null;
@@ -114,6 +119,8 @@ function billingScheduleCopy(model: string | null): string {
   switch (model) {
     case "cost_plus":
       return "Billed in bi-weekly cycles at actual cost plus the agreed fees.";
+    case "fifty_fifty":
+      return "50% deposit due before work begins; balance due upon completion.";
     case "trade_by_trade":
       return "Paid trade-by-trade as each portion of work is completed.";
     default:
@@ -142,6 +149,10 @@ export function QuotePage() {
     reload()
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+    if (new URLSearchParams(window.location.search).get("signed") === "1") {
+      const t = window.setTimeout(() => void reload().catch(() => undefined), 1500);
+      return () => window.clearTimeout(t);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -223,10 +234,12 @@ function ScopeCard({ quote }: { quote: PublicQuote }) {
             {address && <div class="preview__meta-sub">{address}</div>}
             {quote.client_phone && <div class="preview__meta-sub">{quote.client_phone}</div>}
           </div>
-          <div class="preview__deposit">
-            <div class="preview__meta-label">Deposit to begin</div>
-            <div class="preview__deposit-amount">{formatCurrency(quote.deposit_amount)}</div>
-          </div>
+          {(quote.deposit_amount ?? 0) > 0 && (
+            <div class="preview__deposit">
+              <div class="preview__meta-label">Deposit to begin</div>
+              <div class="preview__deposit-amount">{formatCurrency(quote.deposit_amount)}</div>
+            </div>
+          )}
         </div>
 
         {quote.title && <div class="preview__title">{quote.title}</div>}
@@ -351,6 +364,8 @@ function ApprovedCard({ quote }: { quote: PublicQuote }) {
 
 function ApprovalFlow({ quote, reload }: { quote: PublicQuote; reload: () => Promise<PublicQuote> }) {
   const [changesOpen, setChangesOpen] = useState(false);
+  const needsSign = quote.signature_required && !quote.signature_complete;
+  const stepTotal = quote.signature_required ? 2 : 1;
 
   return (
     <div class="quote-card quote-action">
@@ -360,10 +375,10 @@ function ApprovalFlow({ quote, reload }: { quote: PublicQuote; reload: () => Pro
         <strong>{formatCurrency(quote.deposit_amount)}</strong>
       </div>
 
-      {!quote.signed ? (
-        <SignSection quote={quote} reload={reload} />
+      {needsSign ? (
+        <SignSection quote={quote} reload={reload} stepTotal={stepTotal} />
       ) : (
-        <PaySection quote={quote} reload={reload} />
+        <PaySection quote={quote} reload={reload} stepTotal={stepTotal} showSignNote={quote.signature_required} />
       )}
 
       <button class="quote-link-btn" onClick={() => setChangesOpen((v) => !v)}>
@@ -374,13 +389,32 @@ function ApprovalFlow({ quote, reload }: { quote: PublicQuote; reload: () => Pro
   );
 }
 
-function SignSection({ quote, reload }: { quote: PublicQuote; reload: () => Promise<PublicQuote> }) {
+function SignSection({
+  quote,
+  reload,
+  stepTotal,
+}: {
+  quote: PublicQuote;
+  reload: () => Promise<PublicQuote>;
+  stepTotal: number;
+}) {
   const [contractOpen, setContractOpen] = useState(false);
   const [name, setName] = useState(quote.client_name ?? "");
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [signLink, setSignLink] = useState<string | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
+  const boldsign = quote.contract_signature_mode === "boldsign";
+
+  useEffect(() => {
+    if (!boldsign) return;
+    const poll = window.setInterval(() => {
+      void reload().catch(() => undefined);
+    }, 12_000);
+    return () => window.clearInterval(poll);
+  }, [boldsign, quote.token]);
 
   const sign = async () => {
     setBusy(true);
@@ -394,9 +428,25 @@ function SignSection({ quote, reload }: { quote: PublicQuote; reload: () => Prom
     }
   };
 
+  const openBoldSign = async () => {
+    setLinkBusy(true);
+    setErr(null);
+    try {
+      const res = await getJson<{ sign_link: string }>(`/api/public/quote/${quote.token}/sign-link`);
+      setSignLink(res.sign_link);
+      window.open(res.sign_link, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
   return (
     <div class="quote-step">
-      <div class="quote-step__label">Step 1 — Sign the service agreement</div>
+      <div class="quote-step__label">
+        Step 1 of {stepTotal} — Sign the service agreement
+      </div>
       {quote.include_contract && quote.contract_text && (
         <>
           <button class="quote-link-btn" onClick={() => setContractOpen((v) => !v)}>
@@ -405,39 +455,76 @@ function SignSection({ quote, reload }: { quote: PublicQuote; reload: () => Prom
           {contractOpen && <pre class="quote-contract">{quote.contract_text}</pre>}
         </>
       )}
-      <label class="quote-field">
-        <span>Type your full legal name to sign</span>
-        <input
-          class="quote-input"
-          value={name}
-          placeholder="e.g. Marcus Aurelius"
-          onInput={(e) => setName((e.target as HTMLInputElement).value)}
-        />
-      </label>
-      <label class="quote-check">
-        <input type="checkbox" checked={agree} onChange={(e) => setAgree((e.target as HTMLInputElement).checked)} />
-        <span>
-          I agree to the service agreement and understand my electronic signature is legally binding.
-        </span>
-      </label>
-      {err && <div class="quote-error">{err}</div>}
-      <button class="quote-btn quote-btn--primary" disabled={!name.trim() || !agree || busy} onClick={sign}>
-        {busy ? "Signing…" : "Adopt & Sign"}
-      </button>
+      {boldsign ? (
+        <>
+          <p class="quote-muted">
+            Review and sign electronically. Deposit payment unlocks once your signature is complete.
+          </p>
+          {quote.signature_status && quote.signature_status !== "none" && (
+            <div class="quote-signed-note">
+              Signature status: <strong>{quote.signature_status}</strong>
+            </div>
+          )}
+          {err && <div class="quote-error">{err}</div>}
+          <button class="quote-btn quote-btn--primary" disabled={linkBusy} onClick={openBoldSign}>
+            {linkBusy ? "Opening…" : signLink ? "Re-open signature" : "Sign agreement"}
+          </button>
+          <button class="quote-link-btn" onClick={() => void reload()}>
+            I finished signing — refresh status
+          </button>
+        </>
+      ) : (
+        <>
+          <label class="quote-field">
+            <span>Type your full legal name to sign</span>
+            <input
+              class="quote-input"
+              value={name}
+              placeholder="e.g. Marcus Aurelius"
+              onInput={(e) => setName((e.target as HTMLInputElement).value)}
+            />
+          </label>
+          <label class="quote-check">
+            <input type="checkbox" checked={agree} onChange={(e) => setAgree((e.target as HTMLInputElement).checked)} />
+            <span>
+              I agree to the service agreement and understand my electronic signature is legally binding.
+            </span>
+          </label>
+          {err && <div class="quote-error">{err}</div>}
+          <button class="quote-btn quote-btn--primary" disabled={!name.trim() || !agree || busy} onClick={sign}>
+            {busy ? "Signing…" : "Adopt & Sign"}
+          </button>
+        </>
+      )}
     </div>
   );
 }
 
-function PaySection({ quote, reload }: { quote: PublicQuote; reload: () => Promise<PublicQuote> }) {
+function PaySection({
+  quote,
+  reload,
+  stepTotal,
+  showSignNote,
+}: {
+  quote: PublicQuote;
+  reload: () => Promise<PublicQuote>;
+  stepTotal: number;
+  showSignNote?: boolean;
+}) {
   const [mode, setMode] = useState<"choose" | "card" | "check">("choose");
+  const payStep = quote.signature_required ? 2 : 1;
 
   return (
     <div class="quote-step">
-      <div class="quote-step__label">Step 2 — Pay your deposit</div>
-      <div class="quote-signed-note">
-        Signed by <strong>{quote.client_signature}</strong>
-        {quote.signed_date ? ` on ${formatDate(quote.signed_date)}` : ""}.
+      <div class="quote-step__label">
+        {stepTotal > 1 ? `Step ${payStep} of ${stepTotal} — ` : ""}Pay your deposit
       </div>
+      {showSignNote && quote.client_signature && (
+        <div class="quote-signed-note">
+          Signed by <strong>{quote.client_signature}</strong>
+          {quote.signed_date ? ` on ${formatDate(quote.signed_date)}` : ""}.
+        </div>
+      )}
 
       {mode === "choose" && (
         <div class="quote-pay-choices">

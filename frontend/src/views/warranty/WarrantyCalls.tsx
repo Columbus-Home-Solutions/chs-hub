@@ -262,11 +262,11 @@ function WarrantyFormModal({
         )}
       </FormField>
       <FormField label="Title" required>
-        <input class="input" value={title} onInput={(e) => setTitle((e.target as HTMLInputElement).value)} />
+        <input class="form-input" value={title} onInput={(e) => setTitle((e.target as HTMLInputElement).value)} />
       </FormField>
       <FormField label="Description">
         <textarea
-          class="input"
+          class="form-input"
           rows={3}
           value={description}
           onInput={(e) => setDescription((e.target as HTMLTextAreaElement).value)}
@@ -275,7 +275,7 @@ function WarrantyFormModal({
       <FormField label="Scheduled date & time">
         <input
           type="datetime-local"
-          class="input"
+          class="form-input"
           value={scheduled}
           onInput={(e) => setScheduled((e.target as HTMLInputElement).value)}
         />
@@ -363,7 +363,7 @@ export function WarrantyScheduleModal({
       <FormField label="Date & time">
         <input
           type="datetime-local"
-          class="input"
+          class="form-input"
           value={value}
           onInput={(e) => setValue((e.target as HTMLInputElement).value)}
         />

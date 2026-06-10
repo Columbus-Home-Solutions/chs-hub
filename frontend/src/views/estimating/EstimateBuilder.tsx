@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -11,6 +11,16 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
+import {
+  buildDefaultMilestones,
+  depositFromSchedule,
+  isCostPlusSchedule,
+  isScheduleUnconfigured,
+  milestoneAmount,
+  milestonePercentage,
+  shouldAutoPopulateSchedule,
+} from "../../lib/estimate-milestones";
+import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton";
 import {
   BILLING_MODELS,
   ESTIMATE_MODES,
@@ -39,6 +49,8 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
   const [reviews, setReviews] = useState<SavedReview[]>([]);
   const [mobileView, setMobileView] = useState<"edit" | "preview">("edit");
   const [saving, setSaving] = useState(false);
+  const [defaultScheduleNote, setDefaultScheduleNote] = useState(false);
+  const scheduleBootstrappedRef = useRef<string | null>(null);
 
   const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
 
@@ -80,6 +92,16 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
       .catch(() => setReviews([]));
   }, []);
 
+  // First open: apply defaults when contract/billing are set but schedule is blank.
+  useEffect(() => {
+    if (!estimate || estimate.status === "sent" || estimate.status === "approved") return;
+    if (scheduleBootstrappedRef.current === estimate.id) return;
+    scheduleBootstrappedRef.current = estimate.id;
+    if (!isScheduleUnconfigured(estimate.payment_schedule)) return;
+    void applyDefaultSchedule(estimate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estimate?.id]);
+
   const reload = async () => {
     if (!estimate) return;
     try {
@@ -89,6 +111,23 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
       toast.push("error", errMsg(e));
     }
   };
+
+  async function applyDefaultSchedule(est: Estimate, successMsg?: string) {
+    if (!est || est.status === "sent" || est.status === "approved") return;
+    if (!isScheduleUnconfigured(est.payment_schedule)) return;
+    setSaving(true);
+    try {
+      const milestones = buildDefaultMilestones(est);
+      await api.put(`/api/estimates/${est.id}/payment-schedule`, { milestones });
+      await reload();
+      setDefaultScheduleNote(true);
+      if (successMsg) toast.push("success", successMsg);
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   // Generic mutation: run an API call, refresh from the server (source of truth).
   const mutate = async (fn: () => Promise<unknown>, successMsg?: string) => {
@@ -128,6 +167,30 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
   const patchHeader = (body: Record<string, unknown>, msg?: string) =>
     mutate(() => api.put(`/api/estimates/${e.id}`, body), msg);
 
+  const patchWithAutoSchedule = (body: Record<string, unknown>, msg?: string) => {
+    const tryAuto = shouldAutoPopulateSchedule(body, e);
+    const merged = { ...e, ...body } as Estimate;
+    const scheduleMsg = tryAuto
+      ? msg
+        ? `${msg} — payment schedule updated`
+        : "Payment schedule updated"
+      : msg;
+    return mutate(async () => {
+      // Persist header fields first. A no-op billing_model change returns 400 — don't
+      // block schedule refresh when the schedule still needs defaults.
+      try {
+        await api.put(`/api/estimates/${e.id}`, body);
+      } catch (err) {
+        if (!tryAuto || !(err instanceof ApiError && err.status === 400)) throw err;
+      }
+      if (tryAuto) {
+        const milestones = buildDefaultMilestones(merged);
+        await api.put(`/api/estimates/${e.id}/payment-schedule`, { milestones });
+        setDefaultScheduleNote(true);
+      }
+    }, scheduleMsg);
+  };
+
   return (
     <div class="builder">
       <div class="view-header">
@@ -158,6 +221,7 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
           {sent && e.status !== "approved" && (
             <MarkLostButton estimate={e} mutate={mutate} />
           )}
+          {canDeleteEstimate(e) && <DeleteEstimateButton estimate={e} />}
         </div>
       </div>
 
@@ -174,7 +238,10 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
                   <button
                     key={m.value}
                     class={`segmented__btn${e.estimate_mode === m.value ? " segmented__btn--active" : ""}`}
-                    onClick={() => e.estimate_mode !== m.value && patchHeader({ estimate_mode: m.value })}
+                    onClick={() =>
+                      e.estimate_mode !== m.value &&
+                      patchWithAutoSchedule({ estimate_mode: m.value }, "Estimate mode updated")
+                    }
                   >
                     {m.label}
                   </button>
@@ -186,7 +253,7 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
               <Select
                 value={e.billing_model ?? ""}
                 options={BILLING_MODELS}
-                onChange={(v) => patchHeader({ billing_model: v }, "Billing model updated — deposit recalculated")}
+                onChange={(v) => patchWithAutoSchedule({ billing_model: v }, "Billing model updated")}
               />
             </div>
             <TemplateApplier
@@ -238,11 +305,16 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
         <div class={`builder__panel builder__panel--editor${mobileView === "preview" ? " is-hidden-mobile" : ""}`}>
           <LineItemEditor estimate={e} mutate={mutate} />
 
-          <PaymentScheduleBuilder estimate={e} mutate={mutate} />
+          <PaymentScheduleBuilder
+            estimate={e}
+            mutate={mutate}
+            showDefaultNote={defaultScheduleNote}
+            showCostPlusNote={isCostPlusSchedule(e)}
+            onUserEdit={() => setDefaultScheduleNote(false)}
+            onApplyDefaults={() => void applyDefaultSchedule(e, "Default payment schedule added")}
+          />
 
-          <DepositCard estimate={e} patchHeader={patchHeader} />
-
-          <OptionsCard estimate={e} reviews={reviews} patchHeader={patchHeader} />
+          <OptionsCard estimate={e} reviews={reviews} patchHeader={patchHeader} patchWithAutoSchedule={patchWithAutoSchedule} />
         </div>
 
         {/* ── Right: live client preview ───────────────────────── */}
@@ -366,7 +438,7 @@ function LineItemEditor({
   };
 
   return (
-    <Card title="Line Items" actions={<Button size="sm" variant="secondary" onClick={addLineItem}>+ Add Line Item</Button>}>
+    <Card title="Line Items" actions={<Button size="sm" variant="primary" onClick={addLineItem}>+ Add Line Item</Button>}>
       {estimate.line_items.length === 0 ? (
         <div class="empty-state" style={{ padding: "var(--space-xl)" }}>
           <div class="empty-state__title">No line items yet</div>
@@ -768,10 +840,19 @@ function MaterialSearchModal({
 function PaymentScheduleBuilder({
   estimate,
   mutate,
+  showDefaultNote,
+  showCostPlusNote,
+  onUserEdit,
+  onApplyDefaults,
 }: {
   estimate: Estimate;
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+  showDefaultNote: boolean;
+  showCostPlusNote: boolean;
+  onUserEdit: () => void;
+  onApplyDefaults: () => void;
 }) {
+  const unconfigured = isScheduleUnconfigured(estimate.payment_schedule);
   const [rows, setRows] = useState(
     estimate.payment_schedule.map((p) => ({
       description: p.description,
@@ -781,6 +862,10 @@ function PaymentScheduleBuilder({
       trigger: p.trigger ?? "",
     })),
   );
+
+  const scheduleKey = estimate.payment_schedule
+    .map((p) => `${p.id}:${p.sort_order}:${p.description}:${p.percentage}:${p.fixed_amount}:${p.is_deposit}`)
+    .join("|");
 
   useEffect(() => {
     setRows(
@@ -792,14 +877,15 @@ function PaymentScheduleBuilder({
         trigger: p.trigger ?? "",
       })),
     );
-  }, [estimate.id, estimate.payment_schedule]);
+  }, [estimate.id, scheduleKey]);
 
   const pctRows = rows.filter((r) => r.percentage != null && r.fixed_amount == null);
   const pctSum = pctRows.reduce((a, r) => a + (Number(r.percentage) || 0), 0);
   const pctValid = pctRows.length === 0 || Math.abs(pctSum - 100) < 0.01;
 
-  const persist = (next: typeof rows) =>
-    mutate(() =>
+  const persist = (next: typeof rows, edited = true) => {
+    if (edited) onUserEdit();
+    return mutate(() =>
       api.put(`/api/estimates/${estimate.id}/payment-schedule`, {
         milestones: next.map((r, i) => ({
           sort_order: i,
@@ -811,8 +897,13 @@ function PaymentScheduleBuilder({
         })),
       }),
     );
+  };
 
   const addRow = () => {
+    if (unconfigured) {
+      onApplyDefaults();
+      return;
+    }
     const next = [...rows, { description: "", percentage: null as number | null, fixed_amount: null as number | null, is_deposit: rows.length === 0, trigger: "" }];
     setRows(next);
     void persist(next);
@@ -823,21 +914,43 @@ function PaymentScheduleBuilder({
     void persist(next);
   };
   const update = (i: number, patch: Partial<(typeof rows)[number]>) => {
+    onUserEdit();
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   };
 
   return (
     <Card
       title="Payment Schedule"
-      actions={<Button size="sm" variant="secondary" onClick={addRow}>+ Milestone</Button>}
+      actions={<Button size="sm" variant="primary" onClick={addRow}>+ Add Milestone</Button>}
     >
+      {unconfigured && rows.length > 0 && (
+        <div class="text--muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-sm)" }}>
+          Milestones have no amounts yet.{" "}
+          <button type="button" class="link-btn" onClick={onApplyDefaults}>
+            Apply default schedule
+          </button>
+        </div>
+      )}
       {rows.length === 0 ? (
         <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-          No milestones. Add the deposit and draw schedule.
+          No milestones yet — click <strong>+ Add Milestone</strong> to apply the default schedule for
+          this contract type.
         </div>
       ) : (
         <div class="pay-list">
-          {rows.map((r, i) => (
+          {rows.map((r, i) => {
+            const isPctBased = r.percentage != null && r.fixed_amount == null;
+            const isFixedBased = r.fixed_amount != null && r.fixed_amount > 0 && r.percentage == null;
+            const computedDollar = milestoneAmount(
+              { percentage: r.percentage, fixed_amount: r.fixed_amount, amount: 0 },
+              estimate.total,
+            );
+            const computedPct =
+              isFixedBased && r.fixed_amount != null
+                ? milestonePercentage(r.fixed_amount, estimate.total)
+                : null;
+
+            return (
             <div class="pay-row" key={i}>
               <input
                 class="form-input"
@@ -848,31 +961,43 @@ function PaymentScheduleBuilder({
               />
               <label class="pay-row__num">
                 <span>%</span>
-                <input
-                  class="form-input"
-                  type="number"
-                  step="any"
-                  value={r.percentage ?? ""}
-                  onInput={(ev) => {
-                    const v = (ev.target as HTMLInputElement).value;
-                    update(i, { percentage: v === "" ? null : Number(v) });
-                  }}
-                  onBlur={() => persist(rows)}
-                />
+                {isFixedBased && computedPct != null ? (
+                  <span class="pay-row__computed-val" title="Computed from dollar amount ÷ total">
+                    {computedPct}
+                  </span>
+                ) : (
+                  <input
+                    class="form-input"
+                    type="number"
+                    step="any"
+                    value={r.percentage ?? ""}
+                    onInput={(ev) => {
+                      const v = (ev.target as HTMLInputElement).value;
+                      update(i, { percentage: v === "" ? null : Number(v), fixed_amount: null });
+                    }}
+                    onBlur={() => persist(rows)}
+                  />
+                )}
               </label>
               <label class="pay-row__num">
                 <span>$</span>
-                <input
-                  class="form-input"
-                  type="number"
-                  step="any"
-                  value={r.fixed_amount ?? ""}
-                  onInput={(ev) => {
-                    const v = (ev.target as HTMLInputElement).value;
-                    update(i, { fixed_amount: v === "" ? null : Number(v) });
-                  }}
-                  onBlur={() => persist(rows)}
-                />
+                {isPctBased ? (
+                  <span class="pay-row__computed-val" title="Computed from percentage × total">
+                    {formatCurrency(computedDollar)}
+                  </span>
+                ) : (
+                  <input
+                    class="form-input"
+                    type="number"
+                    step="any"
+                    value={r.fixed_amount ?? ""}
+                    onInput={(ev) => {
+                      const v = (ev.target as HTMLInputElement).value;
+                      update(i, { fixed_amount: v === "" ? null : Number(v), percentage: null });
+                    }}
+                    onBlur={() => persist(rows)}
+                  />
+                )}
               </label>
               <Select
                 value={r.trigger}
@@ -899,8 +1024,19 @@ function PaymentScheduleBuilder({
                 ✕
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
+      )}
+      {showDefaultNote && (
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0 0" }}>
+          Default payment schedule added. Adjust amounts as needed.
+        </p>
+      )}
+      {showCostPlusNote && (
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0 0" }}>
+          Remaining payments are generated automatically each billing cycle.
+        </p>
       )}
       {pctRows.length > 0 && (
         <div class={`pay-validate${pctValid ? "" : " pay-validate--bad"}`}>
@@ -911,55 +1047,18 @@ function PaymentScheduleBuilder({
   );
 }
 
-// ─── Deposit card ─────────────────────────────────────────────────────────────
-
-function DepositCard({
-  estimate,
-  patchHeader,
-}: {
-  estimate: Estimate;
-  patchHeader: (body: Record<string, unknown>, msg?: string) => Promise<void>;
-}) {
-  const [val, setVal] = useState(estimate.deposit_amount ?? 0);
-  useEffect(() => setVal(estimate.deposit_amount ?? 0), [estimate.deposit_amount]);
-
-  return (
-    <Card title="Deposit">
-      <div class="flex items-center gap-md" style={{ flexWrap: "wrap" }}>
-        <label class="li-input" style={{ flex: "1", minWidth: "160px" }}>
-          <span>Deposit amount (override)</span>
-          <input
-            class="form-input"
-            type="number"
-            step="any"
-            value={val}
-            onInput={(ev) => setVal(Number((ev.target as HTMLInputElement).value))}
-            onBlur={() =>
-              Number(val) !== (estimate.deposit_amount ?? 0) &&
-              patchHeader({ deposit_amount: Number(val), deposit_type: "fixed" }, "Deposit updated")
-            }
-          />
-        </label>
-        <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-          {estimate.deposit_type === "percentage" && estimate.deposit_percentage
-            ? `Auto: ${estimate.deposit_percentage}% of total (${formatCurrency(estimate.deposit_amount)})`
-            : `Type: ${formatStatus(estimate.deposit_type ?? "fixed")}`}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
 // ─── Options (validity, reviews, contract) ─────────────────────────────────────
 
 function OptionsCard({
   estimate,
   reviews,
   patchHeader,
+  patchWithAutoSchedule,
 }: {
   estimate: Estimate;
   reviews: SavedReview[];
   patchHeader: (body: Record<string, unknown>, msg?: string) => Promise<void>;
+  patchWithAutoSchedule: (body: Record<string, unknown>, msg?: string) => Promise<void>;
 }) {
   const [days, setDays] = useState(estimate.valid_days);
   useEffect(() => setDays(estimate.valid_days), [estimate.valid_days]);
@@ -991,7 +1090,9 @@ function OptionsCard({
           <input
             type="checkbox"
             checked={estimate.include_contract}
-            onChange={(ev) => patchHeader({ include_contract: (ev.target as HTMLInputElement).checked })}
+            onChange={(ev) =>
+              patchWithAutoSchedule({ include_contract: (ev.target as HTMLInputElement).checked })
+            }
           />
           Include service agreement / contract
         </label>
@@ -1003,7 +1104,10 @@ function OptionsCard({
               { value: "standard_service_agreement", label: "Standard Service Agreement" },
               { value: "cost_plus_billing_agreement", label: "Cost-Plus Billing Agreement" },
             ]}
-            onChange={(v) => patchHeader({ contract_template_id: v })}
+            onChange={(v) => {
+              if (!v) return;
+              void patchWithAutoSchedule({ contract_template_id: v }, "Contract type updated");
+            }}
           />
         </FormField>
       </div>
@@ -1015,6 +1119,7 @@ function OptionsCard({
 
 function ClientPreview({ estimate, reviews }: { estimate: Estimate; reviews: SavedReview[] }) {
   const e = estimate;
+  const depositDue = depositFromSchedule(e);
   const shownReviews = useMemo(() => reviews.filter((r) => r.is_active).slice(0, 3), [reviews]);
 
   return (
@@ -1040,10 +1145,12 @@ function ClientPreview({ estimate, reviews }: { estimate: Estimate; reviews: Sav
               {[e.property_address, e.property_city, e.property_state, e.property_zip].filter(Boolean).join(", ")}
             </div>
           </div>
-          <div class="preview__deposit">
-            <div class="preview__meta-label">Deposit to begin</div>
-            <div class="preview__deposit-amount">{formatCurrency(e.deposit_amount)}</div>
-          </div>
+          {depositDue > 0 && (
+            <div class="preview__deposit">
+              <div class="preview__meta-label">Deposit to begin</div>
+              <div class="preview__deposit-amount">{formatCurrency(depositDue)}</div>
+            </div>
+          )}
         </div>
 
         {e.title && <div class="preview__title">{e.title}</div>}
@@ -1094,8 +1201,9 @@ function ClientPreview({ estimate, reviews }: { estimate: Estimate; reviews: Sav
                 <span>
                   {p.description}
                   {p.is_deposit ? " (deposit)" : ""}
+                  {p.percentage != null && p.fixed_amount == null ? ` · ${p.percentage}%` : ""}
                 </span>
-                <span>{formatCurrency(p.amount)}</span>
+                <span>{formatCurrency(milestoneAmount(p, e.total))}</span>
               </div>
             ))}
           </div>
@@ -1344,7 +1452,7 @@ function SendButton({
 }) {
   const [open, setOpen] = useState(false);
   const hasLine = estimate.line_items.length > 0;
-  const hasDeposit = (estimate.deposit_amount ?? 0) > 0;
+  const hasDeposit = depositFromSchedule(estimate) > 0;
   const pctRows = estimate.payment_schedule.filter((p) => p.percentage != null && p.fixed_amount == null);
   const pctOk = pctRows.length === 0 || Math.abs(pctRows.reduce((a, p) => a + (p.percentage ?? 0), 0) - 100) < 0.01;
   const blocked = !hasLine || !hasDeposit || !pctOk;
@@ -1379,7 +1487,7 @@ function SendButton({
       >
         <ul class="send-checklist">
           <li class={hasLine ? "ok" : "bad"}>{hasLine ? "✓" : "✕"} At least one line item</li>
-          <li class={hasDeposit ? "ok" : "bad"}>{hasDeposit ? "✓" : "✕"} Deposit amount configured</li>
+          <li class={hasDeposit ? "ok" : "bad"}>{hasDeposit ? "✓" : "✕"} Deposit milestone configured</li>
           <li class={pctOk ? "ok" : "bad"}>{pctOk ? "✓" : "✕"} Percentage milestones total 100%</li>
         </ul>
         <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>

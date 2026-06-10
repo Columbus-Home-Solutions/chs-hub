@@ -57,6 +57,7 @@ import {
   handleJobPipeline,
   handleJobDetail,
   handleJobUpdate,
+  handleJobDelete,
   handleJobStatus,
   handleJobReverseConversion,
   handleTaskList,
@@ -198,6 +199,7 @@ import {
 import { handleMe, handleClockableUsers } from "./routes/me.js";
 import {
   handleClientCreate,
+  handleClientDelete,
   handleClientGet,
   handleClientList,
   handleClientSummary,
@@ -240,12 +242,14 @@ import {
   handleEstimateRequestAppointment,
   handleEstimateRequestLost,
   handleEstimateRequestWin,
+  handleEstimateRequestDelete,
 } from "./routes/estimate-requests.js";
 import {
   handleEstimateList,
   handleEstimateGet,
   handleEstimateCreate,
   handleEstimateUpdate,
+  handleEstimateDelete,
   handleEstimateSend,
   handleEstimateRevise,
   handleEstimateLost,
@@ -276,6 +280,7 @@ import {
   handlePublicQuoteRequestChanges,
   handlePublicQuotePayIntent,
   handlePublicQuotePayCheck,
+  handlePublicQuoteSignLink,
   handleStripeWebhook,
 } from "./routes/public-quote.js";
 import {
@@ -327,6 +332,24 @@ import {
   handleTemplatePreview as handleDocTemplatePreview,
   handleTemplateGenerate as handleDocTemplateGenerate,
 } from "./routes/document-templates.js";
+import {
+  handleGenerateJobDocument,
+  handleListGeneratedDocuments,
+  handleDownloadJobDocument,
+  handleDeleteGeneratedDocument,
+  handleJobDocPreview,
+  handleApproveDocument,
+  handleDiscardDocument,
+  handleReviewQueue,
+  handleDocViewUrl,
+  handleESignatureStatus,
+  handleSendForSignature,
+  handleSignatureStatus,
+  handleSendReminder,
+  handleRevokeSignature,
+  handleDownloadSignedPdf,
+} from "./routes/job-documents.js";
+import { handleBoldSignWebhook } from "./routes/webhooks-boldsign.js";
 import {
   handleJobLienWaivers,
   handleLienWaiverCreate,
@@ -434,7 +457,7 @@ async function fetchAssetWithDashboardInject(
 }
 
 export default {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // ── workers.dev ingest lockdown (Pre-Launch H3) ─────────────────────
@@ -483,7 +506,8 @@ export default {
         p.startsWith("/api/public/social-posts/") ||
         p.startsWith("/api/public/social/") ||
         p.startsWith("/api/portal/") ||
-        p === "/api/webhooks/stripe";
+        p === "/api/webhooks/stripe" ||
+        p === "/api/integrations/boldsign/webhook";
       if (!allowed) {
         return new Response(JSON.stringify({ error: "Not found" }), {
           status: 404,
@@ -516,7 +540,7 @@ export default {
     // (or, for the webhook, the Stripe signature). No guard()/Access here.
     // Matched early so the token paths never fall through to auth'd routes.
     if (url.pathname === "/api/webhooks/stripe" && request.method === "POST") {
-      return handleStripeWebhook(request, env);
+      return handleStripeWebhook(request, env, ctx);
     }
     // Inbound Twilio (SMS + delivery status). PUBLIC — gated only by the Twilio
     // signature, like the Stripe webhook. Matched early so they never fall
@@ -527,9 +551,18 @@ export default {
     if (url.pathname === "/api/webhooks/twilio/status" && request.method === "POST") {
       return handleTwilioStatus(request, env);
     }
+    // BoldSign webhook — PUBLIC, HMAC-verified, must NOT be caught by RBAC.
+    // Reachable on dashboard.homesolutionsar.com (added to public host allowlist above).
+    if (url.pathname === "/api/integrations/boldsign/webhook" && request.method === "POST") {
+      return handleBoldSignWebhook(request, env, ctx);
+    }
     const pqSign = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/sign$/);
     if (pqSign && request.method === "POST") {
       return handlePublicQuoteSign(request, env, decodeURIComponent(pqSign[1]));
+    }
+    const pqSignLink = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/sign-link$/);
+    if (pqSignLink && request.method === "GET") {
+      return handlePublicQuoteSignLink(request, env, decodeURIComponent(pqSignLink[1]));
     }
     const pqChanges = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/request-changes$/);
     if (pqChanges && request.method === "POST") {
@@ -624,7 +657,7 @@ export default {
     const companyById = url.pathname.match(/^\/api\/company-documents\/([^/]+)$/);
     if (companyById) {
       const cid = decodeURIComponent(companyById[1]);
-      if (request.method === "DELETE") return handleCompanyDocumentDelete(env, cid);
+      if (request.method === "DELETE") return handleCompanyDocumentDelete(env, cid, request);
       if (request.method === "PATCH") return handleCompanyDocumentPatch(env, cid, request);
     }
 
@@ -883,7 +916,7 @@ export default {
     }
     const jobStatus = url.pathname.match(/^\/api\/jobs\/([^/]+)\/status$/);
     if (jobStatus && request.method === "PUT") {
-      return handleJobStatus(request, env, decodeURIComponent(jobStatus[1]));
+      return handleJobStatus(request, env, decodeURIComponent(jobStatus[1]), ctx);
     }
     const jobReverse = url.pathname.match(/^\/api\/jobs\/([^/]+)\/reverse-conversion$/);
     if (jobReverse && request.method === "POST") {
@@ -950,6 +983,68 @@ export default {
       if (request.method === "GET") return handleJobChangeOrders(env, jid);
       if (request.method === "POST") return handleChangeOrderCreate(request, env, jid);
     }
+    // ── Sprint 19/20/21: Auto-fill .docx generation + Review Queue + E-Signature ──
+    if (url.pathname === "/api/documents/review-queue" && request.method === "GET") {
+      return handleReviewQueue(request, env);
+    }
+    if (url.pathname === "/api/esignature/status" && request.method === "GET") {
+      return handleESignatureStatus(request, env);
+    }
+    const jobDocPreview = url.pathname.match(/^\/api\/jobs\/([^/]+)\/doc-preview$/);
+    if (jobDocPreview && request.method === "GET") {
+      return handleJobDocPreview(env, decodeURIComponent(jobDocPreview[1]));
+    }
+    const jobDocGenerate = url.pathname.match(/^\/api\/jobs\/([^/]+)\/documents\/generate$/);
+    if (jobDocGenerate && request.method === "POST") {
+      return handleGenerateJobDocument(request, env, decodeURIComponent(jobDocGenerate[1]));
+    }
+    const jobDocDownload = url.pathname.match(/^\/api\/jobs\/([^/]+)\/documents\/([^/]+)\/download$/);
+    if (jobDocDownload && request.method === "GET") {
+      return handleDownloadJobDocument(env, decodeURIComponent(jobDocDownload[1]), decodeURIComponent(jobDocDownload[2]));
+    }
+    // Sub-resource routes must be matched BEFORE the bare :doc_id route.
+    const jobGenDocViewUrl = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)\/view-url$/);
+    if (jobGenDocViewUrl && request.method === "GET") {
+      return handleDocViewUrl(request, env, decodeURIComponent(jobGenDocViewUrl[1]), decodeURIComponent(jobGenDocViewUrl[2]));
+    }
+    const jobGenDocApprove = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)\/approve$/);
+    if (jobGenDocApprove && request.method === "POST") {
+      return handleApproveDocument(request, env, decodeURIComponent(jobGenDocApprove[1]), decodeURIComponent(jobGenDocApprove[2]));
+    }
+    const jobGenDocDiscard = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)\/discard$/);
+    if (jobGenDocDiscard && request.method === "POST") {
+      return handleDiscardDocument(request, env, decodeURIComponent(jobGenDocDiscard[1]), decodeURIComponent(jobGenDocDiscard[2]));
+    }
+    // Sprint 21: send-for-signature, signature-status, remind, revoke.
+    const jobGenDocSendSig = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)\/send-for-signature$/);
+    if (jobGenDocSendSig && request.method === "POST") {
+      return handleSendForSignature(request, env, decodeURIComponent(jobGenDocSendSig[1]), decodeURIComponent(jobGenDocSendSig[2]));
+    }
+    const jobGenDocSigStatus = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)\/signature-status$/);
+    if (jobGenDocSigStatus && request.method === "GET") {
+      return handleSignatureStatus(request, env, decodeURIComponent(jobGenDocSigStatus[1]), decodeURIComponent(jobGenDocSigStatus[2]));
+    }
+    const jobGenDocRemind = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)\/remind$/);
+    if (jobGenDocRemind && request.method === "POST") {
+      return handleSendReminder(request, env, decodeURIComponent(jobGenDocRemind[1]), decodeURIComponent(jobGenDocRemind[2]));
+    }
+    const jobGenDocRevoke = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)\/revoke$/);
+    if (jobGenDocRevoke && request.method === "POST") {
+      return handleRevokeSignature(request, env, decodeURIComponent(jobGenDocRevoke[1]), decodeURIComponent(jobGenDocRevoke[2]));
+    }
+    const jobGenDocSignedPdf = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)\/signed-pdf$/);
+    if (jobGenDocSignedPdf && (request.method === "GET" || request.method === "HEAD")) {
+      return handleDownloadSignedPdf(request, env, decodeURIComponent(jobGenDocSignedPdf[1]), decodeURIComponent(jobGenDocSignedPdf[2]));
+    }
+    const jobGeneratedDocs = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents$/);
+    if (jobGeneratedDocs) {
+      const jid = decodeURIComponent(jobGeneratedDocs[1]);
+      if (request.method === "GET") return handleListGeneratedDocuments(env, jid);
+    }
+    const jobGeneratedDocDelete = url.pathname.match(/^\/api\/jobs\/([^/]+)\/generated-documents\/([^/]+)$/);
+    if (jobGeneratedDocDelete && request.method === "DELETE") {
+      return handleDeleteGeneratedDocument(request, env, decodeURIComponent(jobGeneratedDocDelete[1]), decodeURIComponent(jobGeneratedDocDelete[2]));
+    }
     // ── Job-scoped Document Management routes (Sprint 15) ─────────────
     const jobDocuments = url.pathname.match(/^\/api\/jobs\/([^/]+)\/documents$/);
     if (jobDocuments && request.method === "GET") {
@@ -993,6 +1088,7 @@ export default {
       const jid = decodeURIComponent(jobById[1]);
       if (request.method === "GET") return handleJobDetail(env, jid);
       if (request.method === "PUT") return handleJobUpdate(request, env, jid);
+      if (request.method === "DELETE") return handleJobDelete(request, env, jid);
     }
     const taskById = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
     if (taskById && request.method === "PUT") {
@@ -1115,7 +1211,7 @@ export default {
     // ── Payments (Sprint 9) ──────────────────────────────────────────
     if (url.pathname === "/api/payments") {
       if (request.method === "GET") return handlePaymentList(request, env, url);
-      if (request.method === "POST") return handlePaymentCreate(request, env);
+      if (request.method === "POST") return handlePaymentCreate(request, env, ctx);
     }
 
     // ── Public payment page (Sprint 9, token-gated, unauthenticated) ──
@@ -1143,7 +1239,7 @@ export default {
     // messages, deferred seams). The dispatcher returns null when nothing
     // matches so non-portal paths fall through to the auth'd routes.
     if (url.pathname.startsWith("/api/portal/")) {
-      const portalRes = await handlePortalApi(request, env, url);
+      const portalRes = await handlePortalApi(request, env, url, ctx);
       if (portalRes) return portalRes;
     }
 
@@ -1262,7 +1358,7 @@ export default {
       if (request.method === "POST") {
         const ct = request.headers.get("content-type") ?? "";
         return ct.includes("application/json")
-          ? handleExpenseCreateJson(env, request)
+          ? handleExpenseCreateJson(env, request, ctx)
           : handleExpenseCreate(env, request);
       }
       if (request.method === "GET") return handleFullExpenseList(env, url);
@@ -1449,6 +1545,7 @@ export default {
       const cid = decodeURIComponent(clientById[1]);
       if (request.method === "GET") return handleClientGet(env, cid);
       if (request.method === "PUT") return handleClientUpdate(request, env, cid);
+      if (request.method === "DELETE") return handleClientDelete(request, env, cid);
     }
     const propertyById = url.pathname.match(/^\/api\/properties\/([^/]+)$/);
     if (propertyById && request.method === "PUT") {
@@ -1529,13 +1626,14 @@ export default {
     }
     const erWin = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/win$/);
     if (erWin && request.method === "POST") {
-      return handleEstimateRequestWin(request, env, decodeURIComponent(erWin[1]));
+      return handleEstimateRequestWin(request, env, decodeURIComponent(erWin[1]), ctx);
     }
     const erById = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)$/);
     if (erById) {
       const erid = decodeURIComponent(erById[1]);
       if (request.method === "GET") return handleEstimateRequestGet(env, erid);
       if (request.method === "PUT") return handleEstimateRequestUpdate(request, env, erid);
+      if (request.method === "DELETE") return handleEstimateRequestDelete(request, env, erid);
     }
 
     // ── Estimate Builder (Sprint 4) ──────────────────────────────────
@@ -1619,6 +1717,7 @@ export default {
       const eid = decodeURIComponent(estById[1]);
       if (request.method === "GET") return handleEstimateGet(env, eid);
       if (request.method === "PUT") return handleEstimateUpdate(request, env, eid);
+      if (request.method === "DELETE") return handleEstimateDelete(request, env, eid);
     }
 
     // Line item sub-resources (sub-items) before the bare line-item :id route.

@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -14,6 +14,8 @@ import { go } from "../../lib/nav";
 import { formatDateTime, formatStatus } from "../../lib/format";
 import { formatCurrency } from "../../lib/format";
 import { MarkWonModal } from "./MarkWonModal";
+import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton";
+import { canDeleteRequest, DeleteRequestButton } from "./DeleteRequestButton";
 import {
   ESTIMATE_SENT_TOOLTIP,
   LOST_REASONS,
@@ -63,10 +65,32 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   const [apptOpen, setApptOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [wonOpen, setWonOpen] = useState(false);
+  const prevStatusRef = useRef<EstimateRequestStatus | null>(null);
 
   useEffect(() => {
     setNotes(r?.visit_notes ?? "");
   }, [r?.id, r?.visit_notes]);
+
+  // Poll for client deposit conversion while estimate is out and not yet won.
+  useEffect(() => {
+    if (!r || r.status === "won" || r.status === "lost" || !r.estimate_sent) return;
+    const poll = window.setInterval(() => void refetch(), 20_000);
+    return () => window.clearInterval(poll);
+  }, [r?.id, r?.status, r?.estimate_sent]);
+
+  // Auto-navigate when conversion completes while this page is open (not on initial load of won).
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    if (
+      r?.status === "won" &&
+      r.converted_job_id &&
+      prev &&
+      prev !== "won"
+    ) {
+      go(`/jobs/${r.converted_job_id}`);
+    }
+    if (r?.status) prevStatusRef.current = r.status;
+  }, [r?.status, r?.converted_job_id]);
 
   const patch = async (body: Record<string, unknown>, successMsg: string) => {
     if (!id) return;
@@ -146,7 +170,8 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             REQ-{String(r.request_number).padStart(3, "0")} · {fullAddress}
           </p>
         </div>
-        <div class="view-header__right">
+        <div class="view-header__right flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
+          {canDeleteRequest(r) && <DeleteRequestButton request={r} size="sm" />}
           <Button variant="tertiary" onClick={() => go("/estimating")}>
             ← Pipeline
           </Button>
@@ -264,14 +289,32 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                   {r.estimate_id ? "Estimate started." : "No estimate built yet."}
                 </span>
               )}
-              <Button variant="primary" onClick={() => go(`/estimating/${r.id}/estimate`)}>
-                {estimate || r.estimate_id ? "Open Estimate" : "Build Estimate"}
-              </Button>
+              <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
+                {canDeleteEstimate(estimate) &&
+                  !r.converted_job_id &&
+                  r.status !== "won" &&
+                  r.status !== "lost" && (
+                    <DeleteEstimateButton estimate={estimate!} size="sm" onDeleted={refetch} />
+                  )}
+                <Button variant="primary" onClick={() => go(`/estimating/${r.id}/estimate`)}>
+                  {estimate || r.estimate_id ? "Open Estimate" : "Build Estimate"}
+                </Button>
+              </div>
             </div>
             {estimate && estimate.portal_path && (
               <EstimateClientProgress estimate={estimate} />
             )}
           </Card>
+
+          {canDeleteRequest(r) && (
+            <Card title="Danger zone">
+              <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-sm)" }}>
+                Permanently remove this request from the pipeline, including any estimate, payment
+                schedule, and client quote link.
+              </p>
+              <DeleteRequestButton request={r} />
+            </Card>
+          )}
         </div>
 
         <div class="stack">
@@ -313,8 +356,15 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                 </Button>
               )}
               {r.status === "won" && (
-                <div class="text--secondary" style={{ fontSize: "var(--text-sm)" }}>
-                  Won — converted to a job. This request is closed on the estimating board.
+                <div class="stack" style={{ gap: "var(--space-sm)" }}>
+                  <div class="text--secondary" style={{ fontSize: "var(--text-sm)" }}>
+                    Won — converted to a job. This request is closed on the estimating board.
+                  </div>
+                  {r.converted_job_id && (
+                    <Button variant="primary" block onClick={() => go(`/jobs/${r.converted_job_id}`)}>
+                      Go to Job →
+                    </Button>
+                  )}
                 </div>
               )}
               {r.status === "lost" && r.lost_reason && (

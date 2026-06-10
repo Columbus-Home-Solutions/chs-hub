@@ -16,6 +16,7 @@
  *   GET    /api/estimates/:id                          full nested estimate
  *   POST   /api/estimates                              create from a request
  *   PUT    /api/estimates/:id                          update header
+ *   DELETE /api/estimates/:id                          cascade delete (guards on linked job)
  *   POST   /api/estimates/:id/send                     send-gate + status flip + WC hook
  *   POST   /api/estimates/:id/revise                   clone into a new version
  * Line items (parent — client-facing)
@@ -45,9 +46,12 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
+import { cascadeDeleteEstimateChildren } from "../lib/cascade-delete.js";
 import { triggerQuoteSent } from "../lib/wc/triggers.js";
 import { triggerNotification } from "../lib/notification-engine.js";
 import { renderContract } from "../lib/contracts.js";
+import { depositFromSchedule } from "../lib/deposit-from-schedule.js";
+import { generateAndSendEstimateContract } from "../lib/estimate-contract-document.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -442,8 +446,13 @@ async function loadFullEstimate(env: Env, id: string) {
     (ctx?.client_name as string) ||
     null;
 
+  const linkedJob = await env.DB.prepare("SELECT id FROM jobs WHERE estimate_id = ? LIMIT 1")
+    .bind(id)
+    .first<{ id: string }>();
+
   return {
     ...shapeEstimateHeader(row, totals),
+    linked_job_id: linkedJob?.id ?? null,
     client_name: clientName,
     client_phone: ctx?.client_phone ?? null,
     client_email: ctx?.client_email ?? null,
@@ -486,6 +495,12 @@ async function defaultDeposit(
         deposit_amount: round2(total * 0.33),
         deposit_type: "percentage",
         deposit_percentage: 33,
+      };
+    case "fifty_fifty":
+      return {
+        deposit_amount: round2(total * 0.5),
+        deposit_type: "percentage",
+        deposit_percentage: 50,
       };
     case "trade_by_trade":
       // Configurable; default to the first milestone if one exists, else 0.
@@ -569,6 +584,103 @@ export async function handleEstimateGet(env: Env, id: string): Promise<Response>
   const estimate = await loadFullEstimate(env, id);
   if (!estimate) return err(404, "not_found", "Estimate not found");
   return json({ estimate });
+}
+
+// ─── DELETE /api/estimates/:id ────────────────────────────────────────────────
+
+export async function handleEstimateDelete(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const row = await env.DB.prepare(
+    "SELECT id, estimate_number, title, status, client_id, request_id FROM estimates WHERE id = ?",
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      estimate_number: number | null;
+      title: string | null;
+      status: string;
+      client_id: string | null;
+      request_id: string | null;
+    }>();
+  if (!row) return err(404, "not_found", "Estimate not found");
+
+  if (row.status === "approved") {
+    return json(
+      {
+        error: "cannot_delete_approved_estimate",
+        message: "This estimate was approved and the deposit was paid. Delete the job instead.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const linked = await env.DB.prepare("SELECT id FROM jobs WHERE estimate_id = ? LIMIT 1")
+    .bind(id)
+    .first<{ id: string }>();
+  if (linked) {
+    return json(
+      {
+        error: "cannot_delete_converted_estimate",
+        message: "This estimate has been converted to a job. Delete the job first.",
+      },
+      { status: 409 },
+    );
+  }
+
+  if (row.request_id) {
+    const req = await env.DB.prepare(
+      "SELECT converted_job_id FROM estimate_requests WHERE id = ?",
+    )
+      .bind(row.request_id)
+      .first<{ converted_job_id: string | null }>();
+    if (req?.converted_job_id) {
+      return json(
+        {
+          error: "cannot_delete_converted_estimate",
+          message: "This request was already converted to a job.",
+        },
+        { status: 409 },
+      );
+    }
+  }
+
+  await cascadeDeleteEstimateChildren(env, id);
+
+  const now = new Date().toISOString();
+  if (row.request_id) {
+    // Unlink and roll back to visit_done — "building" with no estimate is confusing.
+    await env.DB.prepare(
+      `UPDATE estimate_requests
+          SET estimate_id = NULL,
+              status = CASE WHEN status IN ('won','lost') THEN status ELSE 'visit_done' END,
+              sent_date = CASE WHEN status IN ('won','lost') THEN sent_date ELSE NULL END,
+              follow_up_count = CASE WHEN status IN ('won','lost') THEN follow_up_count ELSE 0 END,
+              last_follow_up_date = CASE WHEN status IN ('won','lost') THEN last_follow_up_date ELSE NULL END,
+              updated_at = ?
+        WHERE id = ? AND estimate_id = ?`,
+    )
+      .bind(now, row.request_id, id)
+      .run();
+  } else {
+    await env.DB.prepare("UPDATE estimate_requests SET estimate_id = NULL WHERE estimate_id = ?")
+      .bind(id)
+      .run();
+  }
+
+  await env.DB.prepare("DELETE FROM estimates WHERE id = ?").bind(id).run();
+
+  await logAudit(env, user.email, "estimate_deleted", "estimate", id, {
+    estimate_number: row.estimate_number,
+    title: row.title,
+    status: row.status,
+    client_id: row.client_id,
+    request_id: row.request_id,
+  });
+
+  return json({ ok: true, deleted: true, id });
 }
 
 // ─── POST /api/estimates ───────────────────────────────────────────────────────
@@ -761,7 +873,12 @@ export async function handleEstimateUpdate(
     binds.push(dep.deposit_amount, dep.deposit_type, dep.deposit_percentage);
   }
 
-  if (updates.length === 0) return err(400, "bad_request", "No updatable fields supplied");
+  // Allow no-op updates (e.g. re-selecting the same billing model) so the
+  // frontend can still run follow-up actions like payment-schedule auto-populate.
+  if (updates.length === 0) {
+    const estimate = await loadFullEstimate(env, id);
+    return json({ estimate });
+  }
 
   updates.push("updated_at = ?");
   binds.push(new Date().toISOString());
@@ -806,15 +923,16 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
   if ((lineCount?.n ?? 0) < 1) {
     return err(400, "send_blocked", "An estimate needs at least one line item before it can be sent.");
   }
-  if (!est.deposit_amount || est.deposit_amount <= 0) {
-    return err(400, "send_blocked", "Configure a deposit amount before sending.");
-  }
-
   const schedule = (
     await env.DB.prepare("SELECT * FROM payment_schedules WHERE estimate_id = ?")
       .bind(id)
       .all<PaymentRow>()
   ).results ?? [];
+
+  const depositDue = depositFromSchedule(schedule, totals.total);
+  if (depositDue <= 0) {
+    return err(400, "send_blocked", "Add a deposit milestone to the payment schedule before sending.");
+  }
   const pctRows = schedule.filter((p) => p.percentage != null && p.fixed_amount == null);
   if (pctRows.length > 0) {
     const sum = round2(pctRows.reduce((a, p) => a + (p.percentage ?? 0), 0));
@@ -901,10 +1019,21 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
       .run();
   }
 
+  // Generate Service Agreement at send time (estimate-phase, not job).
+  let contractDocId: string | null = null;
+  if ((est.include_contract ?? 1) === 1) {
+    const contractResult = await generateAndSendEstimateContract(env, id, user.email);
+    contractDocId = contractResult.docId;
+    if (contractResult.reason === "template_not_found") {
+      console.error(`[estimate-send] contract generation failed for estimate ${id}`);
+    }
+  }
+
   await logAudit(env, user.email, "estimate_sent", "estimate", id, {
     total: totals.total,
     deposit_amount: est.deposit_amount,
     expiration_date: expiration.toISOString().slice(0, 10),
+    contract_document_id: contractDocId,
   });
 
   // WC quotes-sent hook (count + dollar value; recomputed on next cron tick).
@@ -1619,6 +1748,26 @@ export async function handlePaymentScheduleReplace(
       )
       .run();
   }
+
+  const totals = await recomputeEstimate(env, estimateId);
+  const saved = (
+    await env.DB.prepare("SELECT * FROM payment_schedules WHERE estimate_id = ? ORDER BY sort_order ASC")
+      .bind(estimateId)
+      .all<PaymentRow>()
+  ).results ?? [];
+  const depositDue = depositFromSchedule(saved, totals.total);
+  const depRow = saved.find((p) => (p.is_deposit ?? 0) === 1);
+  await env.DB.prepare(
+    "UPDATE estimates SET deposit_amount = ?, deposit_type = ?, deposit_percentage = ?, updated_at = ? WHERE id = ?",
+  )
+    .bind(
+      depositDue,
+      depRow?.percentage != null && depRow.fixed_amount == null ? "percentage" : "fixed",
+      depRow?.percentage != null && depRow.fixed_amount == null ? depRow.percentage : null,
+      new Date().toISOString(),
+      estimateId,
+    )
+    .run();
 
   await logAudit(env, user.email, "estimate_payment_schedule_replaced", "estimate", estimateId, {
     count: milestones.length,

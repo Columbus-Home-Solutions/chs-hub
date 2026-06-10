@@ -25,6 +25,59 @@ interface CommsResponse {
   communications: Communication[];
 }
 
+function DeleteClientCard({ client }: { client: Client }) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await api.del(`/api/clients/${client.id}`);
+      toast.push("success", "Client deleted");
+      go("/clients");
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(false);
+      setOpen(false);
+    }
+  };
+
+  return (
+    <>
+      <Card title="Danger zone">
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-sm)" }}>
+          Permanently remove this client, their estimates, and closed job history.
+        </p>
+        <Button variant="danger" onClick={() => setOpen(true)}>
+          Delete Client
+        </Button>
+      </Card>
+      <Modal
+        open={open}
+        title="Delete client"
+        onClose={() => setOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" disabled={busy} onClick={() => void remove()}>
+              Yes, delete
+            </Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>
+          Permanently delete {client.name}? All estimates and closed job history for this client will
+          be deleted. This cannot be undone.
+        </p>
+      </Modal>
+    </>
+  );
+}
+
 export function ClientDetail({ id }: RoutableProps & { id?: string }) {
   const toast = useToast();
   const { data, loading, error, refetch } = useApi<DetailResponse>(id ? `/api/clients/${id}` : null);
@@ -44,14 +97,19 @@ export function ClientDetail({ id }: RoutableProps & { id?: string }) {
       <div class="view-header">
         <div>
           <h1 class="view-title">
-            {c.name} {c.is_repeat_client && <Badge tone="brand">Repeat</Badge>}
+            {c.name}
+            {c.company_name && <span class="text--muted"> — {c.company_name}</span>}
+            {c.is_repeat_client && <Badge tone="brand">Repeat</Badge>}
           </h1>
           <p class="view-subtitle">
             {formatPhone(c.phone)} · {c.email ?? "—"}
             {c.mailing_city ? ` · ${c.mailing_city}, ${c.mailing_state ?? ""}` : ""}
           </p>
         </div>
-        <div class="view-header__right">
+        <div class="view-header__right flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
+          <Button variant="primary" onClick={() => go(`/estimating/new?client_id=${c.id}&autostart=1`)}>
+            + New Estimate
+          </Button>
           <Button variant="tertiary" onClick={() => go("/clients")}>
             ← Back
           </Button>
@@ -126,13 +184,24 @@ export function ClientDetail({ id }: RoutableProps & { id?: string }) {
                         </div>
                       )}
                     </div>
-                    <Button
-                      size="sm"
-                      variant="tertiary"
-                      onClick={() => setPropModal({ mode: "edit", property: p })}
-                    >
-                      Edit
-                    </Button>
+                    <div class="flex items-center gap-sm">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() =>
+                          go(`/estimating/new?client_id=${c.id}&property_id=${p.id}&autostart=1`)
+                        }
+                      >
+                        Estimate
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="tertiary"
+                        onClick={() => setPropModal({ mode: "edit", property: p })}
+                      >
+                        Edit
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -144,6 +213,8 @@ export function ClientDetail({ id }: RoutableProps & { id?: string }) {
               <p style={{ margin: 0, fontSize: "var(--text-sm)" }}>{c.notes}</p>
             </Card>
           )}
+
+          {c.can_delete && <DeleteClientCard client={c} />}
         </div>
 
         <div class="stack">

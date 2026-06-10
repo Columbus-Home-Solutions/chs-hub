@@ -121,6 +121,16 @@ export interface Env {
   // Read from env first, then the system_settings 'social_publish_mode' row.
   SOCIAL_PUBLISH_MODE?: string;
 
+  // ─── BoldSign / E-Signature (Sprint 21) ──────────────────────────────────────
+  // Mode gate mirrors SOCIAL_PUBLISH_MODE discipline. Only "live" sends legally-
+  // binding requests. Default (unset) = "sandbox". Read from env first, then
+  // system_settings 'esignature_mode'. Not a secret — set in wrangler.toml [vars].
+  ESIGNATURE_MODE?: string;
+  // BoldSign sandbox API key first; swap to live when Tony flips the gate.
+  BOLDSIGN_API_KEY?: string;
+  // Webhook HMAC signing secret from BoldSign account settings → Webhooks.
+  BOLDSIGN_WEBHOOK_SECRET?: string;
+
   // ─── Google Cloud (Imagen + Maps) ─────────────────────────────────
   // Service account for Vertex AI Imagen 3 (image gen). All three required.
   GOOGLE_CLIENT_EMAIL?: string;

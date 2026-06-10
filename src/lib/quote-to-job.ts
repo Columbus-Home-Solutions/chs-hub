@@ -671,10 +671,11 @@ async function buildConversionSteps(
         stmts.push(
           env.DB.prepare(
             `INSERT INTO billing_schedule (id, job_id, billing_model, sequence, label, trigger_type, trigger_ref, percentage, amount, status, created_at)
-             VALUES (?, ?, 'fixed_price', ?, ?, 'milestone', ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, 'milestone', ?, ?, ?, ?, ?)`,
           ).bind(
             crypto.randomUUID(),
             jobId,
+            billingModel ?? "fixed_price",
             i,
             d.label,
             String(i + 1),

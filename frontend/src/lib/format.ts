@@ -44,6 +44,7 @@ export function datetimeLocalToIso(local: string | null | undefined): string | n
 
 export function formatStatus(status: string | null | undefined): string {
   if (!status) return "—";
+  if (status === "fifty_fifty") return "50/50";
   return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 

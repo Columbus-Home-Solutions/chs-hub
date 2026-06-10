@@ -1,6 +1,7 @@
 export interface Client {
   id: string;
   name: string;
+  company_name: string | null;
   first_name: string | null;
   last_name: string | null;
   email: string | null;
@@ -20,6 +21,7 @@ export interface Client {
   total_jobs: number;
   total_revenue: number;
   active_jobs: number;
+  can_delete?: boolean;
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
@@ -305,7 +307,7 @@ export const LOST_REASONS = [
 // ─── Estimate Builder (Sprint 4) ────────────────────────────────────────────
 
 export type EstimateMode = "lump_sum" | "trade_by_trade";
-export type BillingModel = "fixed_price" | "trade_by_trade" | "cost_plus";
+export type BillingModel = "fixed_price" | "fifty_fifty" | "trade_by_trade" | "cost_plus";
 export type EstimateStatus = "draft" | "sent" | "viewed" | "approved" | "expired" | "revised";
 
 export const SUB_ITEM_CATEGORIES = [
@@ -407,6 +409,7 @@ export interface Estimate {
   viewed_date: string | null;
   approved_date: string | null;
   portal_path: string | null;
+  linked_job_id: string | null;
   notes: string | null;
   version: number;
   revised_from_id: string | null;
@@ -460,6 +463,7 @@ export const ESTIMATE_MODES: { value: EstimateMode; label: string }[] = [
 
 export const BILLING_MODELS: { value: BillingModel; label: string }[] = [
   { value: "fixed_price", label: "Fixed Price" },
+  { value: "fifty_fifty", label: "50/50" },
   { value: "trade_by_trade", label: "Trade-by-Trade" },
   { value: "cost_plus", label: "Cost-Plus" },
 ];

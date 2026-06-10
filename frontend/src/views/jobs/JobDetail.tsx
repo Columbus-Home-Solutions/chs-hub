@@ -173,7 +173,7 @@ export function JobDetail({ id }: DetailProps) {
       {tab === "permits" && id && <PermitsTab jobId={id} />}
       {tab === "warranty" && id && <WarrantyTab jobId={id} />}
       {tab === "photos" && id && <PhotosTab jobId={id} />}
-      {tab === "documents" && id && <DocumentsTab jobId={id} clientId={data.job.client_id} />}
+      {tab === "documents" && id && <DocumentsTab jobId={id} />}
       {tab === "daily_logs" && id && <DailyLogsTab jobId={id} />}
       {tab === "notes" && id && <SmartNotesPanel jobId={id} />}
       {tab === "activity" && (
@@ -271,6 +271,10 @@ function OverviewTab({
         <PortalLinkCard data={data} toast={toast} />
 
         <DatesCard data={data} refetch={refetch} toast={toast} />
+
+        {(job.status === "closed" || job.status === "cancelled") && (
+          <DeleteJobCard job={job} />
+        )}
       </div>
 
       <div class="stack">
@@ -297,6 +301,60 @@ function OverviewTab({
         </Card>
       </div>
     </div>
+  );
+}
+
+function DeleteJobCard({ job }: { job: JobDetailResponse["job"] }) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const label = job.job_display ?? `Job #${job.job_number ?? "—"}`;
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await api.del(`/api/jobs/${job.id}`);
+      toast.push("success", "Job deleted");
+      go("/jobs");
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(false);
+      setOpen(false);
+    }
+  };
+
+  return (
+    <>
+      <Card title="Danger zone">
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-sm)" }}>
+          Permanently remove this job and all related invoices, payments, photos, and documents.
+        </p>
+        <Button variant="danger" onClick={() => setOpen(true)}>
+          Delete Job
+        </Button>
+      </Card>
+      <Modal
+        open={open}
+        title="Delete job"
+        onClose={() => setOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" disabled={busy} onClick={() => void remove()}>
+              Yes, delete
+            </Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>
+          Permanently delete {label}? All invoices, payments, photos, and documents for this job will
+          be deleted. This cannot be undone.
+        </p>
+      </Modal>
+    </>
   );
 }
 

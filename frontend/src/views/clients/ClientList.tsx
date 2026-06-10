@@ -37,7 +37,7 @@ export function ClientList(_props: RoutableProps) {
     if (!q) return all;
     const qDigits = q.replace(/\D/g, "");
     return all.filter((c) => {
-      const hay = [c.name, c.email, c.phone, c.mailing_address, c.mailing_city]
+      const hay = [c.name, c.company_name, c.email, c.phone, c.mailing_address, c.mailing_city]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -52,7 +52,14 @@ export function ClientList(_props: RoutableProps) {
       sortValue: (c) => c.name.toLowerCase(),
       render: (c) => (
         <span class="flex items-center gap-sm">
-          <strong>{c.name}</strong>
+          <span>
+            <strong>{c.name}</strong>
+            {c.company_name && (
+              <span class="text--muted" style={{ display: "block", fontSize: "var(--text-xs)" }}>
+                {c.company_name}
+              </span>
+            )}
+          </span>
           {c.is_repeat_client && <Badge tone="brand">Repeat</Badge>}
         </span>
       ),

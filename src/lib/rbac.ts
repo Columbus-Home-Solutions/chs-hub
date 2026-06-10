@@ -47,7 +47,8 @@ export type Capability =
   | "manage_jobs" // job + task + schedule writes
   | "manage_clients" // clients / properties / communications
   | "manage_invoices" // invoices / payments / billing cycles
-  | "field_ops"; // photos / daily logs / time tracking
+  | "field_ops" // photos / daily logs / time tracking
+  | "manage_company_docs"; // company SOPs / internal library upload + edit
 
 export const ALL_CAPABILITIES: Capability[] = [
   "system_admin",
@@ -57,6 +58,7 @@ export const ALL_CAPABILITIES: Capability[] = [
   "manage_clients",
   "manage_invoices",
   "field_ops",
+  "manage_company_docs",
 ];
 
 /**
@@ -78,7 +80,7 @@ const ROLE_CAPABILITIES: Record<Exclude<UserRole, "owner">, Capability[]> = {
     "field_ops",
   ],
   field_crew: ["field_ops"],
-  office_admin: ["manage_clients", "manage_invoices"],
+  office_admin: ["manage_clients", "manage_invoices", "manage_company_docs"],
 };
 
 /** Does this role hold the capability? The owner holds all capabilities. */
@@ -111,6 +113,7 @@ interface RouteRule {
 }
 
 const O: UserRole[] = ["owner"];
+const O_OA: UserRole[] = ["owner", "office_admin"];
 const O_PM: UserRole[] = ["owner", "project_manager"];
 const O_PM_OA: UserRole[] = ["owner", "project_manager", "office_admin"];
 const O_PM_FC: UserRole[] = ["owner", "project_manager", "field_crew"];
@@ -150,6 +153,11 @@ const ROUTE_RULES: RouteRule[] = [
   { method: "POST", pattern: /^\/api\/warranty-calls(\/.*)?$/, roles: O_PM_OA },
   { method: "PATCH", pattern: /^\/api\/warranty-calls(\/.*)?$/, roles: O_PM_OA },
   { method: "DELETE", pattern: /^\/api\/warranty-calls(\/.*)?$/, roles: O_PM_OA },
+
+  // ── Company docs library — writes: OWNER + Office Admin; reads: ALL ────────
+  { method: "POST", pattern: /^\/api\/company-documents$/, roles: O_OA },
+  { method: "PATCH", pattern: /^\/api\/company-documents\/[^/]+$/, roles: O_OA },
+  { method: "DELETE", pattern: /^\/api\/company-documents\/[^/]+$/, roles: O_OA },
 
   // ── Social media engine — OWNER + PM ───────────────────────────────────────
   { method: "*", pattern: /^\/api\/social-posts(\/.*)?$/, roles: O_PM },

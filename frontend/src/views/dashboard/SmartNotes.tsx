@@ -153,22 +153,37 @@ export function SmartNotes() {
 
           <div class="smart-notes__buttons">
             <button
+              type="button"
               class={`btn btn--sm ${recording ? "btn--danger" : "btn--secondary"}`}
               onClick={toggleVoice}
             >
               {recording ? "■ Stop" : "🎤"}
             </button>
             <button
-              class="btn btn--sm btn--primary"
-              disabled={busy || !text.trim()}
-              onClick={processNote}
+              type="button"
+              class={`btn btn--sm btn--primary${!text.trim() && !busy ? " btn--ghost-empty" : ""}`}
+              disabled={busy}
+              onClick={() => {
+                if (!text.trim()) {
+                  toast.push("info", "Type a note above first.");
+                  return;
+                }
+                void processNote();
+              }}
             >
               {busy ? "Processing…" : "Process with Claude"}
             </button>
             <button
-              class="btn btn--sm btn--tertiary"
-              disabled={busy || !text.trim()}
-              onClick={saveOnly}
+              type="button"
+              class={`btn btn--sm btn--tertiary${!text.trim() && !busy ? " btn--ghost-empty" : ""}`}
+              disabled={busy}
+              onClick={() => {
+                if (!text.trim()) {
+                  toast.push("info", "Type a note above first.");
+                  return;
+                }
+                void saveOnly();
+              }}
             >
               Save Only
             </button>

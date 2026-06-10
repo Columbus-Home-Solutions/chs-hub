@@ -47,6 +47,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Subcontractors", path: "/subcontractors", icon: "🔧", enabled: true },
   { label: "Photos", path: "/photos", icon: "📸", enabled: true, capability: "field_ops" },
   { label: "Documents", path: "/documents", icon: "📄", enabled: true },
+  { label: "Company Docs", path: "/company-docs", icon: "🏢", enabled: true },
   { label: "Social", path: "/social", icon: "📱", enabled: true, capability: "manage_estimates" },
   { label: "Settings", path: "/settings", icon: "⚙️", enabled: true, capability: "system_admin" },
 ];

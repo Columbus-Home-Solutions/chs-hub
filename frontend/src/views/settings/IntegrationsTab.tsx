@@ -63,6 +63,14 @@ export function IntegrationsTab() {
   const [icalUrl, setIcalUrl] = useState<string | null>(null);
   const [gcalBusy, setGcalBusy] = useState(false);
   const [icalBusy, setIcalBusy] = useState(false);
+  const [esig, setEsig] = useState<{
+    mode: "sandbox" | "live";
+    api_key_present: boolean;
+    webhook_secret_present: boolean;
+    webhook_url: string;
+    setting_key: string;
+  } | null>(null);
+  const [esigModeBusy, setEsigModeBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -83,6 +91,13 @@ export function IntegrationsTab() {
           client_secret_configured: boolean;
         }>("/api/google-calendar/status"),
         api.get<{ url: string }>("/api/calendar/ical/settings"),
+        api.get<{
+          mode: "sandbox" | "live";
+          api_key_present: boolean;
+          webhook_secret_present: boolean;
+          webhook_url: string;
+          setting_key: string;
+        }>("/api/esignature/status"),
       ]);
 
       const pick = <T,>(i: number, fallback: T): T =>
@@ -107,6 +122,14 @@ export function IntegrationsTab() {
         toast.push("error", errMsg((failed[0] as PromiseRejectedResult).reason));
       }
 
+      const esigStatus = pick(6, {
+        mode: "sandbox" as const,
+        api_key_present: false,
+        webhook_secret_present: false,
+        webhook_url: "https://dashboard.homesolutionsar.com/api/integrations/boldsign/webhook",
+        setting_key: "esignature_mode",
+      });
+
       setConnections(integrations.integrations);
       const setting = settings.settings.find((s) => s.key === "image_gen_enabled");
       setImageGen({
@@ -120,6 +143,7 @@ export function IntegrationsTab() {
       });
       setGcal(gcalStatus);
       setIcalUrl(icalSettings.url);
+      setEsig(esigStatus);
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -461,6 +485,123 @@ export function IntegrationsTab() {
           </div>
         )}
       </Card>
+
+      {/* ── BoldSign / E-Signature (Sprint 21) ─────────────────────────── */}
+      <div class="card" style={{ marginBottom: "var(--space-md)" }}>
+        <div class="card__body">
+          <div class="flex items-center gap-sm" style={{ justifyContent: "space-between" }}>
+            <div class="flex items-center gap-sm">
+              <span style={{ fontSize: "1.4rem" }}>✍️</span>
+              <strong>BoldSign / E-Signature</strong>
+            </div>
+            <div class="flex gap-sm items-center">
+              <Badge tone={esig?.api_key_present ? "success" : "neutral"}>
+                {esig?.api_key_present ? "API key configured" : "Not configured"}
+              </Badge>
+              {esig && (
+                <Badge tone={esig.mode === "live" ? "success" : "warning"}>
+                  {esig.mode === "live" ? "LIVE" : "SANDBOX"}
+                </Badge>
+              )}
+            </div>
+          </div>
+
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
+            Send approved generated documents (service agreements, change orders, lien waivers, etc.) for e-signature via BoldSign. Clients sign in their browser — no account required.
+          </p>
+
+          {esig?.mode === "sandbox" && (
+            <div style={{
+              background: "var(--color-warning-light, #fff3cd)",
+              border: "2px solid var(--color-warning, #f59e0b)",
+              borderRadius: "var(--radius-sm)",
+              padding: "var(--space-sm) var(--space-md)",
+              marginBottom: "var(--space-sm)",
+              fontWeight: 600,
+              color: "var(--color-warning-dark, #92400e)",
+              fontSize: "var(--text-sm)",
+            }}>
+              ⚠️ SANDBOX MODE — signature requests are non-binding watermarked test documents. Flip to LIVE only when ready.
+            </div>
+          )}
+
+          <div class="kv" style={{ marginTop: "var(--space-sm)" }}>
+            <div class="kv__row">
+              <span class="kv__label">Mode</span>
+              <span class="kv__value">{esig?.mode ?? "—"}</span>
+            </div>
+            <div class="kv__row">
+              <span class="kv__label">API Key</span>
+              <span class="kv__value">{esig?.api_key_present ? "Configured (wrangler secret)" : "Not set — run: wrangler secret put BOLDSIGN_API_KEY"}</span>
+            </div>
+            <div class="kv__row">
+              <span class="kv__label">Webhook Secret</span>
+              <span class="kv__value">{esig?.webhook_secret_present ? "Configured" : "Not set — run: wrangler secret put BOLDSIGN_WEBHOOK_SECRET"}</span>
+            </div>
+            <div class="kv__row">
+              <span class="kv__label">Webhook URL</span>
+              <span class="kv__value" style={{ fontSize: "var(--text-xs)", fontFamily: "monospace", wordBreak: "break-all" }}>
+                {esig?.webhook_url ?? "https://dashboard.homesolutionsar.com/api/integrations/boldsign/webhook"}
+              </span>
+            </div>
+          </div>
+
+          <div class="flex gap-sm" style={{ marginTop: "var(--space-sm)", flexWrap: "wrap" }}>
+            <Button
+              size="sm"
+              variant="tertiary"
+              onClick={() => {
+                const url = esig?.webhook_url ?? "https://dashboard.homesolutionsar.com/api/integrations/boldsign/webhook";
+                navigator.clipboard?.writeText(url).then(() => toast.push("success", "Webhook URL copied")).catch(() => undefined);
+              }}
+            >
+              Copy Webhook URL
+            </Button>
+            {esig?.mode === "sandbox" ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={esigModeBusy}
+                onClick={async () => {
+                  if (!confirm("CAUTION: Switching to LIVE mode will send real, legally-binding signature requests. Are you sure you want to proceed?")) return;
+                  setEsigModeBusy(true);
+                  try {
+                    await api.put(`/api/settings/${esig.setting_key}`, { value: "live" });
+                    setEsig((e) => e ? { ...e, mode: "live" } : e);
+                    toast.push("success", "E-signature mode set to LIVE. All new requests are legally binding.");
+                  } catch (e) {
+                    toast.push("error", errMsg(e));
+                  } finally {
+                    setEsigModeBusy(false);
+                  }
+                }}
+              >
+                {esigModeBusy ? "Saving…" : "Switch to LIVE ⚠️"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="tertiary"
+                disabled={esigModeBusy}
+                onClick={async () => {
+                  setEsigModeBusy(true);
+                  try {
+                    await api.put(`/api/settings/${esig!.setting_key}`, { value: "sandbox" });
+                    setEsig((e) => e ? { ...e, mode: "sandbox" } : e);
+                    toast.push("success", "E-signature mode set to SANDBOX.");
+                  } catch (e) {
+                    toast.push("error", errMsg(e));
+                  } finally {
+                    setEsigModeBusy(false);
+                  }
+                }}
+              >
+                {esigModeBusy ? "Saving…" : "Switch to Sandbox"}
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

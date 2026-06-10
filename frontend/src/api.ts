@@ -21,8 +21,9 @@ async function parse<T>(res: Response): Promise<T> {
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
   if (!res.ok) {
-    const msg = (data && (data.error || data.message)) || `Request failed: ${res.status}`;
-    throw new ApiError(msg, res.status, data?.details, data);
+    const msg =
+      (data && (data.details || data.message || data.error)) || `Request failed: ${res.status}`;
+    throw new ApiError(msg, res.status, data?.details ?? data?.message, data);
   }
   return data as T;
 }

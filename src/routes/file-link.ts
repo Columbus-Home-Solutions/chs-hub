@@ -10,9 +10,9 @@ import { handleExpenseReceipt } from "./expenses.js";
 import { handleJobFileStream } from "./job-files.js";
 import { handlePhotoStream } from "./photos.js";
 
-const KINDS = new Set(["job_file", "company", "photo", "receipt"]);
+const KINDS = new Set(["job_file", "company", "photo", "receipt", "gendoc"]);
 
-type PayloadV1 = { v: 1; k: "job_file" | "company" | "photo" | "receipt"; i: string; e: number };
+type PayloadV1 = { v: 1; k: "job_file" | "company" | "photo" | "receipt" | "gendoc"; i: string; e: number };
 
 function jsonErr(status: number, code: string, message?: string): Response {
   return new Response(JSON.stringify({ error: code, message: message ?? code }), {
@@ -70,9 +70,15 @@ function getLinkOrigin(request: URL, env: Env): string {
 
 async function verifyExists(
   env: Env,
-  k: "job_file" | "company" | "photo" | "receipt",
+  k: "job_file" | "company" | "photo" | "receipt" | "gendoc",
   id: string,
 ): Promise<boolean> {
+  if (k === "gendoc") {
+    const r = await env.DB.prepare("SELECT 1 AS o FROM job_documents WHERE id = ?")
+      .bind(id)
+      .first<{ o: number }>();
+    return !!r;
+  }
   if (k === "job_file") {
     const r = await env.DB.prepare("SELECT 1 AS o FROM job_files WHERE id = ?")
       .bind(id)
@@ -204,6 +210,22 @@ export async function handleFileLinkResolve(
     return new Response(body, { status: res.status, statusText: res.statusText, headers: h });
   }
 
+  if (p.k === "gendoc") {
+    const row = await env.DB.prepare(
+      "SELECT filename, r2_key FROM job_documents WHERE id = ?",
+    ).bind(p.i).first<{ filename: string; r2_key: string }>();
+    if (!row) return jsonErr(404, "not_found");
+    const obj = await env.FILES.get(row.r2_key);
+    if (!obj) return jsonErr(404, "file_not_found");
+    const h = new Headers({
+      "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Disposition": `inline; filename="${row.filename}"`,
+      "Cache-Control": "private, max-age=300",
+      "access-control-allow-origin": "*",
+    });
+    const body = method === "HEAD" ? null : obj.body;
+    return new Response(body, { status: 200, headers: h });
+  }
   if (p.k === "job_file") {
     return withCors(await handleJobFileStream(env, p.i, method), method);
   }

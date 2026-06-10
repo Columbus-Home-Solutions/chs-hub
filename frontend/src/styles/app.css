@@ -486,6 +486,10 @@
 }
 .typeahead__item:last-child { border-bottom: none; }
 .typeahead__item:hover { background: var(--color-surface-3); }
+.typeahead__item--active {
+  background: var(--color-surface-3);
+  outline: 1px solid var(--color-brand);
+}
 .typeahead__item .text--muted { font-size: var(--text-xs); }
 
 /* ─── Estimating pipeline (Kanban) ─── */
@@ -736,8 +740,40 @@
 }
 .cycle-preview .invoice-builder__total { margin-top: var(--space-xs); padding-top: var(--space-xs); border-top: none; }
 
-.form-row { display: flex; gap: var(--space-sm); }
+.form-row { display: flex; gap: var(--space-sm); align-items: flex-end; }
 .form-row > * { flex: 1; }
+/* FormField carries margin-bottom for standalone use; strip it in rows so
+   buttons line up with inputs instead of sitting below them. */
+.form-row .form-group { margin-bottom: 0; }
+.form-row > .btn,
+.form-row .form-row__action { flex: 0 0 auto; }
+.form-row--align-end {
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.form-row--align-end > .form-group {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.form-row--align-end .form-row__action {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-sm);
+  align-items: flex-end;
+}
+@media (max-width: 767px) {
+  .form-row--align-end > .form-group {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .form-row--align-end .form-row__action {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .form-row--align-end .form-row__action .btn {
+    flex: 1;
+  }
+}
 
 .won-confirm p { margin: 0 0 var(--space-sm); line-height: 1.5; }
 .won-confirm__note {
@@ -1192,6 +1228,19 @@
 }
 .pay-row__num input {
   min-height: 36px;
+}
+.pay-row__computed-val {
+  flex: 1;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-xs);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
 }
 .pay-validate {
   margin-top: var(--space-sm);
@@ -2768,6 +2817,9 @@
   align-items: center;
   gap: var(--space-sm);
   flex-wrap: wrap;
+  position: relative;
+  z-index: 5;
+  isolation: isolate;
 }
 .smart-notes__category {
   background: var(--color-surface-2);
@@ -2776,11 +2828,67 @@
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
   padding: 4px 8px;
+  height: 32px;
+  box-sizing: border-box;
 }
 .smart-notes__buttons {
   display: flex;
   gap: var(--space-xs);
   flex-wrap: wrap;
+  align-items: center;
+  position: relative;
+  z-index: 5;
+}
+.smart-notes__buttons .btn {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.smart-notes__buttons .btn--ghost-empty {
+  opacity: 0.55;
+}
+
+/* ── Internal Resources (Documents page) ── */
+.internal-resources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+.internal-resources__drive {
+  display: flex;
+  gap: var(--space-md);
+  align-items: flex-start;
+}
+.internal-resources__drive-icon {
+  font-size: 1.75rem;
+  line-height: 1;
+}
+.internal-resources__drive-body {
+  flex: 1;
+  min-width: 0;
+}
+.internal-resources__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.internal-resources__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.internal-resources__item:last-child {
+  border-bottom: none;
+}
+.internal-resources__add-form {
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--color-border);
 }
 .smart-notes__recent {
   display: flex;
@@ -2905,10 +3013,6 @@
 }
 .meeting-row__join {
   margin-top: var(--space-xs);
-  color: #fff;
-}
-.meeting-row__join.btn--primary:hover:not(:disabled) {
-  color: #fff;
 }
 .meeting-row--skeleton {
   height: 52px;

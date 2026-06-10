@@ -1,14 +1,20 @@
 /**
  * Company documents (SOPs, insurance, licenses, W-9, etc.)
  *
- *   GET    /api/company-documents
- *   POST   /api/company-documents   — multipart: file, title, doc_type, effective_date?, expires_at?, notes?
- *   GET    /api/company-documents/:id/file  — stream from R2
+ *   GET    /api/company-documents              — all authenticated users
+ *   POST   /api/company-documents              — owner + office_admin
+ *   GET    /api/company-documents/:id/file     — all authenticated users
+ *   PATCH  /api/company-documents/:id          — owner + office_admin
+ *   DELETE /api/company-documents/:id          — owner + office_admin
+ *
+ * Files land in R2; drive_mirrored_at is set by the hourly Drive mirror cron
+ * (owner-only ops surface — admins cannot trigger or configure mirror).
  */
 
 import type { Env } from "../env.js";
+import { guard } from "../middleware/guard.js";
 
-const DOC_TYPES = new Set([
+export const COMPANY_DOC_TYPES = [
   "sop",
   "insurance",
   "license",
@@ -20,10 +26,14 @@ const DOC_TYPES = new Set([
   "marketing",
   "legal",
   "other",
-]);
+] as const;
 
-function jsonErr(status: number, code: string): Response {
-  return new Response(JSON.stringify({ error: code }), {
+const DOC_TYPES = new Set<string>(COMPANY_DOC_TYPES);
+
+export const COMPANY_DOC_WRITE_ROLES = ["owner", "office_admin"] as const;
+
+function jsonErr(status: number, code: string, details?: string): Response {
+  return new Response(JSON.stringify({ error: code, details }), {
     status,
     headers: { "content-type": "application/json" },
   });
@@ -36,6 +46,12 @@ function getEntry(form: FormData, name: string): Blob | string | null {
 function extFromName(name: string): string {
   const m = name.match(/\.([a-z0-9]{1,8})$/i);
   return m ? `.${m[1].toLowerCase()}` : "";
+}
+
+function str(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
 }
 
 export async function handleCompanyDocumentList(
@@ -57,7 +73,7 @@ export async function handleCompanyDocumentList(
     binds.push(p, p, p);
   }
   const sql = `SELECT id, created_at, updated_at, title, doc_type, filename, mime_type, size_bytes,
-      effective_date, expires_at, notes, r2_key
+      effective_date, expires_at, notes, uploaded_by, drive_mirrored_at
      FROM company_documents
      WHERE ${where.join(" AND ")}
      ORDER BY datetime(created_at) DESC
@@ -77,10 +93,11 @@ export async function handleCompanyDocumentList(
       effective_date: string | null;
       expires_at: string | null;
       notes: string | null;
-      r2_key: string;
+      uploaded_by: string | null;
+      drive_mirrored_at: string | null;
     }>();
   return new Response(JSON.stringify({ documents: res.results ?? [] }), {
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 }
 
@@ -88,6 +105,9 @@ export async function handleCompanyDocumentCreate(
   env: Env,
   request: Request,
 ): Promise<Response> {
+  const guarded = await guard(request, env, [...COMPANY_DOC_WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
   let form: FormData;
   try {
     form = await request.formData();
@@ -126,7 +146,7 @@ export async function handleCompanyDocumentCreate(
 
   const bytes = await file.arrayBuffer();
   const mime = file.type || "application/octet-stream";
-  const uploadedBy = request.headers.get("cf-access-authenticated-user-email") ?? null;
+  const uploadedBy = guarded.user.email;
 
   await env.FILES.put(r2Key, bytes, { httpMetadata: { contentType: mime } });
   try {
@@ -207,8 +227,14 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-// DELETE /api/company-documents/:id
-export async function handleCompanyDocumentDelete(env: Env, id: string): Promise<Response> {
+export async function handleCompanyDocumentDelete(
+  env: Env,
+  id: string,
+  request: Request,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...COMPANY_DOC_WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
   const row = await env.DB.prepare("SELECT r2_key FROM company_documents WHERE id = ?")
     .bind(id)
     .first<{ r2_key: string }>();
@@ -218,24 +244,23 @@ export async function handleCompanyDocumentDelete(env: Env, id: string): Promise
   return jsonResponse({ ok: true });
 }
 
-// PATCH /api/company-documents/:id  body: { doc_type: string } — move between Hub folders; re-keys R2
 export async function handleCompanyDocumentPatch(
   env: Env,
   id: string,
   request: Request,
 ): Promise<Response> {
+  const guarded = await guard(request, env, [...COMPANY_DOC_WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
     return jsonErr(400, "invalid_json");
   }
-  if (typeof body.doc_type !== "string" || !DOC_TYPES.has(body.doc_type)) {
-    return jsonErr(400, "invalid_doc_type");
-  }
-  const nextType = body.doc_type;
+
   const row = await env.DB.prepare(
-    "SELECT r2_key, doc_type, filename, mime_type FROM company_documents WHERE id = ?",
+    "SELECT r2_key, doc_type, filename, mime_type, title, notes, effective_date, expires_at FROM company_documents WHERE id = ?",
   )
     .bind(id)
     .first<{
@@ -243,28 +268,72 @@ export async function handleCompanyDocumentPatch(
       doc_type: string;
       filename: string;
       mime_type: string;
+      title: string;
+      notes: string | null;
+      effective_date: string | null;
+      expires_at: string | null;
     }>();
   if (!row) return jsonErr(404, "not_found");
-  if (row.doc_type === nextType) return jsonResponse({ ok: true, unchanged: true });
 
-  const ext = extFromName(row.r2_key) || extFromName(row.filename) || ".bin";
-  const newKey = `company-docs/${nextType}/${id}${ext}`;
+  const nextType =
+    typeof body.doc_type === "string" && DOC_TYPES.has(body.doc_type) ? body.doc_type : row.doc_type;
+  const nextTitle = "title" in body ? str(body.title) ?? row.title : row.title;
+  const nextNotes = "notes" in body ? str(body.notes) : row.notes;
+  const nextEffective = "effective_date" in body ? str(body.effective_date) : row.effective_date;
+  const nextExpires = "expires_at" in body ? str(body.expires_at) : row.expires_at;
 
-  const o = await env.FILES.get(row.r2_key);
-  if (!o) return jsonErr(500, "r2_missing");
-  const ab = await o.arrayBuffer();
-  const ct = row.mime_type || o.httpMetadata?.contentType || "application/octet-stream";
-  await env.FILES.put(newKey, ab, { httpMetadata: { contentType: ct } });
-  if (row.r2_key !== newKey) {
-    await env.FILES.delete(row.r2_key).catch(() => undefined);
+  if (!nextTitle) return jsonErr(400, "title_required");
+
+  let r2Key = row.r2_key;
+  if (nextType !== row.doc_type) {
+    const ext = extFromName(row.r2_key) || extFromName(row.filename) || ".bin";
+    const newKey = `company-docs/${nextType}/${id}${ext}`;
+    const o = await env.FILES.get(row.r2_key);
+    if (!o) return jsonErr(500, "r2_missing");
+    const ab = await o.arrayBuffer();
+    const ct = row.mime_type || o.httpMetadata?.contentType || "application/octet-stream";
+    await env.FILES.put(newKey, ab, { httpMetadata: { contentType: ct } });
+    if (row.r2_key !== newKey) {
+      await env.FILES.delete(row.r2_key).catch(() => undefined);
+    }
+    r2Key = newKey;
   }
+
+  const typeChanged = nextType !== row.doc_type;
+  const metaChanged =
+    nextTitle !== row.title ||
+    nextNotes !== row.notes ||
+    nextEffective !== row.effective_date ||
+    nextExpires !== row.expires_at;
+
+  if (!typeChanged && !metaChanged) {
+    return jsonResponse({ ok: true, unchanged: true });
+  }
+
   const now = new Date().toISOString();
   await env.DB.prepare(
     `UPDATE company_documents
-     SET doc_type = ?, r2_key = ?, updated_at = ?, drive_mirrored_at = NULL
+     SET doc_type = ?, r2_key = ?, title = ?, notes = ?, effective_date = ?, expires_at = ?,
+         updated_at = ?, drive_mirrored_at = CASE WHEN ? = 1 THEN NULL ELSE drive_mirrored_at END
      WHERE id = ?`,
   )
-    .bind(nextType, newKey, now, id)
+    .bind(
+      nextType,
+      r2Key,
+      nextTitle,
+      nextNotes,
+      nextEffective,
+      nextExpires,
+      now,
+      typeChanged ? 1 : 0,
+      id,
+    )
     .run();
-  return jsonResponse({ ok: true, doc_type: nextType, r2_key: newKey });
+
+  return jsonResponse({
+    ok: true,
+    doc_type: nextType,
+    title: nextTitle,
+    r2_key: r2Key,
+  });
 }

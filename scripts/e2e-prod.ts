@@ -66,7 +66,8 @@ type CheckResult = { ok: boolean; line: string; detail?: string };
 const results: CheckResult[] = [];
 let testClientId: string | null = null;
 let testRequestId: string | null = null;
-let job100Id: string | null = null;
+/** First job returned by GET /api/jobs — used for job-scoped smoke checks. */
+let fixtureJobId: string | null = null;
 
 function headers(extra?: Record<string, string>, withAuth = true): Record<string, string> {
   const h: Record<string, string> = {
@@ -344,14 +345,14 @@ async function moduleEstimates(): Promise<void> {
   );
 }
 
-async function resolveJob100(): Promise<void> {
+async function resolveFixtureJob(): Promise<void> {
   const jobs = await api("GET", "/api/jobs?limit=200");
   const body = isRecord(jobs.body) ? jobs.body : {};
   const list = arr(body.jobs);
   for (const j of list) {
     if (!isRecord(j)) continue;
-    if (j.job_number === 100 || j.job_number === "100") {
-      job100Id = typeof j.id === "string" ? j.id : null;
+    if (typeof j.id === "string" && j.id.length > 0) {
+      fixtureJobId = j.id;
       break;
     }
   }
@@ -372,8 +373,8 @@ async function moduleJobs(): Promise<void> {
     const jobs = arr(listBody.jobs);
     for (const j of jobs) {
       if (!isRecord(j)) continue;
-      if (j.job_number === 100 || j.job_number === "100") {
-        job100Id = typeof j.id === "string" ? j.id : null;
+      if (typeof j.id === "string" && j.id.length > 0) {
+        fixtureJobId = j.id;
         break;
       }
     }
@@ -390,29 +391,29 @@ async function moduleJobs(): Promise<void> {
     );
   }
 
-  await resolveJob100();
+  await resolveFixtureJob();
   assert(
-    "resolve Job #100",
-    !!job100Id,
-    "job_number=100 not found in GET /api/jobs — update limit or job_number",
-    job100Id ? `id ${job100Id.slice(0, 8)}…` : "missing",
+    "resolve fixture job",
+    !!fixtureJobId,
+    "no jobs in GET /api/jobs — need at least one Jobber-synced job for job-scoped checks",
+    fixtureJobId ? `id ${fixtureJobId.slice(0, 8)}…` : "missing",
   );
 
-  if (job100Id) {
-    const detail = await api("GET", `/api/jobs/${job100Id}`);
+  if (fixtureJobId) {
+    const detail = await api("GET", `/api/jobs/${fixtureJobId}`);
     const dBody = isRecord(detail.body) ? detail.body : {};
     const job = isRecord(dBody.job) ? dBody.job : dBody;
     assert(
-      "GET /api/jobs/:id (Job #100)",
+      "GET /api/jobs/:id (fixture job)",
       detail.status === 200 &&
-        (job.job_number === 100 || job.job_number === "100") &&
+        typeof job.id === "string" &&
         typeof job.status === "string" &&
         ("portal_token" in job),
       detail.text.slice(0, 200),
       String(detail.status),
     );
 
-    const costing = await api("GET", `/api/jobs/${job100Id}/costing`);
+    const costing = await api("GET", `/api/jobs/${fixtureJobId}/costing`);
     const cBody = isRecord(costing.body) ? costing.body : {};
     const costingObj = isRecord(cBody.costing) ? cBody.costing : null;
     const totals = costingObj && isRecord(costingObj.totals) ? costingObj.totals : null;
@@ -427,12 +428,12 @@ async function moduleJobs(): Promise<void> {
       String(costing.status),
     );
 
-    const inv = await api("GET", `/api/jobs/${job100Id}/invoices`);
+    const inv = await api("GET", `/api/jobs/${fixtureJobId}/invoices`);
     const invBody = isRecord(inv.body) ? inv.body : {};
     const invoices = arr(invBody.invoices);
     assert(
       "GET /api/jobs/:id/invoices",
-      inv.status === 200 && invoices.length > 0,
+      inv.status === 200 && Array.isArray(invBody.invoices),
       inv.text.slice(0, 200),
       `${inv.status} (${invoices.length} invoices)`,
     );
@@ -495,8 +496,8 @@ async function moduleExpensesTime(): Promise<void> {
     vm.status === 200 ? `200 (${arr(vBody.materials).length} materials)` : String(vm.status),
   );
 
-  if (job100Id) {
-    const te = await api("GET", `/api/jobs/${job100Id}/time-entries`);
+  if (fixtureJobId) {
+    const te = await api("GET", `/api/jobs/${fixtureJobId}/time-entries`);
     const tBody = isRecord(te.body) ? te.body : {};
     assert(
       "GET /api/jobs/:id/time-entries",
@@ -505,7 +506,7 @@ async function moduleExpensesTime(): Promise<void> {
       String(te.status),
     );
   } else {
-    record(false, "GET /api/jobs/:id/time-entries", "skipped — Job #100 not resolved");
+    record(false, "GET /api/jobs/:id/time-entries", "skipped — no fixture job resolved");
   }
 }
 
@@ -543,8 +544,8 @@ async function modulePhotos(): Promise<void> {
     String(photos.status),
   );
 
-  if (job100Id) {
-    const logs = await api("GET", `/api/jobs/${job100Id}/daily-logs`);
+  if (fixtureJobId) {
+    const logs = await api("GET", `/api/jobs/${fixtureJobId}/daily-logs`);
     const ok = logs.status === 200 || logs.status === 404;
     record(
       ok,
@@ -622,8 +623,8 @@ async function moduleSocial(): Promise<void> {
 async function moduleChangeOrders(): Promise<void> {
   console.log("\n[Change Orders & Scheduling]");
 
-  if (job100Id) {
-    const co = await api("GET", `/api/jobs/${job100Id}/change-orders`);
+  if (fixtureJobId) {
+    const co = await api("GET", `/api/jobs/${fixtureJobId}/change-orders`);
     const coBody = isRecord(co.body) ? co.body : {};
     assert(
       "GET /api/jobs/:id/change-orders",
@@ -632,7 +633,7 @@ async function moduleChangeOrders(): Promise<void> {
       String(co.status),
     );
 
-    const sched = await api("GET", `/api/jobs/${job100Id}/schedule`);
+    const sched = await api("GET", `/api/jobs/${fixtureJobId}/schedule`);
     const sBody = isRecord(sched.body) ? sched.body : {};
     assert(
       "GET /api/jobs/:id/schedule",

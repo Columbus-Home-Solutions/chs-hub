@@ -22,6 +22,7 @@ interface ClientFormProps {
 type FormValues = {
   first_name: string;
   last_name: string;
+  company_name: string;
   email: string;
   phone: string;
   phone_secondary: string;
@@ -37,6 +38,7 @@ function toValues(initial?: Partial<Client>): FormValues {
   return {
     first_name: initial?.first_name ?? "",
     last_name: initial?.last_name ?? "",
+    company_name: initial?.company_name ?? "",
     email: initial?.email ?? "",
     phone: initial?.phone ?? "",
     phone_secondary: initial?.phone_secondary ?? "",
@@ -187,6 +189,14 @@ export function ClientForm({ open, mode, initial, onClose, onSaved }: ClientForm
               }}
             />
           </div>
+          <FormField
+            label="Company name"
+            inputProps={{
+              value: values.company_name,
+              placeholder: "Optional",
+              onInput: (e) => setValue("company_name", (e.target as HTMLInputElement).value),
+            }}
+          />
           <div class="form-row">
             <FormField
               label="Email"

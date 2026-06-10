@@ -17,7 +17,8 @@ export type Capability =
   | "manage_jobs"
   | "manage_clients"
   | "manage_invoices"
-  | "field_ops";
+  | "field_ops"
+  | "manage_company_docs";
 
 type Role = CurrentUser["role"];
 
@@ -30,7 +31,7 @@ const ROLE_CAPABILITIES: Record<Exclude<Role, "owner">, Capability[]> = {
     "field_ops",
   ],
   field_crew: ["field_ops"],
-  office_admin: ["manage_clients", "manage_invoices"],
+  office_admin: ["manage_clients", "manage_invoices", "manage_company_docs"],
 };
 
 export function can(
@@ -73,8 +74,8 @@ export const ROLE_CAPABILITY_SUMMARY: Record<Role, string[]> = {
     "No financials, estimates, or settings",
   ],
   office_admin: [
-    "Clients & communications, documents",
+    "Clients & communications, company docs (upload/edit)",
     "Invoices & payments",
-    "No job costing / margins, estimates, settings, or user management",
+    "No job costing / margins, estimates, settings, integrations, or user management",
   ],
 };

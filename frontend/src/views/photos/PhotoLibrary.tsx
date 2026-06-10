@@ -7,7 +7,7 @@
  */
 
 import type { RoutableProps } from "preact-router";
-import { useState } from "preact/hooks";
+import { useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Spinner } from "../../components/ui/Spinner";
 import { go } from "../../lib/nav";
@@ -27,8 +27,11 @@ interface PhotoItem {
 
 interface JobStub {
   id: string;
+  job_number: number | null;
+  job_display: string | null;
   title: string | null;
   client_name: string | null;
+  status: string | null;
 }
 
 const TYPE_OPTIONS = [
@@ -51,18 +54,32 @@ export function PhotoLibrary(_props: RoutableProps) {
   const photosResp = useApi<{ total: number; photos: PhotoItem[] }>("/api/photos?limit=200");
   const jobsResp = useApi<{ total: number; jobs: JobStub[] }>("/api/jobs");
   const [typeFilter, setTypeFilter] = useState("");
+  const [jobFilter, setJobFilter] = useState("");
   const [lightbox, setLightbox] = useState<PhotoItem | null>(null);
+
+  const photos = photosResp.data?.photos ?? [];
+  const activeJobs = useMemo(() => {
+    const terminal = new Set(["complete", "closed"]);
+    return (jobsResp.data?.jobs ?? [])
+      .filter((j) => !j.status || !terminal.has(j.status))
+      .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+  }, [jobsResp.data?.jobs]);
 
   if (photosResp.loading) return <Spinner center />;
 
-  const photos = photosResp.data?.photos ?? [];
-  const jobMap = new Map<string, JobStub>(
-    (jobsResp.data?.jobs ?? []).map((j) => [j.id, j]),
-  );
+  const jobMap = new Map<string, JobStub>(activeJobs.map((j) => [j.id, j]));
 
-  const filtered = typeFilter
-    ? photos.filter((p) => p.photo_type === typeFilter)
-    : photos;
+  const filtered = photos.filter((p) => {
+    if (typeFilter && p.photo_type !== typeFilter) return false;
+    if (jobFilter && p.job_id !== jobFilter) return false;
+    return true;
+  });
+
+  const jobFilterLabel = (j: JobStub) => {
+    const num = j.job_display ?? (j.job_number != null ? `JOB-${String(j.job_number).padStart(3, "0")}` : "Job");
+    const title = j.title ?? j.client_name ?? "";
+    return title ? `${num} — ${title}` : num;
+  };
 
   return (
     <div>
@@ -75,8 +92,19 @@ export function PhotoLibrary(_props: RoutableProps) {
         </div>
       </div>
 
-      {/* Filter */}
-      <div style={{ marginBottom: "var(--space-md)" }}>
+      {/* Filters */}
+      <div class="flex gap-sm" style={{ marginBottom: "var(--space-md)", flexWrap: "wrap" }}>
+        <select
+          class="form-input"
+          style={{ width: "auto", minWidth: "200px" }}
+          value={jobFilter}
+          onChange={(e) => setJobFilter((e.target as HTMLSelectElement).value)}
+        >
+          <option value="">All Jobs</option>
+          {activeJobs.map((j) => (
+            <option key={j.id} value={j.id}>{jobFilterLabel(j)}</option>
+          ))}
+        </select>
         <select
           class="form-input"
           style={{ width: "auto", minWidth: "160px" }}

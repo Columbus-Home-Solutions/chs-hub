@@ -10,6 +10,7 @@ import { Settings } from "./views/settings/Settings";
 import { Integrations } from "./views/settings/Integrations";
 import { DocumentTemplates } from "./views/settings/DocumentTemplates";
 import { HubFiles } from "./views/documents/HubFiles";
+import { CompanyDocs } from "./views/documents/CompanyDocs";
 import { EstimateRequestPipeline } from "./views/estimating/EstimateRequestPipeline";
 import { EstimateRequestForm } from "./views/estimating/EstimateRequestForm";
 import { EstimateRequestDetail } from "./views/estimating/EstimateRequestDetail";
@@ -56,6 +57,7 @@ export function AppRouter() {
       <FinancialDashboard path={`${BASE}/financial`} />
       <PhotoLibrary path={`${BASE}/photos`} />
       <HubFiles path={`${BASE}/documents`} />
+      <CompanyDocs path={`${BASE}/company-docs`} />
       <SocialMedia path={`${BASE}/social`} />
       <NotFound default />
     </Router>

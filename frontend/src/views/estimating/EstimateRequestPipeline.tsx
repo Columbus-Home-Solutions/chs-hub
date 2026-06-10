@@ -6,6 +6,7 @@ import { Spinner } from "../../components/ui/Spinner";
 import { Button } from "../../components/ui/Button";
 import { ViewToggle } from "../../components/ViewToggle";
 import { MarkWonModal } from "./MarkWonModal";
+import { canDeleteRequest, DeleteRequestButton } from "./DeleteRequestButton";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
@@ -143,7 +144,14 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
                 <td>{r.estimate_deposit != null ? `$${r.estimate_deposit.toLocaleString()}` : "—"}</td>
                 <td>{r.created_at ? formatDate(r.created_at) : "—"}</td>
                 <td>
-                  <Button size="sm" variant="tertiary" onClick={() => go(`/estimating/${r.id}`)}>View</Button>
+                  <div class="flex items-center gap-sm" style={{ justifyContent: "flex-end" }}>
+                    {canDeleteRequest(r) && (
+                      <DeleteRequestButton request={r} size="sm" onDeleted={refetch} />
+                    )}
+                    <Button size="sm" variant="tertiary" onClick={() => go(`/estimating/${r.id}`)}>
+                      View
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}

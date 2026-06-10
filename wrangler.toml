@@ -117,6 +117,16 @@ APP_PUBLIC_ORIGIN = "https://client.homesolutionsar.com"
 # Public file share links: `wrangler secret put FILE_LINK_SECRET` (32+ char random). Optional
 #   var HUB_FILE_LINK_ORIGIN = "https://chs-hub.<account>.workers.dev" so /api/f?t=… works
 #   for people without Cloudflare Access (the dashboard host may require Access).
+HUB_FILE_LINK_ORIGIN = "https://chs-hub.tony-bc5.workers.dev"
+# ─── BoldSign / E-Signature (Sprint 21) ─────────────────────────────────
+# Mode gate: "sandbox" (default) uses the BoldSign sandbox API key (watermarked,
+# non-binding). Flip to "live" via Settings → Integrations → BoldSign (or:
+#   `wrangler secret put BOLDSIGN_API_KEY` with the live key, then toggle the
+#   system_settings 'esignature_mode' row to 'live').
+# DO NOT set ESIGNATURE_MODE = "live" in this file — use the DB gate instead.
+# Secrets required:
+#   `wrangler secret put BOLDSIGN_API_KEY`          — sandbox key first
+#   `wrangler secret put BOLDSIGN_WEBHOOK_SECRET`   — from BoldSign → Webhooks
 
 # ─── Scheduled jobs ────────────────────────────────────────────────────
 # All four schedules dispatch through src/index.ts → dispatchCron().

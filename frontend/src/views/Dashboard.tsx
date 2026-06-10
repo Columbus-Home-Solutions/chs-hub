@@ -16,6 +16,7 @@ import { UpcomingMeetings } from "./dashboard/UpcomingMeetings";
 import { RecentActivity } from "./dashboard/RecentActivity";
 import { JobsMapWidget } from "./dashboard/JobsMapWidget";
 import { WeatherForecastCard } from "./dashboard/WeatherForecastCard";
+import { DocReviewQueue } from "./dashboard/DocReviewQueue";
 
 export function Dashboard(_props: RoutableProps) {
   const { user } = useAuth();
@@ -58,6 +59,8 @@ export function Dashboard(_props: RoutableProps) {
               forecast={weather.forecast}
             />
           )}
+
+          <DocReviewQueue />
 
           <ActionItems
             items={visibleActionItems}

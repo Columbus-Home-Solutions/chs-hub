@@ -104,7 +104,7 @@ function getPlacesService(): any {
   return _placesService;
 }
 
-function getPredictions(query: string): Promise<Suggestion[]> {
+function getPredictions(query: string, token: any): Promise<Suggestion[]> {
   return new Promise((resolve) => {
     const svc = getAutocompleteService();
     if (!svc) {
@@ -112,7 +112,12 @@ function getPredictions(query: string): Promise<Suggestion[]> {
       return;
     }
     svc.getPlacePredictions(
-      { input: query, types: ["address"], componentRestrictions: { country: "us" } },
+      {
+        input: query,
+        types: ["address"],
+        componentRestrictions: { country: "us" },
+        sessionToken: token,
+      },
       (predictions: any[] | null, status: string) => {
         if (status !== "OK" || !predictions) {
           resolve([]);
@@ -131,7 +136,7 @@ function getPredictions(query: string): Promise<Suggestion[]> {
   });
 }
 
-function getPlaceDetails(placeId: string): Promise<AddressResult | null> {
+function getPlaceDetails(placeId: string, token: any): Promise<AddressResult | null> {
   return new Promise((resolve) => {
     const svc = getPlacesService();
     if (!svc) {
@@ -139,7 +144,7 @@ function getPlaceDetails(placeId: string): Promise<AddressResult | null> {
       return;
     }
     svc.getDetails(
-      { placeId, fields: ["address_components", "geometry"] },
+      { placeId, fields: ["address_components", "geometry"], sessionToken: token },
       (place: any, status: string) => {
         if (status !== "OK" || !place) {
           resolve(null);
@@ -176,6 +181,16 @@ export function useAddressAutocomplete(
   const [isLoading, setIsLoading] = useState(false);
   const [mapsReady, setMapsReady] = useState(false);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionToken = useRef<any>(null);
+
+  function getOrCreateSessionToken(): any {
+    const g = (window as any).google?.maps?.places;
+    if (!g?.AutocompleteSessionToken) return null;
+    if (!sessionToken.current) {
+      sessionToken.current = new g.AutocompleteSessionToken();
+    }
+    return sessionToken.current;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -200,7 +215,8 @@ export function useAddressAutocomplete(
     setSuggestions([]);
     setActiveSuggestionIndex(-1);
     setIsLoading(true);
-    const result = await getPlaceDetails(suggestion.placeId);
+    const result = await getPlaceDetails(suggestion.placeId, sessionToken.current);
+    sessionToken.current = null;
     setIsLoading(false);
     if (result) {
       setInputValue(result.street);
@@ -222,7 +238,8 @@ export function useAddressAutocomplete(
     }
     debounceTimer.current = setTimeout(async () => {
       setIsLoading(true);
-      const results = await getPredictions(value);
+      const token = getOrCreateSessionToken();
+      const results = await getPredictions(value, token);
       setIsLoading(false);
       setSuggestions(results);
       setShowDropdown(results.length > 0);
@@ -250,6 +267,11 @@ export function useAddressAutocomplete(
     if (suggestions.length > 0) setShowDropdown(true);
   };
   const handleBlur = () => {
+    // If the field loses focus without a selection, the session is abandoned —
+    // clear the token so a fresh one starts next time the user returns to this field.
+    if (sessionToken.current) {
+      sessionToken.current = null;
+    }
     setTimeout(() => setShowDropdown(false), 150);
   };
 

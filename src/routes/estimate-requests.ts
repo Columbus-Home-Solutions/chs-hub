@@ -727,8 +727,11 @@ export async function handleEstimateRequestWin(
     return err(400, "bad_request", "A deposit amount greater than zero is required.");
   }
   const reference = str(body.reference);
+  const payerId = str(body.payer_id);
 
-  const outcome = await convertQuoteToJob(env, id, { amount, method, reference }, user.id);
+  const outcome = await convertQuoteToJob(env, id, { amount, method, reference }, user.id, {
+    payerId,
+  });
   if (!outcome.ok) return err(outcome.status, outcome.error, outcome.details);
 
   // Idempotent: a request that's already fully converted returns the existing

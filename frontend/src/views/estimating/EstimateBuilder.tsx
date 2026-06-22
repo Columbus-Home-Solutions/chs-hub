@@ -13,16 +13,21 @@ import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
 import {
   buildDefaultMilestones,
+  defaultDepositAmount,
   depositFromSchedule,
+  effectiveDeposit,
   isCostPlusSchedule,
   isScheduleUnconfigured,
   milestoneAmount,
   milestonePercentage,
   shouldAutoPopulateSchedule,
+  isPerLineItemBilling,
 } from "../../lib/estimate-milestones";
 import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton";
 import {
   BILLING_MODELS,
+  BILLING_MODEL_DESCRIPTIONS,
+  type BillingModel,
   ESTIMATE_MODES,
   LOST_REASONS,
   PAYMENT_TRIGGERS,
@@ -50,6 +55,7 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
   const [mobileView, setMobileView] = useState<"edit" | "preview">("edit");
   const [saving, setSaving] = useState(false);
   const [defaultScheduleNote, setDefaultScheduleNote] = useState(false);
+  const [restorationHintDismissed, setRestorationHintDismissed] = useState(false);
   const scheduleBootstrappedRef = useRef<string | null>(null);
 
   const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
@@ -97,10 +103,17 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
     if (!estimate || estimate.status === "sent" || estimate.status === "approved") return;
     if (scheduleBootstrappedRef.current === estimate.id) return;
     scheduleBootstrappedRef.current = estimate.id;
+    if (isPerLineItemBilling(estimate.billing_model)) return;
     if (!isScheduleUnconfigured(estimate.payment_schedule)) return;
     void applyDefaultSchedule(estimate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [estimate?.id]);
+
+  useEffect(() => {
+    if (estimate?.job_type !== "restoration") {
+      setRestorationHintDismissed(false);
+    }
+  }, [estimate?.job_type]);
 
   const reload = async () => {
     if (!estimate) return;
@@ -114,6 +127,7 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
 
   async function applyDefaultSchedule(est: Estimate, successMsg?: string) {
     if (!est || est.status === "sent" || est.status === "approved") return;
+    if (isPerLineItemBilling(est.billing_model)) return;
     if (!isScheduleUnconfigured(est.payment_schedule)) return;
     setSaving(true);
     try {
@@ -168,22 +182,36 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
     mutate(() => api.put(`/api/estimates/${e.id}`, body), msg);
 
   const patchWithAutoSchedule = (body: Record<string, unknown>, msg?: string) => {
-    const tryAuto = shouldAutoPopulateSchedule(body, e);
     const merged = { ...e, ...body } as Estimate;
-    const scheduleMsg = tryAuto
+    const switchingToPerLineItem =
+      "billing_model" in body &&
+      body.billing_model != null &&
+      isPerLineItemBilling(String(body.billing_model)) &&
+      !isPerLineItemBilling(e.billing_model);
+    const tryAuto = shouldAutoPopulateSchedule(body, e);
+    const scheduleMsg = switchingToPerLineItem
       ? msg
-        ? `${msg} — payment schedule updated`
-        : "Payment schedule updated"
-      : msg;
+        ? `${msg} — payment schedule cleared`
+        : "Payment schedule cleared"
+      : tryAuto
+        ? msg
+          ? `${msg} — payment schedule updated`
+          : "Payment schedule updated"
+        : msg;
     return mutate(async () => {
       // Persist header fields first. A no-op billing_model change returns 400 — don't
       // block schedule refresh when the schedule still needs defaults.
       try {
         await api.put(`/api/estimates/${e.id}`, body);
       } catch (err) {
-        if (!tryAuto || !(err instanceof ApiError && err.status === 400)) throw err;
+        if (!(tryAuto || switchingToPerLineItem) || !(err instanceof ApiError && err.status === 400)) {
+          throw err;
+        }
       }
-      if (tryAuto) {
+      if (switchingToPerLineItem) {
+        await api.put(`/api/estimates/${e.id}/payment-schedule`, { milestones: [] });
+        setDefaultScheduleNote(false);
+      } else if (tryAuto) {
         const milestones = buildDefaultMilestones(merged);
         await api.put(`/api/estimates/${e.id}/payment-schedule`, { milestones });
         setDefaultScheduleNote(true);
@@ -231,7 +259,7 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
       <Card>
         <div class="builder__topbar">
           <div class="builder__controls">
-            <div>
+            <div class="builder__control">
               <div class="builder__control-label">Mode</div>
               <div class="segmented">
                 {ESTIMATE_MODES.map((m) => (
@@ -248,12 +276,24 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
                 ))}
               </div>
             </div>
-            <div style={{ minWidth: "180px" }}>
+            <div class="builder__control builder__control--billing">
               <div class="builder__control-label">Billing Model</div>
               <Select
                 value={e.billing_model ?? ""}
                 options={BILLING_MODELS}
                 onChange={(v) => patchWithAutoSchedule({ billing_model: v }, "Billing model updated")}
+              />
+              <BillingModelHint
+                visible={
+                  e.job_type === "restoration" &&
+                  !isPerLineItemBilling(e.billing_model) &&
+                  !restorationHintDismissed
+                }
+                onApply={() => {
+                  setRestorationHintDismissed(true);
+                  void patchWithAutoSchedule({ billing_model: "per_line_item" }, "Billing model updated");
+                }}
+                onDismiss={() => setRestorationHintDismissed(true)}
               />
             </div>
             <TemplateApplier
@@ -264,6 +304,11 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
               }
             />
           </div>
+          {e.billing_model && BILLING_MODEL_DESCRIPTIONS[e.billing_model as BillingModel] && (
+            <p class="builder__billing-desc">
+              {BILLING_MODEL_DESCRIPTIONS[e.billing_model as BillingModel]}
+            </p>
+          )}
 
           <div class={`margin-summary${marginLow ? " margin-summary--low" : ""}`}>
             <div class="margin-summary__item">
@@ -305,14 +350,20 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
         <div class={`builder__panel builder__panel--editor${mobileView === "preview" ? " is-hidden-mobile" : ""}`}>
           <LineItemEditor estimate={e} mutate={mutate} />
 
-          <PaymentScheduleBuilder
-            estimate={e}
-            mutate={mutate}
-            showDefaultNote={defaultScheduleNote}
-            showCostPlusNote={isCostPlusSchedule(e)}
-            onUserEdit={() => setDefaultScheduleNote(false)}
-            onApplyDefaults={() => void applyDefaultSchedule(e, "Default payment schedule added")}
-          />
+          {isPerLineItemBilling(e.billing_model) && (
+            <PerLineItemDeposit estimate={e} patchHeader={patchHeader} />
+          )}
+
+          {!isPerLineItemBilling(e.billing_model) && (
+            <PaymentScheduleBuilder
+              estimate={e}
+              mutate={mutate}
+              showDefaultNote={defaultScheduleNote}
+              showCostPlusNote={isCostPlusSchedule(e)}
+              onUserEdit={() => setDefaultScheduleNote(false)}
+              onApplyDefaults={() => void applyDefaultSchedule(e, "Default payment schedule added")}
+            />
+          )}
 
           <OptionsCard estimate={e} reviews={reviews} patchHeader={patchHeader} patchWithAutoSchedule={patchWithAutoSchedule} />
         </div>
@@ -339,6 +390,29 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
 
 // ─── Template applier (with confirm when line items exist) ────────────────────
 
+function BillingModelHint({
+  visible,
+  onApply,
+  onDismiss,
+}: {
+  visible: boolean;
+  onApply: () => void;
+  onDismiss: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <div class="builder__hint" role="status">
+      <span>💡 Restoration jobs typically use Pay-As-Completed billing.</span>
+      <Button size="sm" variant="primary" onClick={onApply}>
+        Apply
+      </Button>
+      <button type="button" class="builder__hint-dismiss" aria-label="Dismiss" onClick={onDismiss}>
+        ×
+      </button>
+    </div>
+  );
+}
+
 function TemplateApplier({
   templates,
   hasLineItems,
@@ -362,7 +436,7 @@ function TemplateApplier({
   };
 
   return (
-    <div style={{ minWidth: "200px" }}>
+    <div class="builder__control" style={{ minWidth: "200px" }}>
       <div class="builder__control-label">Template</div>
       <Select
         value=""
@@ -837,6 +911,85 @@ function MaterialSearchModal({
 
 // ─── Payment schedule builder ──────────────────────────────────────────────────
 
+function PerLineItemDeposit({
+  estimate,
+  patchHeader,
+}: {
+  estimate: Estimate;
+  patchHeader: (body: Record<string, unknown>, msg?: string) => Promise<void>;
+}) {
+  const requireDeposit = (estimate.deposit_amount ?? 0) > 0;
+  const defaultAmount = defaultDepositAmount(estimate.total, estimate.billing_model);
+  const [amountStr, setAmountStr] = useState(
+    String((estimate.deposit_amount ?? 0) > 0 ? estimate.deposit_amount : defaultAmount),
+  );
+
+  useEffect(() => {
+    if ((estimate.deposit_amount ?? 0) > 0) {
+      setAmountStr(String(estimate.deposit_amount));
+    }
+  }, [estimate.deposit_amount, estimate.id]);
+
+  const persistAmount = () => {
+    if (!requireDeposit) return;
+    const parsed = parseFloat(amountStr.replace(/[^0-9.]/g, ""));
+    if (Number.isNaN(parsed) || parsed < 0) return;
+    const rounded = Math.round(parsed * 100) / 100;
+    if (Math.abs(rounded - (estimate.deposit_amount ?? 0)) > 0.009) {
+      void patchHeader({ deposit_amount: rounded, deposit_type: "fixed" }, "Deposit updated");
+    }
+  };
+
+  return (
+    <Card title="Deposit">
+      <label class="form-check" style={{ marginBottom: requireDeposit ? "var(--space-sm)" : 0 }}>
+        <input
+          type="checkbox"
+          checked={requireDeposit}
+          onChange={(ev) => {
+            const checked = (ev.target as HTMLInputElement).checked;
+            if (checked) {
+              void patchHeader(
+                {
+                  deposit_amount: defaultAmount,
+                  deposit_type: "percentage",
+                  deposit_percentage: 33,
+                },
+                "Deposit enabled",
+              );
+            } else {
+              void patchHeader(
+                {
+                  deposit_amount: 0,
+                  deposit_type: "fixed",
+                  deposit_percentage: null,
+                },
+                "Deposit removed",
+              );
+            }
+          }}
+        />
+        Require deposit
+      </label>
+      {requireDeposit && (
+        <FormField label="Deposit">
+          <input
+            class="form-input"
+            type="text"
+            inputMode="decimal"
+            value={amountStr}
+            onInput={(ev) => setAmountStr((ev.target as HTMLInputElement).value)}
+            onBlur={persistAmount}
+          />
+        </FormField>
+      )}
+      <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginTop: "var(--space-sm)" }}>
+        Single upfront amount due at signing, applied toward the first invoice.
+      </p>
+    </Card>
+  );
+}
+
 function PaymentScheduleBuilder({
   estimate,
   mutate,
@@ -1119,7 +1272,7 @@ function OptionsCard({
 
 function ClientPreview({ estimate, reviews }: { estimate: Estimate; reviews: SavedReview[] }) {
   const e = estimate;
-  const depositDue = depositFromSchedule(e);
+  const depositDue = effectiveDeposit(e);
   const shownReviews = useMemo(() => reviews.filter((r) => r.is_active).slice(0, 3), [reviews]);
 
   return (
@@ -1451,11 +1604,18 @@ function SendButton({
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const perLineItem = isPerLineItemBilling(estimate.billing_model);
   const hasLine = estimate.line_items.length > 0;
-  const hasDeposit = depositFromSchedule(estimate) > 0;
+  const hasDeposit = perLineItem
+    ? (estimate.deposit_amount ?? 0) > 0
+    : depositFromSchedule(estimate) > 0;
+  const depositOk = perLineItem || hasDeposit;
   const pctRows = estimate.payment_schedule.filter((p) => p.percentage != null && p.fixed_amount == null);
-  const pctOk = pctRows.length === 0 || Math.abs(pctRows.reduce((a, p) => a + (p.percentage ?? 0), 0) - 100) < 0.01;
-  const blocked = !hasLine || !hasDeposit || !pctOk;
+  const pctOk =
+    perLineItem ||
+    pctRows.length === 0 ||
+    Math.abs(pctRows.reduce((a, p) => a + (p.percentage ?? 0), 0) - 100) < 0.01;
+  const blocked = !hasLine || !depositOk || !pctOk;
   const sent = estimate.status === "sent" || estimate.status === "approved";
 
   return (
@@ -1487,8 +1647,23 @@ function SendButton({
       >
         <ul class="send-checklist">
           <li class={hasLine ? "ok" : "bad"}>{hasLine ? "✓" : "✕"} At least one line item</li>
-          <li class={hasDeposit ? "ok" : "bad"}>{hasDeposit ? "✓" : "✕"} Deposit milestone configured</li>
-          <li class={pctOk ? "ok" : "bad"}>{pctOk ? "✓" : "✕"} Percentage milestones total 100%</li>
+          {perLineItem ? (
+            <li class="ok">
+              ✓{" "}
+              {hasDeposit
+                ? `Deposit configured (${formatCurrency(estimate.deposit_amount)})`
+                : "No deposit required"}
+            </li>
+          ) : (
+            <>
+              <li class={hasDeposit ? "ok" : "bad"}>
+                {hasDeposit ? "✓" : "✕"} Deposit milestone configured
+              </li>
+              <li class={pctOk ? "ok" : "bad"}>
+                {pctOk ? "✓" : "✕"} Percentage milestones total 100%
+              </li>
+            </>
+          )}
         </ul>
         <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
           Marks the estimate as sent, freezes the contract text, and makes the secure client quote

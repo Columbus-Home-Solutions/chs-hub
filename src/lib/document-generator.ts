@@ -25,6 +25,8 @@ export async function generateDocument(
 
   let docXml = strFromU8(unzipped["word/document.xml"]);
 
+  console.log(`[document-generator] merge fields before substitution: ${JSON.stringify(mergeFields)}`);
+
   for (const [key, value] of Object.entries(mergeFields)) {
     const safe = (value ?? "")
       .toString()

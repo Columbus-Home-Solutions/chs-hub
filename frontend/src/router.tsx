@@ -26,6 +26,8 @@ import { NotificationSettings } from "./views/notifications/NotificationSettings
 import { NotificationLogs } from "./views/notifications/NotificationLogs";
 import { SocialMedia } from "./views/social/SocialMedia";
 import { FinancialDashboard } from "./views/financial/FinancialDashboard";
+import { PayerList } from "./views/payers/PayerList";
+import { PayerDetail } from "./views/payers/PayerDetail";
 import { PhotoLibrary } from "./views/photos/PhotoLibrary";
 import { Placeholder } from "./views/Placeholder";
 
@@ -55,6 +57,8 @@ export function AppRouter() {
       <WarrantyCallDetail path={`${BASE}/warranty-calls/:id`} />
       <JobDetail path={`${BASE}/jobs/:id`} />
       <FinancialDashboard path={`${BASE}/financial`} />
+      <PayerList path={`${BASE}/payers`} />
+      <PayerDetail path={`${BASE}/payers/:id`} />
       <PhotoLibrary path={`${BASE}/photos`} />
       <HubFiles path={`${BASE}/documents`} />
       <CompanyDocs path={`${BASE}/company-docs`} />

@@ -515,6 +515,12 @@ async function defaultDeposit(
         deposit_type: "fixed",
         deposit_percentage: null,
       };
+    case "per_line_item":
+      return {
+        deposit_amount: round2(total * 0.33),
+        deposit_type: "percentage",
+        deposit_percentage: 33,
+      };
     default:
       return { deposit_amount: 0, deposit_type: "fixed", deposit_percentage: null };
   }
@@ -1443,6 +1449,25 @@ export async function handleLineItemUpdate(
   if ("sort_order" in body) {
     updates.push("sort_order = ?");
     binds.push(num(body.sort_order) ?? 0);
+  }
+  if ("completion_status" in body) {
+    const status = str(body.completion_status);
+    if (status && !["not_started", "in_progress", "complete"].includes(status)) {
+      return err(400, "bad_request", "completion_status must be not_started, in_progress, or complete.");
+    }
+    updates.push("completion_status = ?");
+    binds.push(status ?? "not_started");
+    if (status === "complete") {
+      updates.push("completed_date = ?");
+      binds.push(new Date().toISOString().slice(0, 10));
+    } else if ("completion_status" in body) {
+      updates.push("completed_date = ?");
+      binds.push(null);
+    }
+  }
+  if ("completed_date" in body && !("completion_status" in body)) {
+    updates.push("completed_date = ?");
+    binds.push(str(body.completed_date));
   }
   if (updates.length === 0) return err(400, "bad_request", "No updatable fields supplied");
 

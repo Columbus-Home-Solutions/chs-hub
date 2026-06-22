@@ -122,6 +122,7 @@ interface JobListRow {
   portal_type: string | null;
   conversion_complete: number | null;
   estimate_id: string | null;
+  payer_id: string | null;
   created_at: string | null;
   updated_at: string | null;
   status_since: string | null; // last status-change timestamp (or created_at)
@@ -133,7 +134,7 @@ const JOB_SELECT = `
          j.property_address, j.property_city, j.property_state, j.property_zip,
          j.contract_total, j.deposit_amount, j.deposit_paid,
          j.start_date, j.target_end_date, j.actual_end_date,
-         j.portal_token, j.portal_type, j.conversion_complete, j.estimate_id,
+         j.portal_token, j.portal_type, j.conversion_complete, j.estimate_id, j.payer_id,
          j.created_at, j.updated_at,
          COALESCE((
            SELECT MAX(a.created_at) FROM audit_logs a
@@ -184,6 +185,7 @@ function shapeJobCard(r: JobListRow) {
     portal_path: null,
     conversion_complete: (r.conversion_complete ?? 0) === 1,
     estimate_id: r.estimate_id,
+    payer_id: r.payer_id,
     days_in_status: daysSince(r.status_since),
     photo_count: 0, // stub until Sprint 8
     overdue,
@@ -326,12 +328,52 @@ export async function handleJobDetail(env: Env, id: string): Promise<Response> {
   const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
   const portalUrl = card.portal_token ? `${origin}/portal/${card.portal_token}` : null;
 
+  let payer: {
+    id: string;
+    company_name: string | null;
+    contact_name: string;
+    email: string;
+    card_brand: string | null;
+    card_last4: string | null;
+    has_card_on_file: boolean;
+  } | null = null;
+  if (row.payer_id) {
+    payer = await env.DB.prepare(
+      `SELECT id, company_name, contact_name, email, card_brand, card_last4, stripe_payment_method_id
+         FROM payers WHERE id = ?`,
+    )
+      .bind(row.payer_id)
+      .first<{
+        id: string;
+        company_name: string | null;
+        contact_name: string;
+        email: string;
+        card_brand: string | null;
+        card_last4: string | null;
+        stripe_payment_method_id: string | null;
+      }>()
+      .then((p) =>
+        p
+          ? {
+              id: p.id,
+              company_name: p.company_name,
+              contact_name: p.contact_name,
+              email: p.email,
+              card_brand: p.card_brand,
+              card_last4: p.card_last4,
+              has_card_on_file: !!p.stripe_payment_method_id,
+            }
+          : null,
+      );
+  }
+
   return json({
     job: {
       ...card,
       client_name: clientName,
       client_phone: client?.phone ?? null,
       client_email: client?.email ?? null,
+      payer,
       conversion_reversed: (reversal?.conversion_reversed ?? 0) === 1,
       reversal_reason: reversal?.reversal_reason ?? null,
       reversed_at: reversal?.reversed_at ?? null,
@@ -381,6 +423,7 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
     start_date: "str",
     target_end_date: "str",
     actual_end_date: "str",
+    payer_id: "str",
   };
   for (const [field] of Object.entries(editable)) {
     if (field in body) {

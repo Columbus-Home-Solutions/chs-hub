@@ -56,6 +56,7 @@ interface PortalJob {
   title: string | null;
   status: string | null;
   client_id: string | null;
+  payer_id: string | null;
   billing_model: string | null;
   portal_type: string | null;
   contract_total: number | null;
@@ -71,7 +72,7 @@ interface PortalJob {
 async function resolveJob(env: Env, token: string): Promise<PortalJob | null> {
   if (!token) return null;
   return env.DB.prepare(
-    `SELECT id, job_number, title, status, client_id, billing_model, portal_type,
+    `SELECT id, job_number, title, status, client_id, payer_id, billing_model, portal_type,
             contract_total, deposit_amount,
             property_address, property_city, property_state, property_zip,
             conversion_reversed
@@ -161,6 +162,29 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
     .bind(job.id)
     .first<{ x: number }>();
 
+  let billing_party: {
+    company_name: string | null;
+    contact_name: string;
+    email: string;
+    notice: string;
+  } | null = null;
+  if (job.payer_id) {
+    const payer = await env.DB.prepare(
+      "SELECT company_name, contact_name, email FROM payers WHERE id = ?",
+    )
+      .bind(job.payer_id)
+      .first<{ company_name: string | null; contact_name: string; email: string }>();
+    if (payer) {
+      const label = payer.company_name ?? payer.contact_name;
+      billing_party = {
+        company_name: payer.company_name,
+        contact_name: payer.contact_name,
+        email: payer.email,
+        notice: `Invoices for this project are billed to ${label}. Payment links will be sent to ${payer.email}.`,
+      };
+    }
+  }
+
   return json({
     ok: true,
     company_name: await companyName(env),
@@ -168,6 +192,7 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
     is_cost_plus: (job.portal_type ?? "") === "cost_plus",
     completion_package_available: !!sentPkg,
     on_hold: onHold,
+    billing_party,
     header: {
       client_name: await clientName(env, job.client_id),
       property_address: fullAddress(job),

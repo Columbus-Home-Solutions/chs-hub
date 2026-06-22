@@ -66,10 +66,15 @@ async function fetchMapsKey(): Promise<string | null> {
   }
 }
 
+function placesLibraryReady(): boolean {
+  const g = (window as any).google?.maps?.places;
+  return !!(g?.AutocompleteService && g?.AutocompleteSessionToken);
+}
+
 function loadMapsScript(apiKey: string): Promise<void> {
   if (_mapsLoadPromise) return _mapsLoadPromise;
   _mapsLoadPromise = new Promise((resolve, reject) => {
-    if ((window as any).google?.maps?.places?.AutocompleteService) {
+    if (placesLibraryReady()) {
       resolve();
       return;
     }
@@ -181,6 +186,7 @@ export function useAddressAutocomplete(
   const [isLoading, setIsLoading] = useState(false);
   const [mapsReady, setMapsReady] = useState(false);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const blurClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionToken = useRef<any>(null);
 
   function getOrCreateSessionToken(): any {
@@ -192,6 +198,17 @@ export function useAddressAutocomplete(
     return sessionToken.current;
   }
 
+  function clearSessionToken(): void {
+    sessionToken.current = null;
+  }
+
+  function cancelBlurClear(): void {
+    if (blurClearTimer.current) {
+      clearTimeout(blurClearTimer.current);
+      blurClearTimer.current = null;
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -199,7 +216,7 @@ export function useAddressAutocomplete(
       if (!key || cancelled) return;
       try {
         await loadMapsScript(key);
-        if (!cancelled) setMapsReady(true);
+        if (!cancelled && placesLibraryReady()) setMapsReady(true);
       } catch {
         /* degrade gracefully */
       }
@@ -210,13 +227,15 @@ export function useAddressAutocomplete(
   }, []);
 
   const selectSuggestion = async (suggestion: Suggestion) => {
+    cancelBlurClear();
+    const token = sessionToken.current ?? getOrCreateSessionToken();
     setInputValue(suggestion.mainText);
     setShowDropdown(false);
     setSuggestions([]);
     setActiveSuggestionIndex(-1);
     setIsLoading(true);
-    const result = await getPlaceDetails(suggestion.placeId, sessionToken.current);
-    sessionToken.current = null;
+    const result = await getPlaceDetails(suggestion.placeId, token);
+    clearSessionToken();
     setIsLoading(false);
     if (result) {
       setInputValue(result.street);
@@ -234,12 +253,14 @@ export function useAddressAutocomplete(
     if (!value.trim() || !mapsReady || value.length < 3) {
       setSuggestions([]);
       setShowDropdown(false);
+      if (!value.trim()) clearSessionToken();
       return;
     }
+    cancelBlurClear();
+    getOrCreateSessionToken();
     debounceTimer.current = setTimeout(async () => {
       setIsLoading(true);
-      const token = getOrCreateSessionToken();
-      const results = await getPredictions(value, token);
+      const results = await getPredictions(value, sessionToken.current);
       setIsLoading(false);
       setSuggestions(results);
       setShowDropdown(results.length > 0);
@@ -264,14 +285,16 @@ export function useAddressAutocomplete(
   };
 
   const handleFocus = () => {
+    cancelBlurClear();
     if (suggestions.length > 0) setShowDropdown(true);
   };
   const handleBlur = () => {
-    // If the field loses focus without a selection, the session is abandoned —
-    // clear the token so a fresh one starts next time the user returns to this field.
-    if (sessionToken.current) {
-      sessionToken.current = null;
-    }
+    // Defer clearing so mousedown on a suggestion runs selectSuggestion first.
+    cancelBlurClear();
+    blurClearTimer.current = setTimeout(() => {
+      blurClearTimer.current = null;
+      clearSessionToken();
+    }, 200);
     setTimeout(() => setShowDropdown(false), 150);
   };
 

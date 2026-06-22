@@ -290,9 +290,24 @@ import {
   handleInvoiceUpdate,
   handleInvoiceSend,
   handleInvoiceVoid,
+  handleInvoiceChargeOnFile,
   handleJobInvoices,
 } from "./routes/invoices.js";
 import { handlePaymentList, handlePaymentCreate, handleJobPayments } from "./routes/payments.js";
+import {
+  handlePayerList,
+  handlePayerCreate,
+  handlePayerGet,
+  handlePayerUpdate,
+  handlePayerDelete,
+  handlePayerSetupIntent,
+  handlePayerSavePaymentMethod,
+  handlePayerRemovePaymentMethod,
+} from "./routes/payers.js";
+import {
+  handleLineItemsBillingStatus,
+  handleLineItemInvoiceCreate,
+} from "./routes/line-item-billing.js";
 import {
   handleCycleList,
   handleCycleGet,
@@ -446,6 +461,7 @@ import {
   handleIntegrationConnect,
   handleIntegrationDisconnect,
 } from "./routes/integrations.js";
+import { PRIVACY_POLICY_HTML, TERMS_HTML, legalPageResponse } from "./legal/legal-pages.js";
 
 async function fetchAssetWithDashboardInject(
   env: Env,
@@ -520,8 +536,25 @@ export default {
       return handleHealth(env);
     }
 
+    // Public legal pages — no auth (Twilio A2P 10DLC). Must run before dashboard
+    // asset rewrite and before any gated /api dispatch.
+    if (url.pathname === "/privacy-policy" && (request.method === "GET" || request.method === "HEAD")) {
+      return legalPageResponse(PRIVACY_POLICY_HTML, request.method);
+    }
+    if (
+      url.pathname === "/terms-and-conditions" &&
+      (request.method === "GET" || request.method === "HEAD")
+    ) {
+      return legalPageResponse(TERMS_HTML, request.method);
+    }
+
     if (url.pathname === "/api/health/heartbeat" && request.method === "GET") {
       return handleHeartbeat(env);
+    }
+
+    // BoldSign webhook — PUBLIC, HMAC-verified; dispatch before RBAC/Access gate.
+    if (url.pathname === "/api/integrations/boldsign/webhook" && request.method === "POST") {
+      return handleBoldSignWebhook(request, env, ctx);
     }
 
     // ── RBAC enforcement gate (Sprint 17) ────────────────────────────────
@@ -550,11 +583,6 @@ export default {
     }
     if (url.pathname === "/api/webhooks/twilio/status" && request.method === "POST") {
       return handleTwilioStatus(request, env);
-    }
-    // BoldSign webhook — PUBLIC, HMAC-verified, must NOT be caught by RBAC.
-    // Reachable on dashboard.homesolutionsar.com (added to public host allowlist above).
-    if (url.pathname === "/api/integrations/boldsign/webhook" && request.method === "POST") {
-      return handleBoldSignWebhook(request, env, ctx);
     }
     const pqSign = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/sign$/);
     if (pqSign && request.method === "POST") {
@@ -945,6 +973,14 @@ export default {
     if (jobInvoices && request.method === "GET") {
       return handleJobInvoices(env, decodeURIComponent(jobInvoices[1]));
     }
+    const jobLineItemsBilling = url.pathname.match(/^\/api\/jobs\/([^/]+)\/line-items-billing-status$/);
+    if (jobLineItemsBilling && request.method === "GET") {
+      return handleLineItemsBillingStatus(env, decodeURIComponent(jobLineItemsBilling[1]));
+    }
+    const jobLineItemInvoice = url.pathname.match(/^\/api\/jobs\/([^/]+)\/line-item-invoice$/);
+    if (jobLineItemInvoice && request.method === "POST") {
+      return handleLineItemInvoiceCreate(request, env, decodeURIComponent(jobLineItemInvoice[1]));
+    }
     const jobPayments = url.pathname.match(/^\/api\/jobs\/([^/]+)\/payments$/);
     if (jobPayments && request.method === "GET") {
       return handleJobPayments(request, env, decodeURIComponent(jobPayments[1]));
@@ -1111,6 +1147,10 @@ export default {
     const invoiceVoid = url.pathname.match(/^\/api\/invoices\/([^/]+)\/void$/);
     if (invoiceVoid && request.method === "POST") {
       return handleInvoiceVoid(request, env, decodeURIComponent(invoiceVoid[1]));
+    }
+    const invoiceChargeOnFile = url.pathname.match(/^\/api\/invoices\/([^/]+)\/charge-on-file$/);
+    if (invoiceChargeOnFile && request.method === "POST") {
+      return handleInvoiceChargeOnFile(request, env, decodeURIComponent(invoiceChargeOnFile[1]));
     }
     const invoiceById = url.pathname.match(/^\/api\/invoices\/([^/]+)$/);
     if (invoiceById) {
@@ -1553,6 +1593,31 @@ export default {
     }
     if (url.pathname === "/api/communications" && request.method === "POST") {
       return handleCommunicationCreate(request, env);
+    }
+
+    // ── Payers (Sprint 22) ───────────────────────────────────────────
+    if (url.pathname === "/api/payers") {
+      if (request.method === "GET") return handlePayerList(env);
+      if (request.method === "POST") return handlePayerCreate(request, env);
+    }
+    const payerSetupIntent = url.pathname.match(/^\/api\/payers\/([^/]+)\/setup-intent$/);
+    if (payerSetupIntent && request.method === "POST") {
+      return handlePayerSetupIntent(request, env, decodeURIComponent(payerSetupIntent[1]));
+    }
+    const payerSavePm = url.pathname.match(/^\/api\/payers\/([^/]+)\/save-payment-method$/);
+    if (payerSavePm && request.method === "POST") {
+      return handlePayerSavePaymentMethod(request, env, decodeURIComponent(payerSavePm[1]));
+    }
+    const payerRemovePm = url.pathname.match(/^\/api\/payers\/([^/]+)\/payment-method$/);
+    if (payerRemovePm && request.method === "DELETE") {
+      return handlePayerRemovePaymentMethod(request, env, decodeURIComponent(payerRemovePm[1]));
+    }
+    const payerById = url.pathname.match(/^\/api\/payers\/([^/]+)$/);
+    if (payerById) {
+      const pid = decodeURIComponent(payerById[1]);
+      if (request.method === "GET") return handlePayerGet(env, pid);
+      if (request.method === "PUT") return handlePayerUpdate(request, env, pid);
+      if (request.method === "DELETE") return handlePayerDelete(request, env, pid);
     }
 
     // ── Notifications (Sprint 7) ─────────────────────────────────────

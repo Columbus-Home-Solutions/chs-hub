@@ -125,6 +125,7 @@ export async function convertQuoteToJob(
   requestId: string,
   payment: DepositPayment,
   createdBy: string | null,
+  opts?: { payerId?: string | null },
 ): Promise<ConversionOutcome> {
   const row = await env.DB.prepare(
     `SELECT er.id, er.status, er.client_id, er.property_address, er.property_city,
@@ -279,9 +280,9 @@ export async function convertQuoteToJob(
        billing_model, property_address, property_city, property_state, property_zip,
        lat, lon,
        job_type, lead_source, estimate_id, contract_total, deposit_amount, deposit_paid,
-       portal_token, portal_type, conversion_complete
+       portal_token, portal_type, conversion_complete, payer_id
      )
-     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0`,
+     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?`,
   ).bind(
     jobId,
     title,
@@ -305,6 +306,7 @@ export async function convertQuoteToJob(
     deposit,
     portalToken,
     portalTypeFor(billingModel),
+    opts?.payerId ?? null,
   );
 
   const createPayment = env.DB.prepare(

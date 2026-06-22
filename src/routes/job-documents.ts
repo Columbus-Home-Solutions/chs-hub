@@ -478,6 +478,9 @@ export async function handleDeleteGeneratedDocument(
 
   if (!row) return err(404, "document_not_found");
 
+  await env.DB.prepare("DELETE FROM signature_events WHERE job_document_id = ?")
+    .bind(docId)
+    .run();
   await env.DB.prepare("DELETE FROM job_documents WHERE id = ?").bind(docId).run();
 
   return json({ ok: true });
@@ -831,6 +834,12 @@ export async function handleSendForSignature(
     .catch(() => null);
   const boldSignTemplateId = templateIdFromSettings ?? BOLDSIGN_TEMPLATE_IDS[row.template_type];
 
+  // BoldSign requires signerRole + roleIndex to match the template definition.
+  const isSubLienWaiver = SUB_TEMPLATE_TYPES.has(row.template_type);
+  const boldSignRole = isSubLienWaiver ? "Subcontractor" : "Client";
+  // Client templates: Contractor=1 (pre-filled), Client=2. Sub waiver: single Subcontractor role=1.
+  const boldSignRoleIndex = isSubLienWaiver ? 1 : 2;
+
   // Send to BoldSign.
   let boldSignResult: { documentId: string };
   try {
@@ -841,6 +850,8 @@ export async function handleSendForSignature(
       message,
       signerEmail,
       signerName,
+      signerRole: boldSignRole,
+      roleIndex: boldSignRoleIndex,
       templateId: boldSignTemplateId,
     });
   } catch (e) {

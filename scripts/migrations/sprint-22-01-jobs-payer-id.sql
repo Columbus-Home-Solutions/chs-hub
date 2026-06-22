@@ -1,0 +1,1 @@
+ALTER TABLE jobs ADD COLUMN payer_id TEXT REFERENCES payers(id);

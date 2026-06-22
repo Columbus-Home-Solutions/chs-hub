@@ -16,6 +16,8 @@ import {
   type CostingLineLite,
 } from "../financial/ExpenseForm";
 import { CycleManager } from "./CycleManager";
+import { LineItemBilling } from "./LineItemBilling";
+import type { JobCard, Payer } from "../../types";
 
 /**
  * Job Detail → Financial tab (Sprint 9). Shows the job's invoice ledger
@@ -40,6 +42,8 @@ interface InvoiceRow {
   due_date: string | null;
   paid_amount: number | null;
   payment_token: string | null;
+  line_item_ids?: string | null;
+  payer_id?: string | null;
 }
 interface MilestoneSuggestion {
   billing_schedule_id: string;
@@ -188,6 +192,8 @@ interface Prefill {
 
 export function FinancialTab({ jobId }: { jobId: string }) {
   const { data, loading, error, refetch } = useApi<JobInvoicesResponse>(`/api/jobs/${jobId}/invoices`);
+  const jobDetail = useApi<{ job: JobCard & { payer?: Payer | null } }>(`/api/jobs/${jobId}`);
+  const payersList = useApi<{ payers: Payer[] }>("/api/payers");
   const costing = useApi<CostingResponse>(`/api/jobs/${jobId}/costing`);
   const expenses = useApi<ExpensesResponse>(`/api/jobs/${jobId}/expenses`);
   const timeEntries = useApi<TimeEntriesResponse>(`/api/jobs/${jobId}/time-entries`);
@@ -199,6 +205,7 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [prefill, setPrefill] = useState<Prefill | null>(null);
   const [payFor, setPayFor] = useState<InvoiceRow | null>(null);
+  const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(null);
 
   if (loading) return <Spinner center />;
   if (error || !data) {
@@ -302,6 +309,17 @@ export function FinancialTab({ jobId }: { jobId: string }) {
           </>
         )}
       </div>
+
+      {data.billing_model === "per_line_item" && <LineItemBilling jobId={jobId} />}
+
+      <PayerField
+        jobId={jobId}
+        payer={jobDetail.data?.job?.payer ?? null}
+        payerId={jobDetail.data?.job?.payer_id ?? null}
+        payers={payersList.data?.payers ?? []}
+        onUpdated={() => jobDetail.refetch()}
+        toast={toast}
+      />
 
       <div class="flex items-center justify-between gap-sm">
         <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
@@ -417,6 +435,9 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                   )}
                 </div>
                 <div class="invoice-row__actions">
+                  <Button size="sm" variant="tertiary" onClick={() => setDetailInvoiceId(inv.id)}>
+                    View
+                  </Button>
                   {inv.status === "draft" && (
                     <Button size="sm" variant="primary" onClick={() => sendInvoice(inv)}>
                       Send
@@ -493,6 +514,15 @@ export function FinancialTab({ jobId }: { jobId: string }) {
             setPayFor(null);
             refetch();
           }}
+          toast={toast}
+        />
+      )}
+
+      {detailInvoiceId && (
+        <InvoiceDetailModal
+          invoiceId={detailInvoiceId}
+          onClose={() => setDetailInvoiceId(null)}
+          onChanged={refetchAll}
           toast={toast}
         />
       )}
@@ -1294,6 +1324,205 @@ function RecordPaymentModal({
           onInput={(e) => setNotes((e.target as HTMLInputElement).value)}
         />
       </FormField>
+    </Modal>
+  );
+}
+
+function PayerField({
+  jobId,
+  payer,
+  payerId,
+  payers,
+  onUpdated,
+  toast,
+}: {
+  jobId: string;
+  payer: Payer | null;
+  payerId: string | null;
+  payers: Payer[];
+  onUpdated: () => void;
+  toast: ToastApi;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const matches = payers.filter((p) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return [p.company_name, p.contact_name, p.email].filter(Boolean).join(" ").toLowerCase().includes(q);
+  }).slice(0, 8);
+
+  const selectPayer = async (id: string | null) => {
+    setSaving(true);
+    try {
+      await api.put(`/api/jobs/${jobId}`, { payer_id: id });
+      toast.push("success", id ? "Payer updated" : "Payer cleared");
+      setOpen(false);
+      onUpdated();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card title="Bill To (Payer)">
+      <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginTop: 0 }}>
+        Optional third-party payer for invoices. Changing the payer does not affect invoices already issued.
+      </p>
+      {payer ? (
+        <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
+          <span>
+            <strong>{payer.company_name ?? payer.contact_name}</strong>
+            {payer.company_name && <span class="text--muted"> · {payer.contact_name}</span>}
+          </span>
+          {payer.has_card_on_file && (
+            <Badge tone="success">{payer.card_brand} ····{payer.card_last4}</Badge>
+          )}
+          <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
+            Change
+          </Button>
+          <Button size="sm" variant="tertiary" disabled={saving} onClick={() => void selectPayer(null)}>
+            Clear
+          </Button>
+        </div>
+      ) : (
+        <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
+          Select payer…
+        </Button>
+      )}
+
+      <Modal
+        open={open}
+        title="Select payer"
+        onClose={() => setOpen(false)}
+        footer={<Button variant="secondary" onClick={() => setOpen(false)}>Close</Button>}
+      >
+        <FormField label="Search payers">
+          <input
+            class="form-input"
+            value={query}
+            placeholder="Company or contact name…"
+            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+          />
+        </FormField>
+        <div class="stack">
+          {matches.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              class="btn btn--secondary"
+              style={{ justifyContent: "flex-start", textAlign: "left" }}
+              disabled={saving || p.id === payerId}
+              onClick={() => void selectPayer(p.id)}
+            >
+              {p.company_name ? `${p.company_name} (${p.contact_name})` : p.contact_name}
+              {p.has_card_on_file && <Badge tone="success" style={{ marginLeft: "var(--space-sm)" }}>Card</Badge>}
+            </button>
+          ))}
+          {matches.length === 0 && <p class="text--muted">No matching payers.</p>}
+        </div>
+      </Modal>
+    </Card>
+  );
+}
+
+interface InvoiceDetailPayload {
+  invoice: InvoiceRow & { invoice_type: string | null; invoice_display?: string };
+  payer: (Payer & { display_name?: string; stripe_payment_method_id?: string | null }) | null;
+  line_items: { id: string; description: string; amount: number | null }[];
+}
+
+function InvoiceDetailModal({
+  invoiceId,
+  onClose,
+  onChanged,
+  toast,
+}: {
+  invoiceId: string;
+  onClose: () => void;
+  onChanged: () => void;
+  toast: ToastApi;
+}) {
+  const { data, loading, refetch } = useApi<InvoiceDetailPayload>(`/api/invoices/${invoiceId}`);
+  const [charging, setCharging] = useState(false);
+
+  if (loading || !data) {
+    return (
+      <Modal open title="Invoice" onClose={onClose}>
+        <Spinner center />
+      </Modal>
+    );
+  }
+
+  const inv = data.invoice;
+  const balance = Math.max(0, Math.round(((inv.total_due ?? 0) - (inv.paid_amount ?? 0)) * 100) / 100);
+  const fee = Math.round(balance * 0.035 * 100) / 100;
+  const canCharge =
+    inv.status !== "paid" &&
+    inv.status !== "void" &&
+    !!data.payer?.stripe_payment_method_id &&
+    balance > 0;
+
+  const charge = async () => {
+    if (!confirm(`Charge ${formatCurrency(balance)} + ${formatCurrency(fee)} fee (${formatCurrency(balance + fee)} total)?`)) {
+      return;
+    }
+    setCharging(true);
+    try {
+      await api.post(`/api/invoices/${invoiceId}/charge-on-file`, {});
+      toast.push("success", "Card charged successfully");
+      refetch();
+      onChanged();
+      onClose();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setCharging(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      title={inv.invoice_display ?? "Invoice"}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+          {canCharge && (
+            <Button variant="primary" disabled={charging} onClick={() => void charge()}>
+              {charging ? "Charging…" : "Charge card on file"}
+            </Button>
+          )}
+        </>
+      }
+    >
+      <dl class="kv">
+        <div class="kv__row"><dt>Type</dt><dd>{formatStatus(inv.invoice_type)}</dd></div>
+        <div class="kv__row"><dt>Status</dt><dd>{formatStatus(inv.status)}</dd></div>
+        <div class="kv__row"><dt>Amount</dt><dd>{formatCurrency(inv.total_due)}</dd></div>
+        {data.payer && (
+          <div class="kv__row">
+            <dt>Bill to</dt>
+            <dd>{data.payer.display_name ?? data.payer.contact_name}</dd>
+          </div>
+        )}
+      </dl>
+      {data.line_items.length > 0 && (
+        <>
+          <h4 style={{ marginBottom: "var(--space-sm)" }}>Line items</h4>
+          <ul>
+            {data.line_items.map((li) => (
+              <li key={li.id}>
+                {li.description} — {formatCurrency(li.amount ?? 0)}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </Modal>
   );
 }

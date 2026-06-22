@@ -236,3 +236,185 @@ function timingSafeEqual(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+// ─── Sprint 22 — SetupIntent / card-on-file / off-session charge ─────────────
+
+export interface StripeApiError {
+  ok: false;
+  status: number;
+  error: string;
+  details: string;
+}
+export interface StripeApiOk<T> {
+  ok: true;
+  data: T;
+}
+
+type StripeResult<T> = ({ ok: true } & T) | StripeApiError;
+
+async function stripePost(
+  cfg: StripeConfig,
+  path: string,
+  form: URLSearchParams,
+): Promise<{ ok: true; body: Record<string, unknown> } | StripeApiError> {
+  if (!cfg.secretKey) {
+    return { ok: false, status: 503, error: "stripe_not_configured", details: "Stripe key missing." };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`https://api.stripe.com/v1/${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cfg.secretKey}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: form.toString(),
+    });
+  } catch (e) {
+    return { ok: false, status: 502, error: "stripe_unreachable", details: (e as Error).message };
+  }
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown> & {
+    error?: { message?: string };
+  };
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status >= 400 && res.status < 500 ? res.status : 502,
+      error: "stripe_error",
+      details: (body.error as { message?: string } | undefined)?.message ?? `Stripe returned ${res.status}`,
+    };
+  }
+  return { ok: true, body };
+}
+
+async function stripeGet(
+  cfg: StripeConfig,
+  path: string,
+): Promise<{ ok: true; body: Record<string, unknown> } | StripeApiError> {
+  if (!cfg.secretKey) {
+    return { ok: false, status: 503, error: "stripe_not_configured", details: "Stripe key missing." };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`https://api.stripe.com/v1/${path}`, {
+      headers: { Authorization: `Bearer ${cfg.secretKey}` },
+    });
+  } catch (e) {
+    return { ok: false, status: 502, error: "stripe_unreachable", details: (e as Error).message };
+  }
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown> & {
+    error?: { message?: string };
+  };
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status >= 400 && res.status < 500 ? res.status : 502,
+      error: "stripe_error",
+      details: (body.error as { message?: string } | undefined)?.message ?? `Stripe returned ${res.status}`,
+    };
+  }
+  return { ok: true, body };
+}
+
+export async function createCustomer(
+  cfg: StripeConfig,
+  args: { name: string; email: string },
+): Promise<StripeResult<{ id: string }>> {
+  const form = new URLSearchParams();
+  form.set("name", args.name);
+  form.set("email", args.email);
+  const res = await stripePost(cfg, "customers", form);
+  if (!res.ok) return res;
+  const id = res.body.id as string | undefined;
+  if (!id) return { ok: false, status: 502, error: "stripe_error", details: "No customer id returned." };
+  return { ok: true, id };
+}
+
+export async function createSetupIntent(
+  cfg: StripeConfig,
+  customerId: string,
+): Promise<StripeResult<{ client_secret: string }>> {
+  const form = new URLSearchParams();
+  form.set("customer", customerId);
+  form.set("usage", "off_session");
+  form.append("payment_method_types[]", "card");
+  const res = await stripePost(cfg, "setup_intents", form);
+  if (!res.ok) return res;
+  const clientSecret = res.body.client_secret as string | undefined;
+  if (!clientSecret) {
+    return { ok: false, status: 502, error: "stripe_error", details: "No client_secret returned." };
+  }
+  return { ok: true, client_secret: clientSecret };
+}
+
+export async function attachPaymentMethod(
+  cfg: StripeConfig,
+  paymentMethodId: string,
+  customerId: string,
+): Promise<StripeResult<{ done: true }>> {
+  const form = new URLSearchParams();
+  form.set("customer", customerId);
+  const res = await stripePost(cfg, `payment_methods/${paymentMethodId}/attach`, form);
+  if (!res.ok) return res;
+  return { ok: true, done: true };
+}
+
+export async function setDefaultPaymentMethod(
+  cfg: StripeConfig,
+  customerId: string,
+  paymentMethodId: string,
+): Promise<StripeResult<{ done: true }>> {
+  const form = new URLSearchParams();
+  form.set("invoice_settings[default_payment_method]", paymentMethodId);
+  const res = await stripePost(cfg, `customers/${customerId}`, form);
+  if (!res.ok) return res;
+  return { ok: true, done: true };
+}
+
+export async function getPaymentMethod(
+  cfg: StripeConfig,
+  paymentMethodId: string,
+): Promise<StripeResult<{ card_brand: string | null; card_last4: string | null }>> {
+  const res = await stripeGet(cfg, `payment_methods/${paymentMethodId}`);
+  if (!res.ok) return res;
+  const card = res.body.card as { brand?: string; last4?: string } | undefined;
+  return { ok: true, card_brand: card?.brand ?? null, card_last4: card?.last4 ?? null };
+}
+
+export async function detachPaymentMethod(
+  cfg: StripeConfig,
+  paymentMethodId: string,
+): Promise<StripeResult<{ done: true }>> {
+  const res = await stripePost(cfg, `payment_methods/${paymentMethodId}/detach`, new URLSearchParams());
+  if (!res.ok) return res;
+  return { ok: true, done: true };
+}
+
+export async function createOffSessionPaymentIntent(
+  cfg: StripeConfig,
+  args: {
+    amountCents: number;
+    customerId: string;
+    paymentMethodId: string;
+    description: string;
+    metadata: Record<string, string>;
+  },
+): Promise<StripeResult<{ id: string; status: string }>> {
+  const form = new URLSearchParams();
+  form.set("amount", String(Math.round(args.amountCents)));
+  form.set("currency", "usd");
+  form.set("customer", args.customerId);
+  form.set("payment_method", args.paymentMethodId);
+  form.set("confirm", "true");
+  form.set("off_session", "true");
+  form.set("description", args.description);
+  for (const [k, v] of Object.entries(args.metadata)) {
+    form.set(`metadata[${k}]`, v);
+  }
+  const res = await stripePost(cfg, "payment_intents", form);
+  if (!res.ok) return res;
+  const id = res.body.id as string | undefined;
+  const status = res.body.status as string | undefined;
+  if (!id) return { ok: false, status: 502, error: "stripe_error", details: "No PaymentIntent id returned." };
+  return { ok: true, id, status: status ?? "unknown" };
+}

@@ -156,9 +156,13 @@ export interface SendDocumentArgs {
   message: string;
   signerEmail: string;
   signerName: string;
-  /** BoldSign template ID. When provided, sends via /v1/template/send so
-   *  field positions defined by drag-and-drop in the BoldSign UI are used.
-   *  The generated file is attached as an additional file alongside the template. */
+  /** BoldSign template role name (e.g. "Client", "Subcontractor"). Required for
+   *  /v1/template/send — must match the role defined on the template exactly. */
+  signerRole?: string;
+  /** BoldSign template role index (1-based). Client/Subcontractor signer role = 1. */
+  roleIndex?: number;
+  /** BoldSign template ID. When provided, sends via /v1/template/send using the
+   *  template's stored DOCX (role info only — no generated file upload). */
   templateId?: string;
 }
 
@@ -170,9 +174,8 @@ export interface SendDocumentResult {
  * Send a document to BoldSign for signature.
  *
  * When a templateId is provided the request goes to /v1/template/send so that
- * signature field positions are inherited from the template (set visually in
- * the BoldSign dashboard). The dynamically-generated DOCX is attached as the
- * primary additional file. RoleIndex 1 maps to the "Client" role.
+ * signature field positions are inherited from the BoldSign-stored template file.
+ * Role info only — no generated DOCX is uploaded. RoleIndex 1 maps to Client/Sub.
  *
  * When no templateId is provided we fall back to /v1/document/send with
  * coordinate-based field placement (legacy path).
@@ -187,20 +190,21 @@ export async function sendDocumentForSignature(
 
   if (args.templateId) {
     // ── Template-based send (preferred) ──────────────────────────────────────
-    // Field positions come from the template; no coordinates needed here.
+    const signerRole = args.signerRole ?? "Client";
+    const roleIndex = 1;
     const form = new FormData();
     form.append("Title", args.title);
     form.append("Message", args.message);
-    form.append("Files", args.fileBlob, args.filename);
-    // Role index 1 = "Client" role created in the BoldSign template UI
-    form.append("roles[0][roleIndex]", "1");
+    form.append("roles[0][roleIndex]", String(roleIndex));
     form.append("roles[0][signerName]", args.signerName);
     form.append("roles[0][signerEmail]", args.signerEmail);
+    form.append("roles[0][signerRole]", signerRole);
     form.append("roles[0][signerType]", "Signer");
 
     console.log(
-      `${label} send_document (template=${args.templateId}): file="${args.filename}" signer="${args.signerEmail}"`,
+      `${label} send_document (template=${args.templateId}): signer="${args.signerEmail}" role="${signerRole}" roleIndex=${roleIndex} (template file only, no upload)`,
     );
+
     res = await boldSignRequest(
       config,
       `/v1/template/send?templateId=${encodeURIComponent(args.templateId)}`,

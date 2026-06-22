@@ -35,6 +35,7 @@ export type InvoiceType =
   | "cost_plus_cycle"
   | "final"
   | "change_order"
+  | "line_item_completion"
   | "manual";
 
 export const INVOICE_TYPES: InvoiceType[] = [
@@ -44,6 +45,7 @@ export const INVOICE_TYPES: InvoiceType[] = [
   "cost_plus_cycle",
   "final",
   "change_order",
+  "line_item_completion",
   "manual",
 ];
 
@@ -131,6 +133,8 @@ export interface InvoiceRow {
   cost_plus_cycle_id: string | null;
   milestone_number: number | null;
   trade_line_item_id: string | null;
+  line_item_ids: string | null;
+  payer_id: string | null;
   notes: string | null;
   created_at: string | null;
   created_by: string | null;
@@ -140,7 +144,7 @@ export const INVOICE_COLUMNS = `id, invoice_number, job_id, client_id, billing_m
   title, description, amount, tax_amount, late_fee_amount, credits_applied, total_due,
   status, sent_date, viewed_date, due_date, paid_date, paid_amount, payment_method,
   stripe_payment_id, portal_link, payment_token, cost_plus_cycle_id, milestone_number,
-  trade_line_item_id, notes, created_at, created_by`;
+  trade_line_item_id, line_item_ids, payer_id, notes, created_at, created_by`;
 
 export function shapeInvoice(r: InvoiceRow) {
   return {
@@ -170,6 +174,8 @@ export function shapeInvoice(r: InvoiceRow) {
     milestone_number: r.milestone_number,
     trade_line_item_id: r.trade_line_item_id,
     cost_plus_cycle_id: r.cost_plus_cycle_id,
+    line_item_ids: r.line_item_ids,
+    payer_id: r.payer_id,
     notes: r.notes,
     created_at: r.created_at,
     created_by: r.created_by,

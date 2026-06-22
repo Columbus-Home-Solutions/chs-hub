@@ -281,6 +281,8 @@ export const ESTIMATE_JOB_TYPES = [
   "remodel_bathroom",
   "remodel_other",
   "repair",
+  "restoration",
+  "multifamily",
   "commercial",
   "other",
 ];
@@ -307,7 +309,7 @@ export const LOST_REASONS = [
 // ─── Estimate Builder (Sprint 4) ────────────────────────────────────────────
 
 export type EstimateMode = "lump_sum" | "trade_by_trade";
-export type BillingModel = "fixed_price" | "fifty_fifty" | "trade_by_trade" | "cost_plus";
+export type BillingModel = "fixed_price" | "fifty_fifty" | "trade_by_trade" | "cost_plus" | "per_line_item";
 export type EstimateStatus = "draft" | "sent" | "viewed" | "approved" | "expired" | "revised";
 
 export const SUB_ITEM_CATEGORIES = [
@@ -466,7 +468,32 @@ export const BILLING_MODELS: { value: BillingModel; label: string }[] = [
   { value: "fifty_fifty", label: "50/50" },
   { value: "trade_by_trade", label: "Trade-by-Trade" },
   { value: "cost_plus", label: "Cost-Plus" },
+  { value: "per_line_item", label: "Pay-As-Completed" },
 ];
+
+export const BILLING_MODEL_DESCRIPTIONS: Partial<Record<BillingModel, string>> = {
+  per_line_item:
+    "Invoice specific line items as work is completed. Ideal for insurance restoration and phased scope work.",
+};
+
+export interface Payer {
+  id: string;
+  company_name: string | null;
+  contact_name: string;
+  email: string;
+  phone: string | null;
+  billing_address: string | null;
+  billing_city: string | null;
+  billing_state: string | null;
+  billing_zip: string | null;
+  card_brand: string | null;
+  card_last4: string | null;
+  has_card_on_file: boolean;
+  job_count: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export const REVIEW_SOURCES = ["google", "facebook", "manual"];
 
@@ -522,6 +549,7 @@ export interface JobCard {
   portal_path: string | null;
   conversion_complete: boolean;
   estimate_id: string | null;
+  payer_id: string | null;
   days_in_status: number;
   photo_count: number;
   overdue: boolean;

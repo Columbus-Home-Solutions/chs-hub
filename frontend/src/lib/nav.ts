@@ -42,6 +42,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Warranty Calls", path: "/warranty-calls", icon: "🛡️", enabled: true },
   { label: "Schedule", path: "/schedule", icon: "📅", enabled: true },
   { label: "Financial", path: "/financial", icon: "💰", enabled: true, capability: "view_financials" },
+  { label: "Payers", path: "/payers", icon: "🏦", enabled: true, capability: "view_financials" },
   { label: "Clients", path: "/clients", icon: "👥", enabled: true, capability: "manage_clients" },
   { label: "Estimating", path: "/estimating", icon: "📋", enabled: true, capability: "manage_estimates" },
   { label: "Subcontractors", path: "/subcontractors", icon: "🔧", enabled: true },

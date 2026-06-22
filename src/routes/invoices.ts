@@ -22,12 +22,17 @@ import {
   type InvoiceType,
   computeSuggestions,
   computeTotalDue,
+  convenienceFee,
+  CONVENIENCE_FEE_RATE,
   loadInvoice,
+  invoiceLabel,
   paymentLink,
   round2,
   shapeInvoice,
   type InvoiceRow,
 } from "../lib/invoicing.js";
+import { createOffSessionPaymentIntent, getStripeConfig } from "../lib/stripe.js";
+import { recordPayment } from "./payments.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const VOID_ROLES = ["owner"] as const;
@@ -112,7 +117,50 @@ export async function handleInvoiceList(env: Env, url: URL): Promise<Response> {
 export async function handleInvoiceGet(env: Env, id: string): Promise<Response> {
   const inv = await loadInvoice(env, id);
   if (!inv) return err(404, "not_found", "Invoice not found.");
-  return json({ invoice: shapeInvoice(inv), payments: await paymentsForInvoice(env, id) });
+
+  let payer: Record<string, unknown> | null = null;
+  if (inv.payer_id) {
+    payer = await env.DB.prepare(
+      `SELECT id, company_name, contact_name, email, card_brand, card_last4, stripe_payment_method_id, stripe_customer_id
+         FROM payers WHERE id = ?`,
+    )
+      .bind(inv.payer_id)
+      .first<Record<string, unknown>>();
+    if (payer) {
+      payer = {
+        ...payer,
+        has_card_on_file: !!payer.stripe_payment_method_id,
+        display_name: payer.company_name
+          ? `${payer.company_name} (${payer.contact_name})`
+          : payer.contact_name,
+      };
+    }
+  }
+
+  let line_items: { id: string; description: string; amount: number | null }[] = [];
+  if (inv.line_item_ids && inv.invoice_type === "line_item_completion") {
+    const ids = inv.line_item_ids.split(",").map((s) => s.trim()).filter(Boolean);
+    if (ids.length > 0) {
+      const placeholders = ids.map(() => "?").join(",");
+      const { results } = await env.DB.prepare(
+        `SELECT id, description, total, unit_price, quantity FROM estimate_line_items WHERE id IN (${placeholders})`,
+      )
+        .bind(...ids)
+        .all<{ id: string; description: string; total: number | null; unit_price: number; quantity: number }>();
+      line_items = (results ?? []).map((r) => ({
+        id: r.id,
+        description: r.description,
+        amount: round2(r.total ?? r.unit_price * r.quantity),
+      }));
+    }
+  }
+
+  return json({
+    invoice: shapeInvoice(inv),
+    payer,
+    line_items,
+    payments: await paymentsForInvoice(env, id),
+  });
 }
 
 // ─── POST /api/invoices ───────────────────────────────────────────────────────
@@ -245,6 +293,7 @@ function defaultTitle(t: InvoiceType): string {
     case "final": return "Final Invoice";
     case "change_order": return "Change Order";
     case "cost_plus_cycle": return "Billing Cycle";
+    case "line_item_completion": return "Line Item Completion";
     default: return "Invoice";
   }
 }
@@ -431,4 +480,96 @@ function fmtDate(iso: string | null): string {
   const d = new Date(iso.length === 10 ? iso + "T00:00:00Z" : iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
+
+// ─── POST /api/invoices/:id/charge-on-file ────────────────────────────────────
+
+export async function handleInvoiceChargeOnFile(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const inv = await loadInvoice(env, id);
+  if (!inv) return err(404, "not_found", "Invoice not found.");
+  if (inv.status === "void") return err(409, "invoice_void", "Voided invoices cannot be charged.");
+  if (inv.status === "paid") return err(409, "invoice_paid", "Invoice is already paid.");
+  if (!inv.payer_id) return err(400, "no_payer", "This invoice has no payer assigned.");
+
+  const payer = await env.DB.prepare(
+    `SELECT id, company_name, contact_name, stripe_customer_id, stripe_payment_method_id
+       FROM payers WHERE id = ?`,
+  )
+    .bind(inv.payer_id)
+    .first<{
+      id: string;
+      company_name: string | null;
+      contact_name: string;
+      stripe_customer_id: string | null;
+      stripe_payment_method_id: string | null;
+    }>();
+  if (!payer?.stripe_customer_id || !payer.stripe_payment_method_id) {
+    return err(400, "no_card_on_file", "The payer has no card on file.");
+  }
+
+  const agg = await env.DB.prepare(
+    "SELECT COALESCE(SUM(amount), 0) AS paid FROM payments WHERE invoice_id = ?",
+  )
+    .bind(id)
+    .first<{ paid: number }>();
+  const collected = round2(agg?.paid ?? 0);
+  const totalDue = round2(inv.total_due ?? inv.amount ?? 0);
+  const balance = round2(Math.max(0, totalDue - collected));
+  if (balance <= 0) return err(409, "already_paid", "Invoice is already paid in full.");
+
+  const fee = convenienceFee(balance, CONVENIENCE_FEE_RATE);
+  const totalCharge = round2(balance + fee);
+  const cfg = await getStripeConfig(env);
+
+  const intent = await createOffSessionPaymentIntent(cfg, {
+    amountCents: Math.round(totalCharge * 100),
+    customerId: payer.stripe_customer_id,
+    paymentMethodId: payer.stripe_payment_method_id,
+    description: `${invoiceLabel(inv.invoice_number)} — card on file`,
+    metadata: {
+      kind: "invoice",
+      invoice_id: id,
+      job_id: inv.job_id ?? "",
+      client_id: inv.client_id ?? "",
+      base_amount: String(balance),
+      convenience_fee: String(fee),
+      charge_on_file: "true",
+    },
+  });
+
+  if (!intent.ok) {
+    return err(402, intent.error, intent.details);
+  }
+  if (intent.status !== "succeeded") {
+    return err(402, "payment_failed", `Payment status: ${intent.status}`);
+  }
+
+  await recordPayment(env, {
+    jobId: inv.job_id,
+    invoiceId: id,
+    clientId: inv.client_id,
+    amount: balance,
+    method: "credit_card",
+    convenienceFee: fee,
+    stripePaymentId: intent.id,
+    receivedDate: new Date().toISOString().slice(0, 10),
+    notes: "Card on file charge",
+  });
+
+  await logAudit(env, user.email, "invoice_charged_on_file", id, {
+    amount: balance,
+    convenience_fee: fee,
+    stripe_payment_id: intent.id,
+  });
+
+  const updated = await loadInvoice(env, id);
+  return json({ invoice: updated ? shapeInvoice(updated) : null, charged: balance, convenience_fee: fee });
 }

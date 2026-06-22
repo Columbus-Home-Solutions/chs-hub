@@ -30,6 +30,19 @@ function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { ...init, headers: h });
 }
 
+interface BoldSignEventData {
+  object?: string;
+  documentId?: string;
+  templateId?: string;
+  errorMessage?: string;
+  signerDetails?: Array<{
+    signerEmail?: string;
+    signerName?: string;
+    status?: string;
+    signedOn?: string;
+  }>;
+}
+
 interface BoldSignEvent {
   Event?: {
     EventType?: string;
@@ -45,8 +58,43 @@ interface BoldSignEvent {
       }>;
     };
   };
+  event?: {
+    eventType?: string;
+  };
+  data?: BoldSignEventData;
+  Data?: BoldSignEventData;
   // Verification handshake
   IsHandshake?: boolean;
+}
+
+function getEventType(event: BoldSignEvent): string | undefined {
+  return event.Event?.EventType ?? event.event?.eventType;
+}
+
+function getDocumentId(event: BoldSignEvent): string | undefined {
+  return event.Event?.Document?.DocumentId ?? event.data?.documentId ?? event.Data?.documentId;
+}
+
+function getEventData(event: BoldSignEvent): BoldSignEventData | undefined {
+  return event.data ?? event.Data;
+}
+
+function getSignerDetails(event: BoldSignEvent): Array<{
+  SignerEmail?: string;
+  SignerName?: string;
+  Status?: string;
+  SignedOn?: string;
+}> | undefined {
+  const legacy = event.Event?.Document?.SignerDetails;
+  if (legacy) return legacy;
+  const modern = getEventData(event)?.signerDetails;
+  if (!modern) return undefined;
+  return modern.map((s) => ({
+    SignerEmail: s.signerEmail,
+    SignerName: s.signerName,
+    Status: s.status,
+    SignedOn: s.signedOn,
+  }));
 }
 
 /** Map BoldSign event types to our signature_status values. */
@@ -82,7 +130,7 @@ export async function handleBoldSignWebhook(
   }
 
   // BoldSign URL-verification handshake — respond 200 immediately, no signature required.
-  if (event.IsHandshake === true || event.Event?.EventType === "Verification") {
+  if (event.IsHandshake === true || getEventType(event) === "Verification") {
     console.log("[boldsign_webhook] verification_handshake: responding 200");
     return json({ ok: true, message: "Webhook verification successful" });
   }
@@ -107,8 +155,14 @@ async function processWebhookEvent(
   event: BoldSignEvent,
   rawBody: string,
 ): Promise<void> {
-  const eventType = event.Event?.EventType;
-  const boldSignDocumentId = event.Event?.Document?.DocumentId;
+  const eventType = getEventType(event);
+
+  if (eventType === "TemplateSendFailed") {
+    await handleTemplateSendFailed(env, event, rawBody);
+    return;
+  }
+
+  const boldSignDocumentId = getDocumentId(event);
 
   console.log(`[boldsign_webhook] event_type="${eventType}" documentId="${boldSignDocumentId ?? "unknown"}"`);
 
@@ -172,7 +226,9 @@ async function processWebhookEvent(
   // Map event type to status.
   const newStatus = mapEventToStatus(eventType);
   if (!newStatus) {
-    console.log(`[boldsign_webhook] unhandled event_type="${eventType}" — audit logged only`);
+    console.warn(
+      `[BoldSign] Unrecognized eventType: ${eventType} — payload: ${rawBody.slice(0, 500)}`,
+    );
     return;
   }
 
@@ -192,13 +248,69 @@ async function processWebhookEvent(
   console.log(`[boldsign_webhook] updated job_document id="${docRow.id}" signature_status="${newStatus}"`);
 }
 
+async function handleTemplateSendFailed(
+  env: Env,
+  event: BoldSignEvent,
+  rawBody: string,
+): Promise<void> {
+  const data = getEventData(event);
+  const failedDocId = data?.documentId;
+  const templateId = data?.templateId;
+  const errorMsg = data?.errorMessage ?? "Unknown error";
+
+  console.error(
+    `[BoldSign] TemplateSendFailed — templateId: ${templateId ?? "none"}, ` +
+      `documentId: ${failedDocId ?? "none"}, error: ${errorMsg}`,
+  );
+
+  if (!failedDocId) {
+    return;
+  }
+
+  const docRow = await env.DB.prepare(
+    `SELECT id FROM job_documents WHERE boldsign_document_id = ?`,
+  )
+    .bind(failedDocId)
+    .first<{ id: string }>();
+
+  if (!docRow) {
+    console.warn(
+      `[BoldSign] TemplateSendFailed — no job_documents row for documentId ${failedDocId}`,
+    );
+    return;
+  }
+
+  await env.DB.prepare(
+    `UPDATE job_documents SET signature_status = 'failed' WHERE id = ?`,
+  )
+    .bind(docRow.id)
+    .run();
+
+  await env.DB.prepare(
+    `INSERT INTO signature_events (id, job_document_id, boldsign_document_id, event_type, raw_payload, created_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      docRow.id,
+      failedDocId,
+      "TemplateSendFailed",
+      rawBody.slice(0, 10_000),
+    )
+    .run();
+
+  console.log(
+    `[boldsign_webhook] TemplateSendFailed: job_document="${docRow.id}" signature_status="failed"`,
+  );
+}
+
 async function handleCompleted(
   env: Env,
   docRow: { id: string; job_id: string; template_type: string; filename: string; signer_email: string | null; signer_name: string | null },
   boldSignDocumentId: string,
   event: BoldSignEvent,
 ): Promise<void> {
-  const signerDetails = event.Event?.Document?.SignerDetails?.[0];
+  const signerDetails = getSignerDetails(event)?.[0];
   const signedOn = signerDetails?.SignedOn ?? new Date().toISOString();
 
   // Download signed PDF from BoldSign.
@@ -350,7 +462,7 @@ async function handleEstimateCompleted(
   event: BoldSignEvent,
   meta: EstimateSignatureMeta,
 ): Promise<void> {
-  const signerDetails = event.Event?.Document?.SignerDetails?.[0];
+  const signerDetails = getSignerDetails(event)?.[0];
   const signedOn = signerDetails?.SignedOn ?? new Date().toISOString().slice(0, 10);
   const signerName = signerDetails?.SignerName ?? meta.signer_name ?? "";
 

@@ -17,12 +17,33 @@ export function depositFromSchedule(estimate: Estimate): number {
   return dep.amount ?? 0;
 }
 
+export function defaultDepositAmount(total: number, billingModel?: string | null): number {
+  const pct = billingModel === "fifty_fifty" ? 0.5 : 0.33;
+  return Math.round(total * pct * 100) / 100;
+}
+
+/** Deposit due at signing — from schedule milestones or standalone `deposit_amount` for per_line_item. */
+export function effectiveDeposit(estimate: Estimate): number {
+  if (isPerLineItemBilling(estimate.billing_model)) {
+    return estimate.deposit_amount ?? 0;
+  }
+  return depositFromSchedule(estimate);
+}
+
 export function isCostPlusSchedule(estimate: Estimate): boolean {
   const contract = estimate.contract_template_id ?? "standard_service_agreement";
   return contract === "cost_plus_billing_agreement" || estimate.billing_model === "cost_plus";
 }
 
+export function isPerLineItemBilling(billingModel: string | null | undefined): boolean {
+  return billingModel === "per_line_item";
+}
+
 export function buildDefaultMilestones(estimate: Estimate): MilestoneDraft[] {
+  if (isPerLineItemBilling(estimate.billing_model)) {
+    return [];
+  }
+
   if (isCostPlusSchedule(estimate)) {
     return [
       {
@@ -170,6 +191,10 @@ export function shouldAutoPopulateSchedule(
   estimate: ScheduleAutoPopulateEstimate,
 ): boolean {
   if (estimate.status === "sent" || estimate.status === "approved") return false;
+
+  const nextBilling =
+    body.billing_model != null ? String(body.billing_model) : estimate.billing_model;
+  if (isPerLineItemBilling(nextBilling)) return false;
 
   // Billing model or contract type always refreshes milestones (draft estimates only).
   if (billingOrContractChanged(body, estimate)) return true;

@@ -119,6 +119,12 @@ export function PortalApp() {
         </div>
       )}
 
+      {landing.billing_party?.notice && (
+        <div class="portal-hold" style={{ background: "var(--color-surface-muted)" }}>
+          {landing.billing_party.notice}
+        </div>
+      )}
+
       <section class="portal-stats">
         <Stat label="Contract Total" value={fmtOrDash(qs.contract_total)} />
         <Stat label="Paid to Date" value={formatCurrency(qs.total_paid)} />

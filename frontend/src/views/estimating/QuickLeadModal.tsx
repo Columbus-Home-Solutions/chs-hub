@@ -8,6 +8,8 @@ import { useState } from "preact/hooks";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../store/toast";
 import type { EstimateRequest } from "../../types";
+import { AddressAutocomplete } from "../../components/AddressAutocomplete";
+import type { AddressResult } from "../../hooks/useAddressAutocomplete";
 
 interface QuickLeadModalProps {
   onClose: () => void;
@@ -43,6 +45,9 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
     job_type: "remodel",
     lead_source: "direct_call",
     property_address: "",
+    property_city: "",
+    property_state: "Arkansas",
+    property_zip: "",
     notes: "",
   });
 
@@ -50,6 +55,16 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
     setForm((prev) => ({ ...prev, [field]: value }));
     // Clear matched notice when phone changes.
     if (field === "phone") setMatchedClient(null);
+  }
+
+  function handleAddressSelect(result: AddressResult) {
+    setForm((prev) => ({
+      ...prev,
+      property_address: result.street,
+      property_city: result.city,
+      property_state: result.state || "Arkansas",
+      property_zip: result.zip,
+    }));
   }
 
   async function handleSubmit(e: Event) {
@@ -73,6 +88,9 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
           job_type: form.job_type,
           lead_source: form.lead_source,
           property_address: form.property_address.trim() || undefined,
+          property_city: form.property_city.trim() || undefined,
+          property_state: form.property_state.trim() || undefined,
+          property_zip: form.property_zip.trim() || undefined,
           notes: form.notes.trim() || undefined,
         },
       );
@@ -187,14 +205,11 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
             </div>
 
             <div class="form-group">
-              <label class="form-label" for="ql-address">Property Address</label>
-              <input
-                id="ql-address"
-                class="form-input"
-                type="text"
-                placeholder="123 Main St, NLR AR 72116"
-                value={form.property_address}
-                onInput={(e) => set("property_address", (e.target as HTMLInputElement).value)}
+              <AddressAutocomplete
+                label="Property Address"
+                initialValue={form.property_address}
+                onSelect={handleAddressSelect}
+                onInputChange={(v) => set("property_address", v)}
               />
             </div>
 

@@ -831,126 +831,131 @@ export async function handleEstimateRequestQuickLead(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  const guarded = await guard(request, env, [...WRITE_ROLES]);
-  if (guarded instanceof Response) return guarded;
-  const { user } = guarded;
+  try {
+    const guarded = await guard(request, env, [...WRITE_ROLES]);
+    if (guarded instanceof Response) return guarded;
+    const { user } = guarded;
 
-  const body = await readJson(request);
-  if (!body) return err(400, "bad_request", "Body must be JSON");
+    const body = await readJson(request);
+    if (!body) return err(400, "bad_request", "Body must be JSON");
 
-  const firstName = str(body.first_name);
-  const lastName = str(body.last_name);
-  const phone = str(body.phone);
-  const email = str(body.email);
-  const jobType = str(body.job_type) ?? "other";
-  const leadSource = str(body.lead_source) ?? "direct_call";
-  const propertyAddress = str(body.property_address) ?? "Unknown";
-  const notes = str(body.notes);
+    const firstName = str(body.first_name);
+    const lastName = str(body.last_name);
+    const phone = str(body.phone);
+    const email = str(body.email);
+    const jobType = str(body.job_type) ?? "other";
+    const leadSource = str(body.lead_source) ?? "direct_call";
+    const propertyAddress = str(body.property_address) ?? "Unknown";
+    const notes = str(body.notes);
 
-  const missing: string[] = [];
-  if (!firstName) missing.push("first_name");
-  if (!lastName) missing.push("last_name");
-  if (!phone) missing.push("phone");
-  if (missing.length > 0) {
-    return err(400, "bad_request", `Missing required field(s): ${missing.join(", ")}`);
-  }
-
-  // Dedupe: check for existing client by phone or email (exact match).
-  let existingClientId: string | null = null;
-  let existingClientName: string | null = null;
-
-  const phoneDigits = phone!.replace(/\D/g, "").slice(-10);
-  if (phoneDigits.length === 10) {
-    const byPhone = await env.DB.prepare(
-      `SELECT id, first_name, last_name FROM clients
-        WHERE substr(replace(replace(replace(replace(phone,'(',''),')',''),'-',''),' ',''), -10) = ?
-        LIMIT 1`,
-    )
-      .bind(phoneDigits)
-      .first<{ id: string; first_name: string | null; last_name: string | null }>();
-    if (byPhone) {
-      existingClientId = byPhone.id;
-      existingClientName = [byPhone.first_name, byPhone.last_name].filter(Boolean).join(" ").trim() || null;
+    const missing: string[] = [];
+    if (!firstName) missing.push("first_name");
+    if (!lastName) missing.push("last_name");
+    if (!phone) missing.push("phone");
+    if (missing.length > 0) {
+      return err(400, "bad_request", `Missing required field(s): ${missing.join(", ")}`);
     }
-  }
 
-  if (!existingClientId && email) {
-    const byEmail = await env.DB.prepare(
-      "SELECT id, first_name, last_name FROM clients WHERE email = ? LIMIT 1",
-    )
-      .bind(email)
-      .first<{ id: string; first_name: string | null; last_name: string | null }>();
-    if (byEmail) {
-      existingClientId = byEmail.id;
-      existingClientName = [byEmail.first_name, byEmail.last_name].filter(Boolean).join(" ").trim() || null;
+    // Dedupe: check for existing client by phone or email (exact match).
+    let existingClientId: string | null = null;
+    let existingClientName: string | null = null;
+
+    const phoneDigits = phone!.replace(/\D/g, "").slice(-10);
+    if (phoneDigits.length === 10) {
+      const byPhone = await env.DB.prepare(
+        `SELECT id, first_name, last_name FROM clients
+          WHERE substr(replace(replace(replace(replace(phone,'(',''),')',''),'-',''),' ',''), -10) = ?
+          LIMIT 1`,
+      )
+        .bind(phoneDigits)
+        .first<{ id: string; first_name: string | null; last_name: string | null }>();
+      if (byPhone) {
+        existingClientId = byPhone.id;
+        existingClientName = [byPhone.first_name, byPhone.last_name].filter(Boolean).join(" ").trim() || null;
+      }
     }
-  }
 
-  let clientId: string;
-  const now = new Date().toISOString();
+    if (!existingClientId && email) {
+      const byEmail = await env.DB.prepare(
+        "SELECT id, first_name, last_name FROM clients WHERE email = ? LIMIT 1",
+      )
+        .bind(email)
+        .first<{ id: string; first_name: string | null; last_name: string | null }>();
+      if (byEmail) {
+        existingClientId = byEmail.id;
+        existingClientName = [byEmail.first_name, byEmail.last_name].filter(Boolean).join(" ").trim() || null;
+      }
+    }
 
-  if (existingClientId) {
-    clientId = existingClientId;
-  } else {
-    clientId = crypto.randomUUID();
-    const resolvedEmail = email ?? `unknown_${clientId.slice(0, 8)}@sms.placeholder`;
+    let clientId: string;
+    const now = new Date().toISOString();
+
+    if (existingClientId) {
+      clientId = existingClientId;
+    } else {
+      clientId = crypto.randomUUID();
+      const resolvedEmail = email ?? `unknown_${clientId.slice(0, 8)}@sms.placeholder`;
+      await env.DB.prepare(
+        `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, created_at, updated_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+        .bind(clientId, firstName, lastName, resolvedEmail, phone, leadSource, now, now, user.email)
+        .run();
+      await env.DB.prepare(
+        "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, 'client_created', 'client', ?, ?, datetime('now'))",
+      )
+        .bind(crypto.randomUUID(), user.email, clientId, JSON.stringify({ source: "quick_lead" }))
+        .run();
+    }
+
+    const max = await env.DB.prepare(
+      "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
+    ).first<{ n: number }>();
+    const requestNumber = (max?.n ?? 0) + 1;
+    const requestId = crypto.randomUUID();
+
     await env.DB.prepare(
-      `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, created_at, updated_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO estimate_requests (
+        id, request_number, status, client_id,
+        property_address, property_city, property_state, property_zip,
+        job_type, lead_source, source, visit_notes,
+        created_at, updated_at, created_by
+      ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?)`,
     )
-      .bind(clientId, firstName, lastName, resolvedEmail, phone, leadSource, now, now, user.email)
+      .bind(
+        requestId,
+        requestNumber,
+        clientId,
+        propertyAddress,
+        str(body.property_city) ?? "Unknown",
+        str(body.property_state) ?? "Arkansas",
+        str(body.property_zip) ?? "00000",
+        jobType,
+        leadSource,
+        notes,
+        now,
+        now,
+        user.email,
+      )
       .run();
-    await env.DB.prepare(
-      "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, 'client_created', 'client', ?, ?, datetime('now'))",
-    )
-      .bind(crypto.randomUUID(), user.email, clientId, JSON.stringify({ source: "quick_lead" }))
-      .run();
+
+    await logAudit(env, user.email, "estimate_request_created", requestId, {
+      request_number: requestNumber,
+      client_id: clientId,
+      job_type: jobType,
+      lead_source: leadSource,
+      source: "manual",
+      via: "quick_lead",
+    });
+
+    triggerLeadCreated(env, requestId);
+
+    const created = await loadShaped(env, requestId);
+    return json({ request: created, matched_client: existingClientId ? existingClientName : null }, { status: 201 });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return err(500, "internal_error", `Quick lead creation failed: ${msg}`);
   }
-
-  const max = await env.DB.prepare(
-    "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
-  ).first<{ n: number }>();
-  const requestNumber = (max?.n ?? 0) + 1;
-  const requestId = crypto.randomUUID();
-
-  await env.DB.prepare(
-    `INSERT INTO estimate_requests (
-      id, request_number, status, client_id,
-      property_address, property_city, property_state, property_zip,
-      job_type, lead_source, source, visit_notes,
-      created_at, updated_at, created_by
-    ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?)`,
-  )
-    .bind(
-      requestId,
-      requestNumber,
-      clientId,
-      propertyAddress,
-      str(body.property_city) ?? "Unknown",
-      str(body.property_state) ?? "Arkansas",
-      str(body.property_zip) ?? "00000",
-      jobType,
-      leadSource,
-      notes,
-      now,
-      now,
-      user.email,
-    )
-    .run();
-
-  await logAudit(env, user.email, "estimate_request_created", requestId, {
-    request_number: requestNumber,
-    client_id: clientId,
-    job_type: jobType,
-    lead_source: leadSource,
-    source: "manual",
-    via: "quick_lead",
-  });
-
-  triggerLeadCreated(env, requestId);
-
-  const created = await loadShaped(env, requestId);
-  return json({ request: created, matched_client: existingClientId ? existingClientName : null }, { status: 201 });
 }
 
 // ─── PATCH /api/estimate-requests/:id/stage ──────────────────────────────────

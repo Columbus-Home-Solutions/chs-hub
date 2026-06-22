@@ -6,6 +6,39 @@
 
 > **Note on coverage:** Sprint 9 (invoices + payments) is recorded in full below. **Sprint 8** (photo capture, receipts, smart notes, daily logs — commit `75e95e3`, tag `v0.8.0-sprint8*`) shipped between Sprint 7 and Sprint 9 but is **not yet written up in this file** — see git history / its deploy runbook until backfilled.
 
+### Shipped — Sprint 23 (Jun 22, 2026) — Native Lead Pipeline & SMS Lead Capture ✅ DEPLOYED
+
+**Version:** `v0.23.0-sprint23`. **Commit:** `0f42ed3`. **Worker version:** `20d66482-3523-43c2-8c1f-bbcfb482b247` on `https://chs-hub.tony-bc5.workers.dev` + `dashboard.homesolutionsar.com`. **Migration:** `scripts/migrations/sprint-23-01-lead-sms-fields.sql` — 3 additive `ALTER TABLE estimate_requests ADD COLUMN` statements (`last_sms_at TEXT`, `last_sms_preview TEXT`, `source TEXT DEFAULT 'manual' CHECK(…)`). Applied remote via `wrangler d1 execute --remote --file`. **Backup:** `backups/pre-sprint-23-20260622-0954.sql` (1.8 MB, in repo). **Rollback tag:** `v0.22.2-send-fix`. **Nothing flipped: Stripe test / notifications SIMULATE / `social_publish_mode=SIMULATE` / QBO sandbox. Cron count unchanged.**
+
+**The two most important facts:**
+
+1. **Native CHS Leads Kanban is now live alongside the HL Pipeline.** The `/estimating` screen is now a tabbed view — Tab 1 "HL Pipeline" renders the unchanged `LeadPipeline` (HL Kanban, untouched); Tab 2 "CHS Leads" renders `CHSLeadsKanban` reading from `estimate_requests`. Tab selection persists in `localStorage`. A badge on the CHS Leads tab shows the count of `new_request` stage items.
+
+2. **Inbound SMS from unknown numbers now auto-creates a lead.** The Twilio webhook (`src/routes/webhooks-twilio.ts`) creates a `clients` row (`Unknown Lead`, placeholder email `sms_<phone>@sms.placeholder`) + an `estimate_requests` row (`status=new_request`, `source=inbound_sms`) + a `communications` log entry + an owner in-app alert. STOP/HELP/START from unknown numbers are audited only — no lead created. Known-client inbound SMS now also updates `last_sms_at` / `last_sms_preview` on the most recent open `estimate_request` for that client.
+
+**New routes registered in `src/index.ts`:**
+- `POST /api/estimate-requests/quick-lead` — lightweight lead creation (first/last/phone/email/job_type/lead_source/address/notes); creates client + estimate_request in one call; returns new `id` for immediate navigation.
+- `PATCH /api/estimate-requests/:id/stage` — Kanban drag-to-update; validates stage against `CHS_LEAD_STAGES`; rejects `won` (must use dedicated `/win` route).
+
+**Schema change:** `estimate_requests` gained `last_sms_at TEXT`, `last_sms_preview TEXT`, `source TEXT DEFAULT 'manual' CHECK(source IN ('manual','inbound_sms','high_level','website_form'))`. No table drops, no renames, no data transformation. Pre/post row counts: `estimate_requests=2`, `clients=81`, `communications=10` — unchanged.
+
+**Key new files:** `scripts/migrations/sprint-23-01-lead-sms-fields.sql`, `frontend/src/views/estimating/CHSLeadsKanban.tsx`, `frontend/src/views/estimating/QuickLeadModal.tsx`, `scripts/dev-seed-sprint23.local.sql`. **Modified:** `frontend/src/views/estimating/EstimateRequestPipeline.tsx` (tabbed shell), `src/routes/estimate-requests.ts` (new `source`/`last_sms_at`/`last_sms_preview`/`age_days` in shape + two new route handlers), `src/routes/webhooks-twilio.ts` (unknown-number lead creation + known-client SMS field update), `src/index.ts` (route registration), `frontend/src/types.ts` (new fields), `frontend/src/styles/app.css` (tab bar, SMS badge, source badge, quick-lead modal styles).
+
+**Post-deploy smoke checks passed:** `/app/index.html` → 200, `/api/health/heartbeat` → 200, `/privacy-policy` → 200, `/terms-and-conditions` → 200. Row counts unchanged after migration. All 3 new columns confirmed present via `PRAGMA table_info`.
+
+**🟡 Browser verification (Tony's pass — required before Sprint 24):**
+- [ ] Pipeline screen shows two tabs: "HL Pipeline" and "CHS Leads"
+- [ ] CHS Leads tab renders — columns visible even if empty
+- [ ] "New Lead" button visible on CHS Leads tab
+- [ ] Click "New Lead" → modal opens; submit test lead → card appears in "New Lead" column
+- [ ] Drag test lead card to "Appt Scheduled" → card moves and stays after page refresh
+- [ ] Tab selection persists — navigate away and back, CHS Leads tab still active
+- [ ] HL Pipeline tab still renders correctly — HL Kanban untouched
+
+**Next:** Sprint 24 — two-way SMS conversation UI (reply from CHS dashboard).
+
+---
+
 ### Shipped — Sprint 18 (Jun 3, 2026) — Capacitor App & Polish ✅ DEPLOYED + BROWSER VERIFIED
 
 **Tags:** `v0.18.0-sprint18` / `v0.18.0-sprint18-deployed`. **Final worker version `4a69758e-e48c-4a3a-bee8-e9e8bdef08f7`** (post-verification fixes, see below) on `https://chs-hub.tony-bc5.workers.dev` + `dashboard.homesolutionsar.com` + `client.homesolutionsar.com`. Migration `0039_device_tokens.sql` applied to remote by **direct execute**. Backup: `backup_pre_sprint18_remote_20260603.sql` (local, gitignored) + R2 `chs-backups/`. Rollback tag: `v0.17.0-sprint17-deployed`. **Nothing flipped: Stripe test / notifications SIMULATE (incl. push) / `social_publish_mode=SIMULATE` / QBO sandbox / WC test sheet. Cron count still 5.**

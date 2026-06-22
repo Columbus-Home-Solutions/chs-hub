@@ -222,8 +222,8 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
     // 1. Create client record.
     try {
       await env.DB.prepare(
-        `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, created_at, updated_at)
-         VALUES (?, 'Unknown', 'Lead', ?, ?, 'direct_call', ?, ?)`,
+        `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, synced_at, created_at, updated_at)
+         VALUES (?, 'Unknown', 'Lead', ?, ?, 'direct_call', datetime('now'), ?, ?)`,
       )
         .bind(newClientId, placeholderEmail, from, now, now)
         .run();

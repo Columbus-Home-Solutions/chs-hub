@@ -120,6 +120,9 @@ interface RequestRow {
   lost_reason: string | null;
   lost_notes: string | null;
   converted_job_id: string | null;
+  source: string | null;
+  last_sms_at: string | null;
+  last_sms_preview: string | null;
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
@@ -194,7 +197,11 @@ function shape(row: RequestRow) {
     lost_reason: row.lost_reason,
     lost_notes: row.lost_notes,
     converted_job_id: row.converted_job_id,
+    source: row.source ?? "manual",
+    last_sms_at: row.last_sms_at ?? null,
+    last_sms_preview: row.last_sms_preview ?? null,
     days_in_stage: daysSince(row.updated_at),
+    age_days: daysSince(row.created_at),
     created_at: row.created_at,
     updated_at: row.updated_at,
     created_by: row.created_by,
@@ -813,6 +820,216 @@ export async function handleEstimateRequestWin(
     job_number: outcome.jobNumber,
     payment_id: outcome.paymentId,
   });
+}
+
+// ─── POST /api/estimate-requests/quick-lead ──────────────────────────────────
+// Lightweight lead creation for the "New Lead" Kanban button. Creates a client
+// record if phone/email doesn't match an existing client, then creates an
+// estimate_requests record at new_request/manual.
+
+export async function handleEstimateRequestQuickLead(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  const firstName = str(body.first_name);
+  const lastName = str(body.last_name);
+  const phone = str(body.phone);
+  const email = str(body.email);
+  const jobType = str(body.job_type) ?? "other";
+  const leadSource = str(body.lead_source) ?? "direct_call";
+  const propertyAddress = str(body.property_address) ?? "Unknown";
+  const notes = str(body.notes);
+
+  const missing: string[] = [];
+  if (!firstName) missing.push("first_name");
+  if (!lastName) missing.push("last_name");
+  if (!phone) missing.push("phone");
+  if (missing.length > 0) {
+    return err(400, "bad_request", `Missing required field(s): ${missing.join(", ")}`);
+  }
+
+  // Dedupe: check for existing client by phone or email (exact match).
+  let existingClientId: string | null = null;
+  let existingClientName: string | null = null;
+
+  const phoneDigits = phone!.replace(/\D/g, "").slice(-10);
+  if (phoneDigits.length === 10) {
+    const byPhone = await env.DB.prepare(
+      `SELECT id, first_name, last_name FROM clients
+        WHERE substr(replace(replace(replace(replace(phone,'(',''),')',''),'-',''),' ',''), -10) = ?
+        LIMIT 1`,
+    )
+      .bind(phoneDigits)
+      .first<{ id: string; first_name: string | null; last_name: string | null }>();
+    if (byPhone) {
+      existingClientId = byPhone.id;
+      existingClientName = [byPhone.first_name, byPhone.last_name].filter(Boolean).join(" ").trim() || null;
+    }
+  }
+
+  if (!existingClientId && email) {
+    const byEmail = await env.DB.prepare(
+      "SELECT id, first_name, last_name FROM clients WHERE email = ? LIMIT 1",
+    )
+      .bind(email)
+      .first<{ id: string; first_name: string | null; last_name: string | null }>();
+    if (byEmail) {
+      existingClientId = byEmail.id;
+      existingClientName = [byEmail.first_name, byEmail.last_name].filter(Boolean).join(" ").trim() || null;
+    }
+  }
+
+  let clientId: string;
+  const now = new Date().toISOString();
+
+  if (existingClientId) {
+    clientId = existingClientId;
+  } else {
+    clientId = crypto.randomUUID();
+    const resolvedEmail = email ?? `unknown_${clientId.slice(0, 8)}@sms.placeholder`;
+    await env.DB.prepare(
+      `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, created_at, updated_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(clientId, firstName, lastName, resolvedEmail, phone, leadSource, now, now, user.email)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, 'client_created', 'client', ?, ?, datetime('now'))",
+    )
+      .bind(crypto.randomUUID(), user.email, clientId, JSON.stringify({ source: "quick_lead" }))
+      .run();
+  }
+
+  const max = await env.DB.prepare(
+    "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
+  ).first<{ n: number }>();
+  const requestNumber = (max?.n ?? 0) + 1;
+  const requestId = crypto.randomUUID();
+
+  await env.DB.prepare(
+    `INSERT INTO estimate_requests (
+      id, request_number, status, client_id,
+      property_address, property_city, property_state, property_zip,
+      job_type, lead_source, source, visit_notes,
+      created_at, updated_at, created_by
+    ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?)`,
+  )
+    .bind(
+      requestId,
+      requestNumber,
+      clientId,
+      propertyAddress,
+      str(body.property_city) ?? "Unknown",
+      str(body.property_state) ?? "Arkansas",
+      str(body.property_zip) ?? "00000",
+      jobType,
+      leadSource,
+      notes,
+      now,
+      now,
+      user.email,
+    )
+    .run();
+
+  await logAudit(env, user.email, "estimate_request_created", requestId, {
+    request_number: requestNumber,
+    client_id: clientId,
+    job_type: jobType,
+    lead_source: leadSource,
+    source: "manual",
+    via: "quick_lead",
+  });
+
+  triggerLeadCreated(env, requestId);
+
+  const created = await loadShaped(env, requestId);
+  return json({ request: created, matched_client: existingClientId ? existingClientName : null }, { status: 201 });
+}
+
+// ─── PATCH /api/estimate-requests/:id/stage ──────────────────────────────────
+// Move a lead card to a new pipeline stage (Kanban drag-to-update).
+// Won is excluded — use the /win endpoint instead. Lost is allowed.
+
+const STAGE_ALLOWED: ReadonlySet<string> = new Set([
+  "appointment_set",
+  "visit_done",
+  "building",
+  "sent",
+  "follow_up",
+  "lost",
+  "new_request",
+]);
+
+export async function handleEstimateRequestStage(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const existing = await env.DB.prepare(
+    "SELECT id, status FROM estimate_requests WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ id: string; status: string }>();
+  if (!existing) return err(404, "not_found", "Estimate request not found");
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  const target = str(body.status);
+  if (!target) return err(400, "bad_request", "status is required");
+
+  if (target === "won") {
+    return err(
+      400,
+      "won_requires_conversion",
+      "Use the Mark as Won action (POST /api/estimate-requests/:id/win) to mark a request as won.",
+    );
+  }
+
+  if (!STAGE_ALLOWED.has(target)) {
+    return err(400, "bad_request", `Invalid status value "${target}". Allowed: ${[...STAGE_ALLOWED].join(", ")}`);
+  }
+
+  const problem = validateTransition(existing.status, target);
+  if (problem) return err(400, "bad_request", problem);
+
+  if (target === existing.status) {
+    const unchanged = await loadShaped(env, id);
+    return json({ request: unchanged });
+  }
+
+  const now = new Date().toISOString();
+  const updates: string[] = ["status = ?", "updated_at = ?"];
+  const binds: unknown[] = [target, now];
+
+  if (target === "appointment_set" && !existing.status.includes("appointment")) {
+    // Do NOT set appointment_date here — user must set it via the detail view.
+  }
+
+  binds.push(id);
+  await env.DB.prepare(`UPDATE estimate_requests SET ${updates.join(", ")} WHERE id = ?`)
+    .bind(...binds)
+    .run();
+
+  await logAudit(env, user.email, "estimate_request_stage_moved", id, {
+    status_from: existing.status,
+    status_to: target,
+    via: "kanban_drag",
+  });
+
+  const updated = await loadShaped(env, id);
+  return json({ request: updated });
 }
 
 // ─── DELETE /api/estimate-requests/:id ─────────────────────────────────────────

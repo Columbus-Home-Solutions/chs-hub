@@ -235,7 +235,11 @@ export interface EstimateRequest {
   lost_reason: string | null;
   lost_notes: string | null;
   converted_job_id: string | null;
+  source: string;
+  last_sms_at: string | null;
+  last_sms_preview: string | null;
   days_in_stage: number;
+  age_days: number;
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;

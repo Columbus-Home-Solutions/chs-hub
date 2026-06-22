@@ -171,6 +171,30 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
     await env.DB.prepare("UPDATE clients SET last_interaction_date = datetime('now') WHERE id = ?")
       .bind(client.id)
       .run();
+
+    // Update last_sms_at / last_sms_preview on the most recent open estimate_request
+    // for this client (only if the columns exist — safe with ?? fallback in shape()).
+    try {
+      const openRequest = await env.DB.prepare(
+        `SELECT id FROM estimate_requests
+         WHERE client_id = ? AND status NOT IN ('won', 'lost')
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+        .bind(client.id)
+        .first<{ id: string }>();
+      if (openRequest) {
+        await env.DB.prepare(
+          `UPDATE estimate_requests
+           SET last_sms_at = datetime('now'), last_sms_preview = ?, updated_at = datetime('now')
+           WHERE id = ?`,
+        )
+          .bind(body.slice(0, 100), openRequest.id)
+          .run();
+      }
+    } catch {
+      // Column may not exist yet if migration hasn't run — safe to skip.
+    }
+
     await createOwnerInApp(env, {
       message: `New text from ${name}: ${body.slice(0, 120)}`,
       linkPath: `/app/clients/${client.id}`,
@@ -179,13 +203,96 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
     });
     await audit(env, "twilio_inbound_matched", { client_id: client.id, message_sid: messageSid });
   } else {
-    // Unknown number — never dropped: audit + owner bell so it can be handled.
+    // Check opt-out BEFORE lead creation — an unknown number sending STOP
+    // should never result in a lead record.
+    const unknownKeyword = classifyInboundKeyword(body);
+    if (unknownKeyword === "stop" || unknownKeyword === "help" || unknownKeyword === "start") {
+      // Opt-out/help from unknown number: audit only, no lead.
+      await audit(env, `twilio_inbound_unknown_${unknownKeyword}`, { from, message_sid: messageSid });
+      return twiml();
+    }
+
+    // Unknown number with a real message → auto-create lead.
+    const newClientId = crypto.randomUUID();
+    const newRequestId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const smsPreview = body.slice(0, 100);
+    const placeholderEmail = `sms_${fromDigits || from.replace(/\D/g, "")}@sms.placeholder`;
+
+    // 1. Create client record.
+    try {
+      await env.DB.prepare(
+        `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, created_at, updated_at)
+         VALUES (?, 'Unknown', 'Lead', ?, ?, 'direct_call', ?, ?)`,
+      )
+        .bind(newClientId, placeholderEmail, from, now, now)
+        .run();
+    } catch (e) {
+      // If client insert fails (e.g. duplicate), abort lead creation and fall back to alert.
+      await createOwnerInApp(env, {
+        message: `Inbound text from unrecognized number ${from}: ${smsPreview}`,
+        linkPath: "/app/clients",
+        dedupe: messageSid ? `inbound:${messageSid}` : null,
+      });
+      await audit(env, "twilio_inbound_unmatched_client_create_failed", { from, error: String(e) });
+      return twiml();
+    }
+
+    // 2. Generate request_number for the new estimate_request.
+    let requestNumber = 9001;
+    try {
+      const max = await env.DB.prepare(
+        "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
+      ).first<{ n: number }>();
+      requestNumber = (max?.n ?? 0) + 1;
+    } catch {
+      // Use fallback — estimate_requests may not exist yet locally.
+    }
+
+    // 3. Create estimate_requests record.
+    try {
+      await env.DB.prepare(
+        `INSERT INTO estimate_requests (
+          id, request_number, status, client_id,
+          property_address, property_city, property_state, property_zip,
+          job_type, lead_source, source,
+          last_sms_at, last_sms_preview,
+          created_at, updated_at
+        ) VALUES (?, ?, 'new_request', ?, 'Unknown', 'Unknown', 'Arkansas', '00000',
+                  'unknown', 'direct_call', 'inbound_sms', ?, ?, ?, ?)`,
+      )
+        .bind(newRequestId, requestNumber, newClientId, now, smsPreview, now, now)
+        .run();
+    } catch (e) {
+      await audit(env, "twilio_inbound_request_create_failed", { from, error: String(e) });
+    }
+
+    // 4. Log inbound SMS to communications.
+    try {
+      const commId = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO communications (id, client_id, channel, direction, summary, body, sent_via, created_at)
+         VALUES (?, ?, 'text_sms', 'inbound', ?, ?, 'twilio', ?)`,
+      )
+        .bind(commId, newClientId, `Inbound text from unknown number ${from}`, body, now)
+        .run();
+    } catch {
+      // Communication log failure must never block the webhook.
+    }
+
+    // 5. Owner in-app alert.
     await createOwnerInApp(env, {
-      message: `Inbound text from unrecognized number ${from}: ${body.slice(0, 120)}`,
-      linkPath: "/app/clients",
+      message: `New lead from unknown number: ${from}`,
+      linkPath: `/app/estimating/${newRequestId}`,
+      clientId: newClientId,
       dedupe: messageSid ? `inbound:${messageSid}` : null,
     });
-    await audit(env, "twilio_inbound_unmatched", { from, message_sid: messageSid });
+    await audit(env, "twilio_inbound_unknown_lead_created", {
+      from,
+      client_id: newClientId,
+      request_id: newRequestId,
+      message_sid: messageSid,
+    });
   }
 
   return twiml();

@@ -243,6 +243,8 @@ import {
   handleEstimateRequestLost,
   handleEstimateRequestWin,
   handleEstimateRequestDelete,
+  handleEstimateRequestQuickLead,
+  handleEstimateRequestStage,
 } from "./routes/estimate-requests.js";
 import {
   handleEstimateList,
@@ -1680,6 +1682,13 @@ export default {
     }
     if (url.pathname === "/api/estimate-requests/pipeline" && request.method === "GET") {
       return handleEstimateRequestPipeline(env);
+    }
+    if (url.pathname === "/api/estimate-requests/quick-lead" && request.method === "POST") {
+      return handleEstimateRequestQuickLead(request, env);
+    }
+    const erStage = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/stage$/);
+    if (erStage && request.method === "PATCH") {
+      return handleEstimateRequestStage(request, env, decodeURIComponent(erStage[1]));
     }
     const erAppointment = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/appointment$/);
     if (erAppointment && request.method === "PUT") {

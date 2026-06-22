@@ -601,7 +601,7 @@ export async function handleDashboardPipeline(env: Env): Promise<Response> {
     env.DB.prepare(
       `SELECT status, COUNT(*) as count
        FROM estimate_requests
-       WHERE status NOT IN ('converted', 'lost', 'cancelled')
+       WHERE status NOT IN ('won', 'lost')
        GROUP BY status`
     ).all<{ status: string; count: number }>(),
     env.DB.prepare(
@@ -612,7 +612,7 @@ export async function handleDashboardPipeline(env: Env): Promise<Response> {
     ).all<{ status: string; count: number }>(),
     env.DB.prepare(
       `SELECT
-         COUNT(*) FILTER (WHERE status = 'converted') as converted,
+         COUNT(*) FILTER (WHERE status = 'won') as converted,
          COUNT(*) as total
        FROM estimate_requests
        WHERE created_at >= ?`
@@ -676,7 +676,7 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
        FROM estimate_requests er
        JOIN clients c ON er.client_id = c.id
        WHERE DATE(er.appointment_date) = ?
-         AND er.status NOT IN ('converted', 'lost', 'cancelled')
+         AND er.status NOT IN ('won', 'lost')
        ORDER BY er.appointment_date ASC`,
     ).bind(today).all<{ id: string; appointment_date: string; appointment_time: string | null; first_name: string; last_name: string; property_address: string }>(),
   ]);

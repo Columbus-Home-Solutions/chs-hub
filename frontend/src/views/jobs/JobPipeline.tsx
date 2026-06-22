@@ -42,7 +42,8 @@ export function JobPipeline(_props: RoutableProps) {
   const [listSearch, setListSearch] = useState("");
 
   useEffect(() => {
-    const s = searchParam("status");
+    // Accept both ?stage= (from dashboard pipeline taps) and ?status= (legacy).
+    const s = searchParam("stage") ?? searchParam("status");
     if (s && JOB_STAGES.some((st) => st.key === s)) {
       setActiveStage(s as JobStatus);
       setStatusFilter(s as JobStatus);

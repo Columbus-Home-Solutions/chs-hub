@@ -17,7 +17,9 @@ function PipelineBars({ stages, title }: { stages: PipelineStage[]; title: strin
           key={stage.status}
           class="pipeline-mini__row"
           onClick={() =>
-            route(title.includes("Lead") ? `/estimating?status=${stage.status}` : `/jobs?status=${stage.status}`)
+            route(title.includes("Lead")
+              ? `/app/estimating?tab=chs&stage=${stage.status}`
+              : `/app/jobs?stage=${stage.status}`)
           }
         >
           <span class="pipeline-mini__label">{stage.label}</span>

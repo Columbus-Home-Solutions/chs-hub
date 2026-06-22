@@ -518,6 +518,7 @@
 .pipeline-col--follow_up { --col-accent: var(--pipeline-follow-up); }
 .pipeline-col--won { --col-accent: var(--pipeline-won); }
 .pipeline-col--lost { --col-accent: var(--pipeline-lost); }
+.pipeline-col--highlighted { outline: 2px solid var(--color-brand); outline-offset: -2px; }
 
 /* Job pipeline column accents + status pills (Sprint 6). */
 .pipeline-col--deposit_paid { --col-accent: var(--job-deposit-paid); }

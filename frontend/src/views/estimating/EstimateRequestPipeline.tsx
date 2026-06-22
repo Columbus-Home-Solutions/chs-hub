@@ -12,6 +12,7 @@ import { useEffect, useState } from "preact/hooks";
 import { LeadPipeline } from "../dashboard/LeadPipeline";
 import { CHSLeadsKanban } from "./CHSLeadsKanban";
 import { useApi } from "../../hooks/useApi";
+import { searchParam } from "../../lib/url-params";
 
 const TAB_STORAGE_KEY = "chs_pipeline_active_tab";
 
@@ -34,6 +35,7 @@ interface CountResponse {
 export function EstimateRequestPipeline(_props: RoutableProps) {
   const [activeTab, setActiveTab] = useState<PipelineTab>(storedTab);
   const [newRequestCount, setNewRequestCount] = useState(0);
+  const [highlightStage, setHighlightStage] = useState<string | null>(null);
 
   // Lightweight pipeline fetch just to get the new_request badge count.
   const { data: pipelineData } = useApi<CountResponse>("/api/estimate-requests/pipeline");
@@ -43,6 +45,19 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
       setNewRequestCount(pipelineData.counts.new_request);
     }
   }, [pipelineData]);
+
+  // On mount: read ?tab=chs and ?stage=xxx URL params (set by dashboard Pipeline Summary taps).
+  useEffect(() => {
+    const tabParam = searchParam("tab");
+    const stageParam = searchParam("stage");
+    if (tabParam === "chs") {
+      setActiveTab("chs");
+      try { localStorage.setItem(TAB_STORAGE_KEY, "chs"); } catch { /* ignore */ }
+    }
+    if (stageParam) {
+      setHighlightStage(stageParam);
+    }
+  }, []);
 
   function switchTab(tab: PipelineTab) {
     setActiveTab(tab);
@@ -84,7 +99,7 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
 
       {activeTab === "chs" && (
         <div class="pipeline-tab-content">
-          <CHSLeadsKanban onNewRequestCount={setNewRequestCount} />
+          <CHSLeadsKanban onNewRequestCount={setNewRequestCount} highlightStage={highlightStage ?? undefined} />
         </div>
       )}
     </div>

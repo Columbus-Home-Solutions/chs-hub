@@ -142,9 +142,10 @@ function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete 
 
 interface CHSLeadsKanbanProps {
   onNewRequestCount?: (count: number) => void;
+  highlightStage?: string;
 }
 
-export function CHSLeadsKanban({ onNewRequestCount }: CHSLeadsKanbanProps) {
+export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKanbanProps) {
   const { data, loading, error, refetch } = useApi<PipelineResponse>(
     "/api/estimate-requests/pipeline",
   );
@@ -329,7 +330,7 @@ export function CHSLeadsKanban({ onNewRequestCount }: CHSLeadsKanbanProps) {
               return (
                 <section
                   key={s.key}
-                  class={`pipeline-col pipeline-col--${s.key}${activeStage === s.key ? " is-active" : ""}`}
+                  class={`pipeline-col pipeline-col--${s.key}${activeStage === s.key ? " is-active" : ""}${highlightStage === s.key ? " pipeline-col--highlighted" : ""}`}
                 >
                   <header class="pipeline-col__header" style={{ borderTopColor: s.color }}>
                     <span class="pipeline-col__title" style={{ color: s.color }}>

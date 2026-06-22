@@ -9,7 +9,6 @@ import { KpiTiles } from "./dashboard/KpiTiles";
 import { WeatherAlerts } from "./dashboard/WeatherAlerts";
 import { ActionItems } from "./dashboard/ActionItems";
 import { PipelineSummary } from "./dashboard/PipelineSummary";
-import { LeadPipeline } from "./dashboard/LeadPipeline";
 import { SmartNotes } from "./dashboard/SmartNotes";
 import { TodaySchedule } from "./dashboard/TodaySchedule";
 import { UpcomingMeetings } from "./dashboard/UpcomingMeetings";
@@ -69,26 +68,22 @@ export function Dashboard(_props: RoutableProps) {
             onDismiss={(id) => setDismissedIds((prev) => new Set(prev).add(id))}
           />
 
-          <PipelineSummary
-            data={pipeline.data ?? { leads: [], jobs: [], conversionRate: 0, unpaidTotal: 0 }}
-            loading={pipeline.loading}
-            error={pipeline.error}
-          />
-
-          {/* LeadPipeline Kanban — desktop only, hidden on mobile via CSS */}
-          <div class="dashboard__desktop-only">
-            <LeadPipeline />
-          </div>
-        </div>
-
-        {/* Secondary column (~40%) */}
-        <div class="dashboard__secondary">
-          <WeatherForecastCard />
           <TodaySchedule
             entries={schedule.data?.entries ?? []}
             loading={schedule.loading}
             error={schedule.error}
           />
+
+          <PipelineSummary
+            data={pipeline.data ?? { leads: [], jobs: [], conversionRate: 0, unpaidTotal: 0 }}
+            loading={pipeline.loading}
+            error={pipeline.error}
+          />
+        </div>
+
+        {/* Secondary column (~40%) */}
+        <div class="dashboard__secondary">
+          <WeatherForecastCard />
           <UpcomingMeetings />
           <SmartNotes />
           <JobsMapWidget />

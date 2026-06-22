@@ -896,8 +896,8 @@ export async function handleEstimateRequestQuickLead(
       clientId = crypto.randomUUID();
       const resolvedEmail = email ?? `unknown_${clientId.slice(0, 8)}@sms.placeholder`;
       await env.DB.prepare(
-        `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, synced_at, created_at, updated_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)`,
       )
         .bind(clientId, firstName, lastName, resolvedEmail, phone, leadSource, now, now, user.email)
         .run();

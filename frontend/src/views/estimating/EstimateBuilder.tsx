@@ -381,7 +381,7 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
           <Button variant="secondary" onClick={() => toast.push("success", "Draft saved")}>
             Save Draft
           </Button>
-          <SendButton estimate={e} mutate={mutate} />
+          <SendButton estimate={e} mutate={mutate} toast={toast} />
         </div>
       </div>
     </div>
@@ -1599,9 +1599,11 @@ function SaveTemplate({
 function SendButton({
   estimate,
   mutate,
+  toast,
 }: {
   estimate: Estimate;
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+  toast: ReturnType<typeof useToast>;
 }) {
   const [open, setOpen] = useState(false);
   const perLineItem = isPerLineItemBilling(estimate.billing_model);
@@ -1617,6 +1619,15 @@ function SendButton({
     Math.abs(pctRows.reduce((a, p) => a + (p.percentage ?? 0), 0) - 100) < 0.01;
   const blocked = !hasLine || !depositOk || !pctOk;
   const sent = estimate.status === "sent" || estimate.status === "approved";
+
+  const confirmSend = () => {
+    if (estimate.billing_model !== "per_line_item" && depositFromSchedule(estimate) <= 0) {
+      toast.push("error", "Add a deposit milestone to the payment schedule before sending.");
+      return;
+    }
+    setOpen(false);
+    void mutate(() => api.post(`/api/estimates/${estimate.id}/send`), "Estimate sent");
+  };
 
   return (
     <>
@@ -1635,10 +1646,7 @@ function SendButton({
             <Button
               variant="primary"
               disabled={blocked}
-              onClick={() => {
-                setOpen(false);
-                void mutate(() => api.post(`/api/estimates/${estimate.id}/send`), "Estimate sent");
-              }}
+              onClick={confirmSend}
             >
               Confirm Send
             </Button>

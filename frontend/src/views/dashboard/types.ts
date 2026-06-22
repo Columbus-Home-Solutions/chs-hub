@@ -34,12 +34,15 @@ export interface PipelineData {
 }
 
 export interface ScheduleEntry {
-  type: "schedule" | "appointment";
+  type: "schedule" | "appointment" | "google_calendar";
+  entry_type?: "job" | "estimate" | "warranty" | "google_calendar";
   id: string;
   startTime: string | null;
+  endTime?: string | null;
   label: string;
   description: string | null;
-  link: string;
+  link: string | null;
+  meetLink?: string | null;
 }
 
 export interface ActivityEntry {

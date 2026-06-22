@@ -650,18 +650,21 @@ export async function handleDashboardPipeline(env: Env): Promise<Response> {
 // ── Schedule handler ───────────────────────────────────────────────────────
 
 interface ScheduleEntry {
-  type: "schedule" | "appointment";
+  type: "schedule" | "appointment" | "google_calendar";
+  entry_type: "job" | "estimate" | "warranty" | "google_calendar";
   id: string;
   startTime: string | null;
+  endTime: string | null;
   label: string;
   description: string | null;
-  link: string;
+  link: string | null;
+  meetLink: string | null;
 }
 
 export async function handleDashboardSchedule(env: Env): Promise<Response> {
   const today = todayUtc();
 
-  const [schedRows, apptRows] = await Promise.all([
+  const [schedRows, apptRows, gcalRows] = await Promise.all([
     env.DB.prepare(
       `SELECT se.id, se.start_time, se.trade_or_work, j.title as job_title, j.id as job_id, j.job_number
        FROM schedule_entries se
@@ -679,6 +682,13 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
          AND er.status NOT IN ('won', 'lost')
        ORDER BY er.appointment_date ASC`,
     ).bind(today).all<{ id: string; appointment_date: string; appointment_time: string | null; first_name: string; last_name: string; property_address: string }>(),
+
+    env.DB.prepare(
+      `SELECT id, title, start_time, end_time, meet_link
+       FROM google_calendar_events
+       WHERE date(start_time, 'localtime') = ?
+       ORDER BY start_time ASC`,
+    ).bind(today).all<{ id: string; title: string; start_time: string; end_time: string | null; meet_link: string | null }>().catch(() => ({ results: [] as { id: string; title: string; start_time: string; end_time: string | null; meet_link: string | null }[] })),
   ]);
 
   const entries: ScheduleEntry[] = [];
@@ -686,11 +696,14 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
   for (const row of schedRows.results ?? []) {
     entries.push({
       type: "schedule",
+      entry_type: "job",
       id: row.id,
       startTime: row.start_time ?? null,
+      endTime: null,
       label: row.job_title ?? `Job #${row.job_number}`,
       description: row.trade_or_work ?? null,
       link: `/jobs/${row.job_id}`,
+      meetLink: null,
     });
   }
 
@@ -698,15 +711,34 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
     const clientName = `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim();
     entries.push({
       type: "appointment",
+      entry_type: "estimate",
       id: row.id,
       startTime: row.appointment_time ?? null,
+      endTime: null,
       label: `Estimate appointment: ${clientName}`,
       description: row.property_address ?? null,
       link: "/estimating",
+      meetLink: null,
     });
   }
 
-  // Sort by startTime (nulls last).
+  for (const row of (gcalRows as { results: { id: string; title: string; start_time: string; end_time: string | null; meet_link: string | null }[] }).results ?? []) {
+    entries.push({
+      type: "google_calendar",
+      entry_type: "google_calendar",
+      id: row.id,
+      startTime: row.start_time,
+      endTime: row.end_time ?? null,
+      label: row.title,
+      description: null,
+      link: null,
+      meetLink: row.meet_link ?? null,
+    });
+  }
+
+  // Sort by startTime ascending (nulls last). GCal entries have ISO datetimes,
+  // CHS entries have "HH:MM" time strings — ISO sorts correctly vs ISO and
+  // "HH:MM" sorts correctly vs "HH:MM"; mixed compare falls back to string order.
   entries.sort((a, b) => {
     if (!a.startTime && !b.startTime) return 0;
     if (!a.startTime) return 1;

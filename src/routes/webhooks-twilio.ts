@@ -33,6 +33,18 @@ function twiml(): Response {
   });
 }
 
+/** TwiML with a reply message — for STOP/START compliance responses. */
+function twimlReply(message: string): Response {
+  const escaped = message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return new Response(
+    `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escaped}</Message></Response>`,
+    {
+      status: 200,
+      headers: { "content-type": "text/xml; charset=utf-8" },
+    },
+  );
+}
+
 const OPT_OUT_KEYWORDS = new Set(["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"]);
 const OPT_IN_KEYWORDS = new Set(["START", "UNSTOP", "YES"]);
 
@@ -144,13 +156,22 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
     const name = [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || client.name || "Client";
     const keyword = classifyInboundKeyword(body);
     if (keyword === "stop") {
+      const now = new Date().toISOString();
+      // Write to dedicated column (Sprint 24) AND the legacy JSON prefs blob for
+      // notification-engine compat until that engine is updated to the column.
+      await env.DB.prepare(
+        `UPDATE clients SET sms_opt_out = 1, sms_opt_out_at = ?, updated_at = datetime('now') WHERE id = ?`,
+      ).bind(now, client.id).run();
       await mergeClientSmsPrefs(env, client.id, {
         sms_opt_out: true,
-        sms_opt_out_at: new Date().toISOString(),
+        sms_opt_out_at: now,
         sms_opt_out_source: "inbound_stop",
       });
       await audit(env, "sms_opt_out_inbound", { client_id: client.id, message_sid: messageSid });
     } else if (keyword === "start") {
+      await env.DB.prepare(
+        `UPDATE clients SET sms_opt_out = 0, sms_opt_out_at = NULL, updated_at = datetime('now') WHERE id = ?`,
+      ).bind(client.id).run();
       await mergeClientSmsPrefs(env, client.id, {
         sms_opt_out: false,
         sms_opt_out_source: "inbound_start",
@@ -202,6 +223,18 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
       dedupe: messageSid ? `inbound:${messageSid}` : null,
     });
     await audit(env, "twilio_inbound_matched", { client_id: client.id, message_sid: messageSid });
+
+    // Return compliance TwiML reply for STOP/START keywords.
+    if (keyword === "stop") {
+      return twimlReply(
+        "You have been unsubscribed from Columbus Home Solutions messages. Reply START to re-subscribe.",
+      );
+    }
+    if (keyword === "start") {
+      return twimlReply(
+        "You have been re-subscribed to Columbus Home Solutions messages. Reply STOP at any time to unsubscribe.",
+      );
+    }
   } else {
     // Check opt-out BEFORE lead creation — an unknown number sending STOP
     // should never result in a lead record.

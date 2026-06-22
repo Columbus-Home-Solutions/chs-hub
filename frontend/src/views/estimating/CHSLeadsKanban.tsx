@@ -14,6 +14,7 @@ import { MarkWonModal } from "./MarkWonModal";
 import { canDeleteRequest, DeleteRequestButton } from "./DeleteRequestButton";
 import { QuickLeadModal } from "./QuickLeadModal";
 import { useToast } from "../../store/toast";
+import { useMessageCenter } from "../../store/messageCenter";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { loadStoredView, storeView, truncate, useClientSort } from "../../lib/list-view";
@@ -73,9 +74,10 @@ interface LeadCardProps {
   onDragEnd: () => void;
   onOpen: () => void;
   onDelete: () => void;
+  onMessage: (clientId: string) => void;
 }
 
-function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete }: LeadCardProps) {
+function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete, onMessage }: LeadCardProps) {
   const isSmsSrc = request.source === "inbound_sms";
 
   return (
@@ -131,6 +133,16 @@ function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete 
       <div class="er-card__footer">
         <span class="er-card__age">{ageDays(request.created_at)}</span>
         <div class="flex items-center gap-xs" onClick={(e) => e.stopPropagation()}>
+          {request.client_id && (
+            <button
+              class="btn btn--ghost btn--sm er-card__msg-btn"
+              title="Open SMS thread"
+              aria-label="Open SMS thread"
+              onClick={(e) => { e.stopPropagation(); onMessage(request.client_id!); }}
+            >
+              💬
+            </button>
+          )}
           {canDeleteRequest(request) && (
             <DeleteRequestButton request={request} size="sm" onDeleted={onDelete} />
           )}
@@ -150,6 +162,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
     "/api/estimate-requests/pipeline",
   );
   const toast = useToast();
+  const { open: openMessageCenter } = useMessageCenter();
 
   const [viewMode, setViewMode] = useState(() => loadStoredView("chs_leads_view"));
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -363,6 +376,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                         }}
                         onOpen={() => go(`/estimating/${r.id}`)}
                         onDelete={() => refetch()}
+                        onMessage={(clientId) => openMessageCenter(clientId)}
                       />
                     ))}
                   </div>

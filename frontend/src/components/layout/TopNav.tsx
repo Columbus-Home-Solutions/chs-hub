@@ -3,6 +3,7 @@ import { useWeather, weatherEmoji } from "../../store/weather";
 import { initials } from "../../lib/format";
 import { go } from "../../lib/nav";
 import { NotificationBell } from "./NotificationBell";
+import { MessageCenterButton } from "../MessageCenter";
 import logoUrl from "../../assets/chs-logo.png";
 
 export function TopNav() {
@@ -27,6 +28,7 @@ export function TopNav() {
       )}
 
       <div class="topnav__right">
+        <MessageCenterButton />
         <NotificationBell />
         <button class="topnav__user" onClick={() => go("/settings")}>
           <span class="topnav__avatar">

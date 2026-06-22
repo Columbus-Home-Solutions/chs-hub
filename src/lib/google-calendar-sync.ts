@@ -43,7 +43,9 @@ export async function syncGoogleCalendarEvents(env: Env): Promise<GcalSyncStats>
   }
 
   const now = new Date();
-  const timeMin = now.toISOString();
+  const startOfToday = new Date(now);
+  startOfToday.setUTCHours(0, 0, 0, 0);
+  const timeMin = startOfToday.toISOString();
   const timeMax = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
   const params = new URLSearchParams({
@@ -66,7 +68,7 @@ export async function syncGoogleCalendarEvents(env: Env): Promise<GcalSyncStats>
   }
 
   const data = (await resp.json()) as { items?: GoogleEvent[] };
-  const items = (data.items ?? []).filter((e) => e.hangoutLink && e.id && e.status !== "cancelled");
+  const items = (data.items ?? []).filter((e) => e.id && e.status !== "cancelled");
   stats.fetched = items.length;
 
   const seenIds = new Set<string>();
@@ -91,18 +93,17 @@ export async function syncGoogleCalendarEvents(env: Env): Promise<GcalSyncStats>
          description = excluded.description,
          synced_at = excluded.synced_at`,
     )
-      .bind(id, ev.summary ?? "Google Meet", startTime, endTime, ev.hangoutLink ?? null, ev.description ?? null, syncedAt)
+      .bind(id, ev.summary ?? "Untitled Event", startTime, endTime, ev.hangoutLink ?? null, ev.description ?? null, syncedAt)
       .run();
     stats.upserted++;
   }
 
-  // Remove stale Meet events in the sync window that Google no longer returns.
+  // Remove stale events in the sync window that Google no longer returns.
   const stale =
     (
       await env.DB.prepare(
         `SELECT id FROM google_calendar_events
-          WHERE meet_link IS NOT NULL
-            AND start_time >= ?
+          WHERE start_time >= ?
             AND start_time <= ?`,
       )
         .bind(timeMin, timeMax)
@@ -141,6 +142,36 @@ export async function listUpcomingMeetings(env: Env, limit = 5): Promise<
           LIMIT ?`,
       )
         .bind(now, limit)
+        .all<{
+          id: string;
+          title: string;
+          start_time: string;
+          end_time: string;
+          meet_link: string | null;
+        }>()
+    ).results ?? [];
+  return rows;
+}
+
+/** Returns all calendar events (Meet and non-Meet) from the DB, sorted by start_time. */
+export async function listAllCalendarEvents(env: Env, limit = 100): Promise<
+  Array<{
+    id: string;
+    title: string;
+    start_time: string;
+    end_time: string;
+    meet_link: string | null;
+  }>
+> {
+  const rows =
+    (
+      await env.DB.prepare(
+        `SELECT id, title, start_time, end_time, meet_link
+           FROM google_calendar_events
+          ORDER BY start_time ASC
+          LIMIT ?`,
+      )
+        .bind(limit)
         .all<{
           id: string;
           title: string;

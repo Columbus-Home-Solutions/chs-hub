@@ -224,6 +224,7 @@ import {
   handleInboxReadAll,
 } from "./routes/notifications.js";
 import { handleTwilioInbound, handleTwilioStatus } from "./routes/webhooks-twilio.js";
+import { handleSmsThread, handleSmsReply, handleSmsConversations } from "./routes/sms.js";
 import { processNotifications } from "./lib/notification-engine.js";
 import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
 import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
@@ -1595,6 +1596,18 @@ export default {
     }
     if (url.pathname === "/api/communications" && request.method === "POST") {
       return handleCommunicationCreate(request, env);
+    }
+
+    // ── SMS / Message Center (Sprint 24) ─────────────────────────────
+    if (url.pathname === "/api/sms/conversations" && request.method === "GET") {
+      return handleSmsConversations(env, url);
+    }
+    if (url.pathname === "/api/sms/reply" && request.method === "POST") {
+      return handleSmsReply(request, env);
+    }
+    const smsThread = url.pathname.match(/^\/api\/clients\/([^/]+)\/sms-thread$/);
+    if (smsThread && request.method === "GET") {
+      return handleSmsThread(env, decodeURIComponent(smsThread[1]));
     }
 
     // ── Payers (Sprint 22) ───────────────────────────────────────────

@@ -21,7 +21,7 @@ import {
   saveGcalState,
   verifyGcalState,
 } from "../lib/google-calendar-auth.js";
-import { listUpcomingMeetings, syncGoogleCalendarEvents } from "../lib/google-calendar-sync.js";
+import { listAllCalendarEvents, listUpcomingMeetings, syncGoogleCalendarEvents } from "../lib/google-calendar-sync.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -67,9 +67,9 @@ export async function handleGcalEvents(request: Request, env: Env): Promise<Resp
   const denied = await requireOwner(request, env);
   if (denied) return denied;
   const url = new URL(request.url);
-  const limit = Math.min(Number(url.searchParams.get("limit") ?? 20) || 20, 100);
-  const meetings = await listUpcomingMeetings(env, limit);
-  return json({ events: meetings });
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? 100) || 100, 250);
+  const events = await listAllCalendarEvents(env, limit);
+  return json({ events });
 }
 
 export async function handleGcalSync(request: Request, env: Env): Promise<Response> {

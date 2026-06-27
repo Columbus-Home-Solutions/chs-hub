@@ -281,7 +281,7 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             )}
           </Card>
 
-          <Card title="Proposal Review">
+          <Card title="📅 Proposal Review">
             {reviewDateEdit ? (
               <div class="stack" style={{ gap: "var(--space-sm)" }}>
                 <div class="form-row">
@@ -319,17 +319,14 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             ) : r.proposal_review_date ? (
               <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
                 <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-xs)" }}>
-                    <span>📅</span>
-                    <span
-                      style={{
-                        color: new Date(r.proposal_review_date) < new Date()
-                          ? "var(--color-text-muted)"
-                          : undefined,
-                      }}
-                    >
-                      {formatDateTime(r.proposal_review_date)}
-                    </span>
+                  <div
+                    style={{
+                      color: new Date(r.proposal_review_date) < new Date()
+                        ? "var(--color-text-muted)"
+                        : undefined,
+                    }}
+                  >
+                    {formatDateTime(r.proposal_review_date)}
                   </div>
                   {new Date(r.proposal_review_date) < new Date() && (
                     <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>

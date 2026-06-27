@@ -19,6 +19,10 @@ function str(v: string | null): string | null {
   return s === "" ? null : s;
 }
 
+function titleCaseJobType(s: string): string {
+  return s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export async function handleCalendarEvents(env: Env, url: URL): Promise<Response> {
   const from = str(url.searchParams.get("from"));
   const to = str(url.searchParams.get("to"));
@@ -206,6 +210,67 @@ export async function handleCalendarEvents(env: Env, url: URL): Promise<Response
         link_path: `/estimating/${r.id}`,
         meet_link: null,
         description: (r.property_address as string | null) ?? null,
+        status: String(r.status ?? ""),
+      });
+    }
+  }
+
+  // Proposal review calls (future only, active requests)
+  {
+    const where: string[] = [
+      "er.proposal_review_date IS NOT NULL",
+      "er.status NOT IN ('lost', 'won')",
+      "er.proposal_review_date >= datetime('now')",
+    ];
+    const binds: unknown[] = [];
+    if (from) {
+      where.push("substr(er.proposal_review_date, 1, 10) >= ?");
+      binds.push(from);
+    }
+    if (to) {
+      where.push("substr(er.proposal_review_date, 1, 10) <= ?");
+      binds.push(to);
+    }
+    const rows =
+      (
+        await env.DB.prepare(
+          `SELECT er.id, er.proposal_review_date, er.property_address, er.job_type, er.status,
+                  c.first_name, c.last_name
+             FROM estimate_requests er
+             LEFT JOIN clients c ON c.id = er.client_id
+            WHERE ${where.join(" AND ")}
+            ORDER BY er.proposal_review_date ASC`,
+        )
+          .bind(...binds)
+          .all<Record<string, unknown>>()
+      ).results ?? [];
+
+    for (const r of rows) {
+      const reviewAt = String(r.proposal_review_date ?? "");
+      const date = datePart(reviewAt);
+      if (!date) continue;
+      const client = [r.first_name, r.last_name].filter(Boolean).join(" ").trim();
+      const jobType = titleCaseJobType(String(r.job_type ?? ""));
+      const address = String(r.property_address ?? "");
+      events.push({
+        id: String(r.id),
+        type: "proposal_review",
+        title: client ? `Proposal Review — ${client}` : "Proposal Review",
+        date,
+        start_time: timePart(reviewAt),
+        end_time: null,
+        assigned_user_id: null,
+        assigned_user_name: null,
+        assigned_user_color: null,
+        assigned_sub_id: null,
+        assigned_sub_name: null,
+        assigned_sub_color: null,
+        job_id: null,
+        job_number: null,
+        job_title: null,
+        link_path: `/estimating/${r.id}`,
+        meet_link: null,
+        description: [jobType, address].filter(Boolean).join(" · ") || null,
         status: String(r.status ?? ""),
       });
     }

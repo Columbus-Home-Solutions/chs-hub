@@ -110,7 +110,7 @@ export function ScheduleCalendar(_props: RoutableProps) {
       <div class="view-header">
         <div>
           <h1 class="view-title">Schedule</h1>
-          <p class="view-subtitle">Jobs, warranty calls, estimates &amp; meetings</p>
+          <p class="view-subtitle">Jobs, warranty calls, estimates, proposal reviews &amp; meetings</p>
         </div>
         <div class="view-header__right flex gap-sm">
           <Button variant="tertiary" size="sm" onClick={() => go("/jobs")}>

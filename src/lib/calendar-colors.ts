@@ -4,6 +4,7 @@ export type CalendarEventType =
   | "job_appointment"
   | "warranty_call"
   | "estimate_visit"
+  | "proposal_review"
   | "google_meeting";
 
 export interface CalendarEvent {
@@ -36,6 +37,7 @@ export function getCalendarColor(event: CalendarEvent): string {
   }
   if (event.type === "google_meeting") return "#8B5CF6";
   if (event.type === "estimate_visit") return "#06B6D4";
+  if (event.type === "proposal_review") return "#6366F1";
   if (event.assigned_user_color) return event.assigned_user_color;
   if (event.assigned_sub_color) return event.assigned_sub_color;
   return "#6B7280";

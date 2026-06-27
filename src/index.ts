@@ -60,6 +60,8 @@ import {
   handleJobDelete,
   handleJobStatus,
   handleJobReverseConversion,
+  handleJobCloseEligibility,
+  handleJobAiCloseout,
   handleTaskList,
   handleTaskCreate,
   handleTaskUpdate,
@@ -457,7 +459,7 @@ import {
 } from "./routes/dlq.js";
 import { handleBackupStatus, handleBackupTrigger } from "./routes/backup.js";
 import { handleAdminHealth } from "./routes/health.js";
-import { handleCpaExport, handleFinancialReports } from "./routes/reports.js";
+import { handleCpaExport, handleFinancialReports, handlePricingIntelligence } from "./routes/reports.js";
 import { handleMapsConfig } from "./routes/config.js";
 import {
   handleIntegrationTest,
@@ -948,6 +950,16 @@ export default {
     const jobStatus = url.pathname.match(/^\/api\/jobs\/([^/]+)\/status$/);
     if (jobStatus && request.method === "PUT") {
       return handleJobStatus(request, env, decodeURIComponent(jobStatus[1]), ctx);
+    }
+    // Sprint 25 D1A — close-eligibility check.
+    const jobCloseElig = url.pathname.match(/^\/api\/jobs\/([^/]+)\/close-eligibility$/);
+    if (jobCloseElig && request.method === "GET") {
+      return handleJobCloseEligibility(request, env, decodeURIComponent(jobCloseElig[1]));
+    }
+    // Sprint 25 D2A — AI close-out (manual trigger / regenerate).
+    const jobAiCloseout = url.pathname.match(/^\/api\/jobs\/([^/]+)\/ai-closeout$/);
+    if (jobAiCloseout && request.method === "POST") {
+      return handleJobAiCloseout(request, env, decodeURIComponent(jobAiCloseout[1]));
     }
     const jobReverse = url.pathname.match(/^\/api\/jobs\/([^/]+)\/reverse-conversion$/);
     if (jobReverse && request.method === "POST") {
@@ -1444,7 +1456,11 @@ export default {
       return handleMileageUpdate(env, request, decodeURIComponent(mileageById[1]));
     }
 
-    // ── Financial reports / CPA export ───────────────────────────────
+    // ── Financial reports / CPA export / Pricing Intelligence ─────────
+    // Sprint 25 D3A — Pricing Intelligence (owner only, Claude + cache).
+    if (url.pathname === "/api/financial/pricing-intelligence" && request.method === "GET") {
+      return handlePricingIntelligence(request, env, url);
+    }
     if (url.pathname.startsWith("/api/reports/") && request.method === "GET") {
       const finReport = await handleFinancialReports(request, env, url);
       if (finReport) return finReport;

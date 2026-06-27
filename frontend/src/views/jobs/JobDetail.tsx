@@ -27,8 +27,11 @@ import { formatCurrency, formatDate, formatDateTime, formatPhone, formatStatus }
 import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
+  type AiCloseoutReview,
   type BillingScheduleRow,
+  type CloseEligibilityResult,
   type Communication,
+  type EligibilityCheck,
   type JobDetailResponse,
   type JobStatus,
   type Task,
@@ -205,7 +208,15 @@ function OverviewTab({
   toast: ToastApi;
 }) {
   const job = data.job;
-  const targets = statusTargets(job.status);
+  const allTargets = statusTargets(job.status);
+  // Remove "closed" from dropdown — it gets its own dedicated Close Job button.
+  const dropdownTargets = allTargets.filter((t) => t !== "closed");
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [eligibility, setEligibility] = useState<CloseEligibilityResult | null>(null);
+  const [closeLoading, setCloseLoading] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const changeStatus = async (status: string) => {
     try {
@@ -214,6 +225,37 @@ function OverviewTab({
       refetch();
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    }
+  };
+
+  const handleCloseJobClick = async () => {
+    setCloseLoading(true);
+    try {
+      const result = await api.get<CloseEligibilityResult>(`/api/jobs/${job.id}/close-eligibility`);
+      setEligibility(result);
+      if (result.eligible) {
+        setConfirmOpen(true);
+      } else {
+        setDrawerOpen(true);
+      }
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setCloseLoading(false);
+    }
+  };
+
+  const confirmClose = async () => {
+    setConfirmBusy(true);
+    try {
+      await api.put(`/api/jobs/${job.id}/status`, { status: "closed" });
+      toast.push("success", "Job closed successfully");
+      setConfirmOpen(false);
+      refetch();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setConfirmBusy(false);
     }
   };
 
@@ -278,21 +320,35 @@ function OverviewTab({
       </div>
 
       <div class="stack">
+        {job.status === "complete" && (
+          <AiCloseoutCard job={job} refetch={refetch} toast={toast} />
+        )}
+
         <Card title="Status">
           <div class="stack">
             <div class="flex items-center gap-sm">
               <span class={`er-status job-status--${job.status}`}>{formatStatus(job.status)}</span>
             </div>
-            {targets.length > 0 ? (
+            {dropdownTargets.length > 0 && (
               <FormField label="Move to">
                 <Select
                   value=""
                   placeholder="Select status…"
-                  options={targets.map((t) => ({ value: t, label: stageLabel(t) }))}
+                  options={dropdownTargets.map((t) => ({ value: t, label: stageLabel(t) }))}
                   onChange={(v) => v && changeStatus(v)}
                 />
               </FormField>
-            ) : (
+            )}
+            {job.status === "complete" && (
+              <Button
+                variant="primary"
+                onClick={handleCloseJobClick}
+                disabled={closeLoading}
+              >
+                {closeLoading ? "Checking…" : "Close Job"}
+              </Button>
+            )}
+            {job.status === "closed" && (
               <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
                 This job is closed — no further status changes.
               </div>
@@ -300,7 +356,179 @@ function OverviewTab({
           </div>
         </Card>
       </div>
+
+      {drawerOpen && eligibility && (
+        <CloseOutDrawer
+          checks={eligibility.checks}
+          onClose={() => setDrawerOpen(false)}
+        />
+      )}
+
+      <Modal
+        open={confirmOpen}
+        title="Close this job?"
+        onClose={() => setConfirmOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button variant="primary" onClick={confirmClose} disabled={confirmBusy}>
+              {confirmBusy ? "Closing…" : "Confirm Close"}
+            </Button>
+          </>
+        }
+      >
+        <p>This action cannot be undone. The job will be marked as closed.</p>
+      </Modal>
     </div>
+  );
+}
+
+// ─── AI Close-Out Card ───────────────────────────────────────────────────────
+
+function AiCloseoutCard({
+  job,
+  refetch,
+  toast,
+}: {
+  job: JobDetailResponse["job"];
+  refetch: () => void;
+  toast: ToastApi;
+}) {
+  const [pollCount, setPollCount] = useState(0);
+  const [regenerating, setRegenerating] = useState(false);
+
+  // Poll every 5s if review is null (analysis running in background), max 6 attempts.
+  useEffect(() => {
+    if (job.ai_closeout_review !== null) return;
+    if (pollCount >= 6) return;
+    const timer = setTimeout(() => {
+      refetch();
+      setPollCount((n) => n + 1);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [job.ai_closeout_review, pollCount]);
+
+  const regenerate = async () => {
+    setRegenerating(true);
+    try {
+      await api.post(`/api/jobs/${job.id}/ai-closeout`, {});
+      setPollCount(0);
+      refetch();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
+  const review = job.ai_closeout_review as AiCloseoutReview | null;
+  const generatedAt = job.ai_closeout_generated_at;
+
+  return (
+    <Card title="🤖 AI Close-Out Review">
+      <div class="stack">
+        {review === null && pollCount < 6 && (
+          <div class="ai-closeout__loading">
+            <Spinner />
+            <span>AI close-out review generating…</span>
+          </div>
+        )}
+        {review === null && pollCount >= 6 && (
+          <p class="text--muted">Review unavailable — refresh to retry.</p>
+        )}
+        {review !== null && (
+          <>
+            {generatedAt && (
+              <p class="ai-closeout__timestamp text--muted">
+                Last analyzed: {formatDateTime(generatedAt)}
+              </p>
+            )}
+
+            <p class="ai-closeout__summary">{review.summary}</p>
+
+            {(review.revenue_gap ?? 0) > 0 && (
+              <div class="callout callout--warning">
+                Revenue gap: {formatCurrency(review.revenue_gap)} — not all contract value has been collected.
+              </div>
+            )}
+
+            {review.flags && review.flags.length > 0 && (
+              <div class="ai-closeout__flags">
+                {review.flags.map((flag, i) => (
+                  <div key={i} class={`ai-closeout__flag ai-closeout__flag--${flag.severity}`}>
+                    <span class="ai-closeout__flag-icon">{flag.severity === "warning" ? "⚠️" : "ℹ️"}</span>
+                    <span>{flag.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {review.expense_gap_note && (
+              <div class="ai-closeout__flag ai-closeout__flag--info">
+                <span class="ai-closeout__flag-icon">ℹ️</span>
+                <span>{review.expense_gap_note}</span>
+              </div>
+            )}
+
+            <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
+              {review.ready_to_close ? (
+                <Badge tone="success">Ready to close</Badge>
+              ) : (
+                <Badge tone="warning">Items need attention</Badge>
+              )}
+              <Button variant="secondary" onClick={regenerate} disabled={regenerating}>
+                {regenerating ? "Generating…" : "Regenerate"}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ─── Close-Out Checklist Drawer ───────────────────────────────────────────────
+
+function CloseOutDrawer({
+  checks,
+  onClose,
+}: {
+  checks: EligibilityCheck[];
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <div class="mc-backdrop" onClick={onClose} />
+      <div class="mc-panel mc-panel--open" role="dialog" aria-label="Close-Out Checklist">
+        <div class="mc-header">
+          <span class="mc-header__title">Close-Out Checklist</span>
+          <button class="mc-close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div class="closeout-drawer__body">
+          <p class="closeout-drawer__intro text--muted">
+            Resolve all items below before closing this job.
+          </p>
+          <div class="closeout-drawer__checks">
+            {checks.map((check) => (
+              <div key={check.id} class={`closeout-check${check.passed ? " closeout-check--pass" : " closeout-check--fail"}`}>
+                <span class="closeout-check__icon">{check.passed ? "✅" : "❌"}</span>
+                <div class="closeout-check__body">
+                  <span class="closeout-check__label">{check.label}</span>
+                  {check.detail && (
+                    <span class="closeout-check__detail">{check.detail}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div class="closeout-drawer__footer">
+            <Button variant="primary" disabled title="Resolve all items above to close this job.">
+              Close Job
+            </Button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 

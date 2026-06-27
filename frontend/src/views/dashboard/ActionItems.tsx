@@ -11,6 +11,8 @@ interface Props {
   onDismiss?: (id: string) => void;
 }
 
+const DISMISS_DELAY_MS = 420;
+
 const PRIORITY_ICON: Record<string, string> = {
   invoice_past_due: "💰",
   invoice_due_soon: "💰",
@@ -36,22 +38,23 @@ function relativeTime(iso: string): string {
 
 export function ActionItems({ items, loading, error, mobile, onDismiss }: Props) {
   const [showAll, setShowAll] = useState(false);
-  const [dismissing, setDismissing] = useState<string | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const maxItems = mobile ? 5 : 8;
   const visible = showAll ? items : items.slice(0, maxItems);
   const overflow = items.length - maxItems;
 
-  const dismiss = async (e: Event, id: string) => {
+  const dismiss = (e: Event, id: string) => {
     e.stopPropagation();
-    setDismissing(id);
-    try {
-      await api.patch(`/api/dashboard/action-items/${encodeURIComponent(id)}/dismiss`, {});
+    if (checkedIds.has(id)) return;
+    setCheckedIds((prev) => new Set(prev).add(id));
+    setTimeout(async () => {
+      try {
+        await api.patch(`/api/dashboard/action-items/${encodeURIComponent(id)}/dismiss`, {});
+      } catch (err) {
+        console.error("Dismiss failed:", err instanceof ApiError ? err.message : err);
+      }
       onDismiss?.(id);
-    } catch (err) {
-      console.error("Dismiss failed:", err instanceof ApiError ? err.message : err);
-    } finally {
-      setDismissing(null);
-    }
+    }, DISMISS_DELAY_MS);
   };
 
   if (loading) {
@@ -99,25 +102,30 @@ export function ActionItems({ items, loading, error, mobile, onDismiss }: Props)
         ) : (
           <>
             {visible.map((item) => (
-              <div key={item.id} class={`action-item action-item--${item.priority}`}>
+              <div
+                key={item.id}
+                class={`action-item-wrap${checkedIds.has(item.id) ? " action-item-wrap--dismissing" : ""}`}
+              >
                 <button
                   type="button"
-                  class="action-item__main"
-                  onClick={() => go(item.link)}
+                  class={`action-item__checkbox${checkedIds.has(item.id) ? " action-item__checkbox--checked" : ""}`}
+                  title="Mark done"
+                  aria-label="Dismiss"
+                  onClick={(e) => dismiss(e, item.id)}
                 >
-                  <span class="action-item__icon">{PRIORITY_ICON[item.type] ?? "🔔"}</span>
-                  <span class="action-item__title">{item.title}</span>
-                  <span class="action-item__time">{relativeTime(item.createdAt)}</span>
+                  {checkedIds.has(item.id) && <span class="action-item__checkmark">✓</span>}
                 </button>
-                <button
-                  type="button"
-                  class="action-item__dismiss"
-                  title="Dismiss"
-                  disabled={dismissing === item.id}
-                  onClick={(e) => void dismiss(e, item.id)}
-                >
-                  ✕
-                </button>
+                <div class={`action-item action-item--${item.priority}`}>
+                  <button
+                    type="button"
+                    class="action-item__main"
+                    onClick={() => go(item.link)}
+                  >
+                    <span class="action-item__icon">{PRIORITY_ICON[item.type] ?? "🔔"}</span>
+                    <span class="action-item__title">{item.title}</span>
+                    <span class="action-item__time">{relativeTime(item.createdAt)}</span>
+                  </button>
+                </div>
               </div>
             ))}
             {!showAll && overflow > 0 && (

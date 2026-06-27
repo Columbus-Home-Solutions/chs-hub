@@ -226,35 +226,46 @@ async function fetchNwsForecast(
 // ─── Build the 7-day forecast array ──────────────────────────────────────────
 
 function buildForecast(periods: NwsPeriod[]): ForecastDay[] {
-  // Daily periods alternate daytime (even) / nighttime (odd).
-  // Pair them: [day, night] → one ForecastDay with high + low.
-  const days: ForecastDay[] = [];
-  const daytime = periods.filter((p) => p.isDaytime);
-  const nighttime = periods.filter((p) => !p.isDaytime);
+  // NWS returns 14 periods for a full 7-day daily forecast. Guard against a
+  // malformed or empty response.
+  if (periods.length < 2) return [];
 
-  for (let i = 0; i < daytime.length; i++) {
-    const day = daytime[i];
-    const night = nighttime[i]; // may be undefined if short response
-    const date = day.startTime.slice(0, 10);
-    const dayOfWeek = new Date(day.startTime).toLocaleDateString("en-US", {
-      weekday: "short",
-      timeZone: "UTC",
-    });
-    const precipChance =
-      (day.probabilityOfPrecipitation?.value ?? night?.probabilityOfPrecipitation?.value ?? 0) ?? 0;
-
-    days.push({
-      date,
-      dayOfWeek,
-      high: day.temperature,
-      low: night?.temperature ?? day.temperature,
-      condition: day.shortForecast,
-      icon: toIcon(day.shortForecast),
-      precipChance,
-      windSpeed: day.windSpeed,
-    });
+  // Group by calendar date rather than by index. When the API is queried at
+  // night the first period is "Tonight" (nighttime), which would leave only
+  // 6 daytime entries and produce a 6-day strip. Grouping by date handles
+  // both the daytime-first and nighttime-first cases correctly.
+  const byDate = new Map<string, { day: NwsPeriod | null; night: NwsPeriod | null }>();
+  for (const p of periods) {
+    const date = p.startTime.slice(0, 10);
+    if (!byDate.has(date)) byDate.set(date, { day: null, night: null });
+    const entry = byDate.get(date)!;
+    if (p.isDaytime) entry.day = p;
+    else entry.night = p;
   }
-  return days;
+
+  return [...byDate.keys()]
+    .sort()
+    .slice(0, 7) // cap at 7 days regardless of API response size
+    .map((date) => {
+      const { day, night } = byDate.get(date)!;
+      const ref = day ?? night!;
+      const dayOfWeek = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
+        weekday: "short",
+        timeZone: "UTC",
+      });
+      const precipChance =
+        (day?.probabilityOfPrecipitation?.value ?? night?.probabilityOfPrecipitation?.value ?? 0) ?? 0;
+      return {
+        date,
+        dayOfWeek,
+        high: day?.temperature ?? ref.temperature,
+        low: night?.temperature ?? ref.temperature,
+        condition: ref.shortForecast,
+        icon: toIcon(ref.shortForecast),
+        precipChance,
+        windSpeed: ref.windSpeed,
+      };
+    });
 }
 
 /** Hourly NWS periods for the same local calendar day as the first hourly period. */

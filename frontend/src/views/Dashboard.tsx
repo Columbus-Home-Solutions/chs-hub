@@ -11,7 +11,6 @@ import { ActionItems } from "./dashboard/ActionItems";
 import { PipelineSummary } from "./dashboard/PipelineSummary";
 import { SmartNotes } from "./dashboard/SmartNotes";
 import { TodaySchedule } from "./dashboard/TodaySchedule";
-import { UpcomingMeetings } from "./dashboard/UpcomingMeetings";
 import { RecentActivity } from "./dashboard/RecentActivity";
 import { JobsMapWidget } from "./dashboard/JobsMapWidget";
 import { WeatherForecastCard } from "./dashboard/WeatherForecastCard";
@@ -84,7 +83,6 @@ export function Dashboard(_props: RoutableProps) {
         {/* Secondary column (~40%) */}
         <div class="dashboard__secondary">
           <WeatherForecastCard />
-          <UpcomingMeetings />
           <SmartNotes />
           <JobsMapWidget />
           <RecentActivity

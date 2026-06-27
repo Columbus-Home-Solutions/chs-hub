@@ -7,6 +7,7 @@
  */
 
 import type { RoutableProps } from "preact-router";
+import { useRouter } from "preact-router";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
@@ -14,11 +15,11 @@ import { useApi } from "../../hooks/useApi";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { go } from "../../lib/nav";
-import { readSearchParams } from "../../lib/url-params";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
 import { FinancialReports } from "./FinancialReports";
+import { PricingIntelligence } from "./PricingIntelligence";
 
-type FinTab = "invoices" | "reports";
+type FinTab = "invoices" | "reports" | "pricing";
 
 interface InvoiceRow {
   id: string;
@@ -66,6 +67,9 @@ const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3];
 
 export function FinancialDashboard(_props: RoutableProps) {
+  const [{ url }] = useRouter();
+  const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+
   const invoicesResp = useApi<{ total: number; invoices: InvoiceRow[] }>("/api/invoices");
   const jobsResp = useApi<{ total: number; jobs: JobStub[] }>("/api/jobs");
   const [tab, setTab] = useState<FinTab>("invoices");
@@ -73,18 +77,23 @@ export function FinancialDashboard(_props: RoutableProps) {
   const [cpaModalOpen, setCpaModalOpen] = useState(false);
   const [cpaYear, setCpaYear] = useState(String(CURRENT_YEAR));
 
+  // Re-run whenever the search string changes so sidebar sub-items (same path,
+  // different ?tab=) update the active tab each time without a full remount.
   useEffect(() => {
-    const params = readSearchParams();
+    const params = new URLSearchParams(currentSearch);
     const urlTab = params.get("tab");
     if (urlTab === "reports") setTab("reports");
+    else if (urlTab === "pricing") setTab("pricing");
     else if (urlTab === "invoices" || urlTab === "payments") setTab("invoices");
+    else setTab("invoices"); // default / no ?tab= param
 
     const filter = params.get("filter") ?? params.get("status");
     if (filter === "unpaid") setStatusFilter("__unpaid__");
     else if (filter === "overdue") setStatusFilter("past_due");
     else if (filter === "due_soon") setStatusFilter("__due_soon__");
     else if (filter && STATUS_OPTIONS.some((o) => o.value === filter)) setStatusFilter(filter);
-  }, []);
+    else if (!filter) setStatusFilter("");
+  }, [currentSearch]);
 
   const invoices = invoicesResp.data?.invoices ?? [];
   const jobMap = new Map<string, JobStub>(
@@ -112,6 +121,42 @@ export function FinancialDashboard(_props: RoutableProps) {
     if (statusFilter) return invoices.filter((inv) => inv.status === statusFilter);
     return invoices;
   }, [invoices, statusFilter, dueSoonDate]);
+
+  // Pricing Intelligence tab renders immediately without waiting for invoices/jobs.
+  if (tab === "pricing") {
+    return (
+      <div>
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Financial</h1>
+          </div>
+        </div>
+        <div class="segmented" style={{ marginBottom: "var(--space-lg)" }}>
+          <button
+            type="button"
+            class="segmented__btn"
+            onClick={() => setTab("invoices")}
+          >
+            Invoices
+          </button>
+          <button
+            type="button"
+            class="segmented__btn"
+            onClick={() => setTab("reports")}
+          >
+            Reports
+          </button>
+          <button
+            type="button"
+            class="segmented__btn segmented__btn--active"
+          >
+            Pricing Intelligence
+          </button>
+        </div>
+        <PricingIntelligence />
+      </div>
+    );
+  }
 
   if (invoicesResp.loading || jobsResp.loading) return <Spinner center />;
 
@@ -148,6 +193,13 @@ export function FinancialDashboard(_props: RoutableProps) {
           onClick={() => setTab("reports")}
         >
           Reports
+        </button>
+        <button
+          type="button"
+          class={`segmented__btn${tab === "pricing" ? " segmented__btn--active" : ""}`}
+          onClick={() => setTab("pricing")}
+        >
+          Pricing Intelligence
         </button>
       </div>
 

@@ -710,6 +710,31 @@ export const SOCIAL_TYPE_COLORS: Record<SocialPostType, string> = {
   manual: "#64748b",
 };
 
+export interface AiCloseoutFlag {
+  severity: "warning" | "info";
+  message: string;
+}
+
+export interface AiCloseoutReview {
+  summary: string;
+  flags: AiCloseoutFlag[];
+  revenue_gap: number | null;
+  expense_gap_note: string | null;
+  ready_to_close: boolean;
+}
+
+export interface EligibilityCheck {
+  id: string;
+  label: string;
+  passed: boolean;
+  detail: string | null;
+}
+
+export interface CloseEligibilityResult {
+  eligible: boolean;
+  checks: EligibilityCheck[];
+}
+
 export interface JobDetailResponse {
   job: JobCard & {
     client_phone: string | null;
@@ -718,6 +743,8 @@ export interface JobDetailResponse {
     reversal_reason: string | null;
     reversed_at: string | null;
     portal_url: string | null;
+    ai_closeout_review: AiCloseoutReview | null;
+    ai_closeout_generated_at: string | null;
   };
   financial: {
     contract_total: number | null;

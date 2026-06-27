@@ -1,4 +1,5 @@
 import type { RoutableProps } from "preact-router";
+import { route, useRouter } from "preact-router";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Badge } from "../../components/ui/Badge";
@@ -8,7 +9,6 @@ import { ViewToggle } from "../../components/ViewToggle";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
-import { searchParam } from "../../lib/url-params";
 import { loadStoredView, storeView, truncate, useClientSort } from "../../lib/list-view";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
 import {
@@ -18,6 +18,16 @@ import {
   type JobPipelineResponse,
   type JobStatus,
 } from "../../types";
+
+// Human-readable label for each status value as it appears in the new sidebar nav.
+const STATUS_LABELS: Record<string, string> = {
+  deposit_paid: "Needs Scheduling",
+  scheduled: "Scheduled",
+  in_progress: "In Progress",
+  punch_list: "Punch List",
+  complete: "Needs Reconciliation",
+  closed: "Closed",
+};
 
 // A drop is allowed if it moves strictly forward, or matches one of the two
 // sanctioned backward exceptions. We pre-check on the client purely for UX
@@ -32,6 +42,9 @@ function canMove(from: JobStatus, to: JobStatus): boolean {
 }
 
 export function JobPipeline(_props: RoutableProps) {
+  const [{ url }] = useRouter();
+  const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+
   const { data, loading, error, refetch } = useApi<JobPipelineResponse>("/api/jobs/pipeline");
   const toast = useToast();
   const [viewMode, setViewMode] = useState(() => loadStoredView("chs_jobs_view"));
@@ -41,14 +54,19 @@ export function JobPipeline(_props: RoutableProps) {
   const [statusFilter, setStatusFilter] = useState<JobStatus | "">("");
   const [listSearch, setListSearch] = useState("");
 
+  // Re-run whenever the search string changes so clicking different sidebar
+  // sub-items (same path, different ?status=) updates the filter each time.
   useEffect(() => {
-    // Accept both ?stage= (from dashboard pipeline taps) and ?status= (legacy).
-    const s = searchParam("stage") ?? searchParam("status");
+    const params = new URLSearchParams(currentSearch);
+    // Accept both ?stage= (from dashboard pipeline taps) and ?status= (sidebar).
+    const s = params.get("stage") ?? params.get("status");
     if (s && JOB_STAGES.some((st) => st.key === s)) {
       setActiveStage(s as JobStatus);
       setStatusFilter(s as JobStatus);
+    } else {
+      setStatusFilter("");
     }
-  }, []);
+  }, [currentSearch]);
 
   const allJobs = useMemo(() => {
     if (!data) return [];
@@ -127,6 +145,23 @@ export function JobPipeline(_props: RoutableProps) {
 
       {!loading && !error && data && viewMode === "list" && (
         <>
+        {statusFilter && (
+          <div class="job-filter-badge">
+            <span class="job-filter-badge__label">
+              Showing: {STATUS_LABELS[statusFilter] ?? formatStatus(statusFilter)}
+            </span>
+            <button
+              class="job-filter-badge__clear"
+              onClick={() => {
+                setStatusFilter("");
+                route("/app/jobs");
+              }}
+              aria-label="Clear status filter"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         <div style={{ marginBottom: "var(--space-md)", maxWidth: "360px" }}>
           <input
             class="form-input"
@@ -176,6 +211,23 @@ export function JobPipeline(_props: RoutableProps) {
 
       {!loading && !error && data && viewMode === "kanban" && (
         <>
+          {statusFilter && (
+            <div class="job-filter-badge">
+              <span class="job-filter-badge__label">
+                Showing: {STATUS_LABELS[statusFilter] ?? formatStatus(statusFilter)}
+              </span>
+              <button
+                class="job-filter-badge__clear"
+                onClick={() => {
+                  setStatusFilter("");
+                  route("/app/jobs");
+                }}
+                aria-label="Clear status filter"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           <div class="pipeline-tabs">
             {JOB_STAGES.map((s) => (
               <button

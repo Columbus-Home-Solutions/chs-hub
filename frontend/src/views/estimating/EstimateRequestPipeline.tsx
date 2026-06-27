@@ -8,11 +8,11 @@
  * The CHS Leads tab shows a badge with the count of new_request stage leads.
  */
 import type { RoutableProps } from "preact-router";
+import { useRouter } from "preact-router";
 import { useEffect, useState } from "preact/hooks";
 import { LeadPipeline } from "../dashboard/LeadPipeline";
 import { CHSLeadsKanban } from "./CHSLeadsKanban";
 import { useApi } from "../../hooks/useApi";
-import { searchParam } from "../../lib/url-params";
 
 const TAB_STORAGE_KEY = "chs_pipeline_active_tab";
 
@@ -33,6 +33,9 @@ interface CountResponse {
 }
 
 export function EstimateRequestPipeline(_props: RoutableProps) {
+  const [{ url }] = useRouter();
+  const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+
   const [activeTab, setActiveTab] = useState<PipelineTab>(storedTab);
   const [newRequestCount, setNewRequestCount] = useState(0);
   const [highlightStage, setHighlightStage] = useState<string | null>(null);
@@ -46,18 +49,20 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
     }
   }, [pipelineData]);
 
-  // On mount: read ?tab=chs and ?stage=xxx URL params (set by dashboard Pipeline Summary taps).
+  // Re-run whenever the search string changes so clicking different sidebar
+  // sub-items (same path, different ?tab=) updates the active tab each time.
   useEffect(() => {
-    const tabParam = searchParam("tab");
-    const stageParam = searchParam("stage");
-    if (tabParam === "chs") {
-      setActiveTab("chs");
-      try { localStorage.setItem(TAB_STORAGE_KEY, "chs"); } catch { /* ignore */ }
+    const params = new URLSearchParams(currentSearch);
+    const tabParam = params.get("tab");
+    const stageParam = params.get("stage");
+    if (tabParam === "chs" || tabParam === "hl") {
+      setActiveTab(tabParam);
+      try { localStorage.setItem(TAB_STORAGE_KEY, tabParam); } catch { /* ignore */ }
     }
     if (stageParam) {
       setHighlightStage(stageParam);
     }
-  }, []);
+  }, [currentSearch]);
 
   function switchTab(tab: PipelineTab) {
     setActiveTab(tab);

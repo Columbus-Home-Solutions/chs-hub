@@ -230,6 +230,7 @@ import { handleTwilioInbound, handleTwilioStatus } from "./routes/webhooks-twili
 import { handleSmsThread, handleSmsReply, handleSmsConversations } from "./routes/sms.js";
 import { processNotifications } from "./lib/notification-engine.js";
 import { processQuoteFollowUps } from "./lib/quote-follow-up.js";
+import { processNewLeadOutreach } from "./lib/new-lead-outreach.js";
 import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
 import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
 import {
@@ -2138,6 +2139,19 @@ async function runNotificationProcessor(env: Env): Promise<void> {
     }
   } catch (err) {
     console.error("[cron */15 * * * *] quote_follow_ups failed:", (err as Error).message);
+  }
+
+  // New Lead Outreach Sequence (Sprint 27) — SMS-only Day 1/2/3 texts for
+  // new_request leads with no appointment set yet. Non-fatal.
+  try {
+    const o = await processNewLeadOutreach(env);
+    if (o.dispatched > 0 || o.completed > 0 || o.errors > 0) {
+      console.log(
+        `[cron */15 * * * *] new_lead_outreach: scanned=${o.scanned} dispatched=${o.dispatched} skipped=${o.skipped} completed=${o.completed} errors=${o.errors} in ${o.duration_ms}ms`,
+      );
+    }
+  } catch (err) {
+    console.error("[cron */15 * * * *] new_lead_outreach failed:", (err as Error).message);
   }
 }
 

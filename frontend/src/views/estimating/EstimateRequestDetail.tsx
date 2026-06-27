@@ -65,11 +65,46 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   const [apptOpen, setApptOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [wonOpen, setWonOpen] = useState(false);
+  const [reviewDateEdit, setReviewDateEdit] = useState(false);
+  const [reviewDateVal, setReviewDateVal] = useState("");
+  const [reviewTimeVal, setReviewTimeVal] = useState("");
   const prevStatusRef = useRef<EstimateRequestStatus | null>(null);
 
   useEffect(() => {
     setNotes(r?.visit_notes ?? "");
   }, [r?.id, r?.visit_notes]);
+
+  // Sync review date edit state when record changes.
+  useEffect(() => {
+    if (!reviewDateEdit) {
+      const iso = r?.proposal_review_date ?? "";
+      if (iso) {
+        const d = new Date(iso.includes("T") ? iso : iso + "Z");
+        if (!isNaN(d.getTime())) {
+          const pad = (n: number) => String(n).padStart(2, "0");
+          setReviewDateVal(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+          setReviewTimeVal(`${pad(d.getHours())}:${pad(d.getMinutes())}`);
+          return;
+        }
+      }
+      setReviewDateVal("");
+      setReviewTimeVal("");
+    }
+  }, [r?.id, r?.proposal_review_date, reviewDateEdit]);
+
+  const saveReviewDate = () => {
+    if (!reviewDateVal) return;
+    const iso = reviewTimeVal
+      ? new Date(`${reviewDateVal}T${reviewTimeVal}`).toISOString()
+      : new Date(`${reviewDateVal}T00:00:00`).toISOString();
+    void patch({ proposal_review_date: iso }, "Proposal review date saved");
+    setReviewDateEdit(false);
+  };
+
+  const clearReviewDate = () => {
+    void patch({ proposal_review_date: null }, "Proposal review date cleared");
+    setReviewDateEdit(false);
+  };
 
   // Poll for client deposit conversion while estimate is out and not yet won.
   useEffect(() => {
@@ -241,6 +276,78 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                 </span>
                 <Button size="sm" variant="primary" onClick={() => setApptOpen(true)}>
                   Set Appointment
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          <Card title="Proposal Review">
+            {reviewDateEdit ? (
+              <div class="stack" style={{ gap: "var(--space-sm)" }}>
+                <div class="form-row">
+                  <FormField label="Date">
+                    <input
+                      class="form-input"
+                      type="date"
+                      value={reviewDateVal}
+                      onInput={(e) => setReviewDateVal((e.target as HTMLInputElement).value)}
+                    />
+                  </FormField>
+                  <FormField label="Time (optional)">
+                    <input
+                      class="form-input"
+                      type="time"
+                      value={reviewTimeVal}
+                      onInput={(e) => setReviewTimeVal((e.target as HTMLInputElement).value)}
+                    />
+                  </FormField>
+                </div>
+                <div class="flex gap-sm">
+                  <Button size="sm" variant="primary" disabled={!reviewDateVal} onClick={saveReviewDate}>
+                    Save
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => setReviewDateEdit(false)}>
+                    Cancel
+                  </Button>
+                  {r.proposal_review_date && (
+                    <Button size="sm" variant="danger" onClick={clearReviewDate}>
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : r.proposal_review_date ? (
+              <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-xs)" }}>
+                    <span>📅</span>
+                    <span
+                      style={{
+                        color: new Date(r.proposal_review_date) < new Date()
+                          ? "var(--color-text-muted)"
+                          : undefined,
+                      }}
+                    >
+                      {formatDateTime(r.proposal_review_date)}
+                    </span>
+                  </div>
+                  {new Date(r.proposal_review_date) < new Date() && (
+                    <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+                      Review date has passed
+                    </div>
+                  )}
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => setReviewDateEdit(true)}>
+                  Edit
+                </Button>
+              </div>
+            ) : (
+              <div class="flex items-center justify-between gap-sm">
+                <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+                  Not scheduled
+                </span>
+                <Button size="sm" variant="primary" onClick={() => setReviewDateEdit(true)}>
+                  Schedule
                 </Button>
               </div>
             )}

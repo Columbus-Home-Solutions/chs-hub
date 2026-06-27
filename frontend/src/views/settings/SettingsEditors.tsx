@@ -335,6 +335,374 @@ function TouchPanel({
   );
 }
 
+// ─── Lead Outreach Tab (Sprint 27) ────────────────────────────────────────────
+
+const OUTREACH_MERGE_TAGS = ["{{client_first_name}}", "{{job_type}}"];
+const POST_VISIT_MERGE_TAGS = ["{{client_first_name}}", "{{job_type}}", "{{property_address}}"];
+
+function OutreachSmsPanel({
+  day,
+  dayLabel,
+  smsKey,
+  smsValue,
+  onSaved,
+  note,
+}: {
+  day: number;
+  dayLabel: string;
+  smsKey: string;
+  smsValue: string;
+  onSaved: () => void;
+  note?: string;
+}) {
+  const toast = useToast();
+  const [sms, setSms] = useState(smsValue);
+  const [saving, setSaving] = useState(false);
+  const [showMergeTags, setShowMergeTags] = useState(false);
+
+  useEffect(() => {
+    setSms(smsValue);
+  }, [smsValue]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/api/settings/${encodeURIComponent(smsKey)}`, { value: sms });
+      toast.push("success", `Day ${day} outreach template saved.`);
+      onSaved();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const smsLen = sms.length;
+
+  return (
+    <div class="card" style={{ marginBottom: "var(--space-lg)" }}>
+      <div class="card__header">
+        <span class="card__title">Day {day} — {dayLabel}</span>
+        <span class="badge badge--info" style={{ fontSize: "var(--text-xs)" }}>SMS only</span>
+      </div>
+      <div class="card__body">
+        <div class="form-group">
+          <label class="form-label">SMS Message</label>
+          <div style={{ position: "relative" }}>
+            <textarea
+              class="form-textarea"
+              rows={3}
+              value={sms}
+              onInput={(e) => setSms((e.target as HTMLTextAreaElement).value)}
+            />
+            <span
+              class="form-hint"
+              style={{
+                position: "absolute",
+                bottom: "var(--space-xs)",
+                right: "var(--space-sm)",
+                fontSize: "var(--text-xs)",
+                color: smsLen > 160 ? "var(--color-warning)" : "var(--color-text-muted)",
+              }}
+            >
+              {smsLen}/160
+            </span>
+          </div>
+        </div>
+
+        <div class="form-group" style={{ marginBottom: "var(--space-sm)" }}>
+          <button
+            class="btn btn--ghost btn--sm"
+            onClick={() => setShowMergeTags(!showMergeTags)}
+            type="button"
+          >
+            {showMergeTags ? "▲" : "▼"} Merge Tags
+          </button>
+          {showMergeTags && (
+            <div
+              style={{
+                marginTop: "var(--space-sm)",
+                padding: "var(--space-sm)",
+                background: "var(--color-surface-0)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "var(--radius-md)",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "var(--space-xs)",
+              }}
+            >
+              {OUTREACH_MERGE_TAGS.map((tag) => (
+                <code
+                  key={tag}
+                  style={{
+                    fontSize: "var(--text-xs)",
+                    fontFamily: "var(--font-mono)",
+                    padding: "2px var(--space-xs)",
+                    background: "var(--color-surface-2)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--color-brand)",
+                  }}
+                >
+                  {tag}
+                </code>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {note && (
+          <div
+            class="form-hint"
+            style={{
+              marginTop: "var(--space-sm)",
+              padding: "var(--space-sm)",
+              background: "var(--color-surface-0)",
+              border: "1px solid var(--color-border)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: "var(--text-sm)",
+            }}
+          >
+            {note}
+          </div>
+        )}
+      </div>
+      <div class="card__footer" style={{ justifyContent: "flex-end" }}>
+        <Button variant="primary" size="sm" disabled={saving} onClick={save}>
+          {saving ? "Saving…" : `Save Day ${day} Template`}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function PostVisitPanel({
+  smsValue,
+  emailSubjectValue,
+  emailBodyValue,
+  onSaved,
+}: {
+  smsValue: string;
+  emailSubjectValue: string;
+  emailBodyValue: string;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [sms, setSms] = useState(smsValue);
+  const [emailSubject, setEmailSubject] = useState(emailSubjectValue);
+  const [emailBody, setEmailBody] = useState(emailBodyValue);
+  const [saving, setSaving] = useState(false);
+  const [showMergeTags, setShowMergeTags] = useState(false);
+
+  useEffect(() => {
+    setSms(smsValue);
+    setEmailSubject(emailSubjectValue);
+    setEmailBody(emailBodyValue);
+  }, [smsValue, emailSubjectValue, emailBodyValue]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await Promise.all([
+        api.put(`/api/settings/${encodeURIComponent("post_visit_sms")}`, { value: sms }),
+        api.put(`/api/settings/${encodeURIComponent("post_visit_email_subject")}`, { value: emailSubject }),
+        api.put(`/api/settings/${encodeURIComponent("post_visit_email_body")}`, { value: emailBody }),
+      ]);
+      toast.push("success", "Post-visit follow-up templates saved.");
+      onSaved();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const smsLen = sms.length;
+
+  return (
+    <div class="card" style={{ marginBottom: "var(--space-lg)" }}>
+      <div class="card__header">
+        <span class="card__title">Post-Visit Follow-Up</span>
+        <span class="badge badge--success" style={{ fontSize: "var(--text-xs)" }}>SMS + Email</span>
+      </div>
+      <div class="card__body">
+        <div class="form-group">
+          <label class="form-label">SMS Message</label>
+          <div style={{ position: "relative" }}>
+            <textarea
+              class="form-textarea"
+              rows={3}
+              value={sms}
+              onInput={(e) => setSms((e.target as HTMLTextAreaElement).value)}
+            />
+            <span
+              class="form-hint"
+              style={{
+                position: "absolute",
+                bottom: "var(--space-xs)",
+                right: "var(--space-sm)",
+                fontSize: "var(--text-xs)",
+                color: smsLen > 160 ? "var(--color-warning)" : "var(--color-text-muted)",
+              }}
+            >
+              {smsLen}/160
+            </span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Email Subject</label>
+          <input
+            class="form-input"
+            type="text"
+            value={emailSubject}
+            onInput={(e) => setEmailSubject((e.target as HTMLInputElement).value)}
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Email Body</label>
+          <textarea
+            class="form-textarea"
+            rows={8}
+            value={emailBody}
+            onInput={(e) => setEmailBody((e.target as HTMLTextAreaElement).value)}
+          />
+        </div>
+
+        <div class="form-group" style={{ marginBottom: "var(--space-sm)" }}>
+          <button
+            class="btn btn--ghost btn--sm"
+            onClick={() => setShowMergeTags(!showMergeTags)}
+            type="button"
+          >
+            {showMergeTags ? "▲" : "▼"} Merge Tags
+          </button>
+          {showMergeTags && (
+            <div
+              style={{
+                marginTop: "var(--space-sm)",
+                padding: "var(--space-sm)",
+                background: "var(--color-surface-0)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "var(--radius-md)",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "var(--space-xs)",
+              }}
+            >
+              {POST_VISIT_MERGE_TAGS.map((tag) => (
+                <code
+                  key={tag}
+                  style={{
+                    fontSize: "var(--text-xs)",
+                    fontFamily: "var(--font-mono)",
+                    padding: "2px var(--space-xs)",
+                    background: "var(--color-surface-2)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--color-brand)",
+                  }}
+                >
+                  {tag}
+                </code>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div class="card__footer" style={{ justifyContent: "flex-end" }}>
+        <Button variant="primary" size="sm" disabled={saving} onClick={save}>
+          {saving ? "Saving…" : "Save Post-Visit Templates"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function LeadOutreachTab() {
+  const toast = useToast();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get<{ settings: SettingShape[] }>("/api/settings/category/notifications");
+      const map: Record<string, string> = {};
+      for (const s of r.settings) {
+        map[s.key] = s.value;
+      }
+      setDrafts(map);
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  if (loading) return <Spinner center />;
+
+  return (
+    <div>
+      <Card title="Lead Outreach">
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-lg)" }}>
+          When a new lead comes in with no appointment set, the system automatically texts them on Days 1, 2, and 3.
+          The sequence stops the moment an appointment is scheduled or the lead is marked lost.
+          Edit the SMS templates below. Changes are saved immediately and audit-logged.
+        </p>
+
+        <OutreachSmsPanel
+          day={1}
+          dayLabel="Same Day"
+          smsKey="outreach_day1_sms"
+          smsValue={drafts["outreach_day1_sms"] ?? ""}
+          onSaved={load}
+        />
+        <OutreachSmsPanel
+          day={2}
+          dayLabel="Next Day"
+          smsKey="outreach_day2_sms"
+          smsValue={drafts["outreach_day2_sms"] ?? ""}
+          onSaved={load}
+        />
+        <OutreachSmsPanel
+          day={3}
+          dayLabel="Final Touch"
+          smsKey="outreach_day3_sms"
+          smsValue={drafts["outreach_day3_sms"] ?? ""}
+          onSaved={load}
+          note="Sequence ends after this message. No further automated texts are sent."
+        />
+
+        <div
+          style={{
+            borderTop: "1px solid var(--color-border)",
+            paddingTop: "var(--space-lg)",
+            marginTop: "var(--space-lg)",
+          }}
+        >
+          <h3 style={{ fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)", marginBottom: "var(--space-md)" }}>
+            Post-Visit Follow-Up
+          </h3>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-lg)" }}>
+            Fires once when an estimate visit is marked complete (status moved to{" "}
+            <strong>Estimate Visit Done</strong>). Sends both an SMS and email to the client.
+          </p>
+          <PostVisitPanel
+            smsValue={drafts["post_visit_sms"] ?? ""}
+            emailSubjectValue={drafts["post_visit_email_subject"] ?? ""}
+            emailBodyValue={drafts["post_visit_email_body"] ?? ""}
+            onSaved={load}
+          />
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export function QuoteFollowUpsTab() {
   const toast = useToast();
   const [drafts, setDrafts] = useState<Record<string, string>>({});

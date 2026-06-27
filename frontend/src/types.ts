@@ -241,6 +241,12 @@ export interface EstimateRequest {
   follow_up_sequence_active: boolean;
   follow_up_completed_at: string | null;
   last_sms_preview: string | null;
+  // Sprint 27 fields
+  proposal_review_date: string | null;
+  lead_outreach_sequence_active: boolean;
+  lead_outreach_count: number;
+  last_outreach_date: string | null;
+  lead_outreach_completed_at: string | null;
   days_in_stage: number;
   age_days: number;
   created_at: string | null;

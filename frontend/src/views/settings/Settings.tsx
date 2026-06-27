@@ -15,7 +15,7 @@ import { useAuth } from "../../store/auth";
 import { isOwner, ROLE_LABELS } from "../../lib/rbac";
 import { UsersTab } from "./UsersTab";
 import { AuditLogTab, DlqTab, BackupTab, HealthTab } from "./ReliabilityTabs";
-import { CompanyTab, FinancialSettingsTab, NotificationsTab, QuoteFollowUpsTab } from "./SettingsEditors";
+import { CompanyTab, FinancialSettingsTab, NotificationsTab, QuoteFollowUpsTab, LeadOutreachTab } from "./SettingsEditors";
 import { IntegrationsTab } from "./IntegrationsTab";
 
 type TabKey =
@@ -24,6 +24,7 @@ type TabKey =
   | "integrations"
   | "notifications"
   | "quote_follow_ups"
+  | "lead_outreach"
   | "users"
   | "audit"
   | "dlq"
@@ -37,6 +38,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "integrations", label: "Integrations" },
   { key: "notifications", label: "Notifications" },
   { key: "quote_follow_ups", label: "Quote Follow-Ups" },
+  { key: "lead_outreach", label: "Lead Outreach" },
   { key: "users", label: "Users" },
   { key: "audit", label: "Audit Log" },
   { key: "dlq", label: "Failure Queue" },
@@ -105,6 +107,7 @@ export function Settings(_props: RoutableProps) {
       {tab === "integrations" && <IntegrationsTab />}
       {tab === "notifications" && <NotificationsTab />}
       {tab === "quote_follow_ups" && <QuoteFollowUpsTab />}
+      {tab === "lead_outreach" && <LeadOutreachTab />}
       {tab === "users" && <UsersTab />}
       {tab === "audit" && <AuditLogTab />}
       {tab === "dlq" && <DlqTab />}

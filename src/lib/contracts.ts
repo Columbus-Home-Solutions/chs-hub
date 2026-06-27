@@ -19,6 +19,7 @@
  */
 
 import type { Env } from "../env.js";
+import { applyPmFields, resolvePmFields } from "./pm-fields.js";
 
 export interface ContractContext {
   client_name: string | null;
@@ -28,6 +29,8 @@ export interface ContractContext {
   deposit_amount: number | null;
   billing_model: string | null;
   payment_schedule_lines: string[];
+  /** Job PM assignment — when absent, falls back to Tony Columbus. */
+  assigned_to?: string | null;
 }
 
 const USD = (n: number | null | undefined): string =>
@@ -70,8 +73,8 @@ export function contractKindFor(billingModel: string | null): "cost_plus" | "ser
 export async function renderContract(env: Env, ctx: ContractContext): Promise<string> {
   const s = await loadSettings(env);
   const company = s.company_name ?? "Columbus Home Solutions, LLC";
-  const phone = s.company_phone ?? "";
-  const email = s.company_email ?? "";
+  const pm = await resolvePmFields(env, ctx.assigned_to);
+  const pmContact = `${pm.pm_name}, ${pm.pm_phone}, ${pm.pm_email}`;
   const scheduleBlock =
     ctx.payment_schedule_lines.length > 0
       ? ctx.payment_schedule_lines.map((l) => `  • ${l}`).join("\n")
@@ -130,7 +133,7 @@ export async function renderContract(env: Env, ctx: ContractContext): Promise<st
       ``,
       `This Cost-Plus Billing Agreement is supplemental to the Service Agreement and is governed by its terms for warranty, insurance, termination, dispute resolution, and all other provisions not specifically addressed here. This Agreement shall be governed by the laws of the State of Arkansas.`,
       ``,
-      `Primary point of contact: Tony Columbus${phone ? `, ${phone}` : ""}${email ? `, ${email}` : ""}`,
+      `Primary point of contact: ${pmContact}`,
       ``,
       `By signing below (in person or electronically), both parties acknowledge that they have read, understand, and agree to all terms stated in this document. Electronic signatures are legally binding and carry the same weight as handwritten signatures under federal and Arkansas law.`,
     ].join("\n");
@@ -155,7 +158,7 @@ export async function renderContract(env: Env, ctx: ContractContext): Promise<st
     ``,
     `2. COMMUNICATION`,
     `Contractor will keep Client informed of progress via phone, text, email, or the Client Project Portal, where Client can view project photos, schedule, invoices, documents, and communicate directly with Contractor.`,
-    `Primary point of contact: Tony Columbus${phone ? `, ${phone}` : ""}${email ? `, ${email}` : ""}`,
+    `Primary point of contact: ${pmContact}`,
     ``,
     `3. PROJECT TIMELINE`,
     `Work will begin on a mutually scheduled start date with an estimated completion communicated before work begins. Timeline may be affected by weather, material availability, permitting, inspections, change orders, or other factors outside Contractor's reasonable control.`,

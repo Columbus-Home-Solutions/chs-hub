@@ -164,6 +164,8 @@ export interface SendDocumentArgs {
   /** BoldSign template ID. When provided, sends via /v1/template/send using the
    *  template's stored DOCX (role info only — no generated file upload). */
   templateId?: string;
+  /** Optional reference documents appended to template sends (e.g. Working Agreement). */
+  additionalFiles?: Array<{ blob: Blob; filename: string }>;
 }
 
 export interface SendDocumentResult {
@@ -201,8 +203,12 @@ export async function sendDocumentForSignature(
     form.append("roles[0][signerRole]", signerRole);
     form.append("roles[0][signerType]", "Signer");
 
+    for (const extra of args.additionalFiles ?? []) {
+      form.append("Files", extra.blob, extra.filename);
+    }
+
     console.log(
-      `${label} send_document (template=${args.templateId}): signer="${args.signerEmail}" role="${signerRole}" roleIndex=${roleIndex} (template file only, no upload)`,
+      `${label} send_document (template=${args.templateId}): signer="${args.signerEmail}" role="${signerRole}" roleIndex=${roleIndex} additionalFiles=${args.additionalFiles?.length ?? 0}`,
     );
 
     res = await boldSignRequest(

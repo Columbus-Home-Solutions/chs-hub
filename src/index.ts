@@ -226,11 +226,17 @@ import {
   handleInboxRead,
   handleInboxReadAll,
 } from "./routes/notifications.js";
-import { handleTwilioInbound, handleTwilioStatus } from "./routes/webhooks-twilio.js";
+import {
+  handleCallWhisper,
+  handleTwilioInbound,
+  handleTwilioStatus,
+  handleTwilioVoice,
+} from "./routes/webhooks-twilio.js";
 import { handleSmsThread, handleSmsReply, handleSmsConversations } from "./routes/sms.js";
 import { processNotifications } from "./lib/notification-engine.js";
 import { processQuoteFollowUps } from "./lib/quote-follow-up.js";
 import { processNewLeadOutreach } from "./lib/new-lead-outreach.js";
+import { processProposalReviewReminders } from "./lib/proposal-reminders.js";
 import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
 import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
 import {
@@ -531,6 +537,7 @@ export default {
         p.startsWith("/api/public/social/") ||
         p.startsWith("/api/portal/") ||
         p === "/api/webhooks/stripe" ||
+        p === "/api/webhooks/twilio/call-whisper" ||
         p === "/api/integrations/boldsign/webhook";
       if (!allowed) {
         return new Response(JSON.stringify({ error: "Not found" }), {
@@ -565,6 +572,11 @@ export default {
       return handleBoldSignWebhook(request, env, ctx);
     }
 
+    // Twilio call whisper — PUBLIC; Twilio fetches this URL during Dial bridging.
+    if (url.pathname === "/api/webhooks/twilio/call-whisper" && request.method === "GET") {
+      return handleCallWhisper(request);
+    }
+
     // ── RBAC enforcement gate (Sprint 17) ────────────────────────────────
     // Centralized role enforcement in front of every gated /api route, per the
     // Module-Spec-System-Admin §3 matrix + Route Map labels. Resolves the
@@ -588,6 +600,9 @@ export default {
     // through to the auth'd routes / Cloudflare Access.
     if (url.pathname === "/api/webhooks/twilio/inbound" && request.method === "POST") {
       return handleTwilioInbound(request, env);
+    }
+    if (url.pathname === "/api/webhooks/twilio/voice" && request.method === "POST") {
+      return handleTwilioVoice(request, env);
     }
     if (url.pathname === "/api/webhooks/twilio/status" && request.method === "POST") {
       return handleTwilioStatus(request, env);
@@ -2152,6 +2167,18 @@ async function runNotificationProcessor(env: Env): Promise<void> {
     }
   } catch (err) {
     console.error("[cron */15 * * * *] new_lead_outreach failed:", (err as Error).message);
+  }
+
+  // Proposal Review Morning Reminder — internal SMS on review day (8 AM+ CT). Non-fatal.
+  try {
+    const pr = await processProposalReviewReminders(env);
+    if (pr.dispatched > 0 || pr.skipped > 0 || pr.errors > 0) {
+      console.log(
+        `[cron */15 * * * *] proposal_review_reminders: scanned=${pr.scanned} dispatched=${pr.dispatched} skipped=${pr.skipped} errors=${pr.errors} in ${pr.duration_ms}ms`,
+      );
+    }
+  } catch (err) {
+    console.error("[cron */15 * * * *] processProposalReviewReminders failed (non-fatal):", err);
   }
 }
 

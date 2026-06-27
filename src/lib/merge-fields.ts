@@ -14,6 +14,7 @@
  */
 
 import type { Env } from "../env.js";
+import { applyPmFields, resolvePmFields } from "./pm-fields.js";
 
 export interface MergeContext {
   job_id?: string | null;
@@ -52,6 +53,9 @@ export const MERGE_FIELD_CATALOG: readonly string[] = [
   "company_name",
   "payment_schedule",
   "contractor_name",
+  "pm_name",
+  "pm_phone",
+  "pm_email",
 ] as const;
 
 interface CompanySettings {
@@ -132,7 +136,7 @@ export async function resolveMergeFields(
     const job = await env.DB.prepare(
       `SELECT title, job_number, client_id, estimate_id, contract_total, deposit_amount,
               property_address, property_city, property_state, property_zip,
-              start_date, start_at, target_end_date, completed_at
+              start_date, start_at, target_end_date, completed_at, assigned_to
          FROM jobs WHERE id = ?`,
     )
       .bind(ctx.job_id)
@@ -151,6 +155,7 @@ export async function resolveMergeFields(
         start_at: string | null;
         target_end_date: string | null;
         completed_at: string | null;
+        assigned_to: string | null;
       }>();
     if (job) {
       out.job_title = job.title ?? "";
@@ -164,7 +169,11 @@ export async function resolveMergeFields(
       out.completion_date = longDate(job.target_end_date ?? job.completed_at);
       if (!resolvedClientId) resolvedClientId = job.client_id;
       if (!estimateId) estimateId = job.estimate_id;
+      const pm = await resolvePmFields(env, job.assigned_to);
+      Object.assign(out, applyPmFields({}, pm));
     }
+  } else {
+    Object.assign(out, applyPmFields({}, await resolvePmFields(env, null)));
   }
 
   if (estimateId) {
@@ -252,5 +261,8 @@ export function sampleMergeFields(): Record<string, string> {
     completion_date: longDate(new Date(Date.now() + 60 * 864e5).toISOString()),
     payment_schedule: "  • Materials Deposit — $9,700.00\n  • 50% at Rough-In — $19,400.00\n  • Final on Completion — $19,400.00",
     contractor_name: "Tony Columbus, Owner",
+    pm_name: "Tony Columbus",
+    pm_phone: "501-263-2050",
+    pm_email: "tony@homesolutionsar.com",
   };
 }

@@ -40,6 +40,8 @@ import {
   SETTING_ESIGNATURE_MODE,
   BOLDSIGN_API_BASE,
 } from "../lib/boldsign.js";
+import { applyPmFields, resolvePmFields } from "../lib/pm-fields.js";
+import { loadWorkingAgreementAttachment } from "../lib/working-agreement.js";
 
 const OWNER_PM = ["owner", "project_manager"] as const;
 const READ_ROLES = ["owner", "project_manager", "office_admin"] as const;
@@ -93,6 +95,7 @@ export interface JobRow {
   notes: string | null;
   billing_model: string | null;
   warranty_expiration: string | null;
+  assigned_to: string | null;
 }
 
 interface ClientRow {
@@ -180,6 +183,9 @@ export async function resolveMergeFields(
     "SELECT value FROM system_settings WHERE key = 'contractor_name'",
   ).first<{ value: string }>();
   fields.contractor_name = contractorRow?.value?.trim() || "Tony Columbus, Owner";
+
+  const pm = await resolvePmFields(env, job.assigned_to);
+  Object.assign(fields, applyPmFields({}, pm));
 
   // Subcontractor (if sub_id provided in overrides)
   if (overrides.sub_id) {
@@ -308,7 +314,8 @@ export async function handleGenerateJobDocument(
     `SELECT id, job_number, title, client_id,
             property_address, property_city, property_state, property_zip,
             start_date, target_end_date, actual_end_date,
-            contract_total, deposit_amount, notes, billing_model, warranty_expiration
+            contract_total, deposit_amount, notes, billing_model, warranty_expiration,
+            assigned_to
        FROM jobs WHERE id = ?`,
   )
     .bind(jobId)
@@ -842,6 +849,11 @@ export async function handleSendForSignature(
 
   // Send to BoldSign.
   let boldSignResult: { documentId: string };
+  const additionalFiles: Array<{ blob: Blob; filename: string }> = [];
+  if (row.template_type === "service_agreement") {
+    const wa = await loadWorkingAgreementAttachment(env, jobId);
+    if (wa) additionalFiles.push({ blob: wa.blob, filename: wa.filename });
+  }
   try {
     boldSignResult = await sendDocumentForSignature(config, {
       fileBlob: docxBlob,
@@ -853,6 +865,7 @@ export async function handleSendForSignature(
       signerRole: boldSignRole,
       roleIndex: boldSignRoleIndex,
       templateId: boldSignTemplateId,
+      additionalFiles: additionalFiles.length ? additionalFiles : undefined,
     });
   } catch (e) {
     const msg = (e as Error).message;

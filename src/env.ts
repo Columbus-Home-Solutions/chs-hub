@@ -73,6 +73,8 @@ export interface Env {
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_FROM_NUMBER?: string;
+  /** Tony's cell — inbound Twilio voice calls dial this number (wrangler.toml [vars]). */
+  TWILIO_FORWARD_NUMBER?: string;
 
   /** Client-facing "from" address for notification emails. Falls back to ALERT_EMAIL_FROM. Pre-Launch: a verified Resend sender. */
   NOTIFICATIONS_EMAIL_FROM?: string;

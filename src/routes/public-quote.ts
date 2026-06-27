@@ -35,6 +35,7 @@ import {
   parseSignatureMeta,
   shouldSkipContractAutogen,
 } from "../lib/estimate-contract-document.js";
+import { scheduleWorkingAgreementGeneration } from "../lib/working-agreement.js";
 import { getBoldSignConfig, getEmbeddedSignLink } from "../lib/boldsign.js";
 import {
   convenienceFee as computeFee,
@@ -833,6 +834,8 @@ export async function handleStripeWebhook(request: Request, env: Env, ctx: Execu
       );
     }
   }
+
+  scheduleWorkingAgreementGeneration(env, outcome.jobId, ctx);
 
   return json({ received: true, job_id: outcome.jobId, job_number: outcome.jobNumber });
 }

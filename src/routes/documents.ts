@@ -41,6 +41,7 @@ export const DOCUMENT_CATEGORIES = new Set([
   "photo_report",
   "project_packet",
   "completion_package",
+  "working_agreement",
   "other",
 ]);
 

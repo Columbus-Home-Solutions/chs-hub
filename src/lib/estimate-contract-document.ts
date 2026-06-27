@@ -19,6 +19,8 @@ import {
 } from "./document-generator.js";
 import { depositFromSchedule } from "./deposit-from-schedule.js";
 import { getBoldSignConfig, sendDocumentForSignature } from "./boldsign.js";
+import { applyPmFields, resolvePmFields } from "./pm-fields.js";
+import { loadWorkingAgreementAttachment } from "./working-agreement.js";
 
 export interface EstimateSignatureMeta {
   template_type?: string;
@@ -206,6 +208,13 @@ export async function resolveEstimateMergeFields(
     "SELECT value FROM system_settings WHERE key = 'contractor_name'",
   ).first<{ value: string }>();
 
+  const jobPm = await env.DB.prepare(
+    "SELECT assigned_to FROM jobs WHERE estimate_id = ? LIMIT 1",
+  )
+    .bind(estimateId)
+    .first<{ assigned_to: string | null }>();
+  const pm = await resolvePmFields(env, jobPm?.assigned_to);
+
   const estLabel =
     row.estimate_number != null
       ? `EST-${String(row.estimate_number).padStart(3, "0")}`
@@ -230,6 +239,7 @@ export async function resolveEstimateMergeFields(
     estimated_budget: "",
     certificate_number: "",
     warranty_expiry: "",
+    ...applyPmFields({}, pm),
   };
 }
 
@@ -366,6 +376,17 @@ export async function generateAndSendEstimateContract(
   const boldSignTemplateId = templateIdFromSettings ?? BOLDSIGN_TEMPLATE_IDS[templateType];
 
   try {
+    const additionalFiles: Array<{ blob: Blob; filename: string }> = [];
+    if (templateType === "service_agreement") {
+      const jobRow = await env.DB.prepare("SELECT id FROM jobs WHERE estimate_id = ? LIMIT 1")
+        .bind(estimateId)
+        .first<{ id: string }>();
+      if (jobRow) {
+        const wa = await loadWorkingAgreementAttachment(env, jobRow.id);
+        if (wa) additionalFiles.push({ blob: wa.blob, filename: wa.filename });
+      }
+    }
+
     const result = await sendDocumentForSignature(config, {
       fileBlob: new Blob([docxBytes], {
         type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -376,6 +397,7 @@ export async function generateAndSendEstimateContract(
       signerEmail,
       signerName,
       templateId: boldSignTemplateId,
+      additionalFiles: additionalFiles.length ? additionalFiles : undefined,
     });
 
     meta.boldsign_document_id = result.documentId;

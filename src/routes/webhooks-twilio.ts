@@ -4,6 +4,8 @@
  * /api/webhooks/stripe so they bypass the edge auth.
  *
  *   POST /api/webhooks/twilio/inbound   inbound SMS → match client, log comm, owner bell
+ *   POST /api/webhooks/twilio/voice     inbound voice → whisper caller name, dial Tony
+ *   GET  /api/webhooks/twilio/call-whisper  TwiML whisper audio (called by Twilio during Dial)
  *   POST /api/webhooks/twilio/status    delivery status callback → update the log by SID
  *
  * Signature discipline mirrors the Stripe handler: verify BEFORE any DB write,
@@ -31,6 +33,29 @@ function twiml(): Response {
     status: 200,
     headers: { "content-type": "text/xml; charset=utf-8" },
   });
+}
+
+function escapeXmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function twimlXml(body: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/xml; charset=utf-8" },
+  });
+}
+
+/** Simple forward — no whisper (fallback when APP_PUBLIC_ORIGIN is unset). */
+function twimlDialForward(forwardNumber: string): Response {
+  return twimlXml(
+    `<?xml version="1.0" encoding="UTF-8"?><Response><Dial><Number>${escapeXmlText(forwardNumber)}</Number></Dial></Response>`,
+  );
 }
 
 /** TwiML with a reply message — for STOP/START compliance responses. */
@@ -329,6 +354,100 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
   }
 
   return twiml();
+}
+
+// ─── POST /api/webhooks/twilio/voice ────────────────────────────────────────────
+
+async function lookupClientByPhone(
+  env: Env,
+  callerPhone: string,
+): Promise<{ first_name: string | null; last_name: string | null; name: string | null } | null> {
+  const fromDigits = phoneDigits(callerPhone).slice(-10);
+  if (fromDigits.length !== 10) return null;
+  return env.DB.prepare(
+    `SELECT first_name, last_name, name FROM clients
+      WHERE substr(replace(replace(replace(replace(phone,'(',''),')',''),'-',''),' ',''), -10) = ?
+         OR substr(replace(replace(replace(replace(COALESCE(phone_secondary,''),'(',''),')',''),'-',''),' ',''), -10) = ?
+      LIMIT 1`,
+  )
+    .bind(fromDigits, fromDigits)
+    .first();
+}
+
+export async function handleTwilioVoice(request: Request, env: Env): Promise<Response> {
+  const entries = await parseForm(request);
+  const verified = await verify(env, request, entries);
+  if (!verified.ok) {
+    await audit(env, "twilio_voice_rejected", { reason: verified.reason });
+    return json({ error: "invalid_signature", reason: verified.reason }, { status: verified.status });
+  }
+
+  const forwardNumber = (env.TWILIO_FORWARD_NUMBER ?? "").trim();
+  if (!forwardNumber) {
+    console.error("[twilio-voice] TWILIO_FORWARD_NUMBER is not configured");
+    return json({ error: "not_configured" }, { status: 503 });
+  }
+
+  const form = new Map(entries);
+  const callerPhone = form.get("From") ?? "";
+  const callSid = form.get("CallSid") ?? "";
+
+  const client = callerPhone ? await lookupClientByPhone(env, callerPhone) : null;
+  const callerName = client
+    ? [client.first_name, client.last_name].filter(Boolean).join(" ").trim() ||
+      (client.name ?? "").trim() ||
+      null
+    : null;
+
+  const publicOrigin = (env.APP_PUBLIC_ORIGIN ?? "").trim();
+  if (!publicOrigin) {
+    console.error("[twilio-voice] APP_PUBLIC_ORIGIN is not set — forwarding without whisper");
+    await audit(env, "twilio_voice_no_whisper", { call_sid: callSid, reason: "missing_public_origin" });
+    return twimlDialForward(forwardNumber);
+  }
+
+  const whisperUrl = new URL(`${publicOrigin}/api/webhooks/twilio/call-whisper`);
+  if (callerName) {
+    whisperUrl.searchParams.set("name", callerName);
+  } else {
+    whisperUrl.searchParams.set("digits", phoneDigits(callerPhone).replace(/^1/, "").slice(-10));
+  }
+
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Number url="${escapeXmlText(whisperUrl.toString())}">${escapeXmlText(forwardNumber)}</Number>
+  </Dial>
+</Response>`;
+
+  await audit(env, "twilio_voice_inbound", {
+    call_sid: callSid,
+    from: callerPhone,
+    matched_client: callerName,
+    whisper: true,
+  });
+  return twimlXml(twiml);
+}
+
+// ─── GET /api/webhooks/twilio/call-whisper ────────────────────────────────────
+
+export async function handleCallWhisper(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const name = url.searchParams.get("name");
+  const digits = url.searchParams.get("digits");
+
+  let whisperText: string;
+  if (name) {
+    whisperText = `Incoming call from ${name}.`;
+  } else if (digits) {
+    whisperText = `Incoming call from ${digits.split("").join(" ")}.`;
+  } else {
+    whisperText = "Incoming call.";
+  }
+
+  return twimlXml(
+    `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">${escapeXmlText(whisperText)}</Say></Response>`,
+  );
 }
 
 // ─── POST /api/webhooks/twilio/status ─────────────────────────────────────────

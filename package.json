@@ -15,6 +15,8 @@
     "db:execute": "wrangler d1 execute chs-hub-db --remote --command",
     "r2:create": "wrangler r2 bucket create chs-hub-files",
     "tail": "wrangler tail",
+    "prep:templates": "tsx scripts/prep-templates.ts",
+    "generate:working-agreement-template": "tsx scripts/generate-working-agreement-template.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e:prod": "tsx scripts/e2e-prod.ts",
@@ -25,6 +27,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",
+    "docx": "^9.7.1",
     "tsx": "^4.19.4",
     "typescript": "^5.4.5",
     "vitest": "^2.1.9",

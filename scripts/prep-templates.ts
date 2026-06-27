@@ -382,6 +382,7 @@ const TEMPLATES: {
   { src: "CHS-Lien-Waiver-Conditional-Template.docx",    dest: "lien-waiver-conditional.docx",    prep: prepLienWaiverConditional,    twoPartySig: false },
   { src: "CHS-Lien-Waiver-Sub-Unconditional-Template.docx", dest: "lien-waiver-sub-unconditional.docx", prep: prepSubLienWaiverUnconditional, twoPartySig: false },
   { src: "CHS-Warranty-Certificate-Template.docx",       dest: "warranty-certificate.docx",       prep: prepWarrantyCertificate,       twoPartySig: false },
+  { src: "CHS-Working-Agreement-Template.docx",         dest: "working-agreement.docx",          prep: (xml) => xml,                      twoPartySig: false },
 ];
 
 // ─── Diagnostics ─────────────────────────────────────────────────────────────

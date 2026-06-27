@@ -114,6 +114,7 @@ NOTIFICATIONS_DISPATCH_MODE = "simulate"
 # Cloudflare); the worker's public-host routing guard (src/index.ts) restricts it
 # to the token-gated public surface only.
 APP_PUBLIC_ORIGIN = "https://client.homesolutionsar.com"
+# Inbound voice calls from the CHS Twilio number forward here (E.164). Pre-Launch: set Tony's actual cell.
 # Public file share links: `wrangler secret put FILE_LINK_SECRET` (32+ char random). Optional
 #   var HUB_FILE_LINK_ORIGIN = "https://chs-hub.<account>.workers.dev" so /api/f?t=… works
 #   for people without Cloudflare Access (the dashboard host may require Access).

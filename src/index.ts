@@ -197,6 +197,7 @@ import {
   handleSettingGet,
   handleSettingUpdate,
   handleSettingsList,
+  handleSettingsByCategory,
 } from "./routes/settings.js";
 import { handleMe, handleClockableUsers } from "./routes/me.js";
 import {
@@ -228,6 +229,7 @@ import {
 import { handleTwilioInbound, handleTwilioStatus } from "./routes/webhooks-twilio.js";
 import { handleSmsThread, handleSmsReply, handleSmsConversations } from "./routes/sms.js";
 import { processNotifications } from "./lib/notification-engine.js";
+import { processQuoteFollowUps } from "./lib/quote-follow-up.js";
 import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
 import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
 import {
@@ -1908,6 +1910,10 @@ export default {
     if (url.pathname === "/api/settings" && request.method === "GET") {
       return handleSettingsList(env);
     }
+    const settingsByCategory = url.pathname.match(/^\/api\/settings\/category\/([^/]+)$/);
+    if (settingsByCategory && request.method === "GET") {
+      return handleSettingsByCategory(env, decodeURIComponent(settingsByCategory[1]));
+    }
     const settingByKey = url.pathname.match(/^\/api\/settings\/([^/]+)$/);
     if (settingByKey) {
       const key = decodeURIComponent(settingByKey[1]);
@@ -2119,6 +2125,19 @@ async function runNotificationProcessor(env: Env): Promise<void> {
     }
   } catch (err) {
     console.error("[cron */15 * * * *] gcal_sync failed:", (err as Error).message);
+  }
+
+  // Quote Follow-Up Sequence (Sprint 26) — automated dual-channel (SMS + email)
+  // follow-ups on Days 3, 5, 7, and 10 after an estimate is sent. Non-fatal.
+  try {
+    const f = await processQuoteFollowUps(env);
+    if (f.dispatched > 0 || f.completed > 0 || f.errors > 0) {
+      console.log(
+        `[cron */15 * * * *] quote_follow_ups: scanned=${f.scanned} dispatched=${f.dispatched} skipped=${f.skipped} completed=${f.completed} errors=${f.errors} in ${f.duration_ms}ms`,
+      );
+    }
+  } catch (err) {
+    console.error("[cron */15 * * * *] quote_follow_ups failed:", (err as Error).message);
   }
 }
 

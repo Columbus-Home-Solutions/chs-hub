@@ -83,6 +83,16 @@ export async function handleSettingGet(env: Env, key: string): Promise<Response>
   return json({ setting: shape(row) });
 }
 
+/** GET /api/settings/category/:category */
+export async function handleSettingsByCategory(env: Env, category: string): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    "SELECT key, value, value_type, category, label, description, updated_at, updated_by FROM system_settings WHERE category = ? ORDER BY key",
+  )
+    .bind(category)
+    .all<SettingRow>();
+  return json({ settings: (results ?? []).map(shape) });
+}
+
 /** Coerce an incoming JSON value to the string form stored for a value_type. */
 function serializeValue(value: unknown, valueType: SettingRow["value_type"]): string | null {
   if (value === null || value === undefined) return null;

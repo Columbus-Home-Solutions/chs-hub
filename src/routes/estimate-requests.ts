@@ -126,6 +126,9 @@ interface RequestRow {
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
+  // follow-up sequence fields (Sprint 26)
+  follow_up_sequence_active: number | null;
+  follow_up_completed_at: string | null;
   // joined client fields
   c_first: string | null;
   c_last: string | null;
@@ -205,6 +208,9 @@ function shape(row: RequestRow) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     created_by: row.created_by,
+    // follow-up sequence fields (Sprint 26)
+    follow_up_sequence_active: (row.follow_up_sequence_active ?? 0) === 1,
+    follow_up_completed_at: row.follow_up_completed_at ?? null,
   };
 }
 
@@ -681,7 +687,8 @@ export async function handleEstimateRequestLost(
 
   await env.DB.prepare(
     `UPDATE estimate_requests
-     SET status = 'lost', lost_reason = ?, lost_notes = ?, updated_at = ?
+     SET status = 'lost', lost_reason = ?, lost_notes = ?, updated_at = ?,
+         follow_up_sequence_active = 0, follow_up_completed_at = datetime('now')
      WHERE id = ?`,
   )
     .bind(str(body.lost_reason), str(body.lost_notes), new Date().toISOString(), id)
@@ -740,6 +747,24 @@ export async function handleEstimateRequestWin(
     payerId,
   });
   if (!outcome.ok) return err(outcome.status, outcome.error, outcome.details);
+
+  // Stop the follow-up sequence when the request is won (Sprint 26).
+  // Non-fatal — a log warning is sufficient if this fails.
+  if (!outcome.idempotent) {
+    try {
+      await env.DB.prepare(
+        `UPDATE estimate_requests SET
+           follow_up_sequence_active = 0,
+           follow_up_completed_at = datetime('now'),
+           updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+        .bind(id)
+        .run();
+    } catch (stopErr) {
+      console.warn("[estimate-requests] follow-up stop on won failed:", (stopErr as Error).message);
+    }
+  }
 
   // Idempotent: a request that's already fully converted returns the existing
   // job unchanged (no second job, no second payment).

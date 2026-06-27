@@ -237,6 +237,9 @@ export interface EstimateRequest {
   converted_job_id: string | null;
   source: string;
   last_sms_at: string | null;
+  // follow-up sequence fields (Sprint 26)
+  follow_up_sequence_active: boolean;
+  follow_up_completed_at: string | null;
   last_sms_preview: string | null;
   days_in_stage: number;
   age_days: number;

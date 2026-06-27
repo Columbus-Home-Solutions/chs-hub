@@ -306,6 +306,8 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             )}
           </Card>
 
+          <FollowUpSequenceCard request={r} />
+
           {canDeleteRequest(r) && (
             <Card title="Danger zone">
               <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-sm)" }}>
@@ -502,6 +504,77 @@ function AppointmentModal({
         />
       </FormField>
     </Modal>
+  );
+}
+
+// ─── Follow-Up Sequence Card (Sprint 26) ─────────────────────────────────────
+
+function formatDateLong(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+function FollowUpSequenceCard({ request: r }: { request: import("../../types").EstimateRequest }) {
+  // Only show the card when the estimate has been sent or is in follow-up/terminal.
+  const relevant = ["sent", "viewed", "follow_up", "won", "lost"].includes(r.status) || r.follow_up_count > 0;
+  if (!relevant) return null;
+
+  const count = r.follow_up_count ?? 0;
+
+  type BadgeTone = "success" | "warning" | "error" | "neutral";
+  let statusLabel: string;
+  let tone: BadgeTone;
+
+  if (r.status === "won") {
+    statusLabel = "Stopped — Won";
+    tone = "success";
+  } else if (r.status === "lost") {
+    statusLabel = "Stopped — Lost";
+    tone = "neutral";
+  } else if (r.follow_up_sequence_active) {
+    statusLabel = "Active";
+    tone = "success";
+  } else if (count >= 4) {
+    statusLabel = "Complete";
+    tone = "neutral";
+  } else if (count === 0 && !r.sent_date) {
+    statusLabel = "Not Started";
+    tone = "neutral";
+  } else if (r.follow_up_completed_at) {
+    statusLabel = "Complete";
+    tone = "neutral";
+  } else {
+    statusLabel = "Not Started";
+    tone = "neutral";
+  }
+
+  return (
+    <Card title="Follow-Up Sequence">
+      <div class="kv">
+        <div class="kv__row">
+          <span class="kv__label">Status</span>
+          <span class="kv__value">
+            <Badge tone={tone}>{statusLabel}</Badge>
+          </span>
+        </div>
+        <div class="kv__row">
+          <span class="kv__label">Touches Sent</span>
+          <span class="kv__value">{count} of 4</span>
+        </div>
+        <div class="kv__row">
+          <span class="kv__label">Last Sent</span>
+          <span class="kv__value">{formatDateLong(r.last_follow_up_date)}</span>
+        </div>
+        {!r.follow_up_sequence_active && r.follow_up_completed_at && (
+          <div class="kv__row">
+            <span class="kv__label">Completed</span>
+            <span class="kv__value">{formatDateLong(r.follow_up_completed_at)}</span>
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 

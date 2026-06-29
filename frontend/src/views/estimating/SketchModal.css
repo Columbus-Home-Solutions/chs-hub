@@ -4,6 +4,8 @@
   z-index: 1000;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  touch-action: none;
   background: var(--color-surface-0);
   color: var(--color-text-primary);
 }
@@ -168,7 +170,7 @@
 }
 
 .sketch-modal__canvas {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   overflow: hidden;
   position: relative;

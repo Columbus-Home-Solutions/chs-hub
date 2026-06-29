@@ -23,6 +23,7 @@ import {
   type ExpenseDraft,
   type CostingLineLite,
 } from "../financial/ExpenseForm";
+import { ReceiptMatchReview } from "../financial/ReceiptMatchReview";
 
 export interface PhotoReceipt {
   id: string;
@@ -617,14 +618,33 @@ export function ReceiptConfirm({
     }),
   );
   const [busy, setBusy] = useState(false);
+  const [confirmed, setConfirmed] = useState(
+    Boolean(receipt.expense_id || receipt.processing_status === "confirmed"),
+  );
+  const [showMatchReview, setShowMatchReview] = useState(false);
   const set = <K extends keyof ExpenseDraft>(k: K, v: ExpenseDraft[K]) =>
     setDraft((d) => ({ ...d, [k]: v }));
 
-  if (receipt.expense_id || receipt.processing_status === "confirmed") {
+  if (confirmed) {
     return (
-      <div class="receipt-box">
-        <Badge tone="success">Expense created</Badge>
-        <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>This receipt has been confirmed.</span>
+      <div class="stack">
+        <div class="receipt-box">
+          <Badge tone="success">Expense created</Badge>
+          <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            This receipt has been confirmed.
+          </span>
+        </div>
+        {showMatchReview && jobId && (
+          <ReceiptMatchReview
+            receiptPhotoId={receipt.id}
+            jobId={jobId}
+            toast={toast}
+            onComplete={() => {
+              setShowMatchReview(false);
+              onConfirmed();
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -646,7 +666,8 @@ export function ReceiptConfirm({
         category: draft.tax_category,
       });
       toast.push("success", "Expense created from receipt");
-      onConfirmed();
+      setConfirmed(true);
+      setShowMatchReview(true);
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
     } finally {

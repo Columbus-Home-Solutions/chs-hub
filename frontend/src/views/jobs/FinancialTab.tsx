@@ -15,6 +15,11 @@ import {
   ExpenseFormModal,
   type CostingLineLite,
 } from "../financial/ExpenseForm";
+import {
+  fetchReceiptMatches,
+  ReceiptMatchReview,
+  resolveReceiptPhotoId,
+} from "../financial/ReceiptMatchReview";
 import { CycleManager } from "./CycleManager";
 import { LineItemBilling } from "./LineItemBilling";
 import type { JobCard, Payer } from "../../types";
@@ -137,6 +142,7 @@ interface ExpenseItem {
   sub_id: string | null;
   receipt_url: string | null;
   has_receipt: boolean;
+  receipt_photo_id: string | null;
   is_active: boolean;
 }
 interface ExpensesResponse {
@@ -655,7 +661,45 @@ function ExpensesSection({
   toast: ToastApi;
 }) {
   const [formOpen, setFormOpen] = useState(false);
+  const [pendingByPhotoId, setPendingByPhotoId] = useState<Record<string, string>>({});
+  const [reviewReceiptId, setReviewReceiptId] = useState<string | null>(null);
   const expenses = data?.expenses ?? [];
+
+  useEffect(() => {
+    const photoIds = [
+      ...new Set(
+        expenses.map((e) => e.receipt_photo_id).filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (photoIds.length === 0) {
+      setPendingByPhotoId({});
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, string> = {};
+      await Promise.all(
+        photoIds.map(async (photoId) => {
+          const receiptPhotoId = await resolveReceiptPhotoId(photoId);
+          if (!receiptPhotoId) return;
+          try {
+            const { status, data: matchData } = await fetchReceiptMatches(receiptPhotoId);
+            if (status === 200 && matchData.has_unresolved) {
+              next[photoId] = receiptPhotoId;
+            }
+          } catch {
+            // ignore per-row match lookup failures
+          }
+        }),
+      );
+      if (!cancelled) setPendingByPhotoId(next);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expenses]);
 
   const voidExpense = async (e: ExpenseItem) => {
     if (!confirm("Void this expense? It stays on file (receipt preserved) but drops out of costing.")) return;
@@ -697,6 +741,17 @@ function ExpensesSection({
                   {e.vendor ?? e.description ?? "Expense"}
                   <Badge tone="neutral">{EXPENSE_TYPE_LABEL[e.expense_type ?? "other"] ?? e.expense_type}</Badge>
                   {e.is_1099_reportable && <Badge tone="info">1099</Badge>}
+                  {e.receipt_photo_id && pendingByPhotoId[e.receipt_photo_id] && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() =>
+                        setReviewReceiptId(pendingByPhotoId[e.receipt_photo_id!])
+                      }
+                    >
+                      Match items
+                    </Button>
+                  )}
                 </div>
                 <div class="invoice-row__meta">
                   {e.tax_category ? formatStatus(e.tax_category) : "Uncategorized"}
@@ -725,6 +780,29 @@ function ExpensesSection({
             onChanged();
           }}
         />
+      )}
+
+      {reviewReceiptId && (
+        <Modal
+          open
+          title="Receipt item matching"
+          onClose={() => setReviewReceiptId(null)}
+          footer={
+            <Button variant="secondary" onClick={() => setReviewReceiptId(null)}>
+              Close
+            </Button>
+          }
+        >
+          <ReceiptMatchReview
+            receiptPhotoId={reviewReceiptId}
+            jobId={jobId}
+            toast={toast}
+            onComplete={() => {
+              setReviewReceiptId(null);
+              onChanged();
+            }}
+          />
+        </Modal>
       )}
     </Card>
   );

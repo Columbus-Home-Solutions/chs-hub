@@ -793,3 +793,44 @@ export interface JobDetailResponse {
   billing_schedule: BillingScheduleRow[];
   activity: ActivityEntry[];
 }
+
+// ─── Receipt line-item matching (Sprint 30) ─────────────────────────────────
+
+export interface ExtractedItem {
+  id: string;
+  description: string;
+  amount: number;
+  quantity: number | null;
+  unit_price: number | null;
+}
+
+export interface MatchResult {
+  item_id: string;
+  status: "matched" | "ambiguous" | "unmatched";
+  suggested_line_item_id: string | null;
+  suggested_line_item_name: string | null;
+  confidence: number;
+  alternatives: Array<{ line_item_id: string; line_item_name: string; confidence: number }>;
+  confirmed_line_item_id: string | null;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+}
+
+export interface LineItemForMatching {
+  id: string;
+  description: string;
+}
+
+export interface MatchData {
+  status: "pending" | "processed";
+  extracted_items: ExtractedItem[];
+  match_results: MatchResult[];
+  has_unresolved: boolean;
+}
+
+export interface ReceiptMatchResponse {
+  status: "pending" | "processed" | "failed";
+  extracted_items?: ExtractedItem[];
+  match_results?: MatchResult[];
+  has_unresolved?: boolean;
+}

@@ -89,6 +89,14 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
 
   const activeSketch = sketches[activeIndex] ?? null;
 
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
   const loadSketchData = useCallback(async (sketchId: string) => {
     setCanvasLoading(true);
     editorRef.current = null;
@@ -395,12 +403,14 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
             <div class="sketch-modal__canvas-loading">Loading sketch…</div>
           ) : (
             canvasKey && (
-              <Tldraw
-                key={canvasKey}
-                snapshot={activeSnapshot}
-                onMount={handleEditorMount}
-                autoFocus
-              />
+              <div style={{ width: "100%", height: "100%", position: "relative" }}>
+                <Tldraw
+                  key={canvasKey}
+                  snapshot={activeSnapshot}
+                  onMount={handleEditorMount}
+                  autoFocus
+                />
+              </div>
             )
           )}
         </div>

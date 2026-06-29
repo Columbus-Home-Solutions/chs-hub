@@ -30,6 +30,13 @@
 import type { Env } from "../env.js";
 import { dateBucket, photoOriginalKey, photoThumbKey, putImage, streamObject } from "../lib/r2.js";
 import { extractReceipt } from "../lib/receipt-ai.js";
+import {
+  hasUnresolvedMatches,
+  parseStoredExtractedItems,
+  parseStoredMatchResults,
+  processReceiptMatching,
+  type MatchResult,
+} from "../lib/receipt-matching.js";
 import { guard } from "../middleware/guard.js";
 import { insertFullExpense } from "./expenses.js";
 import { validateAnnotationData, hasMarkup } from "../lib/annotation.js";
@@ -39,6 +46,8 @@ import { writeAudit } from "../lib/audit.js";
 // for expense per the route map note).
 const CAPTURE_ROLES = ["owner", "project_manager", "field_crew", "office_admin"] as const;
 const EXPENSE_ROLES = ["owner", "project_manager", "field_crew"] as const;
+const MATCH_READ_ROLES = ["owner", "project_manager", "office_admin", "field_crew"] as const;
+const MATCH_WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
 // Photo types the capture bar offers. Legacy `category` (before|progress|final)
 // is kept populated alongside so the old dashboard viewer still renders.
@@ -465,7 +474,11 @@ export async function handlePhotoBatch(env: Env, request: Request): Promise<Resp
 
 // ─── POST /api/photos/receipt ───────────────────────────────────────────────
 
-export async function handleReceiptCreate(env: Env, request: Request): Promise<Response> {
+export async function handleReceiptCreate(
+  env: Env,
+  request: Request,
+  ctx: ExecutionContext,
+): Promise<Response> {
   let form: FormData;
   try {
     form = await request.formData();
@@ -516,6 +529,14 @@ export async function handleReceiptCreate(env: Env, request: Request): Promise<R
       status,
     )
     .run();
+
+  if (extraction.ok) {
+    ctx.waitUntil(
+      processReceiptMatching(receiptId, r2Key, meta.job_id, env.DB, env).catch((e) =>
+        console.error("[photos] receipt line-item matching failed:", (e as Error).message),
+      ),
+    );
+  }
 
   return jsonResponse(
     {
@@ -626,6 +647,186 @@ export async function handleReceiptConfirm(
     .run();
 
   return jsonResponse({ ok: true, expense_id: expenseId, receipt_id: receiptId }, { status: 201 });
+}
+
+// ─── GET /api/receipt-photos/:id/matches ────────────────────────────────────
+
+export async function handleReceiptMatchesGet(
+  env: Env,
+  request: Request,
+  receiptId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...MATCH_READ_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const row = await env.DB.prepare(
+    `SELECT id, processing_status, extracted_items, match_results
+     FROM receipt_photos WHERE id = ?`,
+  )
+    .bind(receiptId)
+    .first<{
+      id: string;
+      processing_status: string;
+      extracted_items: string | null;
+      match_results: string | null;
+    }>();
+  if (!row) return jsonErr(404, "not_found");
+
+  if (row.processing_status === "pending" || row.extracted_items == null) {
+    return jsonResponse({ status: "pending" }, { status: 202 });
+  }
+  if (row.processing_status === "failed") {
+    return jsonResponse({ status: "failed" });
+  }
+
+  const extractedItems = parseStoredExtractedItems(row.extracted_items) ?? [];
+  const matchResults = parseStoredMatchResults(row.match_results) ?? [];
+
+  return jsonResponse({
+    status: "processed",
+    extracted_items: extractedItems,
+    match_results: matchResults,
+    has_unresolved: hasUnresolvedMatches(extractedItems, matchResults),
+  });
+}
+
+// ─── POST /api/receipt-photos/:id/matches/:itemId/confirm ───────────────────
+
+export async function handleReceiptMatchConfirm(
+  env: Env,
+  request: Request,
+  receiptId: string,
+  itemId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...MATCH_WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return jsonErr(400, "invalid_json");
+  }
+
+  const row = await env.DB.prepare(
+    `SELECT id, match_results FROM receipt_photos WHERE id = ?`,
+  )
+    .bind(receiptId)
+    .first<{ id: string; match_results: string | null }>();
+  if (!row) return jsonErr(404, "not_found");
+
+  const matchResults = parseStoredMatchResults(row.match_results);
+  if (!matchResults) return jsonErr(404, "matches_not_ready");
+
+  const idx = matchResults.findIndex((r) => r.item_id === itemId);
+  if (idx === -1) return jsonErr(404, "item_not_found");
+
+  const lineItemId =
+    body.line_item_id === null || body.line_item_id === undefined
+      ? null
+      : str(body.line_item_id);
+  if (lineItemId) {
+    const valid = await env.DB.prepare("SELECT 1 AS ok FROM estimate_line_items WHERE id = ?")
+      .bind(lineItemId)
+      .first<{ ok: number }>();
+    if (!valid) return jsonErr(400, "invalid_line_item_id");
+  }
+
+  const now = new Date().toISOString();
+  const updated: MatchResult = {
+    ...matchResults[idx],
+    confirmed_line_item_id: lineItemId,
+    confirmed_by: user.email,
+    confirmed_at: now,
+  };
+  matchResults[idx] = updated;
+
+  await env.DB.prepare("UPDATE receipt_photos SET match_results = ? WHERE id = ?")
+    .bind(JSON.stringify(matchResults), receiptId)
+    .run();
+
+  return jsonResponse({ success: true });
+}
+
+// ─── POST /api/receipt-photos/:id/matches/apply ─────────────────────────────
+
+export async function handleReceiptMatchesApply(
+  env: Env,
+  request: Request,
+  receiptId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...MATCH_WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const row = await env.DB.prepare(
+    `SELECT rp.id, rp.extracted_items, rp.match_results, rp.expense_id, rp.photo_id,
+            e.job_id, e.incurred_date, e.vendor
+     FROM receipt_photos rp
+     LEFT JOIN expenses e ON e.id = rp.expense_id
+     WHERE rp.id = ?`,
+  )
+    .bind(receiptId)
+    .first<{
+      id: string;
+      extracted_items: string | null;
+      match_results: string | null;
+      expense_id: string | null;
+      photo_id: string;
+      job_id: string | null;
+      incurred_date: string | null;
+      vendor: string | null;
+    }>();
+  if (!row) return jsonErr(404, "not_found");
+  if (!row.expense_id || !row.job_id) {
+    return jsonResponse(
+      { error: "Confirm the receipt before applying matches." },
+      { status: 400 },
+    );
+  }
+
+  const extractedItems = parseStoredExtractedItems(row.extracted_items) ?? [];
+  const matchResults = parseStoredMatchResults(row.match_results) ?? [];
+  const matchByItemId = new Map(matchResults.map((r) => [r.item_id, r]));
+
+  let applied = 0;
+  let skipped = 0;
+
+  for (const item of extractedItems) {
+    const match = matchByItemId.get(item.id);
+    let lineItemId: string | null = null;
+    if (match?.confirmed_line_item_id != null) {
+      lineItemId = match.confirmed_line_item_id;
+    } else if (match?.status === "matched" && match.suggested_line_item_id) {
+      lineItemId = match.suggested_line_item_id;
+    }
+
+    if (!lineItemId) {
+      skipped++;
+      continue;
+    }
+
+    await insertFullExpense(env, {
+      job_id: row.job_id,
+      expense_type: "material",
+      vendor: row.vendor,
+      description: item.description,
+      amount: item.amount,
+      incurred_date: row.incurred_date ?? new Date().toISOString().slice(0, 10),
+      estimate_line_item_id: lineItemId,
+      tax_category: null,
+      sub_id: null,
+      is_1099_reportable: false,
+      receipt_photo_id: row.photo_id,
+      receipt_r2_key: null,
+      entered_via: "auto",
+      created_by: user.email,
+    });
+    applied++;
+  }
+
+  return jsonResponse({ applied, skipped });
 }
 
 // ─── GET /api/jobs/:id/photos (timeline) ────────────────────────────────────

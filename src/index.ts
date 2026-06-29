@@ -107,6 +107,9 @@ import {
   handleReceiptCreate,
   handleReceiptGet,
   handleReceiptConfirm,
+  handleReceiptMatchesGet,
+  handleReceiptMatchConfirm,
+  handleReceiptMatchesApply,
 } from "./routes/photos.js";
 import {
   handleDeviceRegister,
@@ -1352,7 +1355,7 @@ export default {
       return handlePhotoBatch(env, request);
     }
     if (url.pathname === "/api/photos/receipt" && request.method === "POST") {
-      return handleReceiptCreate(env, request);
+      return handleReceiptCreate(env, request, ctx);
     }
     if (url.pathname === "/api/photos/pair" && request.method === "POST") {
       return handlePhotoPair(env, request);
@@ -1402,6 +1405,31 @@ export default {
     }
 
     // ── Receipt photos (Sprint 8) ────────────────────────────────────
+    const receiptMatchesApply = url.pathname.match(
+      /^\/api\/receipt-photos\/([^/]+)\/matches\/apply$/,
+    );
+    if (receiptMatchesApply && request.method === "POST") {
+      return handleReceiptMatchesApply(
+        env,
+        request,
+        decodeURIComponent(receiptMatchesApply[1]),
+      );
+    }
+    const receiptMatchConfirm = url.pathname.match(
+      /^\/api\/receipt-photos\/([^/]+)\/matches\/([^/]+)\/confirm$/,
+    );
+    if (receiptMatchConfirm && request.method === "POST") {
+      return handleReceiptMatchConfirm(
+        env,
+        request,
+        decodeURIComponent(receiptMatchConfirm[1]),
+        decodeURIComponent(receiptMatchConfirm[2]),
+      );
+    }
+    const receiptMatches = url.pathname.match(/^\/api\/receipt-photos\/([^/]+)\/matches$/);
+    if (receiptMatches && request.method === "GET") {
+      return handleReceiptMatchesGet(env, request, decodeURIComponent(receiptMatches[1]));
+    }
     const receiptConfirm = url.pathname.match(/^\/api\/receipt-photos\/([^/]+)\/confirm$/);
     if (receiptConfirm && request.method === "POST") {
       return handleReceiptConfirm(env, request, decodeURIComponent(receiptConfirm[1]));

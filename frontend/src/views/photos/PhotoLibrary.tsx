@@ -7,7 +7,8 @@
  */
 
 import type { RoutableProps } from "preact-router";
-import { useMemo, useState } from "preact/hooks";
+import { useRouter } from "preact-router";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Spinner } from "../../components/ui/Spinner";
 import { go } from "../../lib/nav";
@@ -51,11 +52,21 @@ const TYPE_LABEL: Record<string, string> = Object.fromEntries(
 );
 
 export function PhotoLibrary(_props: RoutableProps) {
+  const [{ url }] = useRouter();
+  const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
   const photosResp = useApi<{ total: number; photos: PhotoItem[] }>("/api/photos?limit=200");
   const jobsResp = useApi<{ total: number; jobs: JobStub[] }>("/api/jobs");
   const [typeFilter, setTypeFilter] = useState("");
   const [jobFilter, setJobFilter] = useState("");
   const [lightbox, setLightbox] = useState<PhotoItem | null>(null);
+  const [uploadHint, setUploadHint] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(currentSearch);
+    if (params.get("action") === "upload") {
+      setUploadHint(true);
+    }
+  }, [currentSearch]);
 
   const photos = photosResp.data?.photos ?? [];
   const activeJobs = useMemo(() => {
@@ -91,6 +102,32 @@ export function PhotoLibrary(_props: RoutableProps) {
           </p>
         </div>
       </div>
+
+      {uploadHint && (
+        <div
+          class="dash-card"
+          style={{
+            marginBottom: "var(--space-md)",
+            padding: "var(--space-md)",
+            background: "var(--color-brand-subtle)",
+          }}
+        >
+          <strong>Add a photo:</strong> open a job and use the Photos tab to upload, or pick a job
+          below to jump there.
+          {activeJobs[0] && (
+            <>
+              {" "}
+              <button
+                type="button"
+                class="link-btn"
+                onClick={() => go(`/jobs/${activeJobs[0].id}`)}
+              >
+                Go to {jobFilterLabel(activeJobs[0])}
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Filters */}
       <div class="flex gap-sm" style={{ marginBottom: "var(--space-md)", flexWrap: "wrap" }}>

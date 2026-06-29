@@ -2763,21 +2763,21 @@
   line-height: 1;
 }
 .weather-forecast-strip {
-  display: flex;
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
   gap: 0;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
 }
 .weather-forecast-day {
-  flex: 0 0 auto;
-  width: 80px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
   padding: var(--space-sm) var(--space-xs);
   border-right: 1px solid var(--color-border);
+  min-width: 0;
+}
+.weather-forecast-day:last-child {
+  border-right: none;
 }
 .weather-forecast-day--today {
   background: var(--color-brand-subtle);
@@ -2905,6 +2905,65 @@
   gap: var(--space-lg);
 }
 
+/* Quick Actions widget */
+.quick-actions {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+.quick-actions__header {
+  font-size: var(--font-size-xs, var(--text-xs));
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--space-sm);
+}
+.quick-actions__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-sm);
+}
+.quick-actions__btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-height: 44px;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms, transform 100ms;
+}
+.quick-actions__btn:hover {
+  background: var(--color-surface-3);
+  border-color: var(--color-border-hover);
+}
+.quick-actions__btn:active {
+  transform: scale(0.97);
+}
+.quick-actions__btn-icon {
+  font-size: var(--font-size-lg, var(--text-lg));
+  line-height: 1;
+}
+.quick-actions__btn-label {
+  font-size: var(--font-size-xs, var(--text-xs));
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+/* Quick Actions: desktop in secondary column, mobile between weather and smart notes */
+.dashboard-order-quick-actions--mobile {
+  display: none;
+}
+.dashboard-order-quick-actions--desktop {
+  display: block;
+}
+
 /* Desktop-only block (LeadPipeline Kanban) */
 .dashboard__desktop-only {
   display: block;
@@ -2931,6 +2990,13 @@
 .kpi-tile:hover {
   background: var(--color-surface-2);
   border-color: var(--color-border-hover);
+}
+.kpi-tile--static {
+  cursor: default;
+}
+.kpi-tile--static:hover {
+  background: var(--color-surface-1);
+  border-color: var(--color-border);
 }
 .kpi-tile__label {
   font-size: var(--text-xs);
@@ -3313,7 +3379,6 @@
   flex-wrap: wrap;
   position: relative;
   z-index: 5;
-  isolation: isolate;
 }
 .smart-notes__category {
   background: var(--color-surface-2);
@@ -3331,14 +3396,13 @@
   flex-wrap: wrap;
   align-items: center;
   position: relative;
-  z-index: 5;
+  z-index: 10;
 }
 .smart-notes__buttons .btn {
+  position: relative;
+  z-index: 11;
   pointer-events: auto;
   cursor: pointer;
-}
-.smart-notes__buttons .btn--ghost-empty {
-  opacity: 0.55;
 }
 
 /* ── Internal Resources (Documents page) ── */
@@ -3666,7 +3730,29 @@
     grid-template-columns: repeat(3, 1fr);
   }
   .dashboard__columns {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+  }
+  .dashboard__primary,
+  .dashboard__secondary {
+    display: contents;
+  }
+  .dashboard-order-alerts { order: 1; }
+  .dashboard-order-doc-review { order: 2; }
+  .dashboard-order-action-items { order: 3; }
+  .dashboard-order-weather { order: 4; }
+  .dashboard-order-quick-actions { order: 5; }
+  .dashboard-order-smart-notes { order: 6; }
+  .dashboard-order-schedule { order: 7; }
+  .dashboard-order-pipeline { order: 8; }
+  .dashboard-order-jobs-map { order: 9; }
+  .dashboard-order-activity { order: 10; }
+  .dashboard-order-quick-actions--mobile {
+    display: block;
+  }
+  .dashboard-order-quick-actions--desktop {
+    display: none;
   }
   .dashboard__desktop-only {
     display: none;

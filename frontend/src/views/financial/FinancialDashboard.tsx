@@ -54,6 +54,7 @@ const TONE: Record<string, "neutral" | "info" | "success" | "warning" | "error">
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
   { value: "__unpaid__", label: "Unpaid (open)" },
+  { value: "__paid_this_week__", label: "Paid this week" },
   { value: "past_due", label: "Past due" },
   { value: "__due_soon__", label: "Due in 2 days" },
   { value: "draft", label: "Draft" },
@@ -63,6 +64,30 @@ const STATUS_OPTIONS = [
   { value: "void", label: "Void" },
 ];
 
+/** Sunday-start week boundaries (matches dashboard KPI / WC spreadsheet). */
+function currentWeekRange(): { start: string; endExclusive: string; lastDay: string } {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  const dow = now.getUTCDay();
+  const weekStart = new Date(Date.UTC(y, m, d - dow));
+  const weekEnd = new Date(Date.UTC(y, m, d - dow + 7));
+  const lastDay = new Date(Date.UTC(y, m, d - dow + 6));
+  return {
+    start: weekStart.toISOString().slice(0, 10),
+    endExclusive: weekEnd.toISOString().slice(0, 10),
+    lastDay: lastDay.toISOString().slice(0, 10),
+  };
+}
+
+interface PaymentRow {
+  id: string;
+  invoice_id: string | null;
+  amount: number | null;
+  received_date: string | null;
+}
+
 const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3];
 
@@ -70,12 +95,19 @@ export function FinancialDashboard(_props: RoutableProps) {
   const [{ url }] = useRouter();
   const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
 
-  const invoicesResp = useApi<{ total: number; invoices: InvoiceRow[] }>("/api/invoices");
-  const jobsResp = useApi<{ total: number; jobs: JobStub[] }>("/api/jobs");
-  const [tab, setTab] = useState<FinTab>("invoices");
   const [statusFilter, setStatusFilter] = useState("");
   const [cpaModalOpen, setCpaModalOpen] = useState(false);
   const [cpaYear, setCpaYear] = useState(String(CURRENT_YEAR));
+  const weekRange = useMemo(() => currentWeekRange(), []);
+
+  const invoicesResp = useApi<{ total: number; invoices: InvoiceRow[] }>("/api/invoices");
+  const jobsResp = useApi<{ total: number; jobs: JobStub[] }>("/api/jobs");
+  const paymentsResp = useApi<{ total: number; payments: PaymentRow[] }>(
+    statusFilter === "__paid_this_week__"
+      ? `/api/payments?from=${weekRange.start}&to=${weekRange.lastDay}`
+      : null,
+  );
+  const [tab, setTab] = useState<FinTab>("invoices");
 
   // Re-run whenever the search string changes so sidebar sub-items (same path,
   // different ?tab=) update the active tab each time without a full remount.
@@ -89,10 +121,16 @@ export function FinancialDashboard(_props: RoutableProps) {
 
     const filter = params.get("filter") ?? params.get("status");
     if (filter === "unpaid") setStatusFilter("__unpaid__");
+    else if (filter === "paid_this_week") setStatusFilter("__paid_this_week__");
     else if (filter === "overdue") setStatusFilter("past_due");
     else if (filter === "due_soon") setStatusFilter("__due_soon__");
+    else if (filter === "paid") setStatusFilter("paid");
     else if (filter && STATUS_OPTIONS.some((o) => o.value === filter)) setStatusFilter(filter);
     else if (!filter) setStatusFilter("");
+
+    if (urlTab === "expenses") {
+      go("/jobs");
+    }
   }, [currentSearch]);
 
   const invoices = invoicesResp.data?.invoices ?? [];
@@ -112,6 +150,14 @@ export function FinancialDashboard(_props: RoutableProps) {
         ["sent", "viewed", "partial", "past_due"].includes(inv.status ?? ""),
       );
     }
+    if (statusFilter === "__paid_this_week__") {
+      const invoiceIds = new Set(
+        (paymentsResp.data?.payments ?? [])
+          .map((p) => p.invoice_id)
+          .filter((id): id is string => Boolean(id)),
+      );
+      return invoices.filter((inv) => invoiceIds.has(inv.id));
+    }
     if (statusFilter === "__due_soon__") {
       return invoices.filter(
         (inv) =>
@@ -120,7 +166,7 @@ export function FinancialDashboard(_props: RoutableProps) {
     }
     if (statusFilter) return invoices.filter((inv) => inv.status === statusFilter);
     return invoices;
-  }, [invoices, statusFilter, dueSoonDate]);
+  }, [invoices, statusFilter, dueSoonDate, paymentsResp.data?.payments]);
 
   // Pricing Intelligence tab renders immediately without waiting for invoices/jobs.
   if (tab === "pricing") {
@@ -159,6 +205,7 @@ export function FinancialDashboard(_props: RoutableProps) {
   }
 
   if (invoicesResp.loading || jobsResp.loading) return <Spinner center />;
+  if (statusFilter === "__paid_this_week__" && paymentsResp.loading) return <Spinner center />;
 
   // Summary totals across the filtered set.
   const totalInvoiced = filtered.reduce((s, inv) => s + (inv.total_due ?? 0), 0);

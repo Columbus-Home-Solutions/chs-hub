@@ -202,6 +202,12 @@ import {
   handleSettingsList,
   handleSettingsByCategory,
 } from "./routes/settings.js";
+import {
+  handleInternalResourcesGet,
+  handleInternalResourcesDriveUrl,
+  handleInternalResourcesLinkCreate,
+  handleInternalResourcesLinkDelete,
+} from "./routes/internal-resources.js";
 import { handleMe, handleClockableUsers, handleAssignableUsers } from "./routes/me.js";
 import {
   handleClientCreate,
@@ -2041,6 +2047,23 @@ export default {
     if (settingsByCategory && request.method === "GET") {
       return handleSettingsByCategory(env, decodeURIComponent(settingsByCategory[1]));
     }
+
+    if (url.pathname === "/api/settings/internal-resources" && request.method === "GET") {
+      return handleInternalResourcesGet(request, env);
+    }
+    if (url.pathname === "/api/settings/internal-resources/drive-url" && request.method === "POST") {
+      return handleInternalResourcesDriveUrl(request, env);
+    }
+    if (url.pathname === "/api/settings/internal-resources/links" && request.method === "POST") {
+      return handleInternalResourcesLinkCreate(request, env);
+    }
+    const internalLinkDelete = url.pathname.match(
+      /^\/api\/settings\/internal-resources\/links\/([^/]+)$/,
+    );
+    if (internalLinkDelete && request.method === "DELETE") {
+      return handleInternalResourcesLinkDelete(request, env, decodeURIComponent(internalLinkDelete[1]));
+    }
+
     const settingByKey = url.pathname.match(/^\/api\/settings\/([^/]+)$/);
     if (settingByKey) {
       const key = decodeURIComponent(settingByKey[1]);

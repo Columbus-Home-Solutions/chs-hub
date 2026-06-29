@@ -226,7 +226,7 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
       label: "Quotes Outstanding",
       value: `$${((quotesRow?.total ?? 0) / 1000).toFixed(0)}k`,
       subtitle: `${quotesRow?.cnt ?? 0} open estimates`,
-      link: "/estimating?status=sent",
+      link: "/estimates",
     },
     {
       id: "unpaid_invoices",
@@ -241,7 +241,7 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
       label: "Cash This Week",
       value: `$${((cashThis) / 1000).toFixed(0)}k`,
       subtitle: deltaDir ? `${deltaDir === "up" ? "↑" : "↓"}${deltaPct}% vs. last week` : "vs. last week",
-      link: "/financial?tab=payments",
+      link: "/financial?tab=invoices&filter=paid_this_week",
       deltaDir,
       deltaPct,
     },
@@ -250,14 +250,14 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
       label: "YTD Collected",
       value: `$${(ytdRevenue / 1000).toFixed(0)}k`,
       subtitle: ytdCogsSubtitle,
-      link: "/financial",
+      link: "/financial?tab=invoices&filter=paid",
     },
     {
       id: "ytd_profit",
       label: "Cash Profit",
       value: `$${(ytdProfit / 1000).toFixed(0)}k`,
       subtitle: `${ytdMarginPct}% margin on collections`,
-      link: "/financial",
+      link: "",
       deltaDir: ytdProfit >= 0 ? "up" : "down",
     },
     {
@@ -265,7 +265,7 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
       label: "Earned Margin",
       value: `$${(ytdEarnedProfit / 1000).toFixed(0)}k`,
       subtitle: `${ytdEarnedMarginPct}% on $${(ytdEarned / 1000).toFixed(0)}k invoiced`,
-      link: "/financial?tab=reports",
+      link: "",
       deltaDir: ytdEarnedProfit >= 0 ? "up" : "down",
     },
   ];

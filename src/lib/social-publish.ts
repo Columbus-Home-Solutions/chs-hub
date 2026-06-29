@@ -54,6 +54,54 @@ const IG_CONTAINER_NOT_READY_CODE = 9007;
 /** Match IG publish time to a Page feed post within this window (ms). */
 export const FB_CROSSPOST_TIMESTAMP_WINDOW_MS = 60_000;
 
+interface GraphErrorShape {
+  message?: string;
+  code?: number;
+  error_subcode?: number;
+}
+
+function tokenPreview(token: string | null | undefined): string {
+  const t = token?.trim() ?? "";
+  if (!t) return "missing";
+  return t.slice(0, 8);
+}
+
+async function logFacebookTokenDiagnostics(env: Env): Promise<void> {
+  const fromSettings = (await getSetting(env, SETTING_FB_TOKEN))?.trim() ?? "";
+  const source = fromSettings ? "settings" : "missing";
+  console.log(`[social-publish] Facebook token source: ${source}`);
+  console.log(
+    `[social-publish] Facebook token present: ${fromSettings ? "true" : "false"} (first 8 chars: ${tokenPreview(fromSettings)})`,
+  );
+}
+
+async function logInstagramAccountId(env: Env): Promise<void> {
+  const configured = (await getSetting(env, SETTING_IG_ACCOUNT_ID))?.trim();
+  if (configured) {
+    console.log(`[social-publish] Instagram account ID: ${configured}`);
+    return;
+  }
+  console.log(`[social-publish] Instagram account ID: missing (using default ${DEFAULT_IG_BUSINESS_ACCOUNT_ID})`);
+}
+
+function facebookPermissionsErrorMessage(): string {
+  return (
+    "[social-publish] Facebook publish failed: Page token is missing " +
+    "pages_manage_posts or pages_manage_engagement permission. " +
+    "Regenerate the token with correct scopes and re-seed " +
+    "social_facebook_page_token in system_settings."
+  );
+}
+
+function resolveFacebookPermissionsError(error: GraphErrorShape | undefined): string | null {
+  if (error?.code === 200 || error?.error_subcode === 200) {
+    const msg = facebookPermissionsErrorMessage();
+    console.error(msg);
+    return msg;
+  }
+  return null;
+}
+
 // ─── pure helpers (unit-tested) ────────────────────────────────────────────────
 
 export type PublishMode = "live" | "simulate";
@@ -494,8 +542,9 @@ async function resolveFacebookCrosspostFromFeed(
     return { facebookPostId: null, facebookUrl: null };
   }
   if (!feedRes.ok) {
+    const permErr = resolveFacebookPermissionsError(feedData.error as GraphErrorShape | undefined);
     console.warn(
-      `[social-publish] facebook feed lookup failed post=${logRef} http=${feedRes.status} response=${JSON.stringify(redactForLog(feedData))}`,
+      `[social-publish] facebook feed lookup failed post=${logRef} http=${feedRes.status}${permErr ? ` error=${permErr}` : ""} response=${JSON.stringify(redactForLog(feedData))}`,
     );
     return { facebookPostId: null, facebookUrl: null };
   }
@@ -557,6 +606,7 @@ async function attemptInstagramPublish(
   }
 
   const igId = await resolveInstagramAccountId(env);
+  await logInstagramAccountId(env);
   const token = await resolveInstagramAccessToken(env);
   const imageUrl = publicImageUrl(env, post);
   console.log(
@@ -594,12 +644,13 @@ async function attemptInstagramPublish(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(c.body),
     });
-    const cData = (await cRes.json()) as { id?: string; error?: { message?: string; code?: number } };
+    const cData = (await cRes.json()) as { id?: string; error?: GraphErrorShape };
     if (!cRes.ok || cData.error || !cData.id) {
+      const permErr = resolveFacebookPermissionsError(cData.error);
       logInstagramGraphFailure("container", post.id, cRes.status, cData);
       return {
         ok: false,
-        error: cData.error?.message ?? `container_http_${cRes.status}`,
+        error: permErr ?? cData.error?.message ?? `container_http_${cRes.status}`,
       };
     }
 
@@ -613,7 +664,7 @@ async function attemptInstagramPublish(
         body: JSON.stringify(p.body),
       });
       const pData = (await pRes.json()) as Record<string, unknown> & {
-        error?: { message?: string; code?: number };
+        error?: GraphErrorShape;
       };
       return { pRes, pData };
     };
@@ -629,9 +680,10 @@ async function attemptInstagramPublish(
     }
 
     if (!pRes.ok || pData.error) {
+      const permErr = resolveFacebookPermissionsError(pData.error);
       logInstagramGraphFailure("publish", post.id, pRes.status, pData);
-      const err = pData.error as { message?: string } | undefined;
-      return { ok: false, error: err?.message ?? `publish_http_${pRes.status}` };
+      const err = pData.error;
+      return { ok: false, error: permErr ?? err?.message ?? `publish_http_${pRes.status}` };
     }
 
     let { instagramPostId, facebookPostId } = parseInstagramPublishResponse(pData);
@@ -704,6 +756,7 @@ export async function publishPost(
   }
 
   const mode = await resolvePublishMode(env);
+  await logFacebookTokenDiagnostics(env);
   const targets = platformTargets(post.platform);
   const allTags = parseJsonArray(post.hashtags);
 

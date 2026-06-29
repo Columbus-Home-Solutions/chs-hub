@@ -1,9 +1,9 @@
 /**
  * Dashboard weather forecast card.
  *
- * Shows the full NWS forecast (up to 7 days, updated every 30 min) as a
- * horizontally scrollable strip. Collapsible. Click current conditions or
- * today's column for an hourly breakdown popup.
+ * Shows the full NWS forecast (up to 7 days) in a responsive grid that fills
+ * the primary column width. Collapsible. Click current conditions or today's
+ * column for an hourly breakdown popup.
  */
 
 import { useState } from "preact/hooks";

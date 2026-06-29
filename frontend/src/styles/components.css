@@ -198,6 +198,12 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   transition: border-color var(--transition-base), box-shadow var(--transition-base);
+  color-scheme: dark;
+}
+input[type="date"].form-input,
+input[type="datetime-local"].form-input,
+input[type="time"].form-input {
+  color-scheme: dark;
 }
 .form-input:focus,
 .form-select:focus,

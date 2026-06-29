@@ -78,7 +78,10 @@ export function SmartNotes() {
 
   const processNote = async () => {
     const content = text.trim();
-    if (!content) return;
+    if (!content) {
+      toast.push("info", "Type a note above first.");
+      return;
+    }
     if (recording) recRef.current?.stop();
     setBusy(true);
     try {
@@ -103,7 +106,10 @@ export function SmartNotes() {
 
   const saveOnly = async () => {
     const content = text.trim();
-    if (!content) return;
+    if (!content) {
+      toast.push("info", "Type a note above first.");
+      return;
+    }
     if (recording) recRef.current?.stop();
     setBusy(true);
     try {
@@ -161,29 +167,17 @@ export function SmartNotes() {
             </button>
             <button
               type="button"
-              class={`btn btn--sm btn--primary${!text.trim() && !busy ? " btn--ghost-empty" : ""}`}
+              class="btn btn--sm btn--primary"
               disabled={busy}
-              onClick={() => {
-                if (!text.trim()) {
-                  toast.push("info", "Type a note above first.");
-                  return;
-                }
-                void processNote();
-              }}
+              onClick={() => void processNote()}
             >
               {busy ? "Processing…" : "Process with Claude"}
             </button>
             <button
               type="button"
-              class={`btn btn--sm btn--tertiary${!text.trim() && !busy ? " btn--ghost-empty" : ""}`}
+              class="btn btn--sm btn--tertiary"
               disabled={busy}
-              onClick={() => {
-                if (!text.trim()) {
-                  toast.push("info", "Type a note above first.");
-                  return;
-                }
-                void saveOnly();
-              }}
+              onClick={() => void saveOnly()}
             >
               Save Only
             </button>

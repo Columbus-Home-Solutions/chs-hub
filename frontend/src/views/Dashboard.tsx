@@ -14,6 +14,7 @@ import { TodaySchedule } from "./dashboard/TodaySchedule";
 import { RecentActivity } from "./dashboard/RecentActivity";
 import { JobsMapWidget } from "./dashboard/JobsMapWidget";
 import { WeatherForecastCard } from "./dashboard/WeatherForecastCard";
+import { QuickActionsWidget } from "./dashboard/QuickActionsWidget";
 import { DocReviewQueue } from "./dashboard/DocReviewQueue";
 
 export function Dashboard(_props: RoutableProps) {
@@ -52,44 +53,70 @@ export function Dashboard(_props: RoutableProps) {
         <div class="dashboard__primary">
           {/* Weather: renders only when alerts exist */}
           {weather && (weather.scheduleAlerts?.length ?? 0) > 0 && (
-            <WeatherAlerts
-              scheduleAlerts={weather.scheduleAlerts}
-              forecast={weather.forecast}
-            />
+            <div class="dashboard-order-alerts">
+              <WeatherAlerts
+                scheduleAlerts={weather.scheduleAlerts}
+                forecast={weather.forecast}
+              />
+            </div>
           )}
 
-          <DocReviewQueue />
+          <div class="dashboard-order-doc-review">
+            <DocReviewQueue />
+          </div>
 
-          <ActionItems
-            items={visibleActionItems}
-            loading={actionItems.loading}
-            error={actionItems.error}
-            onDismiss={(id) => setDismissedIds((prev) => new Set(prev).add(id))}
-          />
+          <div class="dashboard-order-action-items">
+            <ActionItems
+              items={visibleActionItems}
+              loading={actionItems.loading}
+              error={actionItems.error}
+              onDismiss={(id) => setDismissedIds((prev) => new Set(prev).add(id))}
+            />
+          </div>
 
+          <div class="dashboard-order-weather">
+            <WeatherForecastCard />
+          </div>
+
+          <div class="dashboard-order-quick-actions dashboard-order-quick-actions--mobile">
+            <QuickActionsWidget />
+          </div>
+
+          <div class="dashboard-order-schedule">
           <TodaySchedule
             entries={schedule.data?.entries ?? []}
             loading={schedule.loading}
             error={schedule.error}
           />
+          </div>
 
+          <div class="dashboard-order-pipeline">
           <PipelineSummary
             data={pipeline.data ?? { leads: [], jobs: [], conversionRate: 0, unpaidTotal: 0 }}
             loading={pipeline.loading}
             error={pipeline.error}
           />
+          </div>
         </div>
 
         {/* Secondary column (~40%) */}
         <div class="dashboard__secondary">
-          <WeatherForecastCard />
-          <SmartNotes />
-          <JobsMapWidget />
-          <RecentActivity
-            entries={activity.data?.entries ?? []}
-            loading={activity.loading}
-            error={activity.error}
-          />
+          <div class="dashboard-order-quick-actions dashboard-order-quick-actions--desktop">
+            <QuickActionsWidget />
+          </div>
+          <div class="dashboard-order-smart-notes">
+            <SmartNotes />
+          </div>
+          <div class="dashboard-order-jobs-map">
+            <JobsMapWidget />
+          </div>
+          <div class="dashboard-order-activity">
+            <RecentActivity
+              entries={activity.data?.entries ?? []}
+              loading={activity.loading}
+              error={activity.error}
+            />
+          </div>
         </div>
       </div>
     </div>

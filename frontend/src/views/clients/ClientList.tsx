@@ -1,5 +1,6 @@
 import type { RoutableProps } from "preact-router";
-import { useMemo, useState } from "preact/hooks";
+import { useRouter } from "preact-router";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Table, type Column } from "../../components/ui/Table";
 import { Button } from "../../components/ui/Button";
@@ -8,6 +9,7 @@ import { Spinner } from "../../components/ui/Spinner";
 import { ClientForm } from "./ClientForm";
 import { formatCurrency, formatDate, formatPhone } from "../../lib/format";
 import { go } from "../../lib/nav";
+import { useMessageCenter } from "../../store/messageCenter";
 import type { Client } from "../../types";
 
 const FILTERS = [
@@ -23,9 +25,19 @@ interface ClientListResponse {
 }
 
 export function ClientList(_props: RoutableProps) {
+  const [{ url }] = useRouter();
+  const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const { open: openMessageCenter } = useMessageCenter();
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(currentSearch);
+    if (params.get("tab") === "messages") {
+      openMessageCenter();
+    }
+  }, [currentSearch, openMessageCenter]);
 
   const { data, loading, error, refetch } = useApi<ClientListResponse>(
     `/api/clients?filter=${filter}`,

@@ -133,6 +133,16 @@ export function JobPipeline(_props: RoutableProps) {
           </p>
         </div>
         <div class="view-header__right flex gap-sm items-center">
+          {viewMode === "list" && (
+            <input
+              class="form-input"
+              type="search"
+              placeholder="Search jobs…"
+              value={listSearch}
+              onInput={(e) => setListSearch((e.target as HTMLInputElement).value)}
+              style={{ width: "min(280px, 40vw)" }}
+            />
+          )}
           <ViewToggle value={viewMode} onChange={setView} />
           <button class="btn btn--secondary btn--sm" onClick={() => go("/jobs/map")}>
             🗺 Map View
@@ -162,15 +172,6 @@ export function JobPipeline(_props: RoutableProps) {
             </button>
           </div>
         )}
-        <div style={{ marginBottom: "var(--space-md)", maxWidth: "360px" }}>
-          <input
-            class="form-input"
-            type="search"
-            placeholder="Search jobs (number, title, client, address)…"
-            value={listSearch}
-            onInput={(e) => setListSearch((e.target as HTMLInputElement).value)}
-          />
-        </div>
         <table class="data-table">
           <thead>
             <tr>
@@ -185,7 +186,15 @@ export function JobPipeline(_props: RoutableProps) {
           </thead>
           <tbody>
             {sorted.length === 0 && (
-              <tr><td colSpan={7} class="text--muted">No jobs match this filter.</td></tr>
+              <tr>
+                <td colSpan={7} class="text--muted">
+                  {listSearch.trim()
+                    ? "No jobs match your search."
+                    : statusFilter
+                      ? "No jobs match this filter."
+                      : "No jobs in the pipeline."}
+                </td>
+              </tr>
             )}
             {sorted.map((j) => (
               <tr key={j.id}>

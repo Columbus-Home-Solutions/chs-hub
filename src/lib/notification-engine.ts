@@ -373,6 +373,16 @@ async function buildMergeContext(env: Env, ctx: TriggerContext): Promise<Record<
       if (v !== undefined && v !== null && v !== "") m[k] = String(v);
     }
   }
+
+  if (ctx.linkPath) {
+    const dashOrigin = (env.APP_PUBLIC_ORIGIN ?? "https://dashboard.homesolutionsar.com").replace(
+      /\/$/,
+      "",
+    );
+    const path = ctx.linkPath.startsWith("/") ? ctx.linkPath : `/${ctx.linkPath}`;
+    m.review_link = `${dashOrigin}${path}`;
+  }
+
   return m;
 }
 

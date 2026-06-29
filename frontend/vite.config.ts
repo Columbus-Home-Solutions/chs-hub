@@ -16,8 +16,14 @@ const DEV_ACCESS_EMAIL = process.env.DEV_ACCESS_EMAIL || "tony@homesolutionsar.c
 export default defineConfig({
   plugins: [preact()],
   base: "/app/",
+  define: {
+    "process.env.IS_PREACT": JSON.stringify("true"),
+  },
   optimizeDeps: {
-    include: ["tldraw", "@tldraw/editor", "@tldraw/store"],
+    esbuildOptions: {
+      target: "es2022",
+      treeShaking: true,
+    },
   },
   build: {
     outDir: "../public/app",

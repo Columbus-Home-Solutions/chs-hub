@@ -189,7 +189,7 @@
   z-index: 1;
 }
 
-.sketch-modal__canvas .tl-container {
+.sketch-modal__canvas .excalidraw {
   width: 100%;
   height: 100%;
 }

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { Tldraw, type Editor, type TLEditorSnapshot, type TLStoreSnapshot } from "tldraw";
-import "tldraw/tldraw.css";
+import {
+  Excalidraw,
+  exportToBlob,
+  restore,
+  serializeAsJSON,
+} from "@excalidraw/excalidraw";
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type { ImportedDataState } from "@excalidraw/excalidraw/types";
+import "@excalidraw/excalidraw/index.css";
 import "./SketchModal.css";
 import { api, ApiError } from "../../api";
 import { Button } from "../../components/ui/Button";
@@ -13,31 +20,13 @@ interface SketchModalProps {
   onClose: () => void;
 }
 
-type Snapshot = TLEditorSnapshot | TLStoreSnapshot;
+type SketchSceneData = ReturnType<typeof restore>;
 
-async function svgToPngBlob(svg: string, width: number, height: number): Promise<Blob | null> {
+function parseSketchData(dataString: string | null): SketchSceneData | null {
+  if (!dataString) return null;
   try {
-    const img = new Image();
-    const svgBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(svgBlob);
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error("svg load failed"));
-      img.src = url;
-    });
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(width));
-    canvas.height = Math.max(1, Math.round(height));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      URL.revokeObjectURL(url);
-      return null;
-    }
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    URL.revokeObjectURL(url);
-    return await new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
+    const parsed = JSON.parse(dataString) as ImportedDataState;
+    return restore(parsed, null, null);
   } catch {
     return null;
   }
@@ -71,13 +60,12 @@ async function putSketchData(
 
 export function SketchModal({ requestId, onClose }: SketchModalProps) {
   const toast = useToast();
-  const editorRef = useRef<Editor | null>(null);
-  const unlistenRef = useRef<(() => void) | null>(null);
+  const suppressDirtyRef = useRef(false);
 
   const [sketches, setSketches] = useState<SketchMeta[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [activeSnapshot, setActiveSnapshot] = useState<Snapshot | undefined>(undefined);
-  const [canvasKey, setCanvasKey] = useState("");
+  const [initialSketchData, setInitialSketchData] = useState<SketchSceneData | null>(null);
+  const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawImperativeAPI | null>(null);
   const [canvasLoading, setCanvasLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
@@ -97,29 +85,48 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
     };
   }, []);
 
-  const loadSketchData = useCallback(async (sketchId: string) => {
-    setCanvasLoading(true);
-    editorRef.current = null;
-    unlistenRef.current?.();
-    unlistenRef.current = null;
-    try {
-      const res = await api.get<{ data: string | null }>(
-        `/api/estimate-requests/${requestId}/sketches/${sketchId}/data`,
-      );
-      if (res.data) {
-        try {
-          setActiveSnapshot(JSON.parse(res.data) as Snapshot);
-        } catch {
-          setActiveSnapshot(undefined);
+  const applySceneToCanvas = useCallback(
+    (api: ExcalidrawImperativeAPI, scene: SketchSceneData | null) => {
+      suppressDirtyRef.current = true;
+      if (scene?.elements?.length) {
+        api.updateScene({
+          elements: scene.elements,
+          appState: scene.appState,
+        });
+        const fileValues = Object.values(scene.files ?? {});
+        if (fileValues.length > 0) {
+          api.addFiles(fileValues);
         }
       } else {
-        setActiveSnapshot(undefined);
+        api.resetScene();
       }
-      setCanvasKey(sketchId);
-    } finally {
-      setCanvasLoading(false);
-    }
-  }, [requestId]);
+      setDirty(false);
+      requestAnimationFrame(() => {
+        suppressDirtyRef.current = false;
+      });
+    },
+    [],
+  );
+
+  const loadSketchData = useCallback(
+    async (sketchId: string, canvasApi: ExcalidrawImperativeAPI | null) => {
+      setCanvasLoading(true);
+      try {
+        const res = await api.get<{ data: string | null }>(
+          `/api/estimate-requests/${requestId}/sketches/${sketchId}/data`,
+        );
+        const scene = parseSketchData(res.data);
+        if (canvasApi) {
+          applySceneToCanvas(canvasApi, scene);
+        } else {
+          setInitialSketchData(scene);
+        }
+      } finally {
+        setCanvasLoading(false);
+      }
+    },
+    [applySceneToCanvas, requestId],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -139,7 +146,7 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
         if (cancelled) return;
         setSketches(list);
         setActiveIndex(0);
-        await loadSketchData(list[0].id);
+        await loadSketchData(list[0].id, null);
       } catch (e) {
         if (!cancelled) {
           toast.push("error", e instanceof ApiError ? e.message : "Failed to load sketches");
@@ -151,27 +158,37 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
     })();
     return () => {
       cancelled = true;
-      unlistenRef.current?.();
     };
   }, [requestId, loadSketchData, onClose, toast]);
 
   const saveCurrent = useCallback(async (): Promise<boolean> => {
-    const editor = editorRef.current;
     const sketch = sketches[activeIndex];
-    if (!editor || !sketch) return true;
+    if (!excalidrawAPI || !sketch) return true;
 
     setSaving(true);
     setSaveError(null);
     try {
-      const snapshot = editor.getSnapshot();
-      const data = JSON.stringify(snapshot);
+      const elements = excalidrawAPI.getSceneElements();
+      const appState = excalidrawAPI.getAppState();
+      const data = serializeAsJSON(
+        elements,
+        appState,
+        excalidrawAPI.getFiles(),
+        "local",
+      );
 
       let thumbnail: Blob | null = null;
-      const ids = [...editor.getCurrentPageShapeIds()];
-      if (ids.length > 0) {
-        const svgExport = await editor.getSvgString(ids, { scale: 1, background: true });
-        if (svgExport?.svg) {
-          thumbnail = await svgToPngBlob(svgExport.svg, svgExport.width, svgExport.height);
+      if (elements.length > 0) {
+        try {
+          thumbnail = await exportToBlob({
+            elements: excalidrawAPI.getSceneElements(),
+            appState: excalidrawAPI.getAppState(),
+            files: excalidrawAPI.getFiles(),
+            mimeType: "image/png",
+            quality: 0.8,
+          });
+        } catch {
+          thumbnail = null;
         }
       }
 
@@ -184,7 +201,7 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
     } finally {
       setSaving(false);
     }
-  }, [activeIndex, requestId, sketches]);
+  }, [activeIndex, excalidrawAPI, requestId, sketches]);
 
   const handleClose = useCallback(async () => {
     if (closeConfirm) return;
@@ -220,7 +237,9 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
     setSaveError(null);
     setActiveIndex(index);
     setDirty(false);
-    await loadSketchData(sketches[index].id);
+    if (excalidrawAPI) {
+      await loadSketchData(sketches[index].id, excalidrawAPI);
+    }
   };
 
   const handleAddPage = async () => {
@@ -241,7 +260,9 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
       setSketches(next);
       setActiveIndex(next.length - 1);
       setDirty(false);
-      await loadSketchData(created.sketch.id);
+      if (excalidrawAPI) {
+        await loadSketchData(created.sketch.id, excalidrawAPI);
+      }
     } catch (e) {
       toast.push("error", e instanceof ApiError ? e.message : "Could not add page");
     }
@@ -271,17 +292,12 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
       const newIndex = Math.min(idx > 0 ? idx - 1 : 0, next.length - 1);
       setActiveIndex(newIndex);
       setDirty(false);
-      await loadSketchData(next[newIndex].id);
+      if (excalidrawAPI) {
+        await loadSketchData(next[newIndex].id, excalidrawAPI);
+      }
     } catch (e) {
       toast.push("error", e instanceof ApiError ? e.message : "Delete failed");
     }
-  };
-
-  const handleEditorMount = (editor: Editor) => {
-    editorRef.current = editor;
-    unlistenRef.current?.();
-    unlistenRef.current = editor.store.listen(() => setDirty(true));
-    setDirty(false);
   };
 
   const updateLocalLabel = (sketchId: string, label: string) => {
@@ -399,20 +415,19 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
         </nav>
 
         <div class="sketch-modal__canvas">
-          {canvasLoading ? (
+          {canvasLoading && (
             <div class="sketch-modal__canvas-loading">Loading sketch…</div>
-          ) : (
-            canvasKey && (
-              <div style={{ width: "100%", height: "100%", position: "relative" }}>
-                <Tldraw
-                  key={canvasKey}
-                  snapshot={activeSnapshot}
-                  onMount={handleEditorMount}
-                  autoFocus
-                />
-              </div>
-            )
           )}
+          <div style={{ width: "100%", height: "100%", position: "relative" }}>
+            <Excalidraw
+              initialData={initialSketchData ?? undefined}
+              excalidrawAPI={(api) => setExcalidrawAPI(api)}
+              onChange={() => {
+                if (suppressDirtyRef.current) return;
+                setDirty(true);
+              }}
+            />
+          </div>
         </div>
       </div>
     </div>

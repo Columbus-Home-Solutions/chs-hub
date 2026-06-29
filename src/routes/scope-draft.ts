@@ -13,7 +13,9 @@ import {
   parseStoredScopeDraft,
   type ScopeDraftItem,
   type ScopeDraftStatus,
+  type SketchImageBlock,
 } from "../lib/scope-draft.js";
+import { parseSketches } from "../lib/sketches.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const VALID_STATUSES: ReadonlySet<ScopeDraftStatus> = new Set([
@@ -60,15 +62,35 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 async function loadRequest(
   env: Env,
   id: string,
-): Promise<{ id: string; visit_notes: string | null; scope_draft: string | null } | null> {
+): Promise<{
+  id: string;
+  visit_notes: string | null;
+  scope_draft: string | null;
+  sketches: string | null;
+} | null> {
   return env.DB.prepare(
-    "SELECT id, visit_notes, scope_draft FROM estimate_requests WHERE id = ?",
+    "SELECT id, visit_notes, scope_draft, sketches FROM estimate_requests WHERE id = ?",
   )
     .bind(id)
-    .first<{ id: string; visit_notes: string | null; scope_draft: string | null }>();
+    .first<{
+      id: string;
+      visit_notes: string | null;
+      scope_draft: string | null;
+      sketches: string | null;
+    }>();
 }
 
 async function fetchActiveCatalog(env: Env): Promise<CatalogRow[]> {
@@ -91,15 +113,35 @@ export async function handleScopeDraftGenerate(
   if (!row) return err(404, "not_found", "Estimate request not found");
 
   const visitNotes = str(row.visit_notes);
-  if (!visitNotes) {
+  const sketches = parseSketches(row.sketches);
+  const hasSketches = sketches.length > 0;
+
+  if (!visitNotes && !hasSketches) {
     return json(
-      { error: "No visit notes to generate from. Add notes from your site visit first." },
+      { error: "Add visit notes or a sketch before generating a scope draft." },
       { status: 400 },
     );
   }
 
+  const sketchImages: SketchImageBlock[] = [];
+  if (hasSketches) {
+    for (const sketch of sketches.slice(0, 3)) {
+      try {
+        const thumbObj = await env.FILES.get(sketch.thumbnail_key);
+        if (!thumbObj) continue;
+        const bytes = await thumbObj.arrayBuffer();
+        sketchImages.push({
+          base64: arrayBufferToBase64(bytes),
+          mediaType: "image/png",
+        });
+      } catch {
+        // Skip failed fetches — graceful degradation
+      }
+    }
+  }
+
   const catalogItems = await fetchActiveCatalog(env);
-  const result = await generateScopeDraft(env, visitNotes, catalogItems);
+  const result = await generateScopeDraft(env, visitNotes, sketchImages, catalogItems);
   if (!result.ok) {
     return json(
       { error: "Scope draft generation failed.", details: result.error },

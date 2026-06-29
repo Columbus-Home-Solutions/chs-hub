@@ -7,7 +7,7 @@
  */
 
 import type { Env } from "../env.js";
-import { claudeMessages } from "./claude.js";
+import { claudeMessages, type ClaudeBlock, type ClaudeMessage } from "./claude.js";
 
 export const SCOPE_DRAFT_MODEL = "claude-sonnet-4-6";
 
@@ -33,6 +33,11 @@ export interface CatalogMatchInput {
   unit_price: number;
 }
 
+export interface SketchImageBlock {
+  base64: string;
+  mediaType: "image/png" | "image/jpeg";
+}
+
 const SYSTEM_PROMPT = `You are a construction estimating assistant for a residential remodeling company
 in Arkansas. Your job is to read field notes from a site visit and extract a list
 of scope items that belong on a construction estimate.
@@ -52,10 +57,28 @@ Rules:
 - Only extract items that represent actual work scope — not client preferences like "wants white cabinets" unless they define a scope item
 - Measurements in the notes should inform quantity where possible
 - If notes mention demolition separately from installation, create separate line items
-- Do not invent scope items not mentioned or implied in the notes
-- Catalog match only when the name and work type are a clear match — do not force matches`;
+- Do not invent scope items not mentioned or implied in the notes or sketches
+- Catalog match only when the name and work type are a clear match — do not force matches
+- When sketch images are provided, extract scope items visible in the drawings including any labeled dimensions, room names, or annotations.`;
 
-function buildUserMessage(visitNotes: string, catalogItems: CatalogMatchInput[]): string {
+export function buildClaudeMessages(
+  notes: string | null,
+  sketchImages: SketchImageBlock[],
+  catalogItems: CatalogMatchInput[],
+): ClaudeMessage[] {
+  const content: ClaudeBlock[] = [];
+
+  for (const img of sketchImages) {
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: img.mediaType,
+        data: img.base64,
+      },
+    });
+  }
+
   const catalogJson = JSON.stringify(
     catalogItems.map((c) => ({
       id: c.id,
@@ -64,17 +87,27 @@ function buildUserMessage(visitNotes: string, catalogItems: CatalogMatchInput[])
       unit_price: c.unit_price,
     })),
   );
-  return `Site visit notes:
-<notes>
-${visitNotes}
-</notes>
 
-Available catalog items for matching:
-<catalog>
-${catalogJson}
-</catalog>
+  const notesSection = notes
+    ? `<notes>\n${notes}\n</notes>`
+    : `<notes>No written notes provided. Use the sketch images above to identify scope items.</notes>`;
 
-Extract the scope items from these notes.`;
+  const catalogSection =
+    catalogItems.length > 0
+      ? `\n\nAvailable catalog items for matching:\n<catalog>\n${catalogJson}\n</catalog>`
+      : "";
+
+  const intro =
+    sketchImages.length > 0
+      ? "Review the site visit sketch images and notes below."
+      : "Site visit notes:";
+
+  content.push({
+    type: "text",
+    text: `${intro}\n${notesSection}${catalogSection}\n\nExtract the scope items from these notes and sketches.`.trim(),
+  });
+
+  return [{ role: "user", content }];
 }
 
 /** Strip markdown fences and parse a JSON array from Claude's reply. */
@@ -133,14 +166,15 @@ function normalizeItem(
 
 export async function generateScopeDraft(
   env: Env,
-  visitNotes: string,
+  visitNotes: string | null,
+  sketchImages: SketchImageBlock[],
   catalogItems: CatalogMatchInput[],
 ): Promise<{ ok: true; items: ScopeDraftItem[] } | { ok: false; error: string }> {
   const call = await claudeMessages(env, {
     system: SYSTEM_PROMPT,
     model: SCOPE_DRAFT_MODEL,
     maxTokens: 2000,
-    messages: [{ role: "user", content: buildUserMessage(visitNotes, catalogItems) }],
+    messages: buildClaudeMessages(visitNotes, sketchImages, catalogItems),
   });
 
   if (!call.ok) {

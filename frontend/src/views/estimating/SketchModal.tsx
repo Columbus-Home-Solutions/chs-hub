@@ -228,7 +228,9 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
     const ok = await saveCurrent();
     if (ok) {
       setSavedFlash(true);
-      window.setTimeout(() => setSavedFlash(false), 1500);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      setSavedFlash(false);
+      onClose();
     }
   };
 

@@ -17,6 +17,7 @@ import { UsersTab } from "./UsersTab";
 import { AuditLogTab, DlqTab, BackupTab, HealthTab } from "./ReliabilityTabs";
 import { CompanyTab, FinancialSettingsTab, NotificationsTab, QuoteFollowUpsTab, LeadOutreachTab } from "./SettingsEditors";
 import { IntegrationsTab } from "./IntegrationsTab";
+import { CatalogTab } from "./CatalogTab";
 
 type TabKey =
   | "company"
@@ -30,7 +31,8 @@ type TabKey =
   | "dlq"
   | "backup"
   | "health"
-  | "mobile";
+  | "mobile"
+  | "catalog";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "company", label: "Company" },
@@ -45,6 +47,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "backup", label: "Backup" },
   { key: "health", label: "Health" },
   { key: "mobile", label: "Mobile App" },
+  { key: "catalog", label: "Services & pricing" },
 ];
 
 export function Settings(_props: RoutableProps) {
@@ -123,6 +126,7 @@ export function Settings(_props: RoutableProps) {
           </div>
         </Card>
       )}
+      {tab === "catalog" && <CatalogTab />}
     </div>
   );
 }

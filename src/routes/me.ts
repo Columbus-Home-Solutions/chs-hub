@@ -12,6 +12,7 @@
 
 import type { Env } from "../env.js";
 import { authenticateRequest, AuthError } from "../middleware/auth.js";
+import { guard } from "../middleware/guard.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -81,4 +82,41 @@ export async function handleClockableUsers(request: Request, env: Env): Promise<
   });
 
   return json(users);
+}
+
+interface AssignableRow {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  name: string | null;
+  email: string | null;
+  role: string;
+}
+
+/**
+ * GET /api/users/assignable — active owner + PM users for job assignment dropdown.
+ * Auth: owner, project_manager, office_admin (not the Owner-only /api/users list).
+ */
+export async function handleAssignableUsers(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, ["owner", "project_manager", "office_admin"]);
+  if (guarded instanceof Response) return guarded;
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, first_name, last_name, name, email, role
+       FROM users
+      WHERE is_active = 1 AND role IN ('owner', 'project_manager')
+      ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, first_name, last_name, email`,
+  ).all<AssignableRow>();
+
+  const users = (results ?? []).map((u) => {
+    const full = [u.first_name, u.last_name].filter(Boolean).join(" ").trim();
+    return {
+      id: u.id,
+      name: full || (u.name ?? "").trim() || u.email,
+      email: u.email,
+      role: u.role,
+    };
+  });
+
+  return json({ users });
 }

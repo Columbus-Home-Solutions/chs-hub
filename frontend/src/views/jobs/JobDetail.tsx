@@ -264,6 +264,7 @@ function OverviewTab({
       <div class="stack">
         <Card title="Client">
           <div class="kv">
+            <ProjectManagerField job={job} refetch={refetch} toast={toast} />
             <div class="kv__row">
               <span class="kv__label">Name</span>
               <span class="kv__value">{job.client_name ?? "—"}</span>
@@ -379,6 +380,130 @@ function OverviewTab({
       >
         <p>This action cannot be undone. The job will be marked as closed.</p>
       </Modal>
+    </div>
+  );
+}
+
+// ─── Project Manager assignment ──────────────────────────────────────────────
+
+interface AssignableUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+}
+
+let assignableUsersCache: AssignableUser[] | null = null;
+
+function pmRoleLabel(role: string): string {
+  return role === "owner" ? "Owner" : "PM";
+}
+
+function ProjectManagerField({
+  job,
+  refetch,
+  toast,
+}: {
+  job: JobDetailResponse["job"];
+  refetch: () => void;
+  toast: ToastApi;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [users, setUsers] = useState<AssignableUser[]>(assignableUsersCache ?? []);
+  const [draft, setDraft] = useState(job.assigned_to ?? "");
+
+  useEffect(() => {
+    if (!editing) setDraft(job.assigned_to ?? "");
+  }, [job.assigned_to, editing]);
+
+  const openEditor = async () => {
+    setEditing(true);
+    if (assignableUsersCache) {
+      setUsers(assignableUsersCache);
+      return;
+    }
+    setLoadingUsers(true);
+    try {
+      const res = await api.get<{ users: AssignableUser[] }>("/api/users/assignable");
+      assignableUsersCache = res.users;
+      setUsers(res.users);
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+      setEditing(false);
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  const save = async (userId: string | null) => {
+    setSaving(true);
+    try {
+      await api.put(`/api/jobs/${job.id}`, { assigned_to: userId });
+      toast.push("success", "Project Manager updated");
+      setEditing(false);
+      refetch();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div class="kv__row">
+        <span class="kv__label">Project Manager</span>
+        <div class="kv__value stack gap-xs">
+          {loadingUsers ? (
+            <Spinner />
+          ) : (
+            <Select
+              value={draft}
+              options={[
+                { value: "", label: "— Unassigned —" },
+                ...users.map((u) => ({
+                  value: u.id,
+                  label: `${u.name} (${pmRoleLabel(u.role)})`,
+                })),
+              ]}
+              onChange={(v) => {
+                setDraft(v);
+                void save(v === "" ? null : v);
+              }}
+              disabled={saving}
+            />
+          )}
+          {saving && <Spinner />}
+          <Button variant="tertiary" size="sm" onClick={() => setEditing(false)} disabled={saving}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div class="kv__row">
+      <span class="kv__label">Project Manager</span>
+      <span class="kv__value flex items-center gap-sm flex-wrap">
+        {job.assigned_to_name ? (
+          <>
+            <span>{job.assigned_to_name}</span>
+            <Button variant="secondary" onClick={openEditor}>
+              Change
+            </Button>
+          </>
+        ) : (
+          <>
+            <span class="text--muted">Unassigned</span>
+            <Button variant="secondary" onClick={openEditor}>
+              Assign →
+            </Button>
+          </>
+        )}
+      </span>
     </div>
   );
 }

@@ -28,6 +28,7 @@
 
 import type { Env } from "../env.js";
 import { round2 } from "../lib/invoicing.js";
+import { formatPmPhone } from "../lib/pm-fields.js";
 import { handlePublicPayIntent } from "./public-pay.js";
 import { handleCycleList } from "./billing-cycles.js";
 import { buildReconciliationReport, type CycleForReport } from "../lib/cost-plus.js";
@@ -66,6 +67,7 @@ interface PortalJob {
   property_state: string | null;
   property_zip: string | null;
   conversion_reversed: number | null;
+  assigned_to: string | null;
 }
 
 /** Resolve the one job a portal_token maps to (rule #2). Null → invalid token. */
@@ -75,7 +77,7 @@ async function resolveJob(env: Env, token: string): Promise<PortalJob | null> {
     `SELECT id, job_number, title, status, client_id, payer_id, billing_model, portal_type,
             contract_total, deposit_amount,
             property_address, property_city, property_state, property_zip,
-            conversion_reversed
+            conversion_reversed, assigned_to
        FROM jobs WHERE portal_token = ?`,
   )
     .bind(token)
@@ -185,6 +187,39 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
     }
   }
 
+  let project_manager: {
+    assigned_to: string;
+    assigned_to_name: string;
+    assigned_to_phone: string | null;
+    assigned_to_email: string | null;
+  } | null = null;
+  if (job.assigned_to) {
+    const pmUser = await env.DB.prepare(
+      "SELECT first_name, last_name, name, business_phone, email FROM users WHERE id = ? AND is_active = 1",
+    )
+      .bind(job.assigned_to)
+      .first<{
+        first_name: string | null;
+        last_name: string | null;
+        name: string | null;
+        business_phone: string | null;
+        email: string | null;
+      }>();
+    if (pmUser) {
+      const name =
+        [pmUser.first_name, pmUser.last_name].filter(Boolean).join(" ").trim() ||
+        (pmUser.name ?? "").trim();
+      if (name) {
+        project_manager = {
+          assigned_to: job.assigned_to,
+          assigned_to_name: name,
+          assigned_to_phone: formatPmPhone(pmUser.business_phone),
+          assigned_to_email: pmUser.email?.trim() || null,
+        };
+      }
+    }
+  }
+
   return json({
     ok: true,
     company_name: await companyName(env),
@@ -193,6 +228,7 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
     completion_package_available: !!sentPkg,
     on_hold: onHold,
     billing_party,
+    project_manager,
     header: {
       client_name: await clientName(env, job.client_id),
       property_address: fullAddress(job),

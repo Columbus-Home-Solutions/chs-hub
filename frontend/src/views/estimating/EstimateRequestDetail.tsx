@@ -16,6 +16,8 @@ import { formatCurrency } from "../../lib/format";
 import { MarkWonModal } from "./MarkWonModal";
 import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton";
 import { canDeleteRequest, DeleteRequestButton } from "./DeleteRequestButton";
+import { ScopeDraftSection } from "./ScopeDraftSection";
+import { ScopeSummaryCard } from "./ScopeSummaryCard";
 import {
   ESTIMATE_SENT_TOOLTIP,
   LOST_REASONS,
@@ -24,7 +26,39 @@ import {
   type Estimate,
   type EstimateRequest,
   type EstimateRequestStatus,
+  type ScopeDraftItem,
 } from "../../types";
+
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  onresult:
+    | ((
+        e: {
+          results: ArrayLike<{ isFinal: boolean; 0: { transcript: string }; length: number }>;
+        },
+      ) => void)
+    | null;
+  onend: (() => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
+};
+
+function speechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
+  return (
+    (window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike })
+      .SpeechRecognition ||
+    (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike })
+      .webkitSpeechRecognition ||
+    null
+  );
+}
+
+function Icon({ name }: { name: string }) {
+  return <i class={`ti ti-${name}`} aria-hidden="true" />;
+}
 
 interface DetailResponse {
   request: EstimateRequest;
@@ -62,6 +96,19 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   const estimate = estData?.estimate;
 
   const [notes, setNotes] = useState("");
+  const [scopeDraft, setScopeDraft] = useState<ScopeDraftItem[] | null>(null);
+  const [draftGenerating, setDraftGenerating] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [hasGeneratedDraft, setHasGeneratedDraft] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const [micDenied, setMicDenied] = useState(false);
+  const recRef = useRef<SpeechRecognitionLike | null>(null);
+  const pendingTranscriptRef = useRef("");
+  const speechSupported = useRef<boolean | null>(null);
+  if (speechSupported.current === null && typeof window !== "undefined") {
+    speechSupported.current = speechRecognitionCtor() != null;
+  }
   const [apptOpen, setApptOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [wonOpen, setWonOpen] = useState(false);
@@ -73,6 +120,14 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   useEffect(() => {
     setNotes(r?.visit_notes ?? "");
   }, [r?.id, r?.visit_notes]);
+
+  useEffect(() => {
+    if (r?.scope_draft && r.scope_draft.length > 0) {
+      setScopeDraft(r.scope_draft);
+    } else if (r && !r.scope_draft) {
+      setScopeDraft(null);
+    }
+  }, [r?.id, r?.scope_draft]);
 
   // Sync review date edit state when record changes.
   useEffect(() => {
@@ -138,10 +193,128 @@ export function EstimateRequestDetail({ id }: DetailProps) {
     }
   };
 
-  const saveNotes = () => {
+  const saveNotes = (value?: string) => {
     if (!r) return;
-    if ((r.visit_notes ?? "") === notes) return; // no change
-    void patch({ visit_notes: notes }, "Visit notes saved");
+    const next = value ?? notes;
+    if ((r.visit_notes ?? "") === next) return;
+    void patch({ visit_notes: next }, "Visit notes saved");
+  };
+
+  const stopRecording = () => {
+    recRef.current?.stop();
+    recRef.current = null;
+    setRecording(false);
+    setInterimTranscript("");
+  };
+
+  const toggleRecording = () => {
+    const Ctor = speechRecognitionCtor();
+    if (!Ctor) return;
+
+    if (recording) {
+      stopRecording();
+      const chunk = pendingTranscriptRef.current.trim();
+      pendingTranscriptRef.current = "";
+      if (chunk) {
+        const next = notes.trim() ? `${notes.trim()}\n${chunk}` : chunk;
+        setNotes(next);
+        saveNotes(next);
+      }
+      return;
+    }
+
+    setMicDenied(false);
+    pendingTranscriptRef.current = "";
+    const rec = new Ctor();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.onresult = (e) => {
+      let interim = "";
+      let finalChunk = "";
+      for (let i = 0; i < e.results.length; i++) {
+        const result = e.results[i];
+        const t = result[0].transcript;
+        if (result.isFinal) finalChunk += t;
+        else interim += t;
+      }
+      if (finalChunk) pendingTranscriptRef.current += finalChunk;
+      setInterimTranscript(interim);
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        setMicDenied(true);
+      }
+      stopRecording();
+    };
+    rec.onend = () => {
+      setRecording(false);
+      setInterimTranscript("");
+      recRef.current = null;
+    };
+    recRef.current = rec;
+    try {
+      rec.start();
+      setRecording(true);
+    } catch {
+      setMicDenied(true);
+    }
+  };
+
+  const generateScopeDraft = async () => {
+    if (!id) return;
+    const trimmed = notes.trim();
+    if (!trimmed) {
+      setDraftError("Add visit notes before generating a scope draft.");
+      return;
+    }
+    setDraftError(null);
+    setDraftGenerating(true);
+    try {
+      const res = await api.post<{ draft: ScopeDraftItem[]; generated_at: string }>(
+        `/api/estimate-requests/${id}/scope-draft`,
+      );
+      setScopeDraft(res.draft);
+      setHasGeneratedDraft(true);
+    } catch (err) {
+      setDraftError("Scope draft generation failed. Check visit notes and try again.");
+      if (err instanceof ApiError && err.details) {
+        console.warn("[scope-draft]", err.details);
+      }
+    } finally {
+      setDraftGenerating(false);
+    }
+  };
+
+  const regenerateScopeDraft = async () => {
+    if (!id) return;
+    setDraftError(null);
+    setDraftGenerating(true);
+    try {
+      await api.del(`/api/estimate-requests/${id}/scope-draft`);
+      const res = await api.post<{ draft: ScopeDraftItem[] }>(
+        `/api/estimate-requests/${id}/scope-draft`,
+      );
+      setScopeDraft(res.draft);
+      setHasGeneratedDraft(true);
+    } catch {
+      setDraftError("Scope draft generation failed. Check visit notes and try again.");
+    } finally {
+      setDraftGenerating(false);
+    }
+  };
+
+  const patchScopeDraftItem = async (itemIndex: number, updates: Record<string, unknown>) => {
+    if (!id || !scopeDraft) return;
+    try {
+      const res = await api.patch<{ draft: ScopeDraftItem[] }>(
+        `/api/estimate-requests/${id}/scope-draft`,
+        { item_index: itemIndex, updates },
+      );
+      setScopeDraft(res.draft);
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    }
   };
 
   // Appointment + lost use dedicated endpoints (PUT /:id/appointment, /:id/lost).
@@ -350,15 +523,89 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             )}
           </Card>
 
-          <Card title="Visit Notes">
+          <Card
+            title="Visit Capture"
+            actions={
+              <div class="visit-capture__actions flex gap-sm">
+                {speechSupported.current && (
+                  <Button
+                    size="sm"
+                    variant={recording ? "danger" : "secondary"}
+                    onClick={toggleRecording}
+                  >
+                    <Icon name="microphone" /> {recording ? "Stop recording" : "Record"}
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => toast.push("info", "Field sketching coming soon")}
+                >
+                  <Icon name="pencil" /> Draw
+                </Button>
+              </div>
+            }
+          >
             <textarea
-              class="form-textarea"
-              placeholder="Notes from the estimate visit… (saved when you click away)"
+              class={`form-textarea${recording ? " visit-capture__textarea--recording" : ""}`}
+              placeholder={
+                recording && !notes.trim() && interimTranscript
+                  ? interimTranscript
+                  : "Notes from the estimate visit…"
+              }
               value={notes}
               onInput={(e) => setNotes((e.target as HTMLTextAreaElement).value)}
-              onBlur={saveNotes}
+              onBlur={() => saveNotes()}
             />
+            {recording && interimTranscript && notes.trim() && (
+              <p class="visit-capture__interim text--muted">{interimTranscript}</p>
+            )}
+            {micDenied && (
+              <div class="visit-capture__alert callout callout--warning">
+                <span>Microphone access was denied. Check your browser settings.</span>
+                <button
+                  type="button"
+                  class="visit-capture__alert-dismiss"
+                  aria-label="Dismiss"
+                  onClick={() => setMicDenied(false)}
+                >
+                  <Icon name="x" />
+                </button>
+              </div>
+            )}
+            <div class="visit-capture__footer">
+              <span class="text--muted visit-capture__hint">
+                Saved when you click away
+              </span>
+              <div class="visit-capture__draft-actions">
+                {draftError && (
+                  <span class="visit-capture__error text--error">{draftError}</span>
+                )}
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={draftGenerating}
+                  onClick={() => void generateScopeDraft()}
+                >
+                  <Icon name="wand" />{" "}
+                  {draftGenerating
+                    ? "Generating…"
+                    : scopeDraft || hasGeneratedDraft
+                      ? "Regenerate scope draft"
+                      : "Build scope draft"}
+                </Button>
+              </div>
+            </div>
           </Card>
+
+          {scopeDraft && scopeDraft.length > 0 && (
+            <ScopeDraftSection
+              draft={scopeDraft}
+              generating={draftGenerating}
+              onRegenerate={() => void regenerateScopeDraft()}
+              onPatchItem={patchScopeDraftItem}
+            />
+          )}
 
           <Card title="Estimate">
             <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
@@ -481,6 +728,14 @@ export function EstimateRequestDetail({ id }: DetailProps) {
               )}
             </div>
           </Card>
+
+          {scopeDraft && scopeDraft.length > 0 && (
+            <ScopeSummaryCard
+              requestId={r.id}
+              draft={scopeDraft}
+              onDraftUpdate={setScopeDraft}
+            />
+          )}
 
           <Card title="Activity Log">
             {data!.activity.length === 0 ? (

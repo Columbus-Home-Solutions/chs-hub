@@ -27,6 +27,7 @@ import { shouldSkipContractAutogen } from "../lib/estimate-contract-document.js"
 import { scheduleWorkingAgreementGeneration } from "../lib/working-agreement.js";
 import { cascadeDeleteEstimateRequest } from "../lib/cascade-delete.js";
 import { triggerPostVisitFollowUp } from "../lib/new-lead-outreach.js";
+import { parseStoredScopeDraft } from "../lib/scope-draft.js";
 
 // Write roles match the app-wide convention (clients/subs): owner, PM, and
 // office_admin — office_admin managing the pipeline is the realistic workflow.
@@ -114,6 +115,7 @@ interface RequestRow {
   appointment_time: string | null;
   appointment_completed: number | null;
   visit_notes: string | null;
+  scope_draft: string | null;
   visit_photo_ids: string | null;
   estimate_id: string | null;
   sent_date: string | null;
@@ -197,6 +199,7 @@ function shape(row: RequestRow) {
     appointment_time: row.appointment_time ?? null,
     appointment_completed: (row.appointment_completed ?? 0) === 1,
     visit_notes: row.visit_notes,
+    scope_draft: parseStoredScopeDraft(row.scope_draft),
     visit_photo_ids: row.visit_photo_ids,
     estimate_id: row.estimate_id,
     estimate_status: row.e_status,

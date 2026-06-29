@@ -204,6 +204,21 @@ export type EstimateRequestStatus =
   | "won"
   | "lost";
 
+export type ScopeDraftStatus = "pending" | "accepted" | "discarded" | "pushed";
+
+export interface ScopeDraftItem {
+  id: string;
+  product_service: string;
+  description: string;
+  quantity: number;
+  unit: string;
+  unit_price: number | null;
+  catalog_match_id: string | null;
+  catalog_match_name: string | null;
+  status: ScopeDraftStatus;
+  generated_at: string;
+}
+
 export interface EstimateRequest {
   id: string;
   request_number: number;
@@ -224,6 +239,7 @@ export interface EstimateRequest {
   appointment_date: string | null;
   appointment_completed: boolean;
   visit_notes: string | null;
+  scope_draft: ScopeDraftItem[] | null;
   visit_photo_ids: string | null;
   estimate_id: string | null;
   estimate_status: EstimateStatus | null;
@@ -568,6 +584,10 @@ export interface JobCard {
   overdue: boolean;
   created_at: string | null;
   updated_at: string | null;
+  assigned_to?: string | null;
+  assigned_to_name?: string | null;
+  assigned_to_phone?: string | null;
+  assigned_to_email?: string | null;
 }
 
 export interface JobPipelineResponse {

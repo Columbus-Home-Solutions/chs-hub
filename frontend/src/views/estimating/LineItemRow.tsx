@@ -1,0 +1,622 @@
+import { useEffect, useRef, useState } from "preact/hooks";
+import { Button } from "../../components/ui/Button";
+import { Select } from "../../components/ui/Select";
+import { Modal } from "../../components/ui/Modal";
+import { api } from "../../api";
+import { formatCurrency, formatStatus } from "../../lib/format";
+import { useCatalogAutocomplete } from "../../hooks/useCatalogAutocomplete";
+import type { CatalogItem } from "../settings/CatalogTab";
+import {
+  SUB_ITEM_CATEGORIES,
+  type EstimateLineItem,
+  type EstimateSubItem,
+  type VendorMaterial,
+} from "../../types";
+
+export interface LineItemRowProps {
+  item: EstimateLineItem;
+  isNew?: boolean;
+  dragging: boolean;
+  over: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOver: () => void;
+  onDrop: () => void;
+  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+  onNewConsumed?: () => void;
+}
+
+function highlightName(name: string, query: string) {
+  if (!query.trim()) return name;
+  const lower = name.toLowerCase();
+  const q = query.toLowerCase();
+  const i = lower.indexOf(q);
+  if (i === -1) return name;
+  return (
+    <>
+      {name.slice(0, i)}
+      <mark class="catalog-ac__mark">{name.slice(i, i + query.length)}</mark>
+      {name.slice(i + query.length)}
+    </>
+  );
+}
+
+function unitCostFromItem(item: EstimateLineItem): number {
+  const qty = item.quantity ?? 1;
+  if (!qty || item.internal_cost <= 0) return 0;
+  return item.internal_cost / qty;
+}
+
+function marginPercent(unitPrice: number, unitCost: number): number | null {
+  if (!unitPrice || unitPrice <= 0) return null;
+  if (unitCost <= 0) return null;
+  return Math.round(((unitPrice - unitCost) / unitPrice) * 100);
+}
+
+function autoGrow(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  el.style.height = `${Math.max(el.scrollHeight, 72)}px`;
+}
+
+export function LineItemRow({
+  item,
+  isNew,
+  dragging,
+  over,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+  mutate,
+  onNewConsumed,
+}: LineItemRowProps) {
+  const [expanded, setExpanded] = useState(!!isNew);
+  const [fromCatalog, setFromCatalog] = useState(false);
+  const [showAc, setShowAc] = useState(false);
+  const [acIndex, setAcIndex] = useState(-1);
+  const [fields, setFields] = useState({
+    product_service: item.product_service,
+    description: item.description,
+    quantity: item.quantity ?? 1,
+    unit: item.unit ?? "",
+    unit_price: item.unit_price ?? 0,
+    includes_note: item.includes_note ?? "",
+  });
+  const [myCostStr, setMyCostStr] = useState(String(unitCostFromItem(item)));
+
+  const nameRef = useRef<HTMLInputElement>(null);
+  const acWrapRef = useRef<HTMLDivElement>(null);
+  const descRef = useRef<HTMLTextAreaElement>(null);
+  const acQuery = showAc ? fields.product_service : "";
+  const { results: catalogResults, loading: catalogLoading } = useCatalogAutocomplete(acQuery);
+
+  const acOptions = catalogResults.length;
+  const acTotal = acOptions + 1;
+
+  useEffect(() => {
+    setFields({
+      product_service: item.product_service,
+      description: item.description,
+      quantity: item.quantity ?? 1,
+      unit: item.unit ?? "",
+      unit_price: item.unit_price ?? 0,
+      includes_note: item.includes_note ?? "",
+    });
+    setMyCostStr(String(unitCostFromItem(item) || ""));
+  }, [
+    item.id,
+    item.product_service,
+    item.description,
+    item.quantity,
+    item.unit,
+    item.unit_price,
+    item.includes_note,
+    item.internal_cost,
+  ]);
+
+  useEffect(() => {
+    if (isNew) {
+      setExpanded(true);
+      requestAnimationFrame(() => {
+        nameRef.current?.focus();
+        nameRef.current?.select();
+      });
+    }
+  }, [isNew, item.id]);
+
+  useEffect(() => {
+    if (!showAc) return;
+    const onDoc = (ev: MouseEvent) => {
+      if (!acWrapRef.current?.contains(ev.target as Node)) {
+        setShowAc(false);
+        setAcIndex(-1);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [showAc]);
+
+  useEffect(() => {
+    if (expanded && descRef.current) autoGrow(descRef.current);
+  }, [expanded, fields.description]);
+
+  const save = (patch: Record<string, unknown>) =>
+    mutate(() => api.put(`/api/line-items/${item.id}`, patch));
+
+  const previewTotal = (Number(fields.quantity) || 0) * (Number(fields.unit_price) || 0);
+  const unitCost = Number(myCostStr) || 0;
+  const margin = marginPercent(Number(fields.unit_price) || 0, unitCost);
+
+  const applyCatalog = (cat: CatalogItem) => {
+    const next = {
+      product_service: cat.name,
+      description: cat.description ?? "",
+      unit: cat.unit ?? "",
+      unit_price: cat.unit_price,
+    };
+    setFields((f) => ({ ...f, ...next }));
+    setFromCatalog(true);
+    setExpanded(true);
+    setShowAc(false);
+    setAcIndex(-1);
+    void save({
+      product_service: cat.name,
+      description: next.description,
+      unit: next.unit || null,
+      unit_price: cat.unit_price,
+    });
+  };
+
+  const selectAcIndex = (idx: number) => {
+    if (idx < catalogResults.length) {
+      applyCatalog(catalogResults[idx]);
+    } else {
+      setShowAc(false);
+      setAcIndex(-1);
+    }
+  };
+
+  const onNameKeyDown = (ev: KeyboardEvent) => {
+    if (!showAc) return;
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      setAcIndex((i) => Math.min(i + 1, acTotal - 1));
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      setAcIndex((i) => Math.max(i - 1, 0));
+    } else if (ev.key === "Enter" && acIndex >= 0) {
+      ev.preventDefault();
+      selectAcIndex(acIndex);
+    } else if (ev.key === "Escape") {
+      setShowAc(false);
+      setAcIndex(-1);
+    }
+  };
+
+  const persistMyCost = () => {
+    const parsed = Number(myCostStr);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    const qty = Number(fields.quantity) || 1;
+    const current = unitCostFromItem(item);
+    if (Math.abs(parsed - current) < 0.009) return;
+
+    if (item.sub_items.length === 0) {
+      void mutate(
+        () =>
+          api.post(`/api/line-items/${item.id}/sub-items`, {
+            description: "Labor & materials",
+            category: "material",
+            quantity: qty,
+            unit_cost: parsed,
+          }),
+        undefined,
+      );
+      return;
+    }
+    if (item.sub_items.length === 1) {
+      const sub = item.sub_items[0];
+      void mutate(() => api.put(`/api/sub-items/${sub.id}`, { unit_cost: parsed, quantity: qty }));
+    }
+  };
+
+  const onNameBlur = () => {
+    if (fields.product_service !== item.product_service) {
+      void save({ product_service: fields.product_service });
+    }
+    if (isNew && fields.product_service.trim() && fields.product_service !== "New Line Item") {
+      onNewConsumed?.();
+    }
+    setTimeout(() => setShowAc(false), 150);
+  };
+
+  return (
+    <div
+      class={`li-row${dragging ? " li-row--dragging" : ""}${over ? " li-row--over" : ""}${expanded ? " li-row--expanded" : ""}`}
+      onDragOver={(ev) => {
+        ev.preventDefault();
+        onDragOver();
+      }}
+      onDrop={(ev) => {
+        ev.preventDefault();
+        onDrop();
+      }}
+    >
+      <div class="li-row__grid">
+        <span
+          class="li-row__drag"
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          title="Drag to reorder"
+        >
+          ⠿
+        </span>
+        <button
+          type="button"
+          class={`li-row__chevron${expanded ? " li-row__chevron--open" : ""}`}
+          onClick={() => setExpanded((x) => !x)}
+          title="Expand details"
+          aria-expanded={expanded}
+        >
+          ›
+        </button>
+        <div class="li-row__name-wrap" ref={acWrapRef}>
+          <input
+            ref={nameRef}
+            class="li-row__input li-row__input--name"
+            value={fields.product_service}
+            placeholder="Product / service"
+            onInput={(ev) => {
+              const v = (ev.target as HTMLInputElement).value;
+              setFields((f) => ({ ...f, product_service: v }));
+              setShowAc(v.trim().length >= 1);
+              setAcIndex(-1);
+            }}
+            onFocus={() => {
+              if (fields.product_service.trim().length >= 1) setShowAc(true);
+            }}
+            onBlur={onNameBlur}
+            onKeyDown={onNameKeyDown}
+          />
+          {fromCatalog && <span class="li-row__catalog-badge">from catalog</span>}
+          {showAc && fields.product_service.trim().length >= 1 && (
+            <div class="catalog-ac" role="listbox">
+              {catalogLoading && catalogResults.length === 0 && (
+                <div class="catalog-ac__empty">Searching…</div>
+              )}
+              {catalogResults.map((cat, i) => (
+                <button
+                  type="button"
+                  key={cat.id}
+                  class={`catalog-ac__item${acIndex === i ? " catalog-ac__item--active" : ""}`}
+                  onMouseDown={(ev) => ev.preventDefault()}
+                  onClick={() => applyCatalog(cat)}
+                >
+                  <div class="catalog-ac__item-top">
+                    <span class="catalog-ac__item-name">{highlightName(cat.name, fields.product_service)}</span>
+                    <span class="catalog-ac__item-price">
+                      {formatCurrency(cat.unit_price)}
+                      {cat.unit ? `/${cat.unit}` : ""}
+                    </span>
+                  </div>
+                  {cat.description && (
+                    <div class="catalog-ac__item-desc">{cat.description}</div>
+                  )}
+                </button>
+              ))}
+              <button
+                type="button"
+                class={`catalog-ac__item catalog-ac__item--new${acIndex === acOptions ? " catalog-ac__item--active" : ""}`}
+                onMouseDown={(ev) => ev.preventDefault()}
+                onClick={() => selectAcIndex(acOptions)}
+              >
+                + Add &ldquo;{fields.product_service.trim()}&rdquo; as a new item
+              </button>
+            </div>
+          )}
+        </div>
+        <input
+          class="li-row__input li-row__input--qty"
+          type="number"
+          step="any"
+          value={fields.quantity}
+          onInput={(ev) => setFields((f) => ({ ...f, quantity: Number((ev.target as HTMLInputElement).value) }))}
+          onBlur={() => Number(fields.quantity) !== (item.quantity ?? 1) && save({ quantity: Number(fields.quantity) })}
+        />
+        <input
+          class="li-row__input li-row__input--unit"
+          value={fields.unit}
+          placeholder="each"
+          onInput={(ev) => setFields((f) => ({ ...f, unit: (ev.target as HTMLInputElement).value }))}
+          onBlur={() => (fields.unit || null) !== (item.unit ?? null) && save({ unit: fields.unit })}
+        />
+        <input
+          class="li-row__input li-row__input--price"
+          type="number"
+          step="any"
+          value={fields.unit_price}
+          onInput={(ev) => setFields((f) => ({ ...f, unit_price: Number((ev.target as HTMLInputElement).value) }))}
+          onBlur={() =>
+            Number(fields.unit_price) !== (item.unit_price ?? 0) && save({ unit_price: Number(fields.unit_price) })
+          }
+        />
+        <span class="li-row__total">{formatCurrency(previewTotal)}</span>
+        <button
+          type="button"
+          class="li-row__del"
+          title="Remove line item"
+          onClick={() => mutate(() => api.del(`/api/line-items/${item.id}`), "Line item removed")}
+        >
+          ×
+        </button>
+      </div>
+
+      {expanded && (
+        <div class="li-row__detail">
+          <label class="li-row__detail-label">Scope of work (client sees this):</label>
+          <textarea
+            ref={descRef}
+            class="li-row__textarea"
+            placeholder="Scope of work for this line item…"
+            value={fields.description}
+            onInput={(ev) => {
+              const el = ev.target as HTMLTextAreaElement;
+              setFields((f) => ({ ...f, description: el.value }));
+              autoGrow(el);
+            }}
+            onBlur={() => fields.description !== item.description && save({ description: fields.description })}
+          />
+          <div class="li-row__detail-row">
+            <input
+              class="li-row__input li-row__input--includes"
+              value={fields.includes_note}
+              placeholder="Price includes labor and materials"
+              onInput={(ev) => setFields((f) => ({ ...f, includes_note: (ev.target as HTMLInputElement).value }))}
+              onBlur={() =>
+                (fields.includes_note || null) !== (item.includes_note ?? null) && save({ includes_note: fields.includes_note })
+              }
+            />
+            <label class="li-row__cost-field">
+              <span>My cost</span>
+              <input
+                class="li-row__input li-row__input--cost"
+                type="number"
+                step="any"
+                min="0"
+                value={myCostStr}
+                disabled={item.sub_items.length > 1}
+                title={item.sub_items.length > 1 ? "Edit costs in the breakdown below" : undefined}
+                onInput={(ev) => setMyCostStr((ev.target as HTMLInputElement).value)}
+                onBlur={persistMyCost}
+              />
+            </label>
+            <div class="li-row__margin">
+              <span class="li-row__margin-label">Margin</span>
+              <span
+                class={`li-row__margin-value${
+                  margin == null ? " li-row__margin-value--muted" : margin <= 0 ? " li-row__margin-value--bad" : " li-row__margin-value--good"
+                }`}
+              >
+                {margin != null ? `${margin}%` : "—"}
+              </span>
+            </div>
+          </div>
+          <SubItemList item={item} mutate={mutate} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubItemList({
+  item,
+  mutate,
+}: {
+  item: EstimateLineItem;
+  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+}) {
+  const [materialFor, setMaterialFor] = useState(false);
+
+  const addSub = () =>
+    mutate(
+      () =>
+        api.post(`/api/line-items/${item.id}/sub-items`, {
+          description: "New cost item",
+          category: "material",
+          quantity: 1,
+          unit_cost: 0,
+        }),
+      "Sub-item added",
+    );
+
+  return (
+    <div class="subitems">
+      <div class="subitems__head">
+        <span class="subitems__title">Internal Cost Breakdown (not shown to client)</span>
+        <div class="flex gap-sm">
+          <Button size="sm" variant="tertiary" onClick={() => setMaterialFor(true)}>
+            Search Materials
+          </Button>
+          <Button size="sm" variant="secondary" onClick={addSub}>
+            + Add Sub-Item
+          </Button>
+        </div>
+      </div>
+      {item.sub_items.length === 0 ? (
+        <div class="subitems__empty">No sub-items. Add material, labor, or sub costs.</div>
+      ) : (
+        item.sub_items.map((s) => <SubItemRow key={s.id} sub={s} mutate={mutate} />)
+      )}
+      <MaterialSearchModal
+        open={materialFor}
+        onClose={() => setMaterialFor(false)}
+        onPick={(m) => {
+          setMaterialFor(false);
+          void mutate(
+            () =>
+              api.post(`/api/line-items/${item.id}/sub-items`, {
+                description: m.material_name,
+                category: m.category || "material",
+                vendor: m.vendor_name,
+                quantity: 1,
+                unit: m.unit,
+                unit_cost: m.last_price,
+                material_id: m.id,
+              }),
+            "Material added",
+          );
+        }}
+      />
+    </div>
+  );
+}
+
+function SubItemRow({
+  sub,
+  mutate,
+}: {
+  sub: EstimateSubItem;
+  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+}) {
+  const [f, setF] = useState({
+    description: sub.description,
+    category: sub.category,
+    vendor: sub.vendor ?? "",
+    quantity: sub.quantity ?? 0,
+    unit: sub.unit ?? "",
+    unit_cost: sub.unit_cost ?? 0,
+  });
+  useEffect(() => {
+    setF({
+      description: sub.description,
+      category: sub.category,
+      vendor: sub.vendor ?? "",
+      quantity: sub.quantity ?? 0,
+      unit: sub.unit ?? "",
+      unit_cost: sub.unit_cost ?? 0,
+    });
+  }, [sub.id, sub.description, sub.category, sub.vendor, sub.quantity, sub.unit, sub.unit_cost]);
+
+  const save = (patch: Record<string, unknown>) => mutate(() => api.put(`/api/sub-items/${sub.id}`, patch));
+
+  return (
+    <div class="subitem">
+      <input
+        class="form-input"
+        value={f.description}
+        placeholder="Description"
+        onInput={(ev) => setF((p) => ({ ...p, description: (ev.target as HTMLInputElement).value }))}
+        onBlur={() => f.description !== sub.description && save({ description: f.description })}
+      />
+      <Select
+        value={f.category}
+        options={SUB_ITEM_CATEGORIES.map((c) => ({ value: c, label: formatStatus(c) }))}
+        onChange={(v) => {
+          setF((p) => ({ ...p, category: v }));
+          if (v !== sub.category) save({ category: v });
+        }}
+      />
+      <input
+        class="form-input"
+        value={f.vendor}
+        placeholder="Vendor"
+        onInput={(ev) => setF((p) => ({ ...p, vendor: (ev.target as HTMLInputElement).value }))}
+        onBlur={() => (f.vendor || null) !== (sub.vendor ?? null) && save({ vendor: f.vendor })}
+      />
+      <input
+        class="form-input subitem__num"
+        type="number"
+        step="any"
+        value={f.quantity}
+        placeholder="Qty"
+        onInput={(ev) => setF((p) => ({ ...p, quantity: Number((ev.target as HTMLInputElement).value) }))}
+        onBlur={() => Number(f.quantity) !== (sub.quantity ?? 0) && save({ quantity: Number(f.quantity) })}
+      />
+      <input
+        class="form-input subitem__num"
+        type="number"
+        step="any"
+        value={f.unit_cost}
+        placeholder="Cost"
+        onInput={(ev) => setF((p) => ({ ...p, unit_cost: Number((ev.target as HTMLInputElement).value) }))}
+        onBlur={() => Number(f.unit_cost) !== (sub.unit_cost ?? 0) && save({ unit_cost: Number(f.unit_cost) })}
+      />
+      <span class="subitem__total">{formatCurrency(sub.total_cost)}</span>
+      <button class="li-row__del" title="Remove sub-item" onClick={() => mutate(() => api.del(`/api/sub-items/${sub.id}`))}>
+        ×
+      </button>
+    </div>
+  );
+}
+
+function MaterialSearchModal({
+  open,
+  onClose,
+  onPick,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onPick: (m: VendorMaterial) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<VendorMaterial[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setQ("");
+      setResults([]);
+      setSearched(false);
+    }
+  }, [open]);
+
+  const search = async () => {
+    setBusy(true);
+    try {
+      const r = await api.get<{ materials: VendorMaterial[] }>(`/api/materials/search?q=${encodeURIComponent(q)}`);
+      setResults(r.materials);
+    } catch {
+      setResults([]);
+    } finally {
+      setBusy(false);
+      setSearched(true);
+    }
+  };
+
+  return (
+    <Modal open={open} title="Search Materials" onClose={onClose}>
+      <div class="flex gap-sm">
+        <input
+          class="form-input"
+          placeholder="Search by material or vendor (e.g. 2x4)…"
+          value={q}
+          onInput={(ev) => setQ((ev.target as HTMLInputElement).value)}
+          onKeyDown={(ev) => ev.key === "Enter" && search()}
+        />
+        <Button variant="primary" onClick={search} disabled={busy}>
+          Search
+        </Button>
+      </div>
+      <div class="mt-md">
+        {busy && <div class="text--muted">Searching…</div>}
+        {!busy && searched && results.length === 0 && (
+          <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            No materials found. Add this cost manually instead.
+          </div>
+        )}
+        {results.map((m) => (
+          <button key={m.id} class="typeahead__item" onClick={() => onPick(m)}>
+            <span>
+              {m.material_name} — {formatCurrency(m.last_price)}/{m.unit}
+            </span>
+            <span class="text--muted">
+              {m.vendor_name}
+              {m.average_price != null ? ` · avg ${formatCurrency(m.average_price)}` : ""}
+            </span>
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}

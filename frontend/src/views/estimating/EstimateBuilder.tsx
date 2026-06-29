@@ -24,6 +24,7 @@ import {
   isPerLineItemBilling,
 } from "../../lib/estimate-milestones";
 import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton";
+import { LineItemRow } from "./LineItemRow";
 import {
   BILLING_MODELS,
   BILLING_MODEL_DESCRIPTIONS,
@@ -31,12 +32,10 @@ import {
   ESTIMATE_MODES,
   LOST_REASONS,
   PAYMENT_TRIGGERS,
-  SUB_ITEM_CATEGORIES,
   type Estimate,
   type EstimateLineItem,
   type EstimateTemplate,
   type SavedReview,
-  type VendorMaterial,
 } from "../../types";
 
 interface BuilderProps extends RoutableProps {
@@ -348,7 +347,7 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
       <div class="builder__panels">
         {/* ── Left: line item editor ───────────────────────────── */}
         <div class={`builder__panel builder__panel--editor${mobileView === "preview" ? " is-hidden-mobile" : ""}`}>
-          <LineItemEditor estimate={e} mutate={mutate} />
+          <LineItemEditor estimate={e} mutate={mutate} reload={reload} />
 
           {isPerLineItemBilling(e.billing_model) && (
             <PerLineItemDeposit estimate={e} patchHeader={patchHeader} />
@@ -364,13 +363,17 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
               onApplyDefaults={() => void applyDefaultSchedule(e, "Default payment schedule added")}
             />
           )}
-
-          <OptionsCard estimate={e} reviews={reviews} patchHeader={patchHeader} patchWithAutoSchedule={patchWithAutoSchedule} />
         </div>
 
-        {/* ── Right: live client preview ───────────────────────── */}
+        {/* ── Right: live client preview + quote options ───────── */}
         <div class={`builder__panel builder__panel--preview${mobileView === "edit" ? " is-hidden-mobile" : ""}`}>
           <ClientPreview estimate={e} reviews={reviews} />
+          <OptionsCard
+            estimate={e}
+            reviews={reviews}
+            patchHeader={patchHeader}
+            patchWithAutoSchedule={patchWithAutoSchedule}
+          />
         </div>
       </div>
 
@@ -479,24 +482,37 @@ function TemplateApplier({
 function LineItemEditor({
   estimate,
   mutate,
+  reload,
 }: {
   estimate: Estimate;
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+  reload: () => Promise<void>;
 }) {
+  const toast = useToast();
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  const [newItemId, setNewItemId] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
-  const addLineItem = () =>
-    mutate(
-      () =>
-        api.post(`/api/estimates/${estimate.id}/line-items`, {
-          product_service: "New Line Item",
-          description: "",
-          quantity: 1,
-          unit_price: 0,
-        }),
-      "Line item added",
-    );
+  const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
+
+  const addLineItem = async () => {
+    setAdding(true);
+    try {
+      const res = await api.post<{ line_item: EstimateLineItem }>(`/api/estimates/${estimate.id}/line-items`, {
+        product_service: "New Line Item",
+        description: "",
+        quantity: 1,
+        unit_price: 0,
+      });
+      if (res.line_item?.id) setNewItemId(res.line_item.id);
+      await reload();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setAdding(false);
+    }
+  };
 
   const onDrop = (targetId: string) => {
     const src = dragId;
@@ -511,401 +527,81 @@ function LineItemEditor({
     void mutate(() => api.put(`/api/estimates/${estimate.id}/line-items/reorder`, { ids }));
   };
 
+  const marginTone =
+    estimate.total > 0 && estimate.margin_percent > 0
+      ? " li-table__stat-value--good"
+      : estimate.margin_percent <= 0 && estimate.total > 0
+        ? " li-table__stat-value--bad"
+        : "";
+
   return (
-    <Card title="Line Items" actions={<Button size="sm" variant="primary" onClick={addLineItem}>+ Add Line Item</Button>}>
+    <Card title="Line Items">
       {estimate.line_items.length === 0 ? (
         <div class="empty-state" style={{ padding: "var(--space-xl)" }}>
           <div class="empty-state__title">No line items yet</div>
           <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
             Add a line item to start building, or apply a template above.
           </div>
+          <div class="mt-md">
+            <Button variant="tertiary" disabled={adding} onClick={addLineItem}>
+              + Add line item
+            </Button>
+          </div>
         </div>
       ) : (
-        <div class="li-list">
-          {estimate.line_items.map((li) => (
-            <LineItemCard
-              key={li.id}
-              item={li}
-              mutate={mutate}
-              dragging={dragId === li.id}
-              over={overId === li.id}
-              onDragStart={() => setDragId(li.id)}
-              onDragEnd={() => {
-                setDragId(null);
-                setOverId(null);
-              }}
-              onDragOver={() => setOverId(li.id)}
-              onDrop={() => onDrop(li.id)}
-            />
-          ))}
+        <div class="li-table-wrap">
+          <div class="li-table__head li-row__grid" aria-hidden="true">
+            <span />
+            <span />
+            <span>Name</span>
+            <span>Qty</span>
+            <span>Unit</span>
+            <span>Unit price</span>
+            <span>Total</span>
+            <span />
+          </div>
+          <div class="li-table">
+            {estimate.line_items.map((li) => (
+              <LineItemRow
+                key={li.id}
+                item={li}
+                isNew={li.id === newItemId}
+                dragging={dragId === li.id}
+                over={overId === li.id}
+                onDragStart={() => setDragId(li.id)}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setOverId(null);
+                }}
+                onDragOver={() => setOverId(li.id)}
+                onDrop={() => onDrop(li.id)}
+                mutate={mutate}
+                onNewConsumed={() => setNewItemId(null)}
+              />
+            ))}
+          </div>
+          <div class="li-table__footer">
+            <Button variant="tertiary" disabled={adding} onClick={addLineItem}>
+              + Add line item
+            </Button>
+            <div class="li-table__stats">
+              <span>
+                Cost: <strong>{formatCurrency(estimate.internal_cost)}</strong>
+              </span>
+              <span class="li-table__dot">·</span>
+              <span>
+                Total: <strong>{formatCurrency(estimate.total)}</strong>
+              </span>
+              <span class="li-table__dot">·</span>
+              <span>
+                Margin:{" "}
+                <strong class={`li-table__stat-value${marginTone}`}>{estimate.margin_percent}%</strong>
+              </span>
+            </div>
+          </div>
         </div>
       )}
     </Card>
-  );
-}
-
-function LineItemCard({
-  item,
-  mutate,
-  dragging,
-  over,
-  onDragStart,
-  onDragEnd,
-  onDragOver,
-  onDrop,
-}: {
-  item: EstimateLineItem;
-  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
-  dragging: boolean;
-  over: boolean;
-  onDragStart: () => void;
-  onDragEnd: () => void;
-  onDragOver: () => void;
-  onDrop: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [fields, setFields] = useState({
-    product_service: item.product_service,
-    description: item.description,
-    quantity: item.quantity ?? 1,
-    unit: item.unit ?? "",
-    unit_price: item.unit_price ?? 0,
-    includes_note: item.includes_note ?? "",
-  });
-
-  useEffect(() => {
-    setFields({
-      product_service: item.product_service,
-      description: item.description,
-      quantity: item.quantity ?? 1,
-      unit: item.unit ?? "",
-      unit_price: item.unit_price ?? 0,
-      includes_note: item.includes_note ?? "",
-    });
-  }, [item.id, item.product_service, item.description, item.quantity, item.unit, item.unit_price, item.includes_note]);
-
-  const save = (patch: Record<string, unknown>) => mutate(() => api.put(`/api/line-items/${item.id}`, patch));
-  const previewTotal = (Number(fields.quantity) || 0) * (Number(fields.unit_price) || 0);
-
-  return (
-    <div
-      class={`li-card${dragging ? " li-card--dragging" : ""}${over ? " li-card--over" : ""}`}
-      onDragOver={(ev) => {
-        ev.preventDefault();
-        onDragOver();
-      }}
-      onDrop={(ev) => {
-        ev.preventDefault();
-        onDrop();
-      }}
-    >
-      <div class="li-card__head">
-        <span
-          class="li-card__drag"
-          draggable
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
-          title="Drag to reorder"
-        >
-          ⠿
-        </span>
-        <button class="li-card__toggle" onClick={() => setExpanded((x) => !x)} title="Show/hide sub-items">
-          {expanded ? "▾" : "▸"}
-        </button>
-        <input
-          class="form-input li-card__name"
-          value={fields.product_service}
-          placeholder="Product / service"
-          onInput={(ev) => setFields((f) => ({ ...f, product_service: (ev.target as HTMLInputElement).value }))}
-          onBlur={() => fields.product_service !== item.product_service && save({ product_service: fields.product_service })}
-        />
-        <span class="li-card__total">{formatCurrency(previewTotal)}</span>
-        <button
-          class="li-card__del"
-          title="Remove line item"
-          onClick={() => mutate(() => api.del(`/api/line-items/${item.id}`), "Line item removed")}
-        >
-          ✕
-        </button>
-      </div>
-
-      <div class="li-card__row">
-        <textarea
-          class="form-textarea li-card__desc"
-          placeholder="Scope of work for this line item…"
-          value={fields.description}
-          onInput={(ev) => setFields((f) => ({ ...f, description: (ev.target as HTMLTextAreaElement).value }))}
-          onBlur={() => fields.description !== item.description && save({ description: fields.description })}
-        />
-      </div>
-
-      <div class="li-card__inputs">
-        <label class="li-input">
-          <span>Qty</span>
-          <input
-            class="form-input"
-            type="number"
-            step="any"
-            value={fields.quantity}
-            onInput={(ev) => setFields((f) => ({ ...f, quantity: Number((ev.target as HTMLInputElement).value) }))}
-            onBlur={() => Number(fields.quantity) !== (item.quantity ?? 1) && save({ quantity: Number(fields.quantity) })}
-          />
-        </label>
-        <label class="li-input">
-          <span>Unit</span>
-          <input
-            class="form-input"
-            value={fields.unit}
-            placeholder="each"
-            onInput={(ev) => setFields((f) => ({ ...f, unit: (ev.target as HTMLInputElement).value }))}
-            onBlur={() => (fields.unit || null) !== (item.unit ?? null) && save({ unit: fields.unit })}
-          />
-        </label>
-        <label class="li-input">
-          <span>Unit Price</span>
-          <input
-            class="form-input"
-            type="number"
-            step="any"
-            value={fields.unit_price}
-            onInput={(ev) => setFields((f) => ({ ...f, unit_price: Number((ev.target as HTMLInputElement).value) }))}
-            onBlur={() => Number(fields.unit_price) !== (item.unit_price ?? 0) && save({ unit_price: Number(fields.unit_price) })}
-          />
-        </label>
-      </div>
-
-      <input
-        class="form-input li-card__includes"
-        value={fields.includes_note}
-        placeholder='Includes note (e.g. "Price includes labor and materials")'
-        onInput={(ev) => setFields((f) => ({ ...f, includes_note: (ev.target as HTMLInputElement).value }))}
-        onBlur={() => (fields.includes_note || null) !== (item.includes_note ?? null) && save({ includes_note: fields.includes_note })}
-      />
-
-      {expanded && <SubItemList item={item} mutate={mutate} />}
-      <div class="li-card__internal">
-        Internal cost: {formatCurrency(item.internal_cost)} · margin{" "}
-        {item.total > 0 ? Math.round(((item.total - item.internal_cost) / item.total) * 100) : 0}%
-      </div>
-    </div>
-  );
-}
-
-// ─── Sub-items (internal cost) ─────────────────────────────────────────────────
-
-function SubItemList({
-  item,
-  mutate,
-}: {
-  item: EstimateLineItem;
-  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
-}) {
-  const [materialFor, setMaterialFor] = useState(false);
-
-  const addSub = () =>
-    mutate(
-      () =>
-        api.post(`/api/line-items/${item.id}/sub-items`, {
-          description: "New cost item",
-          category: "material",
-          quantity: 1,
-          unit_cost: 0,
-        }),
-      "Sub-item added",
-    );
-
-  return (
-    <div class="subitems">
-      <div class="subitems__head">
-        <span class="subitems__title">Internal Cost Breakdown (not shown to client)</span>
-        <div class="flex gap-sm">
-          <Button size="sm" variant="tertiary" onClick={() => setMaterialFor(true)}>
-            Search Materials
-          </Button>
-          <Button size="sm" variant="secondary" onClick={addSub}>
-            + Add Sub-Item
-          </Button>
-        </div>
-      </div>
-      {item.sub_items.length === 0 ? (
-        <div class="subitems__empty">No sub-items. Add material, labor, or sub costs.</div>
-      ) : (
-        item.sub_items.map((s) => <SubItemRow key={s.id} sub={s} mutate={mutate} />)
-      )}
-      <MaterialSearchModal
-        open={materialFor}
-        onClose={() => setMaterialFor(false)}
-        onPick={(m) => {
-          setMaterialFor(false);
-          void mutate(
-            () =>
-              api.post(`/api/line-items/${item.id}/sub-items`, {
-                description: m.material_name,
-                category: m.category || "material",
-                vendor: m.vendor_name,
-                quantity: 1,
-                unit: m.unit,
-                unit_cost: m.last_price,
-                material_id: m.id,
-              }),
-            "Material added",
-          );
-        }}
-      />
-    </div>
-  );
-}
-
-function SubItemRow({
-  sub,
-  mutate,
-}: {
-  sub: import("../../types").EstimateSubItem;
-  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
-}) {
-  const [f, setF] = useState({
-    description: sub.description,
-    category: sub.category,
-    vendor: sub.vendor ?? "",
-    quantity: sub.quantity ?? 0,
-    unit: sub.unit ?? "",
-    unit_cost: sub.unit_cost ?? 0,
-  });
-  useEffect(() => {
-    setF({
-      description: sub.description,
-      category: sub.category,
-      vendor: sub.vendor ?? "",
-      quantity: sub.quantity ?? 0,
-      unit: sub.unit ?? "",
-      unit_cost: sub.unit_cost ?? 0,
-    });
-  }, [sub.id, sub.description, sub.category, sub.vendor, sub.quantity, sub.unit, sub.unit_cost]);
-
-  const save = (patch: Record<string, unknown>) => mutate(() => api.put(`/api/sub-items/${sub.id}`, patch));
-
-  return (
-    <div class="subitem">
-      <input
-        class="form-input"
-        value={f.description}
-        placeholder="Description"
-        onInput={(ev) => setF((p) => ({ ...p, description: (ev.target as HTMLInputElement).value }))}
-        onBlur={() => f.description !== sub.description && save({ description: f.description })}
-      />
-      <Select
-        value={f.category}
-        options={SUB_ITEM_CATEGORIES.map((c) => ({ value: c, label: formatStatus(c) }))}
-        onChange={(v) => {
-          setF((p) => ({ ...p, category: v }));
-          if (v !== sub.category) save({ category: v });
-        }}
-      />
-      <input
-        class="form-input"
-        value={f.vendor}
-        placeholder="Vendor"
-        onInput={(ev) => setF((p) => ({ ...p, vendor: (ev.target as HTMLInputElement).value }))}
-        onBlur={() => (f.vendor || null) !== (sub.vendor ?? null) && save({ vendor: f.vendor })}
-      />
-      <input
-        class="form-input subitem__num"
-        type="number"
-        step="any"
-        value={f.quantity}
-        placeholder="Qty"
-        onInput={(ev) => setF((p) => ({ ...p, quantity: Number((ev.target as HTMLInputElement).value) }))}
-        onBlur={() => Number(f.quantity) !== (sub.quantity ?? 0) && save({ quantity: Number(f.quantity) })}
-      />
-      <input
-        class="form-input subitem__num"
-        type="number"
-        step="any"
-        value={f.unit_cost}
-        placeholder="Cost"
-        onInput={(ev) => setF((p) => ({ ...p, unit_cost: Number((ev.target as HTMLInputElement).value) }))}
-        onBlur={() => Number(f.unit_cost) !== (sub.unit_cost ?? 0) && save({ unit_cost: Number(f.unit_cost) })}
-      />
-      <span class="subitem__total">{formatCurrency(sub.total_cost)}</span>
-      <button class="li-card__del" title="Remove sub-item" onClick={() => mutate(() => api.del(`/api/sub-items/${sub.id}`))}>
-        ✕
-      </button>
-    </div>
-  );
-}
-
-function MaterialSearchModal({
-  open,
-  onClose,
-  onPick,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onPick: (m: VendorMaterial) => void;
-}) {
-  const [q, setQ] = useState("");
-  const [results, setResults] = useState<VendorMaterial[]>([]);
-  const [searched, setSearched] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      setQ("");
-      setResults([]);
-      setSearched(false);
-    }
-  }, [open]);
-
-  const search = async () => {
-    setBusy(true);
-    try {
-      const r = await api.get<{ materials: VendorMaterial[] }>(
-        `/api/materials/search?q=${encodeURIComponent(q)}`,
-      );
-      setResults(r.materials);
-    } catch {
-      setResults([]);
-    } finally {
-      setBusy(false);
-      setSearched(true);
-    }
-  };
-
-  return (
-    <Modal open={open} title="Search Materials" onClose={onClose}>
-      <div class="flex gap-sm">
-        <input
-          class="form-input"
-          placeholder="Search by material or vendor (e.g. 2x4)…"
-          value={q}
-          onInput={(ev) => setQ((ev.target as HTMLInputElement).value)}
-          onKeyDown={(ev) => ev.key === "Enter" && search()}
-        />
-        <Button variant="primary" onClick={search} disabled={busy}>
-          Search
-        </Button>
-      </div>
-      <div class="mt-md">
-        {busy && <Spinner center />}
-        {!busy && searched && results.length === 0 && (
-          <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-            No materials found. The vendor/material database fills in automatically as expenses are
-            logged (Sprint 10). You can add this cost manually instead.
-          </div>
-        )}
-        {results.map((m) => (
-          <button key={m.id} class="typeahead__item" onClick={() => onPick(m)}>
-            <span>
-              {m.material_name} — {formatCurrency(m.last_price)}/{m.unit}
-            </span>
-            <span class="text--muted">
-              {m.vendor_name}
-              {m.average_price != null ? ` · avg ${formatCurrency(m.average_price)}` : ""}
-            </span>
-          </button>
-        ))}
-      </div>
-    </Modal>
   );
 }
 
@@ -1173,7 +869,7 @@ function PaymentScheduleBuilder({
                 />
                 Deposit
               </label>
-              <button class="li-card__del" onClick={() => removeRow(i)} title="Remove">
+              <button class="li-row__del" onClick={() => removeRow(i)} title="Remove">
                 ✕
               </button>
             </div>

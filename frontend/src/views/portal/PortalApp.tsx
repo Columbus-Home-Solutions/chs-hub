@@ -125,6 +125,29 @@ export function PortalApp() {
         </div>
       )}
 
+      {landing.project_manager && (
+        <section class="portal-card" style={{ marginBottom: "var(--space-lg)" }}>
+          <h2 class="portal-card__title">Your Project Manager</h2>
+          <div class="portal-pm">
+            <div class="portal-pm__name">{landing.project_manager.assigned_to_name}</div>
+            {landing.project_manager.assigned_to_phone && (
+              <div>
+                <a href={`tel:${landing.project_manager.assigned_to_phone.replace(/\D/g, "")}`}>
+                  📞 {landing.project_manager.assigned_to_phone}
+                </a>
+              </div>
+            )}
+            {landing.project_manager.assigned_to_email && (
+              <div>
+                <a href={`mailto:${landing.project_manager.assigned_to_email}`}>
+                  📧 {landing.project_manager.assigned_to_email}
+                </a>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       <section class="portal-stats">
         <Stat label="Contract Total" value={fmtOrDash(qs.contract_total)} />
         <Stat label="Paid to Date" value={formatCurrency(qs.total_paid)} />

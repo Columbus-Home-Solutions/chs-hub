@@ -40,6 +40,12 @@ export interface PortalLanding {
     email: string;
     notice: string;
   } | null;
+  project_manager?: {
+    assigned_to: string;
+    assigned_to_name: string;
+    assigned_to_phone: string | null;
+    assigned_to_email: string | null;
+  } | null;
   header: {
     client_name: string;
     property_address: string;

@@ -63,10 +63,10 @@ function proxyUrl(env: Env): string {
  */
 export async function claudeMessages(
   env: Env,
-  opts: { system: string; messages: ClaudeMessage[]; maxTokens?: number },
+  opts: { system: string; messages: ClaudeMessage[]; maxTokens?: number; model?: string },
 ): Promise<ClaudeCallResult> {
   const body = {
-    model: CLAUDE_MODEL,
+    model: opts.model ?? CLAUDE_MODEL,
     max_tokens: opts.maxTokens ?? 1024,
     system: opts.system,
     messages: opts.messages,

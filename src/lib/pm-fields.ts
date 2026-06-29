@@ -37,17 +37,17 @@ export async function resolvePmFields(
   if (!assignedTo) return { ...OWNER_PM_FALLBACK };
 
   const user = await env.DB.prepare(
-    "SELECT first_name, last_name, phone, email FROM users WHERE id = ?",
+    "SELECT first_name, last_name, business_phone, email FROM users WHERE id = ?",
   )
     .bind(assignedTo)
-    .first<{ first_name: string | null; last_name: string | null; phone: string | null; email: string | null }>();
+    .first<{ first_name: string | null; last_name: string | null; business_phone: string | null; email: string | null }>();
 
   if (!user) return { ...OWNER_PM_FALLBACK };
 
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
   return {
     pm_name: name || OWNER_PM_FALLBACK.pm_name,
-    pm_phone: user.phone ? formatPmPhone(user.phone) : OWNER_PM_FALLBACK.pm_phone,
+    pm_phone: formatPmPhone(user.business_phone),
     pm_email: user.email?.trim() || OWNER_PM_FALLBACK.pm_email,
   };
 }

@@ -199,7 +199,7 @@ import {
   handleSettingsList,
   handleSettingsByCategory,
 } from "./routes/settings.js";
-import { handleMe, handleClockableUsers } from "./routes/me.js";
+import { handleMe, handleClockableUsers, handleAssignableUsers } from "./routes/me.js";
 import {
   handleClientCreate,
   handleClientDelete,
@@ -259,6 +259,12 @@ import {
   handleEstimateRequestStage,
 } from "./routes/estimate-requests.js";
 import {
+  handleScopeDraftGenerate,
+  handleScopeDraftPatch,
+  handleScopeDraftDelete,
+  handlePushToEstimate,
+} from "./routes/scope-draft.js";
+import {
   handleEstimateList,
   handleEstimateGet,
   handleEstimateCreate,
@@ -288,6 +294,12 @@ import {
   handleReviewDelete,
   handleMaterialSearch,
 } from "./routes/estimates.js";
+import {
+  handleCatalogList,
+  handleCatalogCreate,
+  handleCatalogUpdate,
+  handleCatalogDelete,
+} from "./routes/catalog.js";
 import {
   handlePublicQuoteGet,
   handlePublicQuoteSign,
@@ -1542,6 +1554,9 @@ export default {
     if (url.pathname === "/api/users/clockable" && request.method === "GET") {
       return handleClockableUsers(request, env);
     }
+    if (url.pathname === "/api/users/assignable" && request.method === "GET") {
+      return handleAssignableUsers(request, env);
+    }
 
     // ── User management (Sprint 17, Owner-only via RBAC gate) ─────────────
     if (url.pathname === "/api/users") {
@@ -1749,6 +1764,19 @@ export default {
     if (erWin && request.method === "POST") {
       return handleEstimateRequestWin(request, env, decodeURIComponent(erWin[1]), ctx);
     }
+    const erPushToEstimate = url.pathname.match(
+      /^\/api\/estimate-requests\/([^/]+)\/push-to-estimate$/,
+    );
+    if (erPushToEstimate && request.method === "POST") {
+      return handlePushToEstimate(request, env, decodeURIComponent(erPushToEstimate[1]));
+    }
+    const erScopeDraft = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/scope-draft$/);
+    if (erScopeDraft) {
+      const erid = decodeURIComponent(erScopeDraft[1]);
+      if (request.method === "POST") return handleScopeDraftGenerate(request, env, erid);
+      if (request.method === "PATCH") return handleScopeDraftPatch(request, env, erid);
+      if (request.method === "DELETE") return handleScopeDraftDelete(request, env, erid);
+    }
     const erById = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)$/);
     if (erById) {
       const erid = decodeURIComponent(erById[1]);
@@ -1770,6 +1798,18 @@ export default {
       const tid = decodeURIComponent(templateById[1]);
       if (request.method === "GET") return handleTemplateGet(env, tid);
       if (request.method === "PUT") return handleTemplateUpdate(request, env, tid);
+    }
+
+    // Line item catalog (Settings + estimate autocomplete).
+    if (url.pathname === "/api/catalog") {
+      if (request.method === "GET") return handleCatalogList(request, env, url);
+      if (request.method === "POST") return handleCatalogCreate(request, env);
+    }
+    const catalogById = url.pathname.match(/^\/api\/catalog\/([^/]+)$/);
+    if (catalogById) {
+      const cid = decodeURIComponent(catalogById[1]);
+      if (request.method === "PUT") return handleCatalogUpdate(request, env, cid);
+      if (request.method === "DELETE") return handleCatalogDelete(request, env, cid);
     }
 
     // Saved reviews.

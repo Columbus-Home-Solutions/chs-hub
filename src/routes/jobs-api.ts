@@ -34,6 +34,7 @@ import { shouldSkipContractAutogen } from "../lib/estimate-contract-document.js"
 import { scheduleWorkingAgreementGeneration } from "../lib/working-agreement.js";
 import { cascadeDeleteJob, DELETABLE_JOB_STATUSES } from "../lib/cascade-delete.js";
 import { claudeMessages, extractJson } from "../lib/claude.js";
+import { formatPmPhone, resolvePmFields } from "../lib/pm-fields.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const REVERSE_ROLES = ["owner"] as const;
@@ -379,9 +380,47 @@ export async function handleJobDetail(env: Env, id: string): Promise<Response> {
     }
   }
 
+  const assignmentRow = await env.DB.prepare("SELECT assigned_to FROM jobs WHERE id = ?")
+    .bind(id)
+    .first<{ assigned_to: string | null }>();
+  const assignedTo = assignmentRow?.assigned_to ?? null;
+  let assigned_to_name: string | null = null;
+  let assigned_to_phone: string | null = null;
+  let assigned_to_email: string | null = null;
+  if (assignedTo) {
+    const pmUser = await env.DB.prepare(
+      "SELECT first_name, last_name, name, business_phone, email FROM users WHERE id = ?",
+    )
+      .bind(assignedTo)
+      .first<{
+        first_name: string | null;
+        last_name: string | null;
+        name: string | null;
+        business_phone: string | null;
+        email: string | null;
+      }>();
+    if (pmUser) {
+      assigned_to_name =
+        [pmUser.first_name, pmUser.last_name].filter(Boolean).join(" ").trim() ||
+        (pmUser.name ?? "").trim() ||
+        null;
+      assigned_to_phone = formatPmPhone(pmUser.business_phone);
+      assigned_to_email = pmUser.email?.trim() || null;
+    } else {
+      const pm = await resolvePmFields(env, null);
+      assigned_to_name = pm.pm_name;
+      assigned_to_phone = pm.pm_phone;
+      assigned_to_email = pm.pm_email;
+    }
+  }
+
   return json({
     job: {
       ...card,
+      assigned_to: assignedTo,
+      assigned_to_name,
+      assigned_to_phone,
+      assigned_to_email,
       client_name: clientName,
       client_phone: client?.phone ?? null,
       client_email: client?.email ?? null,
@@ -431,6 +470,25 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
 
   const sets: string[] = [];
   const binds: unknown[] = [];
+
+  if ("assigned_to" in body) {
+    const raw = body.assigned_to;
+    const assignedTo =
+      raw === null || raw === undefined || raw === "" ? null : str(raw);
+    if (assignedTo) {
+      const userOk = await env.DB.prepare(
+        "SELECT id FROM users WHERE id = ? AND is_active = 1",
+      )
+        .bind(assignedTo)
+        .first<{ id: string }>();
+      if (!userOk) {
+        return err(400, "invalid_user", "Assigned user not found or inactive.");
+      }
+    }
+    sets.push("assigned_to = ?");
+    binds.push(assignedTo);
+  }
+
   const editable: Record<string, "str"> = {
     title: "str",
     notes: "str",
@@ -453,7 +511,10 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
 
   await env.DB.prepare(`UPDATE jobs SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
   await logAudit(env, user.email, "job_updated", "job", id, {
-    fields: Object.keys(editable).filter((f) => f in body),
+    fields: [
+      ...Object.keys(editable).filter((f) => f in body),
+      ...("assigned_to" in body ? ["assigned_to"] : []),
+    ],
   });
 
   return handleJobDetail(env, id);

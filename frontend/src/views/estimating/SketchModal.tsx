@@ -73,6 +73,7 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [closeConfirm, setCloseConfirm] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
 
   const activeSketch = sketches[activeIndex] ?? null;
@@ -225,7 +226,10 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
 
   const handleSave = async () => {
     const ok = await saveCurrent();
-    if (ok) toast.push("success", "Saved");
+    if (ok) {
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 1500);
+    }
   };
 
   const switchTab = async (index: number) => {
@@ -323,6 +327,9 @@ export function SketchModal({ requestId, onClose }: SketchModalProps) {
             ← Back
           </button>
           <span class="sketch-modal__header-title">{activeSketch?.label ?? "Sketch"}</span>
+          {savedFlash && (
+            <span class="sketch-modal__header-saved">Saved ✓</span>
+          )}
           {saveError && !closeConfirm && (
             <span class="sketch-modal__header-error">{saveError}</span>
           )}

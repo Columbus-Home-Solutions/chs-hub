@@ -119,6 +119,7 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   const [reviewTimeVal, setReviewTimeVal] = useState("");
   const [sketchModalOpen, setSketchModalOpen] = useState(false);
   const [sketchCount, setSketchCount] = useState(0);
+  const [firstSketchId, setFirstSketchId] = useState<string | null>(null);
   const prevStatusRef = useRef<EstimateRequestStatus | null>(null);
 
   useEffect(() => {
@@ -129,8 +130,14 @@ export function EstimateRequestDetail({ id }: DetailProps) {
     if (!id) return;
     api
       .get<{ sketches: SketchMeta[] }>(`/api/estimate-requests/${id}/sketches`)
-      .then((res) => setSketchCount(res.sketches.length))
-      .catch(() => setSketchCount(0));
+      .then((res) => {
+        setSketchCount(res.sketches.length);
+        setFirstSketchId(res.sketches[0]?.id ?? null);
+      })
+      .catch(() => {
+        setSketchCount(0);
+        setFirstSketchId(null);
+      });
   }, [id, sketchModalOpen]);
 
   useEffect(() => {
@@ -276,8 +283,8 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   const generateScopeDraft = async () => {
     if (!id) return;
     const trimmed = notes.trim();
-    if (!trimmed) {
-      setDraftError("Add visit notes before generating a scope draft.");
+    if (!trimmed && sketchCount === 0) {
+      setDraftError("Add visit notes or a sketch before generating a scope draft.");
       return;
     }
     setDraftError(null);
@@ -558,6 +565,18 @@ export function EstimateRequestDetail({ id }: DetailProps) {
               </div>
             }
           >
+            {firstSketchId && (
+              <img
+                key={`${firstSketchId}-${sketchModalOpen ? "open" : "closed"}`}
+                class="visit-capture__sketch-thumb"
+                src={`/api/estimate-requests/${r.id}/sketches/${firstSketchId}/thumbnail`}
+                alt="Sketch preview"
+                onClick={() => setSketchModalOpen(true)}
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = "none";
+                }}
+              />
+            )}
             <textarea
               class={`form-textarea${recording ? " visit-capture__textarea--recording" : ""}`}
               placeholder={

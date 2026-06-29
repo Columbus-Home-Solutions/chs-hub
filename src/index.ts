@@ -272,6 +272,7 @@ import {
   handleSketchCreate,
   handleSketchSave,
   handleSketchDataGet,
+  handleSketchThumbnailGet,
   handleSketchDelete,
 } from "./routes/sketches.js";
 import {
@@ -1811,6 +1812,17 @@ export default {
       if (request.method === "POST") return handleScopeDraftGenerate(request, env, erid);
       if (request.method === "PATCH") return handleScopeDraftPatch(request, env, erid);
       if (request.method === "DELETE") return handleScopeDraftDelete(request, env, erid);
+    }
+    const erSketchThumb = url.pathname.match(
+      /^\/api\/estimate-requests\/([^/]+)\/sketches\/([^/]+)\/thumbnail$/,
+    );
+    if (erSketchThumb && request.method === "GET") {
+      return handleSketchThumbnailGet(
+        request,
+        env,
+        decodeURIComponent(erSketchThumb[1]),
+        decodeURIComponent(erSketchThumb[2]),
+      );
     }
     const erSketchData = url.pathname.match(
       /^\/api\/estimate-requests\/([^/]+)\/sketches\/([^/]+)\/data$/,

@@ -4,8 +4,9 @@
  *   GET    /api/estimate-requests/:id/sketches              list metadata
  *   POST   /api/estimate-requests/:id/sketches              create blank slot
  *   PUT    /api/estimate-requests/:id/sketches/:sketchId    save data + optional thumb
- *   GET    /api/estimate-requests/:id/sketches/:sketchId/data  load tldraw JSON
- *   DELETE /api/estimate-requests/:id/sketches/:sketchId  remove sketch + R2 files
+ *   GET    /api/estimate-requests/:id/sketches/:sketchId/data       load sketch JSON
+ *   GET    /api/estimate-requests/:id/sketches/:sketchId/thumbnail  PNG preview
+ *   DELETE /api/estimate-requests/:id/sketches/:sketchId            remove sketch + R2 files
  */
 
 import type { Env } from "../env.js";
@@ -177,6 +178,32 @@ export async function handleSketchSave(
   await saveSketches(env, requestId, sketches);
 
   return json({ success: true, updated_at: updatedAt });
+}
+
+/** GET /api/estimate-requests/:id/sketches/:sketchId/thumbnail */
+export async function handleSketchThumbnailGet(
+  request: Request,
+  env: Env,
+  requestId: string,
+  sketchId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...SKETCH_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const row = await loadRequest(env, requestId);
+  if (!row) return err(404, "Estimate request not found");
+
+  const sketches = parseSketches(row.sketches);
+  const sketch = findSketch(sketches, sketchId);
+  if (!sketch) return err(404, "Sketch not found");
+
+  const obj = await env.FILES.get(sketch.thumbnail_key);
+  if (!obj) return err(404, "Thumbnail not found");
+
+  const headers = new Headers();
+  headers.set("Content-Type", "image/png");
+  headers.set("Cache-Control", "public, max-age=3600");
+  return new Response(obj.body, { headers });
 }
 
 /** GET /api/estimate-requests/:id/sketches/:sketchId/data */

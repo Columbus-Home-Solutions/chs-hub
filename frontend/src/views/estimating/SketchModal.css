@@ -52,6 +52,11 @@
   white-space: nowrap;
 }
 
+.sketch-modal__header-saved {
+  font-size: var(--text-sm);
+  color: var(--color-success);
+}
+
 .sketch-modal__header-error {
   font-size: var(--text-sm);
   color: var(--color-error);

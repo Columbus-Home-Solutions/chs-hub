@@ -18,6 +18,7 @@ import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton"
 import { canDeleteRequest, DeleteRequestButton } from "./DeleteRequestButton";
 import { ScopeDraftSection } from "./ScopeDraftSection";
 import { ScopeSummaryCard } from "./ScopeSummaryCard";
+import { SketchModal } from "./SketchModal";
 import {
   ESTIMATE_SENT_TOOLTIP,
   LOST_REASONS,
@@ -27,6 +28,7 @@ import {
   type EstimateRequest,
   type EstimateRequestStatus,
   type ScopeDraftItem,
+  type SketchMeta,
 } from "../../types";
 
 type SpeechRecognitionLike = {
@@ -115,11 +117,21 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   const [reviewDateEdit, setReviewDateEdit] = useState(false);
   const [reviewDateVal, setReviewDateVal] = useState("");
   const [reviewTimeVal, setReviewTimeVal] = useState("");
+  const [sketchModalOpen, setSketchModalOpen] = useState(false);
+  const [sketchCount, setSketchCount] = useState(0);
   const prevStatusRef = useRef<EstimateRequestStatus | null>(null);
 
   useEffect(() => {
     setNotes(r?.visit_notes ?? "");
   }, [r?.id, r?.visit_notes]);
+
+  useEffect(() => {
+    if (!id) return;
+    api
+      .get<{ sketches: SketchMeta[] }>(`/api/estimate-requests/${id}/sketches`)
+      .then((res) => setSketchCount(res.sketches.length))
+      .catch(() => setSketchCount(0));
+  }, [id, sketchModalOpen]);
 
   useEffect(() => {
     if (r?.scope_draft && r.scope_draft.length > 0) {
@@ -539,9 +551,9 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={() => toast.push("info", "Field sketching coming soon")}
+                  onClick={() => setSketchModalOpen(true)}
                 >
-                  <Icon name="pencil" /> Draw
+                  <Icon name="pencil" /> Draw{sketchCount > 0 ? ` ${sketchCount}` : ""}
                 </Button>
               </div>
             }
@@ -789,6 +801,10 @@ export function EstimateRequestDetail({ id }: DetailProps) {
           refetch();
         }}
       />
+
+      {sketchModalOpen && r && (
+        <SketchModal requestId={r.id} onClose={() => setSketchModalOpen(false)} />
+      )}
     </div>
   );
 }

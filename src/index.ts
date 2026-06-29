@@ -265,6 +265,13 @@ import {
   handlePushToEstimate,
 } from "./routes/scope-draft.js";
 import {
+  handleSketchesList,
+  handleSketchCreate,
+  handleSketchSave,
+  handleSketchDataGet,
+  handleSketchDelete,
+} from "./routes/sketches.js";
+import {
   handleEstimateList,
   handleEstimateGet,
   handleEstimateCreate,
@@ -1776,6 +1783,30 @@ export default {
       if (request.method === "POST") return handleScopeDraftGenerate(request, env, erid);
       if (request.method === "PATCH") return handleScopeDraftPatch(request, env, erid);
       if (request.method === "DELETE") return handleScopeDraftDelete(request, env, erid);
+    }
+    const erSketchData = url.pathname.match(
+      /^\/api\/estimate-requests\/([^/]+)\/sketches\/([^/]+)\/data$/,
+    );
+    if (erSketchData && request.method === "GET") {
+      return handleSketchDataGet(
+        request,
+        env,
+        decodeURIComponent(erSketchData[1]),
+        decodeURIComponent(erSketchData[2]),
+      );
+    }
+    const erSketchById = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/sketches\/([^/]+)$/);
+    if (erSketchById) {
+      const erid = decodeURIComponent(erSketchById[1]);
+      const sketchId = decodeURIComponent(erSketchById[2]);
+      if (request.method === "PUT") return handleSketchSave(request, env, erid, sketchId);
+      if (request.method === "DELETE") return handleSketchDelete(request, env, erid, sketchId);
+    }
+    const erSketches = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/sketches$/);
+    if (erSketches) {
+      const erid = decodeURIComponent(erSketches[1]);
+      if (request.method === "GET") return handleSketchesList(request, env, erid);
+      if (request.method === "POST") return handleSketchCreate(request, env, erid);
     }
     const erById = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)$/);
     if (erById) {

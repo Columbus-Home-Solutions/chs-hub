@@ -1,0 +1,193 @@
+.sketch-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-0);
+  color: var(--color-text-primary);
+}
+
+.sketch-modal__shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sketch-modal__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+  flex-shrink: 0;
+}
+
+.sketch-modal__back-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+}
+
+.sketch-modal__back-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-2);
+}
+
+.sketch-modal__header-title {
+  flex: 1;
+  font-size: var(--text-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sketch-modal__header-error {
+  font-size: var(--text-sm);
+  color: var(--color-error);
+}
+
+.sketch-modal__header-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.sketch-modal__save-btn {
+  flex-shrink: 0;
+}
+
+.sketch-modal__tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 var(--space-sm);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.sketch-modal__tab-wrap {
+  display: flex;
+  align-items: center;
+  border-bottom: 2px solid transparent;
+}
+
+.sketch-modal__tab-wrap--active {
+  border-bottom-color: var(--color-brand);
+}
+
+.sketch-modal__tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.sketch-modal__tab-wrap--active .sketch-modal__tab {
+  color: var(--color-text-primary);
+}
+
+.sketch-modal__tab:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-2);
+}
+
+.sketch-modal__tab-label {
+  outline: none;
+  min-width: 2ch;
+}
+
+.sketch-modal__tab-label:focus {
+  box-shadow: var(--shadow-focus);
+  border-radius: var(--radius-xs);
+}
+
+.sketch-modal__tab-close {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--text-md);
+  line-height: 1;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-xs);
+}
+
+.sketch-modal__tab-close:hover {
+  color: var(--color-error);
+  background: var(--color-surface-2);
+}
+
+.sketch-modal__tab-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+
+.sketch-modal__add-page {
+  align-self: center;
+  margin: var(--space-xs) var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.sketch-modal__add-page:hover:not(:disabled) {
+  border-color: var(--color-brand-border);
+  color: var(--color-brand);
+}
+
+.sketch-modal__add-page:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sketch-modal__canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: var(--color-surface-2);
+}
+
+.sketch-modal__canvas-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  background: var(--color-surface-2);
+  z-index: 1;
+}
+
+.sketch-modal__canvas .tl-container {
+  width: 100%;
+  height: 100%;
+}

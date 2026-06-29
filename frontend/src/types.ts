@@ -219,6 +219,15 @@ export interface ScopeDraftItem {
   generated_at: string;
 }
 
+export interface SketchMeta {
+  id: string;
+  label: string;
+  data_key: string;
+  thumbnail_key: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface EstimateRequest {
   id: string;
   request_number: number;

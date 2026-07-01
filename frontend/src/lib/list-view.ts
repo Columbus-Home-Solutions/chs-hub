@@ -38,17 +38,17 @@ export function truncate(s: string | null | undefined, max = 40): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-export function loadStoredView(key: string): "list" | "kanban" {
+export function loadStoredView(key: string): "list" | "kanban" | "health" {
   try {
     const v = localStorage.getItem(key);
-    if (v === "list" || v === "kanban") return v;
+    if (v === "list" || v === "kanban" || v === "health") return v;
   } catch {
     /* ignore */
   }
   return "kanban";
 }
 
-export function storeView(key: string, view: "list" | "kanban"): void {
+export function storeView(key: string, view: "list" | "kanban" | "health"): void {
   try {
     localStorage.setItem(key, view);
   } catch {

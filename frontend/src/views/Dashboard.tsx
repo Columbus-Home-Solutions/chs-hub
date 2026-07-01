@@ -16,6 +16,7 @@ import { JobsMapWidget } from "./dashboard/JobsMapWidget";
 import { WeatherForecastCard } from "./dashboard/WeatherForecastCard";
 import { QuickActionsWidget } from "./dashboard/QuickActionsWidget";
 import { DocReviewQueue } from "./dashboard/DocReviewQueue";
+import { JobHealthWidget } from "./dashboard/JobHealthWidget";
 
 export function Dashboard(_props: RoutableProps) {
   const { user } = useAuth();
@@ -103,6 +104,9 @@ export function Dashboard(_props: RoutableProps) {
         <div class="dashboard__secondary">
           <div class="dashboard-order-quick-actions dashboard-order-quick-actions--desktop">
             <QuickActionsWidget />
+          </div>
+          <div class="dashboard-order-job-health">
+            <JobHealthWidget />
           </div>
           <div class="dashboard-order-smart-notes">
             <SmartNotes />

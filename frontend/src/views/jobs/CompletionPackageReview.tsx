@@ -10,6 +10,8 @@ import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatDateTime } from "../../lib/format";
 
+const GOOGLE_REVIEW_LINK = "https://g.page/r/CQ_gM4-vOzjFEBM/review";
+
 interface CompletionPackageData {
   job: { id: string; title: string; client_name: string; job_number: string };
   warranty: {
@@ -37,6 +39,10 @@ interface CompletionPackageData {
   };
   package_status: "not_ready" | "ready_to_send" | "sent";
   sent_at: string | null;
+  review_enabled: boolean;
+  review_received: boolean;
+  review_received_at: string | null;
+  review_log: Array<{ event: string; sent_at: string }>;
 }
 
 interface DetailProps extends RoutableProps {
@@ -91,10 +97,43 @@ export function CompletionPackageReview({ id }: DetailProps) {
   const [sending, setSending] = useState(false);
   const [localStatus, setLocalStatus] = useState<CompletionPackageData["package_status"] | null>(null);
   const [localSentAt, setLocalSentAt] = useState<string | null>(null);
+  const [markingReceived, setMarkingReceived] = useState(false);
+  const [localReviewReceived, setLocalReviewReceived] = useState<boolean | null>(null);
+  const [localReviewEnabled, setLocalReviewEnabled] = useState<boolean | null>(null);
+  const [togglingReview, setTogglingReview] = useState(false);
+
+  const markReviewReceived = useCallback(async () => {
+    if (!jobId) return;
+    setMarkingReceived(true);
+    try {
+      await api.put(`/api/jobs/${jobId}/review-received`, {});
+      setLocalReviewReceived(true);
+      toast.push("success", "Review marked as received");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setMarkingReceived(false);
+    }
+  }, [jobId, toast]);
+
+  const toggleReviewEnabled = useCallback(async (enabled: boolean) => {
+    if (!jobId) return;
+    setTogglingReview(true);
+    try {
+      await api.put(`/api/jobs/${jobId}`, { review_enabled: enabled });
+      setLocalReviewEnabled(enabled);
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setTogglingReview(false);
+    }
+  }, [jobId, toast]);
 
   const pkg = data;
   const packageStatus = localStatus ?? pkg?.package_status ?? "not_ready";
   const sentAt = localSentAt ?? pkg?.sent_at ?? null;
+  const reviewEnabled = localReviewEnabled ?? pkg?.review_enabled ?? true;
+  const reviewReceived = localReviewReceived ?? pkg?.review_received ?? false;
   const banner = statusBanner(packageStatus, sentAt);
 
   const send = useCallback(async () => {
@@ -191,6 +230,20 @@ export function CompletionPackageReview({ id }: DetailProps) {
               </Button>
             )}
           </div>
+
+          <GoogleReviewCard
+            jobId={jobId}
+            packageStatus={packageStatus}
+            sentAt={sentAt}
+            reviewEnabled={reviewEnabled}
+            reviewReceived={reviewReceived}
+            reviewReceivedAt={pkg?.review_received_at ?? null}
+            reviewLog={pkg?.review_log ?? []}
+            markingReceived={markingReceived}
+            togglingReview={togglingReview}
+            onMarkReceived={() => void markReviewReceived()}
+            onToggleEnabled={(v) => void toggleReviewEnabled(v)}
+          />
         </>
       ) : null}
 
@@ -358,4 +411,98 @@ function PhotosCard({
 
 function formatStatusLabel(s: string): string {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// ─── Google Review Card (Sprint 35) ──────────────────────────────────────────
+
+function GoogleReviewCard({
+  packageStatus,
+  sentAt,
+  reviewEnabled,
+  reviewReceived,
+  reviewReceivedAt,
+  reviewLog,
+  markingReceived,
+  togglingReview,
+  onMarkReceived,
+  onToggleEnabled,
+}: {
+  jobId: string;
+  packageStatus: CompletionPackageData["package_status"];
+  sentAt: string | null;
+  reviewEnabled: boolean;
+  reviewReceived: boolean;
+  reviewReceivedAt: string | null;
+  reviewLog: Array<{ event: string; sent_at: string }>;
+  markingReceived: boolean;
+  togglingReview: boolean;
+  onMarkReceived: () => void;
+  onToggleEnabled: (v: boolean) => void;
+}) {
+  const requestRow  = reviewLog.find((r) => r.event === "google_review_request");
+  const followup1   = reviewLog.find((r) => r.event === "google_review_followup_1");
+  const followup2   = reviewLog.find((r) => r.event === "google_review_followup_2");
+
+  // Build status line.
+  const statusParts: string[] = [];
+  if (requestRow)  statusParts.push(`Sent ${formatDate(requestRow.sent_at)}`);
+  if (followup1)   statusParts.push(`Follow-up sent ${formatDate(followup1.sent_at)}`);
+  if (followup2)   statusParts.push(`Final follow-up sent ${formatDate(followup2.sent_at)}`);
+  // Show next follow-up only when enabled & not received & sequence not complete.
+  if (reviewEnabled && !reviewReceived && requestRow && !followup1) {
+    const nextDate = new Date(new Date(requestRow.sent_at).getTime() + 3 * 86_400_000);
+    statusParts.push(`Next follow-up ${formatDate(nextDate.toISOString())}`);
+  } else if (reviewEnabled && !reviewReceived && followup1 && !followup2) {
+    const nextDate = new Date(new Date(requestRow!.sent_at).getTime() + 7 * 86_400_000);
+    statusParts.push(`Next follow-up ${formatDate(nextDate.toISOString())}`);
+  }
+
+  return (
+    <section class="completion-package-card" style={{ marginTop: "var(--space-lg)" }}>
+      <div class="completion-package-card__head">
+        <span class="completion-package-card__icon" aria-hidden="true">⭐</span>
+        <span class="completion-package-card__title">Google Review</span>
+      </div>
+
+      <div class="completion-package-card__body stack" style={{ gap: "var(--space-sm)" }}>
+        <label class="flex items-center gap-sm" style={{ cursor: togglingReview ? "wait" : "pointer" }}>
+          <input
+            type="checkbox"
+            checked={reviewEnabled}
+            disabled={togglingReview}
+            onChange={(e) => onToggleEnabled((e.target as HTMLInputElement).checked)}
+          />
+          <span>Request review on completion</span>
+        </label>
+
+        {reviewReceived ? (
+          <div style={{ color: "var(--color-success, #16a34a)", fontWeight: 600 }}>
+            Review received ✓{reviewReceivedAt ? ` — ${formatDate(reviewReceivedAt)}` : ""}
+          </div>
+        ) : packageStatus !== "sent" ? (
+          <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            Sends automatically after completion package
+          </div>
+        ) : (
+          <>
+            {statusParts.length > 0 && (
+              <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+                {statusParts.join(" · ")}
+              </div>
+            )}
+            {reviewEnabled && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={markingReceived}
+                onClick={onMarkReceived}
+              >
+                {markingReceived ? "Marking…" : "Mark review received"}
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
 }

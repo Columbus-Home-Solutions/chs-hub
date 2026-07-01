@@ -27,6 +27,7 @@ import {
 } from "../lib/punch-list-pdf.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "../lib/twilio.js";
 import { streamObject, putImage } from "../lib/r2.js";
+import { resolveSubAccessToken, subAccessLink } from "../lib/sub-access-tokens.js";
 
 const MAX_COMPLETION_PHOTO_BYTES = 10 * 1024 * 1024;
 
@@ -543,7 +544,10 @@ export async function handlePunchListSend(
     if (!sub) continue;
 
     const token = await getOrCreateSubToken(env, punchListId, subId);
-    const link = punchListSecureLink(token);
+    // Keep punch_list_sub_tokens for per-list reminder dedup bookkeeping; use
+    // the persistent sub access token for the link sent to the sub.
+    const persistentToken = await resolveSubAccessToken(env, subId);
+    const link = subAccessLink(persistentToken);
     const subItems = assigned.filter((i) => i.sub_id === subId);
     const pdfItems: PunchListPdfItem[] = subItems.map((i) => ({
       description: i.description,

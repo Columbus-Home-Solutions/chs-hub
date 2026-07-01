@@ -7,7 +7,7 @@
 
 import type { Env } from "../env.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "./twilio.js";
-import { punchListSecureLink } from "./punch-list-pdf.js";
+import { resolveSubAccessToken, subAccessLink } from "./sub-access-tokens.js";
 
 async function sendPunchListEmail(
   env: Env,
@@ -101,7 +101,10 @@ export async function runPunchListReminderSweep(env: Env): Promise<{ scanned: nu
 
       const schedDate = list.scheduled_date;
       const subName = (token.contact_name || token.company_name || "there") as string;
-      const link = punchListSecureLink(token.token);
+      // Use the persistent sub access link so future reminders always point to
+      // the same URL regardless of which punch list they're about.
+      const persistentToken = await resolveSubAccessToken(env, token.sub_id);
+      const link = subAccessLink(persistentToken);
       const jobTitle = list.job_title ?? "your project";
       const msg = `Hi ${subName}, reminder: you have ${openItems.n} open punch list item(s) for ${jobTitle}. View and complete here: ${link}`;
 

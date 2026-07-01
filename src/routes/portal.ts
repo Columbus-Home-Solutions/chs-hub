@@ -395,6 +395,21 @@ async function handleInvoices(env: Env, token: string): Promise<Response> {
       .all<Record<string, unknown>>()
   ).results ?? [];
 
+  // Review card: shown when job is complete/closed with review_enabled=1 and package sent.
+  const reviewRow = await env.DB.prepare(
+    `SELECT status, COALESCE(review_enabled, 1) AS review_enabled,
+            completion_package_sent_at
+     FROM jobs WHERE id = ?`,
+  ).bind(job.id).first<{
+    status: string | null;
+    review_enabled: number;
+    completion_package_sent_at: string | null;
+  }>();
+  const showReviewCard =
+    reviewRow?.review_enabled === 1 &&
+    !!reviewRow?.completion_package_sent_at &&
+    (reviewRow?.status === "complete" || reviewRow?.status === "closed");
+
   return json({
     ok: true,
     on_hold: onHold,
@@ -408,6 +423,9 @@ async function handleInvoices(env: Env, token: string): Promise<Response> {
       paid_at: p.paid_at,
     })),
     payment_schedule: schedule,
+    review_card: showReviewCard
+      ? { review_link: "https://g.page/r/CQ_gM4-vOzjFEBM/review" }
+      : null,
   });
 }
 

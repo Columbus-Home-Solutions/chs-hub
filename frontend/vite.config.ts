@@ -39,6 +39,7 @@ export default defineConfig({
         pay: "pay.html",
         portal: "portal.html",
         punch: "punch.html",
+        sub: "sub.html",
       },
     },
   },

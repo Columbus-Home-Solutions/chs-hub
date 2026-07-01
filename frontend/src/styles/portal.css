@@ -623,3 +623,30 @@
   color: var(--quote-muted, #5b6b7b);
   margin-bottom: var(--space-xs);
 }
+
+/* Sprint 35 — Google Review card */
+.portal-review-card {
+  border: 1px solid var(--color-border, #e3e8ee);
+  background: var(--color-surface, #fff);
+}
+.portal-review-card__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  text-align: center;
+  padding: var(--space-md) 0;
+}
+.portal-review-card__title {
+  font-size: var(--text-lg, 1.1rem);
+  font-weight: 600;
+  color: var(--color-text, #111827);
+}
+.portal-review-card__sub {
+  font-size: var(--text-sm);
+  color: var(--quote-muted, #5b6b7b);
+}
+.portal-review-card__btn {
+  margin-top: var(--space-xs);
+  text-decoration: none;
+}

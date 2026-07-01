@@ -19,6 +19,7 @@ interface InvoicesPayload {
   invoices: PortalInvoice[];
   payments: PortalPayment[];
   payment_schedule: PortalScheduleRow[];
+  review_card: { review_link: string } | null;
 }
 
 export function InvoicesTab({
@@ -144,6 +145,24 @@ export function InvoicesTab({
             ) : null}
           </div>
         ))
+      )}
+      {data.review_card && (
+        <div class="portal-card portal-review-card">
+          <div class="portal-review-card__body">
+            <div class="portal-review-card__title">Loved working with us?</div>
+            <div class="portal-review-card__sub">
+              We'd really appreciate a quick Google review.
+            </div>
+            <a
+              href={data.review_card.review_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="quote-btn quote-btn--primary portal-review-card__btn"
+            >
+              Leave a review →
+            </a>
+          </div>
+        </div>
       )}
     </div>
   );

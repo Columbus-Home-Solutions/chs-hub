@@ -5138,3 +5138,127 @@
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
 }
+
+/* ─── Job Health view (Sprint 34) ─── */
+.job-health-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+}
+.job-health-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: background var(--transition-base);
+}
+.job-health-row:hover { background: var(--color-surface-2); }
+.job-health-row__dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.job-health-row__main {
+  flex: 1;
+  min-width: 0;
+}
+.job-health-row__title {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-health-row__sub {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-health-row__badge {
+  flex-shrink: 0;
+}
+.job-health-row__stats {
+  display: flex;
+  gap: var(--space-md);
+  flex-shrink: 0;
+}
+.job-health-row__stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: var(--text-xs);
+  min-width: 52px;
+}
+.job-health-row__stat-label {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+@media (max-width: 640px) {
+  .job-health-row__stats { display: none; }
+  .job-health-row__badge { display: none; }
+}
+
+/* ─── Job Health dashboard widget (Sprint 34) ─── */
+.job-health-widget__empty {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  padding: var(--space-xs) 0 var(--space-sm);
+}
+.job-health-widget__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: var(--space-xs);
+}
+.job-health-widget__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: 6px var(--space-xs);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition-base);
+}
+.job-health-widget__row:hover { background: var(--color-surface-2); }
+.job-health-widget__dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.job-health-widget__title {
+  flex: 1;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-health-widget__quiet {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+}
+
+/* ─── SubPage job group header (Sprint 34) ─── */
+.sub-job-group {
+  margin-bottom: var(--space-lg);
+}
+.sub-job-group__title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-xs);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px solid var(--color-border);
+}

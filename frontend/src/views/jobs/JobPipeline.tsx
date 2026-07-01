@@ -5,7 +5,7 @@ import { useApi } from "../../hooks/useApi";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { Button } from "../../components/ui/Button";
-import { ViewToggle } from "../../components/ViewToggle";
+import { ViewToggle, type ViewMode } from "../../components/ViewToggle";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
@@ -18,6 +18,47 @@ import {
   type JobPipelineResponse,
   type JobStatus,
 } from "../../types";
+
+// ─── Job Health types ────────────────────────────────────────────────────────
+
+type HealthColor = "green" | "amber" | "red" | "neutral";
+
+interface JobHealthItem {
+  id: string;
+  title: string;
+  job_number: number | null;
+  status: string;
+  client_name: string;
+  property_address: string | null;
+  health: HealthColor;
+  days_quiet: number | null;
+  last_daily_log: string | null;
+  last_smart_note: string | null;
+  last_photo: string | null;
+}
+
+interface JobHealthResponse {
+  jobs: JobHealthItem[];
+}
+
+/** Format an ISO date/datetime string as relative time for the health view. */
+function formatRelativeDays(dateStr: string | null): string {
+  if (!dateStr) return "—";
+  const then = new Date(dateStr).getTime();
+  if (isNaN(then)) return "—";
+  const diffMs = Date.now() - then;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays < 1) return "Today";
+  if (diffDays === 1) return "1d ago";
+  return `${diffDays}d ago`;
+}
+
+const HEALTH_DOT_COLORS: Record<HealthColor, string> = {
+  green: "#22c55e",
+  amber: "#f59e0b",
+  red: "#ef4444",
+  neutral: "#94a3b8",
+};
 
 // Human-readable label for each status value as it appears in the new sidebar nav.
 const STATUS_LABELS: Record<string, string> = {
@@ -46,8 +87,15 @@ export function JobPipeline(_props: RoutableProps) {
   const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
 
   const { data, loading, error, refetch } = useApi<JobPipelineResponse>("/api/jobs/pipeline");
+  const health = useApi<JobHealthResponse>("/api/jobs/health");
   const toast = useToast();
-  const [viewMode, setViewMode] = useState(() => loadStoredView("chs_jobs_view"));
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    const stored = loadStoredView("chs_jobs_view");
+    // If URL has ?view=health, honour it
+    const params = new URLSearchParams(currentSearch);
+    if (params.get("view") === "health") return "health";
+    return stored;
+  });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<JobStatus | null>(null);
   const [activeStage, setActiveStage] = useState<JobStatus>("deposit_paid");
@@ -98,7 +146,7 @@ export function JobPipeline(_props: RoutableProps) {
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(listJobs, "job_number", "desc");
 
-  const setView = (mode: "list" | "kanban") => {
+  const setView = (mode: ViewMode) => {
     setViewMode(mode);
     storeView("chs_jobs_view", mode);
   };
@@ -143,7 +191,7 @@ export function JobPipeline(_props: RoutableProps) {
               style={{ width: "min(280px, 40vw)" }}
             />
           )}
-          <ViewToggle value={viewMode} onChange={setView} />
+          <ViewToggle value={viewMode} onChange={setView} showHealth />
           <button class="btn btn--secondary btn--sm" onClick={() => go("/jobs/map")}>
             🗺 Map View
           </button>
@@ -215,6 +263,65 @@ export function JobPipeline(_props: RoutableProps) {
             ))}
           </tbody>
         </table>
+        </>
+      )}
+
+      {viewMode === "health" && (
+        <>
+          {health.loading && <Spinner center />}
+          {health.error && <div class="empty-state">Couldn't load job health: {health.error}</div>}
+          {!health.loading && !health.error && (
+            <div class="job-health-list">
+              {(health.data?.jobs ?? []).length === 0 && (
+                <div class="empty-state">No active jobs to show.</div>
+              )}
+              {(health.data?.jobs ?? []).map((job) => (
+                <div
+                  key={job.id}
+                  class="job-health-row"
+                  onClick={() => go(`/jobs/${job.id}`)}
+                  style={{ cursor: "pointer" }}
+                >
+                  <span
+                    class="job-health-row__dot"
+                    style={{ background: HEALTH_DOT_COLORS[job.health] }}
+                    title={job.health}
+                  />
+                  <div class="job-health-row__main">
+                    <div class="job-health-row__title">
+                      <strong>{job.title}</strong>
+                      {job.job_number != null && (
+                        <span class="text--muted" style={{ marginLeft: "var(--space-xs)" }}>
+                          #{job.job_number}
+                        </span>
+                      )}
+                    </div>
+                    <div class="job-health-row__sub text--muted">
+                      {job.client_name}
+                      {job.property_address ? ` · ${job.property_address}` : ""}
+                    </div>
+                  </div>
+                  <div class="job-health-row__badge">
+                    <Badge status={job.status}>{formatStatus(job.status)}</Badge>
+                  </div>
+                  <div class="job-health-row__stats">
+                    <span class="job-health-row__stat" title="Daily log">
+                      <span class="job-health-row__stat-label">Log</span>
+                      <span>{formatRelativeDays(job.last_daily_log)}</span>
+                    </span>
+                    <span class="job-health-row__stat" title="Field note">
+                      <span class="job-health-row__stat-label">Note</span>
+                      <span>{formatRelativeDays(job.last_smart_note)}</span>
+                    </span>
+                    <span class="job-health-row__stat" title="Photo">
+                      <span class="job-health-row__stat-label">Photo</span>
+                      <span>{formatRelativeDays(job.last_photo)}</span>
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
 

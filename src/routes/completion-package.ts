@@ -15,6 +15,7 @@ import { guard } from "../middleware/guard.js";
 import { buildCompletionPackageData, renderCompletionPackageHtml } from "../lib/completion-package.js";
 import { triggerNotification } from "../lib/notification-engine.js";
 import { formatDate, formatDatePlusOneYear } from "../lib/document-generator.js";
+import { sendImmediateReviewRequest } from "../lib/review-followups.js";
 
 const WRITE_ROLES = ["owner", "project_manager"] as const;
 const READ_ROLES = ["owner", "project_manager", "office_admin"] as const;
@@ -72,6 +73,9 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
   const job = await env.DB.prepare(
     `SELECT j.id, j.job_number, j.title, j.completion_package_sent_at, j.actual_end_date, j.target_end_date,
             j.warranty_expiration, j.portal_token,
+            COALESCE(j.review_enabled, 1) AS review_enabled,
+            COALESCE(j.review_received, 0) AS review_received,
+            j.review_received_at,
             COALESCE(c.first_name || ' ' || c.last_name, c.name, '') AS client_name
        FROM jobs j
        LEFT JOIN clients c ON c.id = j.client_id
@@ -87,6 +91,9 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
       target_end_date: string | null;
       warranty_expiration: string | null;
       portal_token: string | null;
+      review_enabled: number;
+      review_received: number;
+      review_received_at: string | null;
       client_name: string;
     }>();
 
@@ -241,7 +248,32 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
     },
     package_status: packageStatus,
     sent_at: job.completion_package_sent_at,
+    review_enabled: job.review_enabled === 1,
+    review_received: job.review_received === 1,
+    review_received_at: job.review_received_at,
+    review_log: await buildReviewLog(env, jobId),
   };
+}
+
+async function buildReviewLog(
+  env: Env,
+  jobId: string,
+): Promise<Array<{ event: string; sent_at: string }>> {
+  const events = [
+    `google_review_request_${jobId}`,
+    `google_review_followup_1_${jobId}`,
+    `google_review_followup_2_${jobId}`,
+  ];
+  const rows: Array<{ event: string; sent_at: string }> = [];
+  for (const key of events) {
+    const row = await env.DB.prepare(
+      "SELECT trigger_event, sent_at FROM notification_logs WHERE dedupe_key = ? LIMIT 1",
+    ).bind(key).first<{ trigger_event: string; sent_at: string | null }>();
+    if (row?.sent_at) {
+      rows.push({ event: row.trigger_event, sent_at: row.sent_at });
+    }
+  }
+  return rows;
 }
 
 // ─── POST /api/jobs/:id/completion-package (legacy compile DRAFT) ───────────
@@ -329,7 +361,8 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
   }
 
   const job = await env.DB.prepare(
-    `SELECT client_id, portal_token, warranty_expiration, actual_end_date, target_end_date
+    `SELECT client_id, portal_token, warranty_expiration, actual_end_date, target_end_date,
+            COALESCE(review_enabled, 1) AS review_enabled
        FROM jobs WHERE id = ?`,
   )
     .bind(jobId)
@@ -339,6 +372,7 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
       warranty_expiration: string | null;
       actual_end_date: string | null;
       target_end_date: string | null;
+      review_enabled: number;
     }>();
 
   const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
@@ -386,6 +420,16 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
   )
     .bind(sentAt.slice(0, 19).replace("T", " "), sentAt, jobId)
     .run();
+
+  // Fire the Google review request immediately after stamping sent_at.
+  // Non-fatal — a failure here must never block completion package delivery.
+  if (job?.review_enabled !== 0) {
+    try {
+      await sendImmediateReviewRequest(env, jobId, job?.client_id ?? null);
+    } catch (e) {
+      console.error("[completion_package.send] google_review_request failed (non-fatal):", (e as Error).message);
+    }
+  }
 
   const trigger = await triggerNotification(env, "completion_package_sent", {
     jobId,

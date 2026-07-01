@@ -488,6 +488,13 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
       binds.push(str(body[field]));
     }
   }
+
+  // Boolean toggle fields (0/1).
+  if ("review_enabled" in body) {
+    sets.push("review_enabled = ?");
+    binds.push(body.review_enabled ? 1 : 0);
+  }
+
   if (sets.length === 0) return err(400, "bad_request", "No editable fields provided.");
 
   sets.push("updated_at = ?");
@@ -499,10 +506,41 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
     fields: [
       ...Object.keys(editable).filter((f) => f in body),
       ...("assigned_to" in body ? ["assigned_to"] : []),
+      ...("review_enabled" in body ? ["review_enabled"] : []),
     ],
   });
 
   return handleJobDetail(env, id);
+}
+
+// ─── PUT /api/jobs/:id/review-received ────────────────────────────────────────
+
+/**
+ * Idempotent — marks review_received = 1 and stamps review_received_at.
+ * Stops the follow-up sequence for this job on the next nightly sweep.
+ * Auth: O/PM.
+ */
+export async function handleJobReviewReceived(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, ["owner", "project_manager"] as const);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const job = await env.DB.prepare(
+    "SELECT id, review_received FROM jobs WHERE id = ?",
+  ).bind(id).first<{ id: string; review_received: number }>();
+  if (!job) return err(404, "not_found", "Job not found.");
+
+  if (job.review_received) {
+    return json({ ok: true, review_received: true, review_received_at: null, already_set: true });
+  }
+
+  await env.DB.prepare(
+    `UPDATE jobs SET review_received = 1, review_received_at = datetime('now'), updated_at = ? WHERE id = ?`,
+  ).bind(new Date().toISOString(), id).run();
+
+  await logAudit(env, user.email, "job_review_received", "job", id, {});
+
+  return json({ ok: true, review_received: true });
 }
 
 // ─── Close-eligibility check (shared by GET and gate inside PUT /status) ─────

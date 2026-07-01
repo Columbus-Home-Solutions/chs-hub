@@ -62,6 +62,7 @@ import {
   handleJobStatus,
   handleJobReverseConversion,
   handleJobCloseEligibility,
+  handleJobReviewReceived,
   handleTaskList,
   handleTaskCreate,
   handleTaskUpdate,
@@ -240,6 +241,7 @@ import { processNotifications } from "./lib/notification-engine.js";
 import { processQuoteFollowUps } from "./lib/quote-follow-up.js";
 import { processNewLeadOutreach } from "./lib/new-lead-outreach.js";
 import { processProposalReviewReminders } from "./lib/proposal-reminders.js";
+import { processReviewFollowUps } from "./lib/review-followups.js";
 import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
 import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
 import {
@@ -426,6 +428,8 @@ import {
   handlePunchItemDone,
   handlePunchPublicPhoto,
 } from "./routes/punch-lists.js";
+import { handleJobHealth } from "./routes/job-health.js";
+import { handleSubPublicGet, handleSubItemDone } from "./routes/sub-access.js";
 import {
   handleVoiceNoteCreate,
   handleVoiceNoteUnmatchedList,
@@ -577,6 +581,12 @@ export default {
         p.startsWith("/api/public/social-posts/") ||
         p.startsWith("/api/public/social/") ||
         p.startsWith("/api/portal/") ||
+        // Sprint 33: public punch list (token auth, no Access).
+        p === "/punch" || p.startsWith("/punch/") ||
+        p.startsWith("/api/punch/") ||
+        // Sprint 34: persistent sub access link (token auth, no Access).
+        p === "/sub" || p.startsWith("/sub/") ||
+        p.startsWith("/api/sub/") ||
         p === "/api/webhooks/stripe" ||
         p === "/api/webhooks/twilio/call-whisper" ||
         p === "/api/integrations/boldsign/webhook";
@@ -614,7 +624,11 @@ export default {
     }
 
     // Twilio call whisper — PUBLIC; Twilio fetches this URL during Dial bridging.
-    if (url.pathname === "/api/webhooks/twilio/call-whisper" && request.method === "GET") {
+    // Twilio defaults to POST for <Number url="..."> unless method="GET" is set.
+    if (
+      url.pathname === "/api/webhooks/twilio/call-whisper" &&
+      (request.method === "GET" || request.method === "POST")
+    ) {
       return handleCallWhisper(request);
     }
 
@@ -671,6 +685,16 @@ export default {
     const pqGet = url.pathname.match(/^\/api\/public\/quote\/([^/]+)$/);
     if (pqGet && request.method === "GET") {
       return handlePublicQuoteGet(env, decodeURIComponent(pqGet[1]));
+    }
+
+    // ── Persistent sub access (Sprint 34) — token auth, no Access ───
+    const subItemDone = url.pathname.match(/^\/api\/sub\/([^/]+)\/items\/([^/]+)\/done$/);
+    if (subItemDone && request.method === "PUT") {
+      return handleSubItemDone(env, request, decodeURIComponent(subItemDone[1]), decodeURIComponent(subItemDone[2]));
+    }
+    const subGet = url.pathname.match(/^\/api\/sub\/([^/]+)$/);
+    if (subGet && request.method === "GET") {
+      return handleSubPublicGet(env, decodeURIComponent(subGet[1]));
     }
 
     // ── Public punch list (Sprint 33) — token auth, no Access ────────
@@ -1010,6 +1034,9 @@ export default {
     if (url.pathname === "/api/jobs/pipeline" && request.method === "GET") {
       return handleJobPipeline(env);
     }
+    if (url.pathname === "/api/jobs/health" && request.method === "GET") {
+      return handleJobHealth(env, request);
+    }
     // /api/jobs/active (legacy capture PWA) must match before /api/jobs/:id.
     if (url.pathname === "/api/jobs/active" && request.method === "GET") {
       return handleActiveJobs(env);
@@ -1032,6 +1059,11 @@ export default {
     const jobReverse = url.pathname.match(/^\/api\/jobs\/([^/]+)\/reverse-conversion$/);
     if (jobReverse && request.method === "POST") {
       return handleJobReverseConversion(request, env, decodeURIComponent(jobReverse[1]));
+    }
+    // Sprint 35 — mark Google review received (stops follow-up sequence).
+    const jobReviewReceived = url.pathname.match(/^\/api\/jobs\/([^/]+)\/review-received$/);
+    if (jobReviewReceived && request.method === "PUT") {
+      return handleJobReviewReceived(request, env, decodeURIComponent(jobReviewReceived[1]));
     }
     const jobComms = url.pathname.match(/^\/api\/jobs\/([^/]+)\/communications$/);
     if (jobComms && request.method === "GET") {
@@ -2162,6 +2194,14 @@ export default {
       return env.ASSETS.fetch(new Request(punchHtmlUrl.toString(), { method: "GET" }));
     }
 
+    // ── Persistent sub link (Sprint 34) ─────────────────────────────
+    // /sub/:token — token-gated, no-auth, own Vite entry (public/app/sub.html).
+    if (url.pathname === "/sub" || url.pathname.startsWith("/sub/")) {
+      const subHtmlUrl = new URL(request.url);
+      subHtmlUrl.pathname = "/app/sub.html";
+      return env.ASSETS.fetch(new Request(subHtmlUrl.toString(), { method: "GET" }));
+    }
+
     // ── New Preact app (Sprint 2+) ───────────────────────────────────
     // Built by Vite into ./app and served at /app. Handled before the
     // dashboard-host rewrite so it resolves on every host. Deep links
@@ -2457,6 +2497,19 @@ async function runNightly(env: Env): Promise<void> {
     );
   } catch (err) {
     console.error(`[cron 15 7 * * *] punch_list_reminders failed:`, (err as Error).message);
+  }
+
+  // Google Review Request follow-up sweep (Sprint 35) — day-3 and day-7
+  // nudges after completion_package_sent_at. Non-fatal.
+  try {
+    const rf = await processReviewFollowUps(env);
+    if (rf.dispatched > 0 || rf.errors > 0) {
+      console.log(
+        `[cron 15 7 * * *] review_followups: scanned=${rf.scanned} dispatched=${rf.dispatched} skipped=${rf.skipped} errors=${rf.errors} in ${rf.duration_ms}ms`,
+      );
+    }
+  } catch (err) {
+    console.error(`[cron 15 7 * * *] review_followups failed:`, (err as Error).message);
   }
 }
 

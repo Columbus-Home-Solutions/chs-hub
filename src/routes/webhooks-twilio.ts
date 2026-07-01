@@ -51,7 +51,7 @@ function twimlXml(body: string): Response {
   });
 }
 
-/** Simple forward — no whisper (fallback when APP_PUBLIC_ORIGIN is unset). */
+/** Simple forward — no whisper (fallback when no public whisper origin is available). */
 function twimlDialForward(forwardNumber: string): Response {
   return twimlXml(
     `<?xml version="1.0" encoding="UTF-8"?><Response><Dial><Number>${escapeXmlText(forwardNumber)}</Number></Dial></Response>`,
@@ -358,6 +358,30 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
 
 // ─── POST /api/webhooks/twilio/voice ────────────────────────────────────────────
 
+/**
+ * Origin for the Dial whisper sub-request. Must be reachable by Twilio without
+ * Cloudflare Access — dashboard.homesolutionsar.com returns 302 to Access login.
+ */
+function resolveTwilioWhisperOrigin(request: Request, env: Env): string | null {
+  const inbound = new URL(request.url);
+  const inboundHost = inbound.hostname.toLowerCase();
+  if (inboundHost.endsWith(".workers.dev") || inboundHost === "client.homesolutionsar.com") {
+    return inbound.origin;
+  }
+
+  const fromEnv = (env.APP_PUBLIC_ORIGIN ?? "").trim().replace(/\/$/, "");
+  if (fromEnv) {
+    try {
+      const envHost = new URL(fromEnv).hostname.toLowerCase();
+      if (envHost !== "dashboard.homesolutionsar.com") return fromEnv;
+    } catch {
+      /* ignore malformed APP_PUBLIC_ORIGIN */
+    }
+  }
+
+  return "https://client.homesolutionsar.com";
+}
+
 async function lookupClientByPhone(
   env: Env,
   callerPhone: string,
@@ -392,21 +416,28 @@ export async function handleTwilioVoice(request: Request, env: Env): Promise<Res
   const callerPhone = form.get("From") ?? "";
   const callSid = form.get("CallSid") ?? "";
 
-  const client = callerPhone ? await lookupClientByPhone(env, callerPhone) : null;
+  let client: Awaited<ReturnType<typeof lookupClientByPhone>> = null;
+  if (callerPhone) {
+    try {
+      client = await lookupClientByPhone(env, callerPhone);
+    } catch (e) {
+      console.warn("[twilio-voice] client lookup failed (non-fatal):", e);
+    }
+  }
   const callerName = client
     ? [client.first_name, client.last_name].filter(Boolean).join(" ").trim() ||
       (client.name ?? "").trim() ||
       null
     : null;
 
-  const publicOrigin = (env.APP_PUBLIC_ORIGIN ?? "").trim();
-  if (!publicOrigin) {
-    console.error("[twilio-voice] APP_PUBLIC_ORIGIN is not set — forwarding without whisper");
-    await audit(env, "twilio_voice_no_whisper", { call_sid: callSid, reason: "missing_public_origin" });
+  const whisperOrigin = resolveTwilioWhisperOrigin(request, env);
+  if (!whisperOrigin) {
+    console.error("[twilio-voice] no public whisper origin — forwarding without whisper");
+    await audit(env, "twilio_voice_no_whisper", { call_sid: callSid, reason: "missing_whisper_origin" });
     return twimlDialForward(forwardNumber);
   }
 
-  const whisperUrl = new URL(`${publicOrigin}/api/webhooks/twilio/call-whisper`);
+  const whisperUrl = new URL(`${whisperOrigin}/api/webhooks/twilio/call-whisper`);
   if (callerName) {
     whisperUrl.searchParams.set("name", callerName);
   } else {
@@ -416,7 +447,7 @@ export async function handleTwilioVoice(request: Request, env: Env): Promise<Res
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial>
-    <Number url="${escapeXmlText(whisperUrl.toString())}">${escapeXmlText(forwardNumber)}</Number>
+    <Number method="GET" url="${escapeXmlText(whisperUrl.toString())}">${escapeXmlText(forwardNumber)}</Number>
   </Dial>
 </Response>`;
 
@@ -429,7 +460,7 @@ export async function handleTwilioVoice(request: Request, env: Env): Promise<Res
   return twimlXml(twiml);
 }
 
-// ─── GET /api/webhooks/twilio/call-whisper ────────────────────────────────────
+// ─── GET|POST /api/webhooks/twilio/call-whisper ───────────────────────────────
 
 export async function handleCallWhisper(request: Request): Promise<Response> {
   const url = new URL(request.url);

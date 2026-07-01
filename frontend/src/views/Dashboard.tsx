@@ -61,6 +61,10 @@ export function Dashboard(_props: RoutableProps) {
             </div>
           )}
 
+          <div class="dashboard-order-weather">
+            <WeatherForecastCard />
+          </div>
+
           <div class="dashboard-order-doc-review">
             <DocReviewQueue />
           </div>
@@ -72,10 +76,6 @@ export function Dashboard(_props: RoutableProps) {
               error={actionItems.error}
               onDismiss={(id) => setDismissedIds((prev) => new Set(prev).add(id))}
             />
-          </div>
-
-          <div class="dashboard-order-weather">
-            <WeatherForecastCard />
           </div>
 
           <div class="dashboard-order-quick-actions dashboard-order-quick-actions--mobile">

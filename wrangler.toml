@@ -128,6 +128,8 @@ HUB_FILE_LINK_ORIGIN = "https://chs-hub.tony-bc5.workers.dev"
 # Secrets required:
 #   `wrangler secret put BOLDSIGN_API_KEY`          — sandbox key first
 #   `wrangler secret put BOLDSIGN_WEBHOOK_SECRET`   — from BoldSign → Webhooks
+# Client conditional lien waiver template (same ID as lien_waiver_conditional in migration 0048).
+BOLDSIGN_LIEN_WAIVER_CLIENT_TEMPLATE_ID = "7d6692c2-21e9-4ae9-ba2a-7f45c1f33eba"
 
 # ─── Scheduled jobs ────────────────────────────────────────────────────
 # All four schedules dispatch through src/index.ts → dispatchCron().

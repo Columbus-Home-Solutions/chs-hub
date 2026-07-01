@@ -1,0 +1,924 @@
+/**
+ * Punch list API (Sprint 33).
+ *
+ *   GET    /api/jobs/:id/punch-list
+ *   POST   /api/jobs/:id/punch-list/items
+ *   PUT    /api/punch-list-items/:id
+ *   DELETE /api/punch-list-items/:id
+ *   PUT    /api/punch-lists/:id/schedule
+ *   POST   /api/punch-lists/:id/send
+ *   POST   /api/punch-lists/:id/renotify
+ *   PUT    /api/punch-lists/:id/close
+ *
+ * Public (token auth, no Cloudflare Access):
+ *   GET    /api/punch/:token
+ *   PUT    /api/punch/:token/items/:itemId/done
+ *   GET    /api/punch/:token/photos/:photoId
+ */
+
+import type { Env } from "../env.js";
+import { guard } from "../middleware/guard.js";
+import { triggerNotification } from "../lib/notification-engine.js";
+import {
+  buildPunchListPdf,
+  punchListSecureLink,
+  storePunchListPdf,
+  type PunchListPdfItem,
+} from "../lib/punch-list-pdf.js";
+import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "../lib/twilio.js";
+import { streamObject, putImage } from "../lib/r2.js";
+
+const MAX_COMPLETION_PHOTO_BYTES = 10 * 1024 * 1024;
+
+const WRITE_ROLES = ["owner", "project_manager"] as const;
+const READ_ROLES = ["owner", "project_manager", "field_crew", "office_admin"] as const;
+
+function json(body: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("content-type", "application/json; charset=utf-8");
+  headers.set("cache-control", "no-store");
+  return new Response(JSON.stringify(body, null, 2), { ...init, headers });
+}
+
+function err(status: number, code: string, message?: string): Response {
+  return json({ error: code, message: message ?? code }, { status });
+}
+
+function str(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
+  try {
+    return (await request.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function getFormEntry(form: FormData, name: string): Blob | string | null {
+  return form.get(name) as Blob | string | null;
+}
+
+async function storePunchCompletionPhoto(
+  env: Env,
+  opts: {
+    photoId: string;
+    jobId: string;
+    punchListId: string;
+    itemId: string;
+    description: string;
+    bytes: ArrayBuffer;
+    contentType: string;
+  },
+): Promise<void> {
+  const r2Key = `punch-lists/${opts.punchListId}/completion-photos/${opts.itemId}.jpg`;
+  await putImage(env, r2Key, opts.bytes, opts.contentType || "image/jpeg");
+
+  const now = new Date().toISOString();
+  const caption = `Punch list completion — ${opts.description}`;
+
+  await env.DB.prepare(
+    `INSERT INTO photos
+       (id, created_at, taken_at, job_id, category, r2_key, thumb_key,
+        uploaded_by, gps_lat, gps_lng, tags, caption, before_after_pair_id,
+        photo_type, latitude, longitude, location_accuracy, r2_thumbnail_key,
+        r2_url, uploaded_at, synced_from_offline, task_id, daily_log_id,
+        entered_via, is_active, created_by)
+     VALUES (?, ?, ?, ?, 'progress', ?, ?, NULL, NULL, NULL, NULL, ?, NULL,
+             'punch_list', NULL, NULL, NULL, ?,
+             ?, ?, 0, NULL, NULL,
+             'punch_link', 1, NULL)`,
+  )
+    .bind(
+      opts.photoId,
+      now,
+      now,
+      opts.jobId,
+      r2Key,
+      r2Key,
+      caption,
+      r2Key,
+      `/api/photos/${opts.photoId}`,
+      now,
+    )
+    .run();
+}
+
+function arrayBufferToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+interface PunchListRow {
+  id: string;
+  job_id: string;
+  status: string;
+  scheduled_date: string | null;
+  sent_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ItemRow {
+  id: string;
+  punch_list_id: string;
+  job_id: string;
+  description: string;
+  sub_id: string | null;
+  photo_ids: string | null;
+  status: string;
+  scheduled_date: string | null;
+  completed_at: string | null;
+  completed_note: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function hydrateItem(row: ItemRow) {
+  return {
+    id: row.id,
+    punch_list_id: row.punch_list_id,
+    job_id: row.job_id,
+    description: row.description,
+    sub_id: row.sub_id,
+    photo_ids: row.photo_ids
+      ? row.photo_ids.split(",").map((s) => s.trim()).filter(Boolean)
+      : [],
+    status: row.status,
+    scheduled_date: row.scheduled_date,
+    completed_at: row.completed_at,
+    completed_note: row.completed_note,
+    sort_order: row.sort_order,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function getOrCreatePunchList(env: Env, jobId: string): Promise<PunchListRow> {
+  const existing = await env.DB.prepare("SELECT * FROM punch_lists WHERE job_id = ?")
+    .bind(jobId)
+    .first<PunchListRow>();
+  if (existing) return existing;
+
+  const id = crypto.randomUUID().replace(/-/g, "");
+  await env.DB.prepare(
+    `INSERT INTO punch_lists (id, job_id, status, created_at, updated_at)
+     VALUES (?, ?, 'open', datetime('now'), datetime('now'))`,
+  )
+    .bind(id, jobId)
+    .run();
+
+  const row = await env.DB.prepare("SELECT * FROM punch_lists WHERE id = ?")
+    .bind(id)
+    .first<PunchListRow>();
+  return row!;
+}
+
+async function loadItems(env: Env, punchListId: string): Promise<ItemRow[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM punch_list_items WHERE punch_list_id = ? ORDER BY sort_order ASC, created_at ASC`,
+  )
+    .bind(punchListId)
+    .all<ItemRow>();
+  return results ?? [];
+}
+
+async function buildBySub(
+  env: Env,
+  punchListId: string,
+  items: ReturnType<typeof hydrateItem>[],
+) {
+  const subIds = [...new Set(items.map((i) => i.sub_id).filter(Boolean))] as string[];
+  const bySub: {
+    sub_id: string;
+    sub_name: string;
+    items: ReturnType<typeof hydrateItem>[];
+    token: string | null;
+  }[] = [];
+
+  for (const subId of subIds) {
+    const sub = await env.DB.prepare(
+      `SELECT id, COALESCE(company_name, company) AS name,
+              COALESCE(contact_name, primary_contact) AS contact
+         FROM subcontractors WHERE id = ?`,
+    )
+      .bind(subId)
+      .first<{ id: string; name: string | null; contact: string | null }>();
+
+    const tokenRow = await env.DB.prepare(
+      `SELECT token FROM punch_list_sub_tokens
+        WHERE punch_list_id = ? AND sub_id = ? AND is_active = 1
+        ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(punchListId, subId)
+      .first<{ token: string }>();
+
+    bySub.push({
+      sub_id: subId,
+      sub_name: sub?.name ?? sub?.contact ?? "Subcontractor",
+      items: items.filter((i) => i.sub_id === subId),
+      token: tokenRow?.token ?? null,
+    });
+  }
+
+  return bySub;
+}
+
+async function sendSubEmailWithPdf(
+  env: Env,
+  to: string,
+  subject: string,
+  text: string,
+  pdfBytes: Uint8Array,
+  filename: string,
+): Promise<void> {
+  const live = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase() === "live";
+  const from = (env.NOTIFICATIONS_EMAIL_FROM ?? "").trim();
+  const apiKey = (env.RESEND_API_KEY ?? "").trim();
+
+  if (!live || !from || !apiKey || env.RESEND_DRY_RUN === "1") {
+    console.log(`[punch-list][SIMULATE] email to=${to} subject="${subject}" attachment=${filename}`);
+    return;
+  }
+
+  const b64 = arrayBufferToBase64(pdfBytes);
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      text,
+      attachments: [{ filename, content: b64 }],
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.warn(`[punch-list] email to ${to} failed: ${res.status} ${body.slice(0, 200)}`);
+  }
+}
+
+async function notifySub(
+  env: Env,
+  sub: {
+    id: string;
+    phone: string | null;
+    email: string | null;
+    company_name: string | null;
+    contact_name: string | null;
+  },
+  smsBody: string,
+  emailSubject: string,
+  pdfBytes: Uint8Array,
+  jobTitle: string,
+): Promise<void> {
+  const twilioCfg = await getTwilioConfig(env);
+
+  if (sub.phone && twilioConfigured(twilioCfg)) {
+    const r = await sendSms(twilioCfg, sub.phone, smsBody);
+    if (!r.ok) console.warn(`[punch-list] SMS to ${sub.phone} failed: ${r.error}`);
+  } else if (sub.phone) {
+    console.warn(`[punch-list] SMS skipped — Twilio not configured, sub=${sub.id}`);
+  }
+
+  if (sub.email) {
+    await sendSubEmailWithPdf(
+      env,
+      sub.email,
+      emailSubject,
+      smsBody,
+      pdfBytes,
+      `punch-list-${jobTitle.replace(/[^a-z0-9]+/gi, "-").slice(0, 40)}.pdf`,
+    );
+  } else {
+    console.warn(`[punch-list] no phone or email for sub=${sub.id} — token still created`);
+  }
+}
+
+async function getOrCreateSubToken(
+  env: Env,
+  punchListId: string,
+  subId: string,
+): Promise<string> {
+  const existing = await env.DB.prepare(
+    `SELECT token FROM punch_list_sub_tokens
+      WHERE punch_list_id = ? AND sub_id = ? AND is_active = 1
+      ORDER BY created_at DESC LIMIT 1`,
+  )
+    .bind(punchListId, subId)
+    .first<{ token: string }>();
+  if (existing?.token) return existing.token;
+
+  const token = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO punch_list_sub_tokens (id, punch_list_id, sub_id, token, is_active, created_at)
+     VALUES (?, ?, ?, ?, 1, datetime('now'))`,
+  )
+    .bind(crypto.randomUUID().replace(/-/g, ""), punchListId, subId, token)
+    .run();
+  return token;
+}
+
+export async function handleJobPunchListGet(env: Env, jobId: string): Promise<Response> {
+  const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ id: string }>();
+  if (!job) return err(404, "job_not_found");
+
+  const punchList = await getOrCreatePunchList(env, jobId);
+  const rawItems = await loadItems(env, punchList.id);
+  const items = rawItems.map(hydrateItem);
+  const bySub = await buildBySub(env, punchList.id, items);
+  const unassigned = items.filter((i) => !i.sub_id);
+
+  return json({
+    punch_list: {
+      id: punchList.id,
+      job_id: punchList.job_id,
+      status: punchList.status,
+      scheduled_date: punchList.scheduled_date,
+      sent_at: punchList.sent_at,
+      closed_at: punchList.closed_at,
+    },
+    items,
+    by_sub: bySub,
+    unassigned_items: unassigned,
+  });
+}
+
+export async function handleJobPunchListGetGuarded(
+  env: Env,
+  request: Request,
+  jobId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...READ_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  return handleJobPunchListGet(env, jobId);
+}
+
+export async function handlePunchListItemCreate(
+  env: Env,
+  request: Request,
+  jobId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "invalid_json");
+  const description = str(body.description);
+  if (!description) return err(400, "description_required");
+
+  const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ id: string }>();
+  if (!job) return err(404, "job_not_found");
+
+  const punchList = await getOrCreatePunchList(env, jobId);
+  const subId = str(body.sub_id);
+  const scheduledDate = str(body.scheduled_date);
+  const photoIds = Array.isArray(body.photo_ids)
+    ? body.photo_ids.map(String).join(",")
+    : str(body.photo_ids);
+  const sortOrder = typeof body.sort_order === "number" ? body.sort_order : 0;
+
+  const id = crypto.randomUUID().replace(/-/g, "");
+  await env.DB.prepare(
+    `INSERT INTO punch_list_items
+       (id, punch_list_id, job_id, description, sub_id, photo_ids, scheduled_date, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+  )
+    .bind(id, punchList.id, jobId, description, subId, photoIds, scheduledDate, sortOrder)
+    .run();
+
+  const row = await env.DB.prepare("SELECT * FROM punch_list_items WHERE id = ?")
+    .bind(id)
+    .first<ItemRow>();
+  return json({ item: row ? hydrateItem(row) : null }, { status: 201 });
+}
+
+export async function handlePunchListItemUpdate(
+  env: Env,
+  request: Request,
+  itemId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "invalid_json");
+
+  const row = await env.DB.prepare("SELECT * FROM punch_list_items WHERE id = ?")
+    .bind(itemId)
+    .first<ItemRow>();
+  if (!row) return err(404, "not_found");
+
+  const description = body.description !== undefined ? str(body.description) : row.description;
+  const subId = body.sub_id !== undefined ? str(body.sub_id) : row.sub_id;
+  const scheduledDate =
+    body.scheduled_date !== undefined ? str(body.scheduled_date) : row.scheduled_date;
+  const photoIds =
+    body.photo_ids !== undefined
+      ? Array.isArray(body.photo_ids)
+        ? body.photo_ids.map(String).join(",")
+        : str(body.photo_ids)
+      : row.photo_ids;
+
+  if (!description) return err(400, "description_required");
+
+  await env.DB.prepare(
+    `UPDATE punch_list_items SET description = ?, sub_id = ?, photo_ids = ?,
+       scheduled_date = ?, updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(description, subId, photoIds, scheduledDate, itemId)
+    .run();
+
+  const updated = await env.DB.prepare("SELECT * FROM punch_list_items WHERE id = ?")
+    .bind(itemId)
+    .first<ItemRow>();
+  return json({ item: updated ? hydrateItem(updated) : null });
+}
+
+export async function handlePunchListItemDelete(
+  env: Env,
+  request: Request,
+  itemId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const row = await env.DB.prepare("SELECT id FROM punch_list_items WHERE id = ?")
+    .bind(itemId)
+    .first<{ id: string }>();
+  if (!row) return err(404, "not_found");
+
+  await env.DB.prepare("DELETE FROM punch_list_items WHERE id = ?").bind(itemId).run();
+  return json({ ok: true });
+}
+
+export async function handlePunchListSchedule(
+  env: Env,
+  request: Request,
+  punchListId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "invalid_json");
+  const scheduledDate = str(body.scheduled_date);
+
+  const row = await env.DB.prepare("SELECT id FROM punch_lists WHERE id = ?")
+    .bind(punchListId)
+    .first<{ id: string }>();
+  if (!row) return err(404, "not_found");
+
+  await env.DB.prepare(
+    `UPDATE punch_lists SET scheduled_date = ?, updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(scheduledDate, punchListId)
+    .run();
+
+  const updated = await env.DB.prepare("SELECT * FROM punch_lists WHERE id = ?")
+    .bind(punchListId)
+    .first<PunchListRow>();
+  return json({ punch_list: updated });
+}
+
+export async function handlePunchListSend(
+  env: Env,
+  request: Request,
+  punchListId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const punchList = await env.DB.prepare(
+    `SELECT pl.*, j.title AS job_title, j.property_address
+       FROM punch_lists pl
+       JOIN jobs j ON j.id = pl.job_id
+      WHERE pl.id = ?`,
+  )
+    .bind(punchListId)
+    .first<PunchListRow & { job_title: string | null; property_address: string | null }>();
+  if (!punchList) return err(404, "not_found");
+
+  const rawItems = await loadItems(env, punchListId);
+  const assigned = rawItems.filter((i) => i.sub_id);
+  if (assigned.length === 0) return err(400, "no_assigned_items");
+
+  const subIds = [...new Set(assigned.map((i) => i.sub_id).filter(Boolean))] as string[];
+  const jobTitle = punchList.job_title ?? "Project";
+  const jobAddress = punchList.property_address ?? "";
+
+  for (const subId of subIds) {
+    const sub = await env.DB.prepare(
+      `SELECT id, phone, email,
+              COALESCE(company_name, company) AS company_name,
+              COALESCE(contact_name, primary_contact) AS contact_name
+         FROM subcontractors WHERE id = ?`,
+    )
+      .bind(subId)
+      .first<{
+        id: string;
+        phone: string | null;
+        email: string | null;
+        company_name: string | null;
+        contact_name: string | null;
+      }>();
+    if (!sub) continue;
+
+    const token = await getOrCreateSubToken(env, punchListId, subId);
+    const link = punchListSecureLink(token);
+    const subItems = assigned.filter((i) => i.sub_id === subId);
+    const pdfItems: PunchListPdfItem[] = subItems.map((i) => ({
+      description: i.description,
+      scheduled_date: i.scheduled_date ?? punchList.scheduled_date,
+    }));
+
+    const pdfBytes = buildPunchListPdf({
+      punch_list_id: punchListId,
+      sub_id: subId,
+      job_title: jobTitle,
+      job_address: jobAddress,
+      sub_company_name: sub.company_name ?? "Subcontractor",
+      scheduled_date: punchList.scheduled_date,
+      items: pdfItems,
+    });
+    await storePunchListPdf(env, punchListId, subId, pdfBytes);
+
+    const subName = sub.contact_name || sub.company_name || "there";
+    const smsBody = `Hi ${subName}, Tony from Columbus Home Solutions has a punch list for you on ${jobTitle} at ${jobAddress}. View your items and mark them complete here: ${link}`;
+
+    await notifySub(env, sub, smsBody, `Punch List — ${jobTitle}`, pdfBytes, jobTitle);
+
+    await env.DB.prepare(
+      `UPDATE punch_list_sub_tokens SET notified_at = datetime('now') WHERE punch_list_id = ? AND sub_id = ? AND token = ?`,
+    )
+      .bind(punchListId, subId, token)
+      .run();
+  }
+
+  await env.DB.prepare(
+    `UPDATE punch_lists SET status = 'sent', sent_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(punchListId)
+    .run();
+
+  await triggerNotification(env, "punch_list_sent", {
+    jobId: punchList.job_id,
+    merge: { job_title: jobTitle },
+    linkPath: `/app/jobs/${punchList.job_id}`,
+  });
+
+  return json({ ok: true, subs_notified: subIds.length });
+}
+
+export async function handlePunchListRenotify(
+  env: Env,
+  request: Request,
+  punchListId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const punchList = await env.DB.prepare(
+    `SELECT pl.*, j.title AS job_title
+       FROM punch_lists pl
+       JOIN jobs j ON j.id = pl.job_id
+      WHERE pl.id = ?`,
+  )
+    .bind(punchListId)
+    .first<PunchListRow & { job_title: string | null }>();
+  if (!punchList) return err(404, "not_found");
+  if (!punchList.sent_at) return err(400, "not_yet_sent");
+
+  const { results: newItems } = await env.DB.prepare(
+    `SELECT DISTINCT sub_id FROM punch_list_items
+      WHERE punch_list_id = ? AND sub_id IS NOT NULL AND created_at > ?`,
+  )
+    .bind(punchListId, punchList.sent_at)
+    .all<{ sub_id: string }>();
+
+  const subIds = (newItems ?? []).map((r) => r.sub_id);
+  const jobTitle = punchList.job_title ?? "Project";
+  const twilioCfg = await getTwilioConfig(env);
+
+  for (const subId of subIds) {
+    const sub = await env.DB.prepare(
+      `SELECT id, phone, email,
+              COALESCE(company_name, company) AS company_name,
+              COALESCE(contact_name, primary_contact) AS contact_name
+         FROM subcontractors WHERE id = ?`,
+    )
+      .bind(subId)
+      .first<{
+        id: string;
+        phone: string | null;
+        email: string | null;
+        company_name: string | null;
+        contact_name: string | null;
+      }>();
+    if (!sub) continue;
+
+    const tokenRow = await env.DB.prepare(
+      `SELECT token FROM punch_list_sub_tokens
+        WHERE punch_list_id = ? AND sub_id = ? AND is_active = 1
+        ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(punchListId, subId)
+      .first<{ token: string }>();
+    if (!tokenRow) continue;
+
+    const link = punchListSecureLink(tokenRow.token);
+    const subName = sub.contact_name || sub.company_name || "there";
+    const msg = `Hi ${subName}, Tony added new items to your punch list for ${jobTitle}. View updated list: ${link}`;
+
+    if (sub.phone && twilioConfigured(twilioCfg)) {
+      await sendSms(twilioCfg, sub.phone, msg);
+    }
+    if (sub.email) {
+      const live = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase() === "live";
+      const from = (env.NOTIFICATIONS_EMAIL_FROM ?? "").trim();
+      const apiKey = (env.RESEND_API_KEY ?? "").trim();
+      if (live && from && apiKey && env.RESEND_DRY_RUN !== "1") {
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from,
+            to: [sub.email],
+            subject: `Updated Punch List — ${jobTitle}`,
+            text: msg,
+          }),
+        });
+      } else {
+        console.log(`[punch-list][SIMULATE] renotify email to=${sub.email}`);
+      }
+    }
+  }
+
+  await env.DB.prepare(
+    `UPDATE punch_lists SET sent_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(punchListId)
+    .run();
+
+  return json({ ok: true, subs_notified: subIds.length });
+}
+
+export async function handlePunchListClose(
+  env: Env,
+  request: Request,
+  punchListId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const punchList = await env.DB.prepare("SELECT * FROM punch_lists WHERE id = ?")
+    .bind(punchListId)
+    .first<PunchListRow>();
+  if (!punchList) return err(404, "not_found");
+
+  const open = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM punch_list_items WHERE punch_list_id = ? AND status = 'open'`,
+  )
+    .bind(punchListId)
+    .first<{ n: number }>();
+  if (open && open.n > 0) return err(400, "open_items_remain");
+
+  await env.DB.prepare(
+    `UPDATE punch_lists SET status = 'closed', closed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(punchListId)
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE punch_list_sub_tokens SET is_active = 0 WHERE punch_list_id = ?`,
+  )
+    .bind(punchListId)
+    .run();
+
+  return json({ ok: true });
+}
+
+async function resolveToken(env: Env, token: string) {
+  return env.DB.prepare(
+    `SELECT pst.*, pl.scheduled_date AS list_scheduled_date, pl.job_id, pl.status AS list_status,
+            j.title AS job_title, j.property_address,
+            COALESCE(s.company_name, s.company) AS sub_company,
+            COALESCE(s.contact_name, s.primary_contact) AS sub_contact
+       FROM punch_list_sub_tokens pst
+       JOIN punch_lists pl ON pl.id = pst.punch_list_id
+       JOIN jobs j ON j.id = pl.job_id
+       JOIN subcontractors s ON s.id = pst.sub_id
+      WHERE pst.token = ? AND pst.is_active = 1`,
+  )
+    .bind(token)
+    .first<{
+      id: string;
+      punch_list_id: string;
+      sub_id: string;
+      token: string;
+      list_scheduled_date: string | null;
+      job_id: string;
+      list_status: string;
+      job_title: string | null;
+      property_address: string | null;
+      sub_company: string | null;
+      sub_contact: string | null;
+    }>();
+}
+
+export async function handlePunchPublicGet(env: Env, token: string): Promise<Response> {
+  const row = await resolveToken(env, token);
+  if (!row) return err(404, "invalid_token");
+  if (row.list_status === "closed") return err(410, "punch_list_closed");
+
+  const { results: allItems } = await env.DB.prepare(
+    `SELECT id, description, status, scheduled_date, completed_at, photo_ids
+       FROM punch_list_items
+      WHERE punch_list_id = ? AND sub_id = ?
+      ORDER BY sort_order ASC, created_at ASC`,
+  )
+    .bind(row.punch_list_id, row.sub_id)
+    .all<{
+      id: string;
+      description: string;
+      status: string;
+      scheduled_date: string | null;
+      completed_at: string | null;
+      photo_ids: string | null;
+    }>();
+
+  const mapped = (allItems ?? []).map((item) => {
+    const photoIds = item.photo_ids
+      ? item.photo_ids.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
+    return {
+      id: item.id,
+      description: item.description,
+      status: item.status,
+      scheduled_date: item.scheduled_date ?? row.list_scheduled_date,
+      photo_urls: photoIds.map((pid) => `/api/punch/${token}/photos/${pid}`),
+      completed_at: item.completed_at,
+    };
+  });
+
+  return json({
+    job_title: row.job_title ?? "",
+    job_address: row.property_address ?? "",
+    sub_name: row.sub_contact || row.sub_company || "",
+    scheduled_date: row.list_scheduled_date,
+    items: mapped,
+  });
+}
+
+export async function handlePunchItemDone(
+  env: Env,
+  request: Request,
+  token: string,
+  itemId: string,
+): Promise<Response> {
+  const row = await resolveToken(env, token);
+  if (!row) return err(404, "invalid_token");
+  if (row.list_status === "closed") return err(410, "punch_list_closed");
+
+  const contentType = request.headers.get("content-type") ?? "";
+  let note: string | null = null;
+  let photoFile: Blob | null = null;
+
+  if (contentType.includes("multipart/form-data")) {
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      return err(400, "invalid_form_data");
+    }
+    const noteEntry = getFormEntry(form, "note");
+    note = typeof noteEntry === "string" && noteEntry.trim() ? noteEntry.trim() : null;
+    const photo = getFormEntry(form, "photo");
+    photoFile = photo instanceof Blob && photo.size > 0 ? photo : null;
+  } else {
+    return err(400, "photo_required", "A completion photo is required");
+  }
+
+  if (!photoFile) return err(400, "photo_required", "A completion photo is required");
+  if (photoFile.size > MAX_COMPLETION_PHOTO_BYTES) {
+    return err(400, "photo_too_large", "Photo too large — please use a smaller image");
+  }
+
+  const item = await env.DB.prepare(
+    `SELECT * FROM punch_list_items WHERE id = ? AND punch_list_id = ? AND sub_id = ?`,
+  )
+    .bind(itemId, row.punch_list_id, row.sub_id)
+    .first<ItemRow>();
+  if (!item) return err(404, "item_not_found");
+  if (item.status === "done") return json({ ok: true, already_done: true });
+
+  const photoId = crypto.randomUUID();
+  try {
+    const bytes = await photoFile.arrayBuffer();
+    await storePunchCompletionPhoto(env, {
+      photoId,
+      jobId: row.job_id,
+      punchListId: row.punch_list_id,
+      itemId,
+      description: item.description,
+      bytes,
+      contentType: photoFile.type || "image/jpeg",
+    });
+  } catch (e) {
+    console.warn("[punch-list] completion photo upload failed:", e);
+    return err(500, "upload_failed", "Upload failed — please try again");
+  }
+
+  const existingIds = item.photo_ids
+    ? item.photo_ids.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  const photoIds = [...existingIds, photoId].join(",");
+
+  await env.DB.prepare(
+    `UPDATE punch_list_items SET status = 'done', completed_at = datetime('now'),
+       completed_note = ?, photo_ids = ?, updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(note, photoIds, itemId)
+    .run();
+
+  const open = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM punch_list_items WHERE punch_list_id = ? AND status = 'open'`,
+  )
+    .bind(row.punch_list_id)
+    .first<{ n: number }>();
+
+  const subName = row.sub_contact || row.sub_company || "Sub";
+  const jobTitle = row.job_title ?? "Project";
+
+  if (open && open.n === 0) {
+    await triggerNotification(env, "punch_list_complete", {
+      jobId: row.job_id,
+      merge: { job_title: jobTitle },
+      linkPath: `/app/jobs/${row.job_id}`,
+    });
+  } else {
+    await triggerNotification(env, "punch_list_item_done", {
+      jobId: row.job_id,
+      merge: { sub_name: subName, item_count: "1", job_title: jobTitle },
+      linkPath: `/app/jobs/${row.job_id}`,
+    });
+  }
+
+  return json({ ok: true, all_complete: open?.n === 0 });
+}
+
+export async function handlePunchPublicPhoto(
+  env: Env,
+  token: string,
+  photoId: string,
+): Promise<Response> {
+  const row = await resolveToken(env, token);
+  if (!row) return err(404, "invalid_token");
+
+  const { results: items } = await env.DB.prepare(
+    `SELECT photo_ids FROM punch_list_items WHERE punch_list_id = ? AND sub_id = ?`,
+  )
+    .bind(row.punch_list_id, row.sub_id)
+    .all<{ photo_ids: string | null }>();
+
+  const allowed = new Set<string>();
+  for (const item of items ?? []) {
+    if (!item.photo_ids) continue;
+    for (const pid of item.photo_ids.split(",")) {
+      const t = pid.trim();
+      if (t) allowed.add(t);
+    }
+  }
+  if (!allowed.has(photoId)) return err(403, "photo_not_in_punch_list");
+
+  const photo = await env.DB.prepare(
+    `SELECT r2_key FROM photos WHERE id = ? AND COALESCE(is_active, 1) = 1`,
+  )
+    .bind(photoId)
+    .first<{ r2_key: string | null }>();
+  if (!photo?.r2_key) return err(404, "photo_not_found");
+
+  const streamed = await streamObject(env, photo.r2_key);
+  return streamed ?? err(404, "photo_missing");
+}

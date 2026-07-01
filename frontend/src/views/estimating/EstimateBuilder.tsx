@@ -1131,14 +1131,16 @@ function SentStatusCard({ estimate }: { estimate: Estimate }) {
             value={link ?? "Link will appear once the quote is sent."}
             onFocus={(ev) => (ev.target as HTMLInputElement).select()}
           />
+          <Button
+            variant="secondary"
+            disabled={!link}
+            onClick={() => link && window.open(link, "_blank", "noopener,noreferrer")}
+          >
+            Open ↗
+          </Button>
           <Button variant="secondary" disabled={!link} onClick={copy}>
             {copied ? "Copied ✓" : "Copy link"}
           </Button>
-          {link && (
-            <Button variant="tertiary" onClick={() => window.open(link, "_blank")}>
-              Open
-            </Button>
-          )}
         </div>
         <div class="quote-progress">
           {steps.map((s, i) => (

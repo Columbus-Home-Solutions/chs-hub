@@ -17,6 +17,7 @@
 
 import type { Env } from "../env.js";
 import { verifyBoldSignWebhook, getBoldSignConfig, downloadSignedDocument } from "../lib/boldsign.js";
+import { triggerNotification } from "../lib/notification-engine.js";
 import {
   parseSignatureMeta,
   serializeSignatureMeta,
@@ -207,6 +208,25 @@ async function processWebhookEvent(
 
     if (estimateDoc) {
       await handleEstimateDocumentEvent(env, estimateDoc, boldSignDocumentId, eventType, event, rawBody);
+      return;
+    }
+
+    const clientWaiver = await env.DB.prepare(
+      `SELECT clw.*, j.client_id, j.id as job_id
+         FROM client_lien_waivers clw
+         JOIN jobs j ON j.id = clw.job_id
+        WHERE clw.boldsign_document_id = ?`,
+    )
+      .bind(boldSignDocumentId)
+      .first<{
+        id: string;
+        job_id: string;
+        client_id: string;
+        status: string;
+      }>();
+
+    if (clientWaiver) {
+      await handleClientLienWaiverEvent(env, clientWaiver, boldSignDocumentId, eventType, event, rawBody);
       return;
     }
 
@@ -528,4 +548,119 @@ async function handleEstimateCompleted(
   console.log(
     `[boldsign_webhook] estimate completed: doc="${docRow.id}" estimate="${docRow.estimate_id}"`,
   );
+}
+
+interface ClientLienWaiverRow {
+  id: string;
+  job_id: string;
+  client_id: string;
+  status: string;
+}
+
+async function handleClientLienWaiverEvent(
+  env: Env,
+  waiver: ClientLienWaiverRow,
+  boldSignDocumentId: string,
+  eventType: string,
+  event: BoldSignEvent,
+  rawBody: string,
+): Promise<void> {
+  console.log(
+    `[boldsign_webhook] client_lien_waiver event="${eventType}" waiver="${waiver.id}" job="${waiver.job_id}"`,
+  );
+
+  if (eventType === "Completed") {
+    await handleClientLienWaiverCompleted(env, waiver, boldSignDocumentId, event);
+    return;
+  }
+
+  const newStatus = mapEventToStatus(eventType);
+  if (!newStatus) return;
+
+  const statusMap: Record<string, string> = {
+    sent: "sent",
+    viewed: "sent",
+    signed: "sent",
+    declined: "declined",
+    revoked: "failed",
+    expired: "failed",
+    failed: "failed",
+  };
+  const mapped = statusMap[newStatus];
+  if (mapped && mapped !== waiver.status) {
+    await env.DB.prepare(
+      `UPDATE client_lien_waivers SET status = ?, updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(mapped, waiver.id)
+      .run();
+  }
+
+  void rawBody;
+}
+
+async function handleClientLienWaiverCompleted(
+  env: Env,
+  waiver: ClientLienWaiverRow,
+  boldSignDocumentId: string,
+  event: BoldSignEvent,
+): Promise<void> {
+  const signerDetails = getSignerDetails(event)?.[0];
+  const signedOn = signerDetails?.SignedOn ?? new Date().toISOString();
+
+  const config = await getBoldSignConfig(env);
+  if (!config) {
+    console.error("[boldsign_webhook] BOLDSIGN_API_KEY not configured — cannot download client lien waiver PDF");
+    await env.DB.prepare(
+      `UPDATE client_lien_waivers SET status = 'signed', signed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(waiver.id)
+      .run();
+    return;
+  }
+
+  let pdfBytes: ArrayBuffer;
+  try {
+    pdfBytes = await downloadSignedDocument(config, boldSignDocumentId);
+  } catch (err) {
+    console.error(`[boldsign_webhook] client lien waiver download failed: ${(err as Error).message}`);
+    await env.DB.prepare(
+      `UPDATE client_lien_waivers SET status = 'signed', signed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(waiver.id)
+      .run();
+    return;
+  }
+
+  const r2Key = `documents/lien-waivers/client/${waiver.job_id}/${boldSignDocumentId}.pdf`;
+  await env.FILES.put(r2Key, pdfBytes, {
+    httpMetadata: { contentType: "application/pdf" },
+  });
+
+  const documentsId = crypto.randomUUID();
+  const pdfTitle = `Conditional Lien Waiver (Signed)`;
+  await env.DB.prepare(
+    `INSERT INTO documents
+       (id, job_id, title, file_type, file_size, r2_key, document_category, is_signed, signed_date, created_at, is_active)
+     VALUES (?, ?, ?, 'pdf', ?, ?, 'lien_waiver', 1, ?, datetime('now'), 1)`,
+  )
+    .bind(documentsId, waiver.job_id, pdfTitle, pdfBytes.byteLength, r2Key, signedOn)
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE client_lien_waivers
+        SET status = 'signed', signed_at = datetime('now'), r2_key = ?, document_id = ?,
+            updated_at = datetime('now')
+      WHERE id = ?`,
+  )
+    .bind(r2Key, documentsId, waiver.id)
+    .run();
+
+  await triggerNotification(env, "completion_package_ready", {
+    jobId: waiver.job_id,
+    clientId: waiver.client_id,
+    linkPath: `/app/jobs/${waiver.job_id}/completion-package`,
+    instanceKey: waiver.id,
+  });
+
+  console.log(`[BoldSign] Client lien waiver signed for job ${waiver.job_id}`);
 }

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "preact/hooks";
+import { useMemo, useRef, useState, useEffect } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -65,6 +65,11 @@ const PHOTO_TYPE_OPTIONS = [
   { value: "punch_list", label: "Punch List" },
   { value: "issue", label: "Issue" },
 ];
+const FILTER_OPTIONS = [
+  { value: "", label: "All types" },
+  { value: "before_after", label: "Before/After" },
+  ...PHOTO_TYPE_OPTIONS,
+];
 const TYPE_LABEL: Record<string, string> = Object.fromEntries(
   PHOTO_TYPE_OPTIONS.map((o) => [o.value, o.label]),
 );
@@ -93,6 +98,7 @@ export function PhotosTab({ jobId }: { jobId: string }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [optimisticTypes, setOptimisticTypes] = useState<Record<string, string>>({});
 
   const exitSelectMode = () => {
     setSelectMode(false);
@@ -132,13 +138,53 @@ export function PhotosTab({ jobId }: { jobId: string }) {
   };
 
   const qs = new URLSearchParams();
-  if (type) qs.set("type", type);
+  if (type && type !== "before_after") qs.set("type", type);
   if (from) qs.set("from", from);
   if (to) qs.set("to", `${to}T23:59:59Z`);
   const url = `/api/jobs/${jobId}/photos${qs.toString() ? `?${qs}` : ""}`;
   const { data, loading, error, refetch } = useApi<{ photos: PhotoItem[]; total: number }>(url);
 
-  const photos = data?.photos ?? [];
+  const photosRaw = data?.photos ?? [];
+  const photos = useMemo(() => {
+    let list = photosRaw.map((p) => ({
+      ...p,
+      photo_type: optimisticTypes[p.id] ?? p.photo_type,
+    }));
+    if (type === "before_after") {
+      list = list.filter((p) => p.photo_type === "before" || p.photo_type === "after");
+    }
+    return list;
+  }, [photosRaw, optimisticTypes, type]);
+
+  const updatePhotoTag = async (
+    photo: PhotoItem,
+    tag: "before" | "after" | "job_progress" | "remove",
+  ) => {
+    const body =
+      tag === "before"
+        ? { photo_type: "before", is_before_photo: 1, is_after_photo: 0 }
+        : tag === "after"
+          ? { photo_type: "after", is_before_photo: 0, is_after_photo: 1 }
+          : tag === "job_progress"
+            ? { photo_type: "job_progress", is_before_photo: 0, is_after_photo: 0 }
+            : { photo_type: "general", is_before_photo: 0, is_after_photo: 0 };
+
+    const prevType = photo.photo_type;
+    setOptimisticTypes((o) => ({ ...o, [photo.id]: body.photo_type }));
+    try {
+      await api.put(`/api/photos/${photo.id}`, body);
+      refetch();
+      setOptimisticTypes((o) => {
+        const next = { ...o };
+        delete next[photo.id];
+        return next;
+      });
+    } catch (err) {
+      setOptimisticTypes((o) => ({ ...o, [photo.id]: prevType }));
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    }
+  };
+
   const groups = useMemo(() => {
     const m = new Map<string, PhotoItem[]>();
     for (const p of photos) {
@@ -188,7 +234,7 @@ export function PhotosTab({ jobId }: { jobId: string }) {
           <Select
             value={type}
             placeholder="All types"
-            options={PHOTO_TYPE_OPTIONS}
+            options={FILTER_OPTIONS}
             onChange={setType}
           />
           <input class="form-input" type="date" value={from} onInput={(e) => setFrom((e.target as HTMLInputElement).value)} aria-label="From date" />
@@ -286,7 +332,15 @@ export function PhotosTab({ jobId }: { jobId: string }) {
                       />
                     )}
                     <img src={p.thumb_url} alt={p.caption ?? p.photo_type} loading="lazy" />
-                    <span class="photo-thumb__type">{TYPE_LABEL[p.photo_type] ?? p.photo_type}</span>
+                    {p.photo_type !== "receipt" && !selectMode && (
+                      <PhotoTagBadge
+                        photoType={p.photo_type}
+                        onSelect={(tag) => void updatePhotoTag(p, tag)}
+                      />
+                    )}
+                    {p.photo_type === "receipt" && (
+                      <span class="photo-thumb__type">{TYPE_LABEL[p.photo_type] ?? p.photo_type}</span>
+                    )}
                     {p.receipt && <span class="photo-thumb__badge">💵</span>}
                     {(p.is_annotated || !!p.annotation_data) && <span class="photo-thumb__badge photo-thumb__badge--annot">✏️</span>}
                     {p.before_after_pair_id && <span class="photo-thumb__badge photo-thumb__badge--pair">↔️</span>}
@@ -381,6 +435,70 @@ export function PhotosTab({ jobId }: { jobId: string }) {
 
       {showReport && (
         <PhotoReportBuilder jobId={jobId} photos={photos} onClose={() => setShowReport(false)} toast={toast} />
+      )}
+    </div>
+  );
+}
+
+type PhotoTagChoice = "before" | "after" | "job_progress" | "remove";
+
+function photoTagLabel(type: string): { label: string; className: string } {
+  if (type === "before") return { label: "Before", className: "photo-tag photo-tag--before" };
+  if (type === "after") return { label: "After", className: "photo-tag photo-tag--after" };
+  if (type === "job_progress") return { label: "Progress", className: "photo-tag photo-tag--progress" };
+  return { label: "+ Tag", className: "photo-tag photo-tag--untagged" };
+}
+
+function PhotoTagBadge({
+  photoType,
+  onSelect,
+}: {
+  photoType: string;
+  onSelect: (tag: PhotoTagChoice) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const tagged = photoType === "before" || photoType === "after" || photoType === "job_progress";
+  const display = photoTagLabel(tagged ? photoType : "general");
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  return (
+    <div class="photo-tag-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        class={display.className}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+      >
+        {display.label}
+      </button>
+      {open && (
+        <div class="photo-tag-popover" role="menu">
+          <button type="button" class="photo-tag-popover__item" onClick={(e) => { e.stopPropagation(); onSelect("before"); setOpen(false); }}>
+            Before
+          </button>
+          <button type="button" class="photo-tag-popover__item" onClick={(e) => { e.stopPropagation(); onSelect("after"); setOpen(false); }}>
+            After
+          </button>
+          <button type="button" class="photo-tag-popover__item" onClick={(e) => { e.stopPropagation(); onSelect("job_progress"); setOpen(false); }}>
+            Progress
+          </button>
+          {tagged && (
+            <button type="button" class="photo-tag-popover__item photo-tag-popover__item--muted" onClick={(e) => { e.stopPropagation(); onSelect("remove"); setOpen(false); }}>
+              Remove tag
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

@@ -1998,6 +1998,92 @@
   .bottom-tabs__icon {
     font-size: 1.2rem;
   }
+  .nav__center-btn {
+    color: var(--color-brand);
+  }
+  .nav__center-btn__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    font-size: 1.75rem;
+    font-weight: 300;
+    line-height: 1;
+    border-radius: var(--radius-full);
+    background: var(--color-brand-subtle, rgba(217, 119, 6, 0.12));
+  }
+}
+
+/* ─── Quick Capture Sheet (mobile center + action) ─── */
+.quick-capture-sheet__backdrop {
+  display: none;
+}
+.quick-capture-sheet {
+  display: none;
+}
+@media (max-width: 767px) {
+  .quick-capture-sheet__backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: calc(var(--z-capture-bar) + 1);
+  }
+  .quick-capture-sheet {
+    display: block;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--color-surface-2);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding: var(--space-lg) var(--space-lg) calc(var(--space-lg) + env(safe-area-inset-bottom));
+    transform: translateY(100%);
+    transition: transform 0.25s ease;
+    z-index: calc(var(--z-capture-bar) + 2);
+  }
+  .quick-capture-sheet--open {
+    transform: translateY(0);
+  }
+  .quick-capture-sheet__handle {
+    width: 2.5rem;
+    height: 4px;
+    margin: 0 auto var(--space-md);
+    border-radius: var(--radius-full);
+    background: var(--color-border);
+  }
+  .quick-capture-sheet__title {
+    margin: 0 0 var(--space-md);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--color-text-muted);
+    text-align: center;
+  }
+  .quick-capture-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    width: 100%;
+    padding: var(--space-md);
+    font-size: var(--text-base);
+    color: var(--color-text-primary);
+    border-radius: var(--radius-md);
+    min-height: 44px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    text-align: left;
+  }
+  .quick-capture-option:active {
+    background: var(--color-surface-3);
+  }
+  .quick-capture-option__icon {
+    font-size: 1.25rem;
+    width: 1.5rem;
+    text-align: center;
+    flex-shrink: 0;
+  }
 }
 
 /* ── Sprint 5: client quote progress (builder "Client Quote Link" card) ──── */
@@ -2429,64 +2515,6 @@
   font-size: var(--text-sm);
 }
 
-/* Quick Capture Bar — mobile only. Sits directly above the global
-   .bottom-tabs nav (which is fixed at bottom:0, height --capture-bar-height)
-   and paints above it so its buttons aren't hidden behind the app nav. */
-.quick-capture-bar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: var(--capture-bar-height);
-  z-index: calc(var(--z-capture-bar) + 1);
-  display: none;
-  justify-content: space-around;
-  gap: var(--space-xs);
-  padding: var(--space-xs) var(--space-sm);
-  padding-bottom: calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
-  background: var(--color-surface-1);
-  border-top: 1px solid var(--color-border);
-  box-shadow: var(--shadow-lg);
-}
-.qc-btn {
-  flex: 1 1 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  background: none;
-  border: none;
-  padding: var(--space-xs);
-  font-size: var(--text-xs);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-.qc-btn:disabled { opacity: 0.5; }
-.qc-btn__icon { font-size: 20px; }
-.qc-uploading {
-  position: fixed;
-  bottom: calc(var(--capture-bar-height) * 2 + var(--space-xs));
-  left: 50%;
-  transform: translateX(-50%);
-  /* S18 CSS audit: the upload pill must paint ABOVE the capture bar + bottom nav
-     (both at --z-capture-bar) so it's never hidden behind them — the S11 lesson.
-     Was a raw z-index:50, which sat below the bars. */
-  z-index: calc(var(--z-capture-bar) + 2);
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: var(--color-surface-1);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  box-shadow: var(--shadow-lg);
-  font-size: var(--text-sm);
-}
-@media (max-width: 767px) {
-  .quick-capture-bar { display: flex; }
-  /* Reserve room so the last bit of job-detail content clears BOTH the
-     global bottom nav and the quick-capture bar stacked above it. */
-  .job-detail { padding-bottom: var(--capture-bar-height); }
-}
 .job-detail__reversal-banner {
   margin-bottom: var(--space-md);
   color: var(--color-text);
@@ -2903,6 +2931,11 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
+}
+
+/* Empty doc-review wrapper would double the flex gap between weather and action items */
+.dashboard-order-doc-review:empty {
+  display: none;
 }
 
 /* Quick Actions widget */
@@ -3405,49 +3438,6 @@
   cursor: pointer;
 }
 
-/* ── Internal Resources (Documents page) ── */
-.internal-resources {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
-}
-.internal-resources__drive {
-  display: flex;
-  gap: var(--space-md);
-  align-items: flex-start;
-}
-.internal-resources__drive-icon {
-  font-size: 1.75rem;
-  line-height: 1;
-}
-.internal-resources__drive-body {
-  flex: 1;
-  min-width: 0;
-}
-.internal-resources__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-.internal-resources__item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
-  padding: var(--space-sm) 0;
-  border-bottom: 1px solid var(--color-border);
-}
-.internal-resources__item:last-child {
-  border-bottom: none;
-}
-.internal-resources__add-form {
-  margin-bottom: var(--space-md);
-  padding-bottom: var(--space-md);
-  border-bottom: 1px solid var(--color-border);
-}
 .smart-notes__recent {
   display: flex;
   flex-direction: column;
@@ -3739,9 +3729,9 @@
     display: contents;
   }
   .dashboard-order-alerts { order: 1; }
-  .dashboard-order-doc-review { order: 2; }
-  .dashboard-order-action-items { order: 3; }
-  .dashboard-order-weather { order: 4; }
+  .dashboard-order-weather { order: 2; }
+  .dashboard-order-doc-review { order: 3; }
+  .dashboard-order-action-items { order: 4; }
   .dashboard-order-quick-actions { order: 5; }
   .dashboard-order-smart-notes { order: 6; }
   .dashboard-order-schedule { order: 7; }
@@ -4521,57 +4511,6 @@
   border-top: 1px solid var(--color-border);
 }
 
-/* ─── Sprint 25: AI Close-Out Card ──────────────────────────────────────── */
-
-.ai-closeout__loading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-}
-
-.ai-closeout__timestamp {
-  font-size: var(--text-xs);
-  margin: 0;
-}
-
-.ai-closeout__summary {
-  font-size: var(--text-sm);
-  line-height: 1.6;
-  margin: 0;
-}
-
-.ai-closeout__flags {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-}
-
-.ai-closeout__flag {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-sm);
-  font-size: var(--text-sm);
-  padding: var(--space-xs) var(--space-sm);
-  border-radius: var(--radius-sm);
-}
-
-.ai-closeout__flag--warning {
-  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
-  color: var(--color-text-primary);
-}
-
-.ai-closeout__flag--info {
-  background: color-mix(in srgb, var(--color-info, var(--color-brand)) 10%, transparent);
-  color: var(--color-text-primary);
-}
-
-.ai-closeout__flag-icon {
-  flex-shrink: 0;
-  line-height: 1.4;
-}
-
 /* ─── Sprint 25: Pricing Intelligence Tab ───────────────────────────────── */
 
 .pricing-intel {
@@ -5043,4 +4982,159 @@
   vertical-align: -0.125em;
   margin-right: var(--space-2xs);
 }
-/* Sat Jun 27 14:33:38 CDT 2026 */
+
+/* ── Photo tag picker (Sprint 32) ─────────────────────────────────────────── */
+.photo-tag-wrap {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  z-index: 3;
+}
+.photo-tag {
+  font-size: var(--text-xs);
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  border: none;
+  cursor: pointer;
+  line-height: 1.3;
+}
+.photo-tag--before {
+  background: var(--color-info);
+  color: #fff;
+}
+.photo-tag--after {
+  background: var(--color-success);
+  color: #fff;
+}
+.photo-tag--progress {
+  background: var(--color-surface-3, var(--color-border));
+  color: var(--color-text-muted);
+}
+.photo-tag--untagged {
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--color-text-muted);
+}
+.photo-tag-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  min-width: 120px;
+  background: var(--color-surface-elevated, var(--color-surface));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-2xs) 0;
+  z-index: 10;
+}
+.photo-tag-popover__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-xs) var(--space-sm);
+  border: none;
+  background: transparent;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  color: var(--color-text);
+}
+.photo-tag-popover__item:hover {
+  background: var(--color-surface-2);
+}
+.photo-tag-popover__item--muted {
+  color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-2xs);
+  padding-top: var(--space-sm);
+}
+
+/* ── Completion package review (Sprint 32) ────────────────────────────────── */
+.completion-package-page {
+  max-width: 960px;
+}
+.completion-package-banner {
+  margin: 0;
+}
+.completion-package-section-title {
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.completion-package-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+@media (max-width: 640px) {
+  .completion-package-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.completion-package-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--color-surface);
+  min-height: 120px;
+}
+.completion-package-card--skeleton {
+  min-height: 140px;
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-2) 25%,
+    var(--color-surface-3, var(--color-border)) 50%,
+    var(--color-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.completion-package-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-sm);
+}
+.completion-package-card__icon {
+  font-size: 1.25rem;
+}
+.completion-package-card__title {
+  font-weight: var(--weight-semibold);
+  flex: 1;
+}
+.completion-package-card__body {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+.completion-package-thumbs {
+  display: flex;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+.completion-package-thumbs img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+}
+.completion-package-send {
+  padding-top: var(--space-md);
+}
+.completion-package-send .btn {
+  width: 100%;
+}
+@media (min-width: 641px) {
+  .completion-package-send .btn {
+    width: auto;
+  }
+}
+.completion-package-sent-confirm {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}

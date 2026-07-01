@@ -107,6 +107,9 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
+const WISETACK_URL = "https://wisetack.us/#/g1wjjq5/prequalify";
+const WISETACK_MIN_TOTAL = 500;
+
 const statusLabel: Record<string, string> = {
   sent: "Awaiting Response",
   viewed: "Viewed",
@@ -282,6 +285,10 @@ function ScopeCard({ quote }: { quote: PublicQuote }) {
           </div>
         </div>
 
+        {!quote.expired && quote.status !== "approved" && quote.total >= WISETACK_MIN_TOTAL && (
+          <WisetackFinancing />
+        )}
+
         {quote.payment_schedule.length > 0 && (
           <div class="preview__section">
             <div class="preview__section-title">Payment Schedule</div>
@@ -307,6 +314,22 @@ function ScopeCard({ quote }: { quote: PublicQuote }) {
             : `This quote is valid for ${quote.valid_days} days.`}
         </div>
       </div>
+    </div>
+  );
+}
+
+function WisetackFinancing() {
+  return (
+    <div class="quote-wisetack">
+      <div class="quote-wisetack__title">💳 Flexible Financing Available</div>
+      <p class="quote-wisetack__body">
+        Finance your project with 0% APR for up to 6 months through Wisetack. Get pre-qualified in
+        seconds — no hard credit pull, no impact to your credit score.
+      </p>
+      <a class="quote-wisetack__cta" href={WISETACK_URL} target="_blank" rel="noopener noreferrer">
+        Check Financing Options →
+      </a>
+      <p class="quote-wisetack__fine">Offered through Wisetack. Subject to credit approval.</p>
     </div>
   );
 }

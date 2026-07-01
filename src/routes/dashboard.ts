@@ -68,7 +68,14 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
     case "job_budget_alert":
     case "change_order_pending":
     case "warranty_checkin":
-      return meta.jobId ? `/jobs/${meta.jobId}` : "/jobs";
+    case "lien_waiver_sent":
+    case "completion_package_ready":
+      return meta.jobId ? `/jobs/${meta.jobId}/completion-package` : "/jobs";
+    case "punch_list_item_done":
+    case "punch_list_complete":
+      return meta.jobId ? `/jobs/${meta.jobId}?tab=punch_list` : "/jobs";
+    case "voice_note_unmatched":
+      return "/voice-notes/unmatched";
     default:
       return meta.jobId ? `/jobs/${meta.jobId}` : "/";
   }
@@ -308,6 +315,9 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     pendingChangOrders,
     warrantyJobs,
     inProgressJobsWithEstimate,
+    pendingWaivers,
+    readyPackages,
+    notifyPunchVoice,
   ] = await Promise.all([
     // HIGH: invoices past due
     env.DB.prepare(
@@ -393,6 +403,39 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
          AND estimate_id IS NOT NULL
        LIMIT 20`,
     ).all<{ id: string; title: string; estimate_id: string }>(),
+
+    // MEDIUM: client lien waiver sent, awaiting signature
+    env.DB.prepare(
+      `SELECT j.id as job_id, j.title as job_title, clw.sent_at
+         FROM client_lien_waivers clw
+         JOIN jobs j ON j.id = clw.job_id
+        WHERE clw.status = 'sent'
+        ORDER BY clw.sent_at ASC
+        LIMIT 10`,
+    ).all<{ job_id: string; job_title: string; sent_at: string }>(),
+
+    // HIGH: completion package ready to send
+    env.DB.prepare(
+      `SELECT j.id as job_id, j.title as job_title, clw.signed_at
+         FROM client_lien_waivers clw
+         JOIN jobs j ON j.id = clw.job_id
+        WHERE clw.status = 'signed'
+          AND (j.completion_package_sent_at IS NULL OR j.completion_package_sent_at = '')
+        ORDER BY clw.signed_at ASC
+        LIMIT 10`,
+    ).all<{ job_id: string; job_title: string; signed_at: string }>(),
+
+    // MEDIUM/HIGH: punch list + voice note in-app notifications (Sprint 33)
+    env.DB.prepare(
+      `SELECT id, trigger_event, body, job_id, created_at
+         FROM notification_logs
+        WHERE channel = 'in_app'
+          AND trigger_event IN ('punch_list_item_done', 'punch_list_complete', 'voice_note_unmatched')
+          AND status IN ('queued', 'sent', 'delivered')
+          AND created_at >= datetime('now', '-14 days')
+        ORDER BY created_at DESC
+        LIMIT 15`,
+    ).all<{ id: string; trigger_event: string; body: string; job_id: string | null; created_at: string }>(),
   ]);
 
   const items: ActionItem[] = [];
@@ -499,6 +542,32 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
   );
   items.push(...budgetAlerts);
 
+  // HIGH: completion_package_ready
+  for (const p of readyPackages.results ?? []) {
+    items.push({
+      id: `completion_package_ready_${p.job_id}`,
+      priority: "high",
+      type: "completion_package_ready",
+      title: `Completion package ready to review and send: ${p.job_title}`,
+      meta: { jobId: p.job_id },
+      link: actionItemLink("completion_package_ready", { jobId: p.job_id }),
+      createdAt: p.signed_at ?? today,
+    });
+  }
+
+  // MEDIUM: lien_waiver_sent
+  for (const w of pendingWaivers.results ?? []) {
+    items.push({
+      id: `lien_waiver_sent_${w.job_id}`,
+      priority: "medium",
+      type: "lien_waiver_sent",
+      title: `Lien waiver sent — awaiting client signature: ${w.job_title}`,
+      meta: { jobId: w.job_id },
+      link: actionItemLink("lien_waiver_sent", { jobId: w.job_id }),
+      createdAt: w.sent_at ?? today,
+    });
+  }
+
   // LOW: social_approval
   for (const post of pendingSocial.results ?? []) {
     const preview = (post.caption ?? "").slice(0, 60);
@@ -536,6 +605,25 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       meta: { jobId: job.id, actualEndDate: job.actual_end_date },
       link: actionItemLink("warranty_checkin", { jobId: job.id }),
       createdAt: job.actual_end_date ?? today,
+    });
+  }
+
+  // Sprint 33: punch list + voice note in-app notifications
+  for (const row of notifyPunchVoice.results ?? []) {
+    const priority =
+      row.trigger_event === "punch_list_complete"
+        ? "high"
+        : row.trigger_event === "voice_note_unmatched" || row.trigger_event === "punch_list_item_done"
+          ? "medium"
+          : "medium";
+    items.push({
+      id: `${row.trigger_event}_${row.id}`,
+      priority,
+      type: row.trigger_event,
+      title: row.body,
+      meta: { jobId: row.job_id, notificationLogId: row.id },
+      link: actionItemLink(row.trigger_event, { jobId: row.job_id }),
+      createdAt: row.created_at,
     });
   }
 

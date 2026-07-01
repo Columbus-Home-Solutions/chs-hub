@@ -190,6 +190,7 @@ const ROUTE_RULES: RouteRule[] = [
  */
 const RBAC_EXEMPT_PREFIXES = [
   "/api/public/", // pay + quote token APIs
+  "/api/punch/", // sub punch list token API (Sprint 33)
   "/api/portal/", // client portal token API
   "/api/share/", // shareable document links
   "/api/webhooks/", // Stripe + Twilio (signature-gated)

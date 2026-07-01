@@ -1,4 +1,5 @@
 import type { RoutableProps } from "preact-router";
+import { useRouter } from "preact-router";
 import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
@@ -18,8 +19,8 @@ import { ChangeOrdersTab } from "./ChangeOrdersTab";
 import { ScheduleTab } from "./ScheduleTab";
 import { PermitsTab } from "./PermitsTab";
 import { WarrantyTab } from "./WarrantyTab";
+import { PunchListTab } from "./PunchListTab";
 import { SmartNotesPanel } from "./SmartNotesPanel";
-import { QuickCaptureBar } from "./QuickCaptureBar";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
@@ -27,7 +28,6 @@ import { formatCurrency, formatDate, formatDateTime, formatPhone, formatStatus }
 import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
-  type AiCloseoutReview,
   type BillingScheduleRow,
   type CloseEligibilityResult,
   type Communication,
@@ -45,6 +45,7 @@ interface DetailProps extends RoutableProps {
 type TabKey =
   | "overview"
   | "tasks"
+  | "punch_list"
   | "schedule"
   | "financial"
   | "change_orders"
@@ -59,6 +60,7 @@ type TabKey =
 const TABS: { key: TabKey; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "tasks", label: "Tasks" },
+  { key: "punch_list", label: "Punch List" },
   { key: "schedule", label: "Schedule" },
   { key: "financial", label: "Financial" },
   { key: "change_orders", label: "Change Orders" },
@@ -82,10 +84,20 @@ function statusTargets(status: JobStatus): JobStatus[] {
   return back ? [back, ...forward] : forward;
 }
 
+const TAB_KEYS = new Set<TabKey>(TABS.map((t) => t.key));
+
 export function JobDetail({ id }: DetailProps) {
+  const [{ url }] = useRouter();
+  const search = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
   const { data, loading, error, refetch } = useApi<JobDetailResponse>(id ? `/api/jobs/${id}` : null);
   const toast = useToast();
   const [tab, setTab] = useState<TabKey>("overview");
+
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const t = params.get("tab");
+    if (t && TAB_KEYS.has(t as TabKey)) setTab(t as TabKey);
+  }, [id, search]);
 
   if (loading) return <Spinner center />;
   if (error || !data) {
@@ -168,6 +180,14 @@ export function JobDetail({ id }: DetailProps) {
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
+      {tab === "punch_list" && id && (
+        <PunchListTab
+          jobId={id}
+          jobTitle={job.title ?? "Job"}
+          jobStatus={job.status}
+          refetchJob={refetch}
+        />
+      )}
       {tab === "schedule" && id && <ScheduleTab jobId={id} />}
       {tab === "financial" && id && <FinancialTab jobId={id} />}
       {tab === "change_orders" && id && (
@@ -181,14 +201,6 @@ export function JobDetail({ id }: DetailProps) {
       {tab === "notes" && id && <SmartNotesPanel jobId={id} />}
       {tab === "activity" && (
         <ActivityTab activity={data.activity} jobId={id} clientId={data.job.client_id} />
-      )}
-
-      {id && (
-        <QuickCaptureBar
-          jobId={id}
-          onNavigate={(t) => setTab(t)}
-          onCaptured={() => setTab("photos")}
-        />
       )}
     </div>
   );
@@ -321,10 +333,6 @@ function OverviewTab({
       </div>
 
       <div class="stack">
-        {job.status === "complete" && (
-          <AiCloseoutCard job={job} refetch={refetch} toast={toast} />
-        )}
-
         <Card title="Status">
           <div class="stack">
             <div class="flex items-center gap-sm">
@@ -505,110 +513,6 @@ function ProjectManagerField({
         )}
       </span>
     </div>
-  );
-}
-
-// ─── AI Close-Out Card ───────────────────────────────────────────────────────
-
-function AiCloseoutCard({
-  job,
-  refetch,
-  toast,
-}: {
-  job: JobDetailResponse["job"];
-  refetch: () => void;
-  toast: ToastApi;
-}) {
-  const [pollCount, setPollCount] = useState(0);
-  const [regenerating, setRegenerating] = useState(false);
-
-  // Poll every 5s if review is null (analysis running in background), max 6 attempts.
-  useEffect(() => {
-    if (job.ai_closeout_review !== null) return;
-    if (pollCount >= 6) return;
-    const timer = setTimeout(() => {
-      refetch();
-      setPollCount((n) => n + 1);
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, [job.ai_closeout_review, pollCount]);
-
-  const regenerate = async () => {
-    setRegenerating(true);
-    try {
-      await api.post(`/api/jobs/${job.id}/ai-closeout`, {});
-      setPollCount(0);
-      refetch();
-    } catch (err) {
-      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
-    } finally {
-      setRegenerating(false);
-    }
-  };
-
-  const review = job.ai_closeout_review as AiCloseoutReview | null;
-  const generatedAt = job.ai_closeout_generated_at;
-
-  return (
-    <Card title="🤖 AI Close-Out Review">
-      <div class="stack">
-        {review === null && pollCount < 6 && (
-          <div class="ai-closeout__loading">
-            <Spinner />
-            <span>AI close-out review generating…</span>
-          </div>
-        )}
-        {review === null && pollCount >= 6 && (
-          <p class="text--muted">Review unavailable — refresh to retry.</p>
-        )}
-        {review !== null && (
-          <>
-            {generatedAt && (
-              <p class="ai-closeout__timestamp text--muted">
-                Last analyzed: {formatDateTime(generatedAt)}
-              </p>
-            )}
-
-            <p class="ai-closeout__summary">{review.summary}</p>
-
-            {(review.revenue_gap ?? 0) > 0 && (
-              <div class="callout callout--warning">
-                Revenue gap: {formatCurrency(review.revenue_gap)} — not all contract value has been collected.
-              </div>
-            )}
-
-            {review.flags && review.flags.length > 0 && (
-              <div class="ai-closeout__flags">
-                {review.flags.map((flag, i) => (
-                  <div key={i} class={`ai-closeout__flag ai-closeout__flag--${flag.severity}`}>
-                    <span class="ai-closeout__flag-icon">{flag.severity === "warning" ? "⚠️" : "ℹ️"}</span>
-                    <span>{flag.message}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {review.expense_gap_note && (
-              <div class="ai-closeout__flag ai-closeout__flag--info">
-                <span class="ai-closeout__flag-icon">ℹ️</span>
-                <span>{review.expense_gap_note}</span>
-              </div>
-            )}
-
-            <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
-              {review.ready_to_close ? (
-                <Badge tone="success">Ready to close</Badge>
-              ) : (
-                <Badge tone="warning">Items need attention</Badge>
-              )}
-              <Button variant="secondary" onClick={regenerate} disabled={regenerating}>
-                {regenerating ? "Generating…" : "Regenerate"}
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
-    </Card>
   );
 }
 

@@ -38,6 +38,7 @@ export default defineConfig({
         quote: "quote.html",
         pay: "pay.html",
         portal: "portal.html",
+        punch: "punch.html",
       },
     },
   },

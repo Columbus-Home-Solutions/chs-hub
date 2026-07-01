@@ -1069,6 +1069,12 @@ function EstimateClientProgress({ estimate }: { estimate: Estimate }) {
             value={link}
             onFocus={(ev) => (ev.target as HTMLInputElement).select()}
           />
+          <Button
+            variant="secondary"
+            onClick={() => window.open(link, "_blank", "noopener,noreferrer")}
+          >
+            Open ↗
+          </Button>
           <Button variant="secondary" onClick={copy}>
             {copied ? "Copied ✓" : "Copy link"}
           </Button>

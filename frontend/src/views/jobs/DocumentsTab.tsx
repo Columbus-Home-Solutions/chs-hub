@@ -6,6 +6,8 @@ import { Spinner } from "../../components/ui/Spinner";
 import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
+import { useApi } from "../../hooks/useApi";
+import { go } from "../../lib/nav";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatStatus } from "../../lib/format";
@@ -44,10 +46,10 @@ interface DocItem {
 export function DocumentsTab({ jobId }: { jobId: string }) {
   return (
     <div class="stack">
+      <CompletionPackageCard jobId={jobId} />
       <GeneratedDocuments jobId={jobId} />
       <JobDocuments jobId={jobId} />
       <LienWaivers jobId={jobId} />
-      <CompletionPackage jobId={jobId} />
     </div>
   );
 }
@@ -975,97 +977,60 @@ function LienWaivers({ jobId }: { jobId: string }) {
   );
 }
 
-// ─── 4. Completion package ─────────────────────────────────────────────────────
-interface PackageState {
-  state: "none" | "draft" | "sent";
-  package: { document_id: string; title: string; preview_url: string; sent_at: string | null; created_at: string } | null;
+// ─── Completion package card (Sprint 32) ───────────────────────────────────────
+
+interface CompletionPackageSummary {
+  package_status: "not_ready" | "ready_to_send" | "sent";
+  sent_at: string | null;
+  lien_waiver: { status: string };
 }
 
-function CompletionPackage({ jobId }: { jobId: string }) {
-  const toast = useToast();
-  const [pkg, setPkg] = useState<PackageState | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [lastCompile, setLastCompile] = useState<string | null>(null);
+function packageStatusLabel(status: CompletionPackageSummary["package_status"]): string {
+  if (status === "sent") return "Sent";
+  if (status === "ready_to_send") return "Ready to send";
+  return "In progress";
+}
 
-  const load = async () => {
-    try {
-      const r = await api.get<PackageState>(`/api/jobs/${jobId}/completion-package`);
-      setPkg(r);
-    } catch (e) {
-      toast.push("error", errMsg(e));
-    }
-  };
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId]);
+function CompletionPackageCard({ jobId }: { jobId: string }) {
+  const job = useApi<{ job: { status: string } }>(`/api/jobs/${jobId}`);
+  const pkg = useApi<CompletionPackageSummary>(`/api/jobs/${jobId}/completion-package`);
 
-  const compile = async () => {
-    setBusy(true);
-    try {
-      const r = await api.post<{ document_count: number; before_photos: number; after_photos: number; summary?: Record<string, number> }>(
-        `/api/jobs/${jobId}/completion-package`,
-        {},
-      );
-      setLastCompile(`Compiled: ${r.document_count} docs · ${r.before_photos} before / ${r.after_photos} after photos`);
-      toast.push("success", "Draft compiled — review, then send.");
-      void load();
-    } catch (e) {
-      toast.push("error", errMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const jobStatus = job.data?.job.status;
+  const summary = pkg.data;
+  const show =
+    jobStatus === "complete" ||
+    summary?.package_status !== "not_ready" ||
+    (summary?.lien_waiver?.status && summary.lien_waiver.status !== "missing");
 
-  const send = async () => {
-    setBusy(true);
-    try {
-      const r = await api.post<{ resent: boolean; notifications_enqueued: number }>(`/api/jobs/${jobId}/completion-package/send`, {});
-      toast.push("success", r.resent ? "Already sent (idempotent resend)." : `Sent. Notifications enqueued: ${r.notifications_enqueued}.`);
-      void load();
-    } catch (e) {
-      toast.push("error", errMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (!show) return null;
+  if (pkg.loading && !summary) {
+    return (
+      <Card title="📦 Completion Package">
+        <Spinner center />
+      </Card>
+    );
+  }
 
-  const state = pkg?.state ?? "none";
+  const status = summary?.package_status ?? "not_ready";
+  const tone = status === "sent" ? "success" : status === "ready_to_send" ? "info" : "warning";
 
   return (
-    <Card
-      title="Completion package"
-      actions={
-        <div class="flex gap-sm">
-          <Button size="sm" variant="secondary" disabled={busy} onClick={compile}>{state === "none" ? "Compile draft" : "Recompile"}</Button>
-          {state !== "none" && <Button size="sm" variant="primary" disabled={busy || state === "sent"} onClick={send}>{state === "sent" ? "Sent" : "Send to client"}</Button>}
-        </div>
-      }
-    >
-      {pkg === null ? (
-        <Spinner center />
-      ) : (
-        <div class="stack">
-          <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
-            <span>Status:</span>
-            <Badge tone={state === "sent" ? "success" : state === "draft" ? "warning" : "neutral"}>
-              {state === "none" ? "Not compiled" : state === "draft" ? "Draft (awaiting send)" : "Sent"}
-            </Badge>
-            {pkg.package?.sent_at && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>sent {new Date(pkg.package.sent_at).toLocaleString()}</span>}
-          </div>
-          {lastCompile && <div class="text--muted" style={{ fontSize: "var(--text-xs)" }}>{lastCompile}</div>}
-          {pkg.package && (
-            <div>
-              <a href={pkg.package.preview_url} target="_blank" rel="noreferrer">
-                <Button size="sm" variant="tertiary">Preview package (HTML)</Button>
-              </a>
-            </div>
+    <Card title="📦 Completion Package">
+      <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
+        <div class="flex items-center gap-sm">
+          <Badge tone={tone}>{packageStatusLabel(status)}</Badge>
+          {summary?.sent_at && (
+            <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
+              {new Date(summary.sent_at).toLocaleString()}
+            </span>
           )}
-          <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
-            Compiling never auto-sends. Sending flips draft → sent, fires the client notification (SIMULATE), and reveals the Completion tab in the client portal.
-          </p>
         </div>
-      )}
+        <Button size="sm" variant="primary" onClick={() => go(`/jobs/${jobId}/completion-package`)}>
+          Review →
+        </Button>
+      </div>
     </Card>
   );
 }
+
+// ─── 4. Legacy completion package compile (removed from tab — use review screen) ─

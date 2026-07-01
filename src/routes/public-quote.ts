@@ -694,7 +694,7 @@ export async function handleStripeWebhook(request: Request, env: Env, ctx: Execu
   // Sprint 9: invoice payments. A PaymentIntent created from the public pay page
   // carries metadata.invoice_id and routes here (NOT through quote conversion).
   if (metadata.invoice_id) {
-    return handleInvoicePaymentWebhook(env, obj, metadata);
+    return handleInvoicePaymentWebhook(env, obj, metadata, ctx);
   }
 
   // Deposit branch (Sprint 5) — unchanged single conversion path.
@@ -875,6 +875,7 @@ async function handleInvoicePaymentWebhook(
   env: Env,
   obj: Record<string, unknown>,
   metadata: Record<string, string>,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const stripePaymentId = String(obj.id ?? "");
   const invoiceId = metadata.invoice_id;
@@ -902,6 +903,7 @@ async function handleInvoicePaymentWebhook(
     convenienceFee: Number.isFinite(fee) ? round2(fee) : null,
     stripeFee: stripeFeeFromObject(obj),
     stripePaymentId,
+    ctx,
   });
 
   await logPublicAudit(

@@ -6,6 +6,7 @@ import { Spinner } from "../../components/ui/Spinner";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../store/toast";
 import { go } from "../../lib/nav";
+import { SiriShortcutCard } from "./SiriShortcutCard";
 
 const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
 
@@ -397,6 +398,8 @@ export function IntegrationsTab() {
           </div>
         </div>
       </div>
+
+      <SiriShortcutCard />
 
       <div class="card" style={{ marginBottom: "var(--space-md)" }}>
         <div class="card__body">

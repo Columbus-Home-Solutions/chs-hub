@@ -53,11 +53,26 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Settings", path: "/settings", icon: "⚙️", enabled: true, capability: "system_admin" },
 ];
 
-// Condensed set for the mobile bottom tab bar.
-export const MOBILE_TABS: NavItem[] = [
+// Condensed set for the mobile bottom tab bar (left/right of the center + action).
+export const MOBILE_TABS_LEFT: NavItem[] = [
   { label: "Home", path: "/", icon: "🏠", enabled: true },
   { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
-  { label: "Estimating", path: "/estimating", icon: "📋", enabled: true },
+];
+
+export const MOBILE_TABS_RIGHT: NavItem[] = [
   { label: "Clients", path: "/clients", icon: "👥", enabled: true },
   { label: "Settings", path: "/settings", icon: "⚙️", enabled: true },
 ];
+
+/** @deprecated Use MOBILE_TABS_LEFT / MOBILE_TABS_RIGHT — kept for any legacy imports. */
+export const MOBILE_TABS: NavItem[] = [...MOBILE_TABS_LEFT, ...MOBILE_TABS_RIGHT];
+
+/** When the current route is `/app/jobs/:id`, return that job id; otherwise null. */
+export function currentJobIdFromRoute(path?: string): string | null {
+  const current = path ?? getCurrentUrl() ?? "";
+  const prefix = `${BASE}/jobs/`;
+  if (!current.startsWith(prefix)) return null;
+  const rest = current.slice(prefix.length);
+  const id = rest.split(/[/?#]/)[0];
+  return id ? decodeURIComponent(id) : null;
+}

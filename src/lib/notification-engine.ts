@@ -70,6 +70,8 @@ const TRANSACTIONAL_EVENTS = new Set([
   // `job_completion_package` key is retained here only as a deprecated alias;
   // the canonical key is the former.
   "completion_package_sent",
+  "lien_waiver_sent",
+  "completion_package_ready",
   "job_completion_package",
   "sub_scheduled",
   "sub_schedule_change",

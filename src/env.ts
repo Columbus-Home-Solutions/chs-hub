@@ -132,6 +132,8 @@ export interface Env {
   BOLDSIGN_API_KEY?: string;
   // Webhook HMAC signing secret from BoldSign account settings → Webhooks.
   BOLDSIGN_WEBHOOK_SECRET?: string;
+  /** BoldSign template for client conditional lien waiver (completion package flow). */
+  BOLDSIGN_LIEN_WAIVER_CLIENT_TEMPLATE_ID?: string;
 
   // ─── Google Cloud (Imagen + Maps) ─────────────────────────────────
   // Service account for Vertex AI Imagen 3 (image gen). All three required.

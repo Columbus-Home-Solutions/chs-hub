@@ -25,6 +25,7 @@
 import type { Env } from "./env.js";
 import { syncJobberToD1 } from "./lib/jobber/sync.js";
 import { runBackup } from "./lib/ops/backup.js";
+import { runPunchListReminderSweep } from "./lib/punch-list-reminders.js";
 import { sendDailySummary } from "./lib/ops/daily-summary.js";
 import { replayDeadLetters } from "./lib/ops/dlq.js";
 import { checkHeartbeat } from "./lib/ops/heartbeat.js";
@@ -61,7 +62,6 @@ import {
   handleJobStatus,
   handleJobReverseConversion,
   handleJobCloseEligibility,
-  handleJobAiCloseout,
   handleTaskList,
   handleTaskCreate,
   handleTaskUpdate,
@@ -202,12 +202,6 @@ import {
   handleSettingsList,
   handleSettingsByCategory,
 } from "./routes/settings.js";
-import {
-  handleInternalResourcesGet,
-  handleInternalResourcesDriveUrl,
-  handleInternalResourcesLinkCreate,
-  handleInternalResourcesLinkDelete,
-} from "./routes/internal-resources.js";
 import { handleMe, handleClockableUsers, handleAssignableUsers } from "./routes/me.js";
 import {
   handleClientCreate,
@@ -419,6 +413,24 @@ import {
   handleCompletionPackageGet,
   handleCompletionPackageSend,
 } from "./routes/completion-package.js";
+import {
+  handleJobPunchListGetGuarded,
+  handlePunchListItemCreate,
+  handlePunchListItemUpdate,
+  handlePunchListItemDelete,
+  handlePunchListSchedule,
+  handlePunchListSend,
+  handlePunchListRenotify,
+  handlePunchListClose,
+  handlePunchPublicGet,
+  handlePunchItemDone,
+  handlePunchPublicPhoto,
+} from "./routes/punch-lists.js";
+import {
+  handleVoiceNoteCreate,
+  handleVoiceNoteUnmatchedList,
+  handleVoiceNoteAssign,
+} from "./routes/voice-notes.js";
 import {
   handleJobSchedule,
   handleScheduleFeed,
@@ -659,6 +671,20 @@ export default {
     const pqGet = url.pathname.match(/^\/api\/public\/quote\/([^/]+)$/);
     if (pqGet && request.method === "GET") {
       return handlePublicQuoteGet(env, decodeURIComponent(pqGet[1]));
+    }
+
+    // ── Public punch list (Sprint 33) — token auth, no Access ────────
+    const punchPhoto = url.pathname.match(/^\/api\/punch\/([^/]+)\/photos\/([^/]+)$/);
+    if (punchPhoto && request.method === "GET") {
+      return handlePunchPublicPhoto(env, decodeURIComponent(punchPhoto[1]), decodeURIComponent(punchPhoto[2]));
+    }
+    const punchItemDone = url.pathname.match(/^\/api\/punch\/([^/]+)\/items\/([^/]+)\/done$/);
+    if (punchItemDone && request.method === "PUT") {
+      return handlePunchItemDone(env, request, decodeURIComponent(punchItemDone[1]), decodeURIComponent(punchItemDone[2]));
+    }
+    const punchGet = url.pathname.match(/^\/api\/punch\/([^/]+)$/);
+    if (punchGet && request.method === "GET") {
+      return handlePunchPublicGet(env, decodeURIComponent(punchGet[1]));
     }
 
     // ── Public shareable document link (Sprint 15) ───────────────────
@@ -1003,11 +1029,6 @@ export default {
     if (jobCloseElig && request.method === "GET") {
       return handleJobCloseEligibility(request, env, decodeURIComponent(jobCloseElig[1]));
     }
-    // Sprint 25 D2A — AI close-out (manual trigger / regenerate).
-    const jobAiCloseout = url.pathname.match(/^\/api\/jobs\/([^/]+)\/ai-closeout$/);
-    if (jobAiCloseout && request.method === "POST") {
-      return handleJobAiCloseout(request, env, decodeURIComponent(jobAiCloseout[1]));
-    }
     const jobReverse = url.pathname.match(/^\/api\/jobs\/([^/]+)\/reverse-conversion$/);
     if (jobReverse && request.method === "POST") {
       return handleJobReverseConversion(request, env, decodeURIComponent(jobReverse[1]));
@@ -1159,8 +1180,16 @@ export default {
     const jobCompletion = url.pathname.match(/^\/api\/jobs\/([^/]+)\/completion-package$/);
     if (jobCompletion) {
       const jid = decodeURIComponent(jobCompletion[1]);
-      if (request.method === "GET") return handleCompletionPackageGet(env, jid);
+      if (request.method === "GET") return handleCompletionPackageGet(request, env, jid);
       if (request.method === "POST") return handleCompletionPackageCompile(request, env, jid);
+    }
+    const jobPunchListItems = url.pathname.match(/^\/api\/jobs\/([^/]+)\/punch-list\/items$/);
+    if (jobPunchListItems && request.method === "POST") {
+      return handlePunchListItemCreate(env, request, decodeURIComponent(jobPunchListItems[1]));
+    }
+    const jobPunchList = url.pathname.match(/^\/api\/jobs\/([^/]+)\/punch-list$/);
+    if (jobPunchList && request.method === "GET") {
+      return handleJobPunchListGetGuarded(env, request, decodeURIComponent(jobPunchList[1]));
     }
     // Schedule entries per job (Sprint 13).
     const jobSchedule = url.pathname.match(/^\/api\/jobs\/([^/]+)\/schedule$/);
@@ -1197,6 +1226,30 @@ export default {
       return handleTaskComplete(request, env, decodeURIComponent(taskComplete[1]));
     }
 
+    // ── Punch lists (Sprint 33) ──────────────────────────────────────
+    const punchListItem = url.pathname.match(/^\/api\/punch-list-items\/([^/]+)$/);
+    if (punchListItem) {
+      const iid = decodeURIComponent(punchListItem[1]);
+      if (request.method === "PUT") return handlePunchListItemUpdate(env, request, iid);
+      if (request.method === "DELETE") return handlePunchListItemDelete(env, request, iid);
+    }
+    const punchListSchedule = url.pathname.match(/^\/api\/punch-lists\/([^/]+)\/schedule$/);
+    if (punchListSchedule && request.method === "PUT") {
+      return handlePunchListSchedule(env, request, decodeURIComponent(punchListSchedule[1]));
+    }
+    const punchListSend = url.pathname.match(/^\/api\/punch-lists\/([^/]+)\/send$/);
+    if (punchListSend && request.method === "POST") {
+      return handlePunchListSend(env, request, decodeURIComponent(punchListSend[1]));
+    }
+    const punchListRenotify = url.pathname.match(/^\/api\/punch-lists\/([^/]+)\/renotify$/);
+    if (punchListRenotify && request.method === "POST") {
+      return handlePunchListRenotify(env, request, decodeURIComponent(punchListRenotify[1]));
+    }
+    const punchListClose = url.pathname.match(/^\/api\/punch-lists\/([^/]+)\/close$/);
+    if (punchListClose && request.method === "PUT") {
+      return handlePunchListClose(env, request, decodeURIComponent(punchListClose[1]));
+    }
+
     // ── Invoices (Sprint 9) ──────────────────────────────────────────
     if (url.pathname === "/api/invoices") {
       if (request.method === "GET") return handleInvoiceList(env, url);
@@ -1212,7 +1265,7 @@ export default {
     }
     const invoiceChargeOnFile = url.pathname.match(/^\/api\/invoices\/([^/]+)\/charge-on-file$/);
     if (invoiceChargeOnFile && request.method === "POST") {
-      return handleInvoiceChargeOnFile(request, env, decodeURIComponent(invoiceChargeOnFile[1]));
+      return handleInvoiceChargeOnFile(request, env, decodeURIComponent(invoiceChargeOnFile[1]), ctx);
     }
     const invoiceById = url.pathname.match(/^\/api\/invoices\/([^/]+)$/);
     if (invoiceById) {
@@ -1477,6 +1530,18 @@ export default {
     const snById = url.pathname.match(/^\/api\/smart-notes\/([^/]+)$/);
     if (snById && request.method === "GET") {
       return handleSmartNoteGet(env, decodeURIComponent(snById[1]));
+    }
+
+    // ── Voice notes (Sprint 33) ──────────────────────────────────────
+    if (url.pathname === "/api/voice-notes/unmatched" && request.method === "GET") {
+      return handleVoiceNoteUnmatchedList(env, request);
+    }
+    if (url.pathname === "/api/voice-notes" && request.method === "POST") {
+      return handleVoiceNoteCreate(env, request);
+    }
+    const voiceNoteAssign = url.pathname.match(/^\/api\/voice-notes\/([^/]+)\/assign$/);
+    if (voiceNoteAssign && request.method === "PUT") {
+      return handleVoiceNoteAssign(env, request, decodeURIComponent(voiceNoteAssign[1]));
     }
 
     // ── Expenses (Sprint 8 PWA capture + Sprint 10 full CRUD) ─────────
@@ -2048,22 +2113,6 @@ export default {
       return handleSettingsByCategory(env, decodeURIComponent(settingsByCategory[1]));
     }
 
-    if (url.pathname === "/api/settings/internal-resources" && request.method === "GET") {
-      return handleInternalResourcesGet(request, env);
-    }
-    if (url.pathname === "/api/settings/internal-resources/drive-url" && request.method === "POST") {
-      return handleInternalResourcesDriveUrl(request, env);
-    }
-    if (url.pathname === "/api/settings/internal-resources/links" && request.method === "POST") {
-      return handleInternalResourcesLinkCreate(request, env);
-    }
-    const internalLinkDelete = url.pathname.match(
-      /^\/api\/settings\/internal-resources\/links\/([^/]+)$/,
-    );
-    if (internalLinkDelete && request.method === "DELETE") {
-      return handleInternalResourcesLinkDelete(request, env, decodeURIComponent(internalLinkDelete[1]));
-    }
-
     const settingByKey = url.pathname.match(/^\/api\/settings\/([^/]+)$/);
     if (settingByKey) {
       const key = decodeURIComponent(settingByKey[1]);
@@ -2103,6 +2152,14 @@ export default {
       const portalHtmlUrl = new URL(request.url);
       portalHtmlUrl.pathname = "/app/portal.html";
       return env.ASSETS.fetch(new Request(portalHtmlUrl.toString(), { method: "GET" }));
+    }
+
+    // ── Sub punch list (Sprint 33) ───────────────────────────────────
+    // /punch/:token — token-gated, no-auth, own Vite entry (public/app/punch.html).
+    if (url.pathname === "/punch" || url.pathname.startsWith("/punch/")) {
+      const punchHtmlUrl = new URL(request.url);
+      punchHtmlUrl.pathname = "/app/punch.html";
+      return env.ASSETS.fetch(new Request(punchHtmlUrl.toString(), { method: "GET" }));
     }
 
     // ── New Preact app (Sprint 2+) ───────────────────────────────────
@@ -2391,6 +2448,15 @@ async function runNightly(env: Env): Promise<void> {
     );
   } catch (err) {
     console.error(`[cron 15 7 * * *] backup failed:`, (err as Error).message);
+  }
+
+  try {
+    const pr = await runPunchListReminderSweep(env);
+    console.log(
+      `[cron 15 7 * * *] punch_list_reminders: scanned=${pr.scanned} reminded=${pr.reminded} followups=${pr.followups}`,
+    );
+  } catch (err) {
+    console.error(`[cron 15 7 * * *] punch_list_reminders failed:`, (err as Error).message);
   }
 }
 

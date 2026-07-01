@@ -178,11 +178,34 @@ export async function resolveMergeFields(
     }
   }
 
+  // Company info (warranty certificate footer block + other templates)
+  const companySettings = await env.DB.prepare(
+    `SELECT key, value FROM system_settings
+     WHERE key IN (
+       'company_name', 'company_address', 'company_phone',
+       'company_email', 'company_license'
+     )`,
+  ).all<{ key: string; value: string }>();
+  const company: Record<string, string> = {};
+  for (const row of companySettings.results ?? []) {
+    company[row.key] = row.value;
+  }
+  fields.company_name = company.company_name ?? "Columbus Home Solutions, LLC";
+  fields.company_address =
+    company.company_address ?? "4414 North Olive Street, North Little Rock, AR 72116";
+  fields.company_phone = company.company_phone ?? "(501) 551-1814";
+  fields.company_email = company.company_email ?? "tony@homesolutionsar.com";
+  fields.company_license = company.company_license ?? "0437210327";
+
   // Contractor/owner info (pre-fills CHS side of signature blocks)
   const contractorRow = await env.DB.prepare(
     "SELECT value FROM system_settings WHERE key = 'contractor_name'",
   ).first<{ value: string }>();
   fields.contractor_name = contractorRow?.value?.trim() || "Tony Columbus, Owner";
+
+  if (templateType === "warranty_certificate") {
+    fields.contractor_date = formatToday();
+  }
 
   const pm = await resolvePmFields(env, job.assigned_to);
   Object.assign(fields, applyPmFields({}, pm));
@@ -345,7 +368,9 @@ export async function handleGenerateJobDocument(
   const templateBuffer = await templateObj.arrayBuffer();
 
   // Generate document
-  const docBytes = await generateDocument(templateBuffer, mergeFields);
+  const docBytes = await generateDocument(templateBuffer, mergeFields, {
+    embedContractorSignature: templateType === "warranty_certificate",
+  });
 
   // Build filename
   const today = new Date().toISOString().slice(0, 10);

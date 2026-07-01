@@ -19,6 +19,7 @@ import { EstimateTemplates } from "./views/estimating/EstimateTemplates";
 import { EstimateList } from "./views/estimating/EstimateList";
 import { JobPipeline } from "./views/jobs/JobPipeline";
 import { JobDetail } from "./views/jobs/JobDetail";
+import { CompletionPackageReview } from "./views/jobs/CompletionPackageReview";
 import { JobMap } from "./views/jobs/JobMap";
 import { ScheduleCalendar } from "./views/jobs/ScheduleCalendar";
 import { WarrantyCalls } from "./views/warranty/WarrantyCalls";
@@ -31,6 +32,8 @@ import { PayerList } from "./views/payers/PayerList";
 import { PayerDetail } from "./views/payers/PayerDetail";
 import { PhotoLibrary } from "./views/photos/PhotoLibrary";
 import { Placeholder } from "./views/Placeholder";
+import { VoiceNoteCapture } from "./views/voice/VoiceNoteCapture";
+import { UnmatchedVoiceNotes } from "./views/voice/UnmatchedVoiceNotes";
 
 export function AppRouter() {
   return (
@@ -57,6 +60,7 @@ export function AppRouter() {
       <ScheduleCalendar path={`${BASE}/schedule`} />
       <WarrantyCalls path={`${BASE}/warranty-calls`} />
       <WarrantyCallDetail path={`${BASE}/warranty-calls/:id`} />
+      <CompletionPackageReview path={`${BASE}/jobs/:id/completion-package`} />
       <JobDetail path={`${BASE}/jobs/:id`} />
       <FinancialDashboard path={`${BASE}/financial`} />
       <PayerList path={`${BASE}/payers`} />
@@ -65,6 +69,8 @@ export function AppRouter() {
       <HubFiles path={`${BASE}/documents`} />
       <CompanyDocs path={`${BASE}/company-docs`} />
       <SocialMedia path={`${BASE}/social`} />
+      <VoiceNoteCapture path={`${BASE}/voice-note`} />
+      <UnmatchedVoiceNotes path={`${BASE}/voice-notes/unmatched`} />
       <NotFound default />
     </Router>
   );

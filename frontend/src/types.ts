@@ -629,6 +629,45 @@ export interface TaskGroup {
   tasks: Task[];
 }
 
+// ─── Punch list (Sprint 33) ───────────────────────────────────────────────
+
+export interface PunchListItem {
+  id: string;
+  punch_list_id: string;
+  job_id: string;
+  description: string;
+  sub_id: string | null;
+  photo_ids: string[];
+  status: "open" | "done";
+  scheduled_date: string | null;
+  completed_at: string | null;
+  completed_note: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PunchListBySub {
+  sub_id: string;
+  sub_name: string;
+  items: PunchListItem[];
+  token: string | null;
+}
+
+export interface PunchListResponse {
+  punch_list: {
+    id: string;
+    job_id: string;
+    status: "open" | "sent" | "closed";
+    scheduled_date: string | null;
+    sent_at: string | null;
+    closed_at: string | null;
+  };
+  items: PunchListItem[];
+  by_sub: PunchListBySub[];
+  unassigned_items: PunchListItem[];
+}
+
 export interface BillingScheduleRow {
   id: string;
   billing_model: string;
@@ -748,19 +787,6 @@ export const SOCIAL_TYPE_COLORS: Record<SocialPostType, string> = {
   manual: "#64748b",
 };
 
-export interface AiCloseoutFlag {
-  severity: "warning" | "info";
-  message: string;
-}
-
-export interface AiCloseoutReview {
-  summary: string;
-  flags: AiCloseoutFlag[];
-  revenue_gap: number | null;
-  expense_gap_note: string | null;
-  ready_to_close: boolean;
-}
-
 export interface EligibilityCheck {
   id: string;
   label: string;
@@ -781,8 +807,6 @@ export interface JobDetailResponse {
     reversal_reason: string | null;
     reversed_at: string | null;
     portal_url: string | null;
-    ai_closeout_review: AiCloseoutReview | null;
-    ai_closeout_generated_at: string | null;
   };
   financial: {
     contract_total: number | null;

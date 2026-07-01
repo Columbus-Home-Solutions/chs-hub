@@ -488,6 +488,7 @@ export async function handleInvoiceChargeOnFile(
   request: Request,
   env: Env,
   id: string,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
@@ -562,6 +563,7 @@ export async function handleInvoiceChargeOnFile(
     stripePaymentId: intent.id,
     receivedDate: new Date().toISOString().slice(0, 10),
     notes: "Card on file charge",
+    ctx,
   });
 
   await logAudit(env, user.email, "invoice_charged_on_file", id, {

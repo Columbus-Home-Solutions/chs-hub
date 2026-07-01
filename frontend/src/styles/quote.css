@@ -333,3 +333,50 @@
   font-size: 13px;
   color: var(--color-text-muted, #5b6472);
 }
+
+/* Wisetack financing — estimate review (below total, above payment schedule) */
+.quote-wisetack {
+  margin: var(--space-md, 12px) 0 var(--space-lg, 16px);
+  padding: var(--space-lg, 16px);
+  border: 1.5px solid var(--color-brand, #d97706);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-brand-subtle, rgba(230, 160, 40, 0.06));
+}
+
+.quote-wisetack__title {
+  font-weight: 600;
+  font-size: var(--text-base, 1rem);
+  color: var(--color-text-primary, #0b0f1a);
+  margin-bottom: var(--space-xs, 4px);
+}
+
+.quote-wisetack__body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text-muted, #5b6472);
+}
+
+.quote-wisetack__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs, 4px);
+  margin-top: var(--space-md, 12px);
+  padding: var(--space-sm, 8px) var(--space-lg, 16px);
+  background: var(--color-brand, #d97706);
+  color: #000;
+  border-radius: var(--radius-md, 8px);
+  font-weight: 600;
+  font-size: var(--text-sm, 0.875rem);
+  text-decoration: none;
+}
+
+.quote-wisetack__cta:hover {
+  opacity: 0.9;
+}
+
+.quote-wisetack__fine {
+  font-size: 12px;
+  color: var(--color-text-muted, #5b6472);
+  margin: var(--space-sm, 8px) 0 0;
+}

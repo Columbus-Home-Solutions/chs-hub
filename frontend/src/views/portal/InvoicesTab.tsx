@@ -125,22 +125,22 @@ export function InvoicesTab({
               <div class="portal-receipt">✓ Paid in full — thank you!</div>
             ) : inv.payable && !onHold ? (
               payingId === inv.id ? (
-                <PayPanel
-                  token={token}
-                  invoice={inv}
-                  onCancel={() => setPayingId(null)}
-                  onPaid={() => {
-                    setPayingId(null);
-                    reload().catch(() => {});
-                    onPaid();
-                  }}
-                />
-              ) : (
-                <button class="quote-btn quote-btn--primary" onClick={() => setPayingId(inv.id)}>
-                  Pay Now
-                  <span class="quote-btn__sub">{formatCurrency(inv.balance)}</span>
-                </button>
-              )
+                  <PayPanel
+                    token={token}
+                    invoice={inv}
+                    onCancel={() => setPayingId(null)}
+                    onPaid={() => {
+                      setPayingId(null);
+                      reload().catch(() => {});
+                      onPaid();
+                    }}
+                  />
+                ) : (
+                  <button class="quote-btn quote-btn--primary" onClick={() => setPayingId(inv.id)}>
+                    Pay Now
+                    <span class="quote-btn__sub">{formatCurrency(inv.balance)}</span>
+                  </button>
+                )
             ) : null}
           </div>
         ))

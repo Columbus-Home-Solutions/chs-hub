@@ -10,7 +10,6 @@ import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatStatus } from "../../lib/format";
-import { InternalResourcesSection } from "./InternalResourcesSection";
 
 interface DocRow {
   id: string;
@@ -234,7 +233,6 @@ export function HubFiles(_props: RoutableProps) {
         />
       )}
 
-      <InternalResourcesSection />
     </div>
   );
 }

@@ -783,6 +783,17 @@ async function handleDocuments(env: Env, token: string): Promise<Response> {
 async function handleCompletionPackage(env: Env, token: string): Promise<Response> {
   const job = await resolveJob(env, token);
   if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
+
+  const jobRow = await env.DB.prepare(
+    "SELECT completion_package_sent_at FROM jobs WHERE id = ?",
+  )
+    .bind(job.id)
+    .first<{ completion_package_sent_at: string | null }>();
+
+  if (!jobRow?.completion_package_sent_at) {
+    return err(404, "not_sent", "The completion package is not available yet.");
+  }
+
   const pkg = await env.DB.prepare(
     `SELECT id, r2_key, file_type, title, signed_date
        FROM documents

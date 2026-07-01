@@ -23,6 +23,11 @@ const PRIORITY_ICON: Record<string, string> = {
   social_approval: "📱",
   change_order_pending: "📄",
   warranty_checkin: "🏗️",
+  lien_waiver_sent: "✍️",
+  completion_package_ready: "📦",
+  punch_list_item_done: "✅",
+  punch_list_complete: "🎉",
+  voice_note_unmatched: "🎤",
 };
 
 function relativeTime(iso: string): string {

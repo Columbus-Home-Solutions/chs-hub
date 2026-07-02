@@ -23,12 +23,10 @@
  */
 
 import type { Env } from "./env.js";
-import { syncJobberToD1 } from "./lib/jobber/sync.js";
 import { runBackup } from "./lib/ops/backup.js";
 import { runPunchListReminderSweep } from "./lib/punch-list-reminders.js";
 import { sendDailySummary } from "./lib/ops/daily-summary.js";
 import { replayDeadLetters } from "./lib/ops/dlq.js";
-import { checkHeartbeat } from "./lib/ops/heartbeat.js";
 import { syncWorkbook } from "./lib/wc/sync.js";
 import { runWcSpreadsheetSync, getWcStatus } from "./services/wc-spreadsheet.js";
 import { runQboSweep, getQboStatus } from "./lib/qbo-sync.js";
@@ -161,7 +159,6 @@ import {
   handleJobFileStream,
 } from "./routes/job-files.js";
 import { handleSheetsInspect } from "./routes/sheets-debug.js";
-import { handleJobberSync, handleSyncNow } from "./routes/sync.js";
 import {
   handleExpenseCreate,
   handleExpenseCreateJson,
@@ -171,7 +168,6 @@ import {
   handleJobExpenses,
   handleExpensePatch,
   handleExpenseReceipt,
-  handleExpensePush,
 } from "./routes/expenses.js";
 import {
   handleTimeEntryClockIn,
@@ -190,11 +186,6 @@ import {
   handleVendorMaterialUpdate,
 } from "./routes/vendor-materials.js";
 import { handleJobCosting } from "./routes/costing.js";
-import {
-  handleJobberOAuthStart,
-  handleJobberOAuthCallback,
-  handleJobberStatus,
-} from "./routes/oauth-jobber.js";
 import { handleWcSync } from "./routes/wc-sync.js";
 import { handleFileLinkCreate, handleFileLinkResolve } from "./routes/file-link.js";
 import {
@@ -217,7 +208,29 @@ import {
   handlePropertyCreate,
   handlePropertyList,
   handlePropertyUpdate,
+  handleContactCreate,
+  handleContactDelete,
+  handleTagAssign,
+  handleTagRemove,
 } from "./routes/clients.js";
+import {
+  handleTagList,
+  handleTagCreate,
+  handleTagArchive,
+  handleReferralSourceList,
+  handleReferralSourceCreate,
+  handleReferralSourceArchive,
+} from "./routes/lists.js";
+import {
+  handleGoogleReviewList,
+  handleGoogleReviewStats,
+  handleGoogleReviewGet,
+  handleGoogleReviewCreate,
+  handleGoogleReviewGenerateResponse,
+  handleGoogleReviewReply,
+  handleGoogleReviewMatch,
+  handleGoogleReviewFeature,
+} from "./routes/google-reviews.js";
 import {
   handleTemplateList as handleNotifTemplateList,
   handleTemplateGet as handleNotifTemplateGet,
@@ -414,6 +427,7 @@ import {
   handleCompletionPackageCompile,
   handleCompletionPackageGet,
   handleCompletionPackageSend,
+  handleLienWaiverRetry,
 } from "./routes/completion-package.js";
 import {
   handleJobPunchListGetGuarded,
@@ -875,27 +889,6 @@ export default {
       }
     }
 
-    // ── Jobber OAuth (operator-facing self-serve re-auth) ───────────
-    // Matches /oauth/jobber/* explicitly so the dashboard host rewrite
-    // (further down) doesn't fold these into /dashboard/oauth/jobber/*.
-    if (url.pathname === "/oauth/jobber/start" && request.method === "GET") {
-      return handleJobberOAuthStart(env, request);
-    }
-    if (url.pathname === "/oauth/jobber/callback" && request.method === "GET") {
-      return handleJobberOAuthCallback(env, request);
-    }
-    if (url.pathname === "/api/jobber/status" && request.method === "GET") {
-      return handleJobberStatus(env);
-    }
-
-    if (url.pathname === "/api/sync/jobber" && request.method === "POST") {
-      return handleJobberSync(request, env);
-    }
-
-    if (url.pathname === "/api/sync/now" && request.method === "POST") {
-      return handleSyncNow(request, env);
-    }
-
     if (url.pathname === "/api/debug/sheets-inspect" && request.method === "GET") {
       return handleSheetsInspect(request, env);
     }
@@ -1208,6 +1201,10 @@ export default {
     const jobCompletionSend = url.pathname.match(/^\/api\/jobs\/([^/]+)\/completion-package\/send$/);
     if (jobCompletionSend && request.method === "POST") {
       return handleCompletionPackageSend(request, env, decodeURIComponent(jobCompletionSend[1]));
+    }
+    const jobLienWaiverRetry = url.pathname.match(/^\/api\/jobs\/([^/]+)\/lien-waiver\/retry$/);
+    if (jobLienWaiverRetry && request.method === "POST") {
+      return handleLienWaiverRetry(request, env, decodeURIComponent(jobLienWaiverRetry[1]));
     }
     const jobCompletion = url.pathname.match(/^\/api\/jobs\/([^/]+)\/completion-package$/);
     if (jobCompletion) {
@@ -1591,10 +1588,6 @@ export default {
     if (expenseReceipt && (request.method === "GET" || request.method === "HEAD")) {
       return handleExpenseReceipt(env, decodeURIComponent(expenseReceipt[1]));
     }
-    const expensePush = url.pathname.match(/^\/api\/expenses\/([^/]+)\/push-to-jobber$/);
-    if (expensePush && request.method === "POST") {
-      return handleExpensePush(env, decodeURIComponent(expensePush[1]));
-    }
     const expenseById = url.pathname.match(/^\/api\/expenses\/([^/]+)$/);
     if (expenseById) {
       const eid = decodeURIComponent(expenseById[1]);
@@ -1763,6 +1756,22 @@ export default {
       if (request.method === "GET") return handlePropertyList(env, cid);
       if (request.method === "POST") return handlePropertyCreate(request, env, cid);
     }
+    const clientContacts = url.pathname.match(/^\/api\/clients\/([^/]+)\/contacts$/);
+    if (clientContacts && request.method === "POST") {
+      return handleContactCreate(request, env, decodeURIComponent(clientContacts[1]));
+    }
+    const clientContactById = url.pathname.match(/^\/api\/client-contacts\/([^/]+)$/);
+    if (clientContactById && request.method === "DELETE") {
+      return handleContactDelete(request, env, decodeURIComponent(clientContactById[1]));
+    }
+    const clientTagsRoute = url.pathname.match(/^\/api\/clients\/([^/]+)\/tags$/);
+    if (clientTagsRoute && request.method === "POST") {
+      return handleTagAssign(request, env, decodeURIComponent(clientTagsRoute[1]));
+    }
+    const clientTagRemove = url.pathname.match(/^\/api\/clients\/([^/]+)\/tags\/([^/]+)$/);
+    if (clientTagRemove && request.method === "DELETE") {
+      return handleTagRemove(request, env, decodeURIComponent(clientTagRemove[1]), decodeURIComponent(clientTagRemove[2]));
+    }
     const clientComms = url.pathname.match(/^\/api\/clients\/([^/]+)\/communications$/);
     if (clientComms && request.method === "GET") {
       return handleCommunicationList(env, decodeURIComponent(clientComms[1]), url);
@@ -1784,6 +1793,53 @@ export default {
     }
     if (url.pathname === "/api/communications" && request.method === "POST") {
       return handleCommunicationCreate(request, env);
+    }
+
+    // ── Managed Lists (Tags + Referral Sources) — Sprint 34 ───────────
+    if (url.pathname === "/api/tags") {
+      if (request.method === "GET") return handleTagList(env);
+      if (request.method === "POST") return handleTagCreate(request, env);
+    }
+    const tagArchive = url.pathname.match(/^\/api\/tags\/([^/]+)\/archive$/);
+    if (tagArchive && request.method === "PUT") {
+      return handleTagArchive(request, env, decodeURIComponent(tagArchive[1]));
+    }
+    if (url.pathname === "/api/referral-sources") {
+      if (request.method === "GET") return handleReferralSourceList(env);
+      if (request.method === "POST") return handleReferralSourceCreate(request, env);
+    }
+    const referralArchive = url.pathname.match(/^\/api\/referral-sources\/([^/]+)\/archive$/);
+    if (referralArchive && request.method === "PUT") {
+      return handleReferralSourceArchive(request, env, decodeURIComponent(referralArchive[1]));
+    }
+
+    // ── Google Reviews — Sprint 36 ────────────────────────────────────
+    if (url.pathname === "/api/google-reviews/stats" && request.method === "GET") {
+      return handleGoogleReviewStats(env);
+    }
+    if (url.pathname === "/api/google-reviews") {
+      if (request.method === "GET") return handleGoogleReviewList(env, url);
+      if (request.method === "POST") return handleGoogleReviewCreate(request, env);
+    }
+    const grById = url.pathname.match(/^\/api\/google-reviews\/([^/]+)$/);
+    if (grById && request.method === "GET") {
+      return handleGoogleReviewGet(env, decodeURIComponent(grById[1]));
+    }
+    const grGenerateResponse = url.pathname.match(/^\/api\/google-reviews\/([^/]+)\/generate-response$/);
+    if (grGenerateResponse && request.method === "POST") {
+      return handleGoogleReviewGenerateResponse(request, env, decodeURIComponent(grGenerateResponse[1]));
+    }
+    const grReply = url.pathname.match(/^\/api\/google-reviews\/([^/]+)\/reply$/);
+    if (grReply && request.method === "POST") {
+      return handleGoogleReviewReply(request, env, decodeURIComponent(grReply[1]));
+    }
+    const grMatch = url.pathname.match(/^\/api\/google-reviews\/([^/]+)\/match$/);
+    if (grMatch && request.method === "PUT") {
+      return handleGoogleReviewMatch(request, env, decodeURIComponent(grMatch[1]));
+    }
+    const grFeature = url.pathname.match(/^\/api\/google-reviews\/([^/]+)\/feature$/);
+    if (grFeature && request.method === "POST") {
+      return handleGoogleReviewFeature(request, env, decodeURIComponent(grFeature[1]));
     }
 
     // ── SMS / Message Center (Sprint 24) ─────────────────────────────
@@ -2240,7 +2296,7 @@ export default {
   //
   // We have four cron schedules (as of the Phase 7 reliability pass):
   //
-  //   "*/30 * * * *"  → Jobber sync + WC workbook export
+  //   "*/30 * * * *"  → WC workbook export
   //   "15 * * * *"    → heartbeat check + DLQ replay
   //   "15 7 * * *"    → nightly D1 → R2 backup + 30-day retention sweep
   //   "0 12 * * *"    → daily summary email (7 AM Central)
@@ -2283,7 +2339,7 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
       return;
     case "*/30 * * * *":
     default:
-      await runJobberTick(cron, env);
+      await runThirtyMinTick(cron, env);
       return;
   }
 }
@@ -2413,19 +2469,9 @@ async function runNotificationProcessor(env: Env): Promise<void> {
   }
 }
 
-async function runJobberTick(cron: string, env: Env): Promise<void> {
-  try {
-    const stats = await syncJobberToD1(env);
-    console.log(
-      `[cron ${cron}] jobber_full: ${stats.jobs_written} jobs, ${stats.jobber_job_files_written} jobber files, ${stats.duration_ms}ms`,
-    );
-  } catch (err) {
-    console.error(`[cron ${cron}] jobber_full failed:`, (err as Error).message);
-  }
-
-  // WC Spreadsheet sync (Sprint 14 rebuild) piggybacks on the */30 tick so the
-  // sheet always reflects the freshest D1 state. Failures here are non-fatal
-  // (logged to sync_log + DLQ inside the service).
+async function runThirtyMinTick(cron: string, env: Env): Promise<void> {
+  // WC Spreadsheet sync — keeps the Google Sheet up to date with the latest D1 state.
+  // Failures are non-fatal (logged to sync_log + DLQ inside the service).
   try {
     const wc = await runWcSpreadsheetSync(env);
     console.log(
@@ -2437,15 +2483,6 @@ async function runJobberTick(cron: string, env: Env): Promise<void> {
 }
 
 async function runHourly(env: Env): Promise<void> {
-  try {
-    const hb = await checkHeartbeat(env);
-    console.log(
-      `[cron 15 * * * *] heartbeat: healthy=${hb.healthy} age_ms=${hb.age_ms ?? "null"} alerted=${hb.alerted}`,
-    );
-  } catch (err) {
-    console.error(`[cron 15 * * * *] heartbeat failed:`, (err as Error).message);
-  }
-
   try {
     const replay = await replayDeadLetters(env);
     console.log(

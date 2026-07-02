@@ -406,6 +406,32 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
     .first<{ id: string; is_repeat: number }>();
   if (!client) return err(404, "not_found", "Client not found");
 
+  // Resolve property_id: use supplied FK, or auto-create a property record so
+  // every new estimate request going forward has a linked property.
+  const propertyState = str(body.property_state) ?? "Arkansas";
+  let propertyId = str(body.property_id);
+
+  if (!propertyId) {
+    // Check if an identical property already exists for this client to avoid duplicates.
+    const existingProp = await env.DB.prepare(
+      `SELECT id FROM properties
+       WHERE client_id = ? AND LOWER(address) = LOWER(?) AND LOWER(city) = LOWER(?) AND LOWER(zip) = LOWER(?)`,
+    )
+      .bind(clientId, propertyAddress, propertyCity, propertyZip)
+      .first<{ id: string }>();
+
+    if (existingProp) {
+      propertyId = existingProp.id;
+    } else {
+      propertyId = crypto.randomUUID();
+      await env.DB.prepare(
+        "INSERT INTO properties (id, client_id, address, city, state, zip, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+      )
+        .bind(propertyId, clientId, propertyAddress!, propertyCity!, propertyState, propertyZip!)
+        .run();
+    }
+  }
+
   // request_number is UNIQUE but not AUTOINCREMENT — compute the next value.
   const max = await env.DB.prepare(
     "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
@@ -418,19 +444,20 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
   await env.DB.prepare(
     `INSERT INTO estimate_requests (
       id, request_number, status, client_id,
-      property_address, property_city, property_state, property_zip,
+      property_id, property_address, property_city, property_state, property_zip,
       lat, lon,
       job_type, lead_source, lead_source_detail, high_level_opportunity_id,
       visit_notes, created_at, updated_at, created_by
-    ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       requestNumber,
       clientId,
+      propertyId,
       propertyAddress,
       propertyCity,
-      str(body.property_state) ?? "Arkansas",
+      propertyState,
       propertyZip,
       optionalCoord(body.lat),
       optionalCoord(body.lon),

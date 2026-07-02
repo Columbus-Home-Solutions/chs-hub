@@ -355,12 +355,19 @@ export async function computeSuggestions(
       if (row.status === "paid") continue; // deposit / already-collected draw
       const milestoneNum = Number(row.trigger_ref ?? row.sequence + 1);
       if (invoicedMilestones.has(milestoneNum)) continue;
+      // Prefer the stored absolute amount; fall back to percentage × contract when
+      // the schedule row only has a percentage (e.g. Jobber-synced schedules).
+      const milestoneAmt = row.amount != null
+        ? round2(row.amount)
+        : row.percentage != null
+          ? round2(contractTotal * row.percentage / 100)
+          : 0;
       out.milestones.push({
         billing_schedule_id: row.id,
         invoice_type: "milestone",
         milestone_number: milestoneNum,
         title: row.label,
-        amount: round2(row.amount ?? 0),
+        amount: milestoneAmt,
         percentage: row.percentage,
       });
     }
@@ -390,12 +397,17 @@ export async function computeSuggestions(
       // trigger_ref / label is the task-group name the conversion linked.
       const group = row.trigger_ref || row.label;
       if (!completeGroups.has(group)) continue;
+      const tradeAmt = row.amount != null
+        ? round2(row.amount)
+        : row.percentage != null
+          ? round2(contractTotal * row.percentage / 100)
+          : 0;
       out.trades.push({
         billing_schedule_id: row.id,
         invoice_type: "trade_completion",
         trade_line_item_id: row.id, // billing_schedule row is the trade reference
         title: `${row.label} — Complete`,
-        amount: round2(row.amount ?? 0),
+        amount: tradeAmt,
         task_group: group,
       });
     }

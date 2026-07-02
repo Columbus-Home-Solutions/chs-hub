@@ -21,7 +21,6 @@
  */
 
 import type { Env } from "../../env.js";
-import { upsertJobFromPayload } from "../jobber/sync.js";
 import { notify } from "./notify.js";
 
 export type DlqEntityType =
@@ -174,8 +173,8 @@ async function replayOne(
 
   switch (row.entity_type) {
     case "job":
-      await upsertJobFromPayload(env, payload);
-      return;
+      // Jobber sync decommissioned — these legacy DLQ entries cannot be replayed.
+      throw new Error("Jobber job replay decommissioned; resolve this DLQ entry manually.");
     // For other types, defer to the next full sync. Recording these still
     // gives us visibility (and an alert if they keep failing); the sync
     // job will retry naturally on its own pass.

@@ -16,6 +16,7 @@ import { buildCompletionPackageData, renderCompletionPackageHtml } from "../lib/
 import { triggerNotification } from "../lib/notification-engine.js";
 import { formatDate, formatDatePlusOneYear } from "../lib/document-generator.js";
 import { sendImmediateReviewRequest } from "../lib/review-followups.js";
+import { getBoldSignConfig, sendDocumentForSignature } from "../lib/boldsign.js";
 
 const WRITE_ROLES = ["owner", "project_manager"] as const;
 const READ_ROLES = ["owner", "project_manager", "office_admin"] as const;
@@ -100,7 +101,7 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
   if (!job) return null;
 
   const warrantyRow = await env.DB.prepare(
-    `SELECT id, r2_key, generated_at, review_status
+    `SELECT id, filename, r2_key, generated_at, review_status
        FROM job_documents
       WHERE job_id = ? AND template_type = 'warranty_certificate'
         AND review_status IN ('pending_review', 'approved', 'manual')
@@ -108,17 +109,19 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
       LIMIT 1`,
   )
     .bind(jobId)
-    .first<{ id: string; r2_key: string; generated_at: string; review_status: string }>();
+    .first<{ id: string; filename: string; r2_key: string; generated_at: string; review_status: string }>();
 
   const warranty = warrantyRow
     ? {
         document_id: warrantyRow.id,
+        filename: warrantyRow.filename,
         r2_key: warrantyRow.r2_key,
         generated_at: warrantyRow.generated_at,
         status: "ready" as const,
       }
     : {
         document_id: null,
+        filename: null,
         r2_key: null,
         generated_at: null,
         status: "missing" as const,
@@ -140,21 +143,17 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
     .bind(jobId)
     .first<{ n: number }>();
 
-  const lienWaiver = await env.DB.prepare(
-    `SELECT id, status, sent_at, signed_at, document_id
-       FROM client_lien_waivers
-      WHERE job_id = ?
-      ORDER BY datetime(created_at) DESC
+  // Lien waiver is now auto-generated into job_documents (like warranty cert) — no BoldSign send.
+  // Existing client_lien_waivers rows are preserved as historical records.
+  const lienWaiverRow = await env.DB.prepare(
+    `SELECT id, filename, generated_at
+       FROM job_documents
+      WHERE job_id = ? AND template_type = 'lien_waiver_conditional'
+      ORDER BY datetime(generated_at) DESC
       LIMIT 1`,
   )
     .bind(jobId)
-    .first<{
-      id: string;
-      status: string;
-      sent_at: string | null;
-      signed_at: string | null;
-      document_id: string | null;
-    }>();
+    .first<{ id: string; filename: string; generated_at: string }>();
 
   const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
   const photoSelect = `SELECT id, r2_thumbnail_key, r2_key, r2_url, caption FROM photos`;
@@ -195,12 +194,26 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
     caption: p.caption,
   });
 
+  const lienWaiver = lienWaiverRow
+    ? {
+        document_id: lienWaiverRow.id,
+        filename: lienWaiverRow.filename,
+        generated_at: lienWaiverRow.generated_at,
+        status: "ready" as const,
+      }
+    : {
+        document_id: null,
+        filename: null,
+        generated_at: null,
+        status: "missing" as const,
+      };
+
   let packageStatus: PackageReviewStatus = "not_ready";
   if (job.completion_package_sent_at) {
     packageStatus = "sent";
   } else if (
     warranty.status === "ready" &&
-    lienWaiver?.status === "signed" &&
+    lienWaiver.status === "ready" &&
     (invoiceCount?.n ?? 0) > 0
   ) {
     packageStatus = "ready_to_send";
@@ -227,21 +240,7 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
           paid_at: null,
           status: "missing" as const,
         },
-    lien_waiver: lienWaiver
-      ? {
-          waiver_id: lienWaiver.id,
-          status: lienWaiver.status as "pending" | "sent" | "signed" | "declined" | "failed",
-          sent_at: lienWaiver.sent_at,
-          signed_at: lienWaiver.signed_at,
-          document_id: lienWaiver.document_id,
-        }
-      : {
-          waiver_id: null,
-          status: "missing" as const,
-          sent_at: null,
-          signed_at: null,
-          document_id: null,
-        },
+    lien_waiver: lienWaiver,
     photos: {
       before: beforePhotos.map(mapPhoto),
       after: afterPhotos.map(mapPhoto),
@@ -455,4 +454,108 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
     notifications_enqueued: trigger.enqueued,
     notification_reasons: trigger.reasons,
   });
+}
+
+// ─── POST /api/jobs/:id/lien-waiver/retry  (O/PM) ─────────────────────────────
+//
+// Manually retry a failed client lien waiver send. Re-uses the existing
+// client_lien_waivers row (updates it in-place) rather than creating a duplicate.
+// Useful after the underlying BoldSign config issue is resolved.
+
+export async function handleLienWaiverRetry(
+  request: Request,
+  env: Env,
+  jobId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const waiver = await env.DB.prepare(
+    `SELECT id, status FROM client_lien_waivers
+      WHERE job_id = ? AND status = 'failed'
+      ORDER BY created_at DESC LIMIT 1`,
+  )
+    .bind(jobId)
+    .first<{ id: string; status: string }>();
+
+  if (!waiver) {
+    return err(404, "not_found", "No failed lien waiver found for this job.");
+  }
+
+  const job = await env.DB.prepare(
+    `SELECT id, client_id, contract_total FROM jobs WHERE id = ?`,
+  )
+    .bind(jobId)
+    .first<{ id: string; client_id: string; contract_total: number }>();
+
+  if (!job) return err(404, "not_found", "Job not found.");
+
+  const client = await env.DB.prepare(
+    `SELECT first_name, last_name, email FROM clients WHERE id = ?`,
+  )
+    .bind(job.client_id)
+    .first<{ first_name: string; last_name: string; email: string }>();
+
+  if (!client?.email) {
+    return err(409, "no_client_email", "Client has no email address — cannot send lien waiver.");
+  }
+
+  const config = await getBoldSignConfig(env);
+  if (!config) {
+    return err(503, "boldsign_not_configured", "BOLDSIGN_API_KEY is not configured.");
+  }
+
+  const DEFAULT_TEMPLATE = "7d6692c2-21e9-4ae9-ba2a-7f45c1f33eba";
+  const templateId = ((env.BOLDSIGN_LIEN_WAIVER_CLIENT_TEMPLATE_ID ?? "").trim()) || DEFAULT_TEMPLATE;
+
+  const signerName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() || "Client";
+  const jobMeta = await env.DB.prepare("SELECT title, job_number FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ title: string; job_number: string }>();
+  const title = jobMeta
+    ? `Conditional Lien Waiver — ${jobMeta.title} (#${jobMeta.job_number})`
+    : "Conditional Lien Waiver";
+
+  // Reset to pending before attempting
+  await env.DB.prepare(
+    `UPDATE client_lien_waivers
+        SET status = 'pending', error_message = NULL, updated_at = datetime('now')
+      WHERE id = ?`,
+  )
+    .bind(waiver.id)
+    .run();
+
+  try {
+    const result = await sendDocumentForSignature(config, {
+      fileBlob: new Blob([]),
+      filename: "lien-waiver-conditional.docx",
+      title,
+      message: "Please review and sign this conditional lien waiver at your earliest convenience.",
+      signerEmail: client.email,
+      signerName,
+      signerRole: "Client",
+      templateId,
+    });
+
+    await env.DB.prepare(
+      `UPDATE client_lien_waivers
+          SET boldsign_document_id = ?, status = 'sent', sent_at = datetime('now'),
+              error_message = NULL, updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+      .bind(result.documentId, waiver.id)
+      .run();
+
+    return json({ ok: true, boldsign_document_id: result.documentId });
+  } catch (err2) {
+    const errMsg = err2 instanceof Error ? err2.message : String(err2);
+    await env.DB.prepare(
+      `UPDATE client_lien_waivers
+          SET status = 'failed', error_message = ?, updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+      .bind(errMsg.slice(0, 1000), waiver.id)
+      .run();
+    return err(502, "boldsign_error", errMsg.slice(0, 500));
+  }
 }

@@ -12,6 +12,7 @@ export interface Client {
   mailing_state: string | null;
   mailing_zip: string | null;
   lead_source: string | null;
+  referral_source_id: string | null;
   high_level_contact_id: string | null;
   is_repeat_client: boolean;
   review_requested: boolean;
@@ -21,10 +22,52 @@ export interface Client {
   total_jobs: number;
   total_revenue: number;
   active_jobs: number;
+  has_reviewed?: boolean;
   can_delete?: boolean;
+  referral_source?: { id: string; label: string } | null;
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
+}
+
+export interface ClientContact {
+  id: string;
+  client_id: string;
+  label: string;
+  contact_type: "phone" | "email";
+  value: string;
+  created_at: string;
+}
+
+export interface TagDefinition {
+  id: string;
+  tag_text: string;
+  archived: number;
+  created_at: string;
+}
+
+export interface ClientTag {
+  id: string;
+  tag_text: string;
+  archived: number;
+  assigned_at: string;
+}
+
+export interface ReferralSource {
+  id: string;
+  label: string;
+  archived: number;
+  created_at: string;
+}
+
+export interface EstimateRequestLite {
+  id: string;
+  request_number: number;
+  status: string;
+  property_address: string;
+  property_city: string;
+  job_type: string;
+  created_at: string | null;
 }
 
 export interface Property {

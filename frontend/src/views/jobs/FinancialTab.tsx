@@ -267,7 +267,10 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   };
 
   const voidInvoice = async (inv: InvoiceRow) => {
-    if (!confirm(`Void ${inv.invoice_display}? It will be preserved for audit but no longer collectible.`)) {
+    const paidWarning = inv.status === "paid"
+      ? "\n\nThis invoice has already been paid. Voiding it will drop total paid below the contract balance — create a corrected invoice afterward."
+      : "";
+    if (!confirm(`Void ${inv.invoice_display}? It will be preserved for audit but no longer collectible.${paidWarning}`)) {
       return;
     }
     try {
@@ -450,6 +453,18 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                     </Button>
                   )}
                   {inv.payment_token && inv.status !== "draft" && inv.status !== "void" && (
+                    <Button
+                      size="sm"
+                      variant="tertiary"
+                      onClick={() => {
+                        const url = `${window.location.origin}/pay/${inv.payment_token}`;
+                        window.open(url, "_blank", "noopener,noreferrer");
+                      }}
+                    >
+                      Open ↗
+                    </Button>
+                  )}
+                  {inv.payment_token && inv.status !== "draft" && inv.status !== "void" && (
                     <Button size="sm" variant="tertiary" onClick={() => copyLink(inv)}>
                       Copy link
                     </Button>
@@ -459,7 +474,7 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                       Record payment
                     </Button>
                   )}
-                  {inv.status !== "void" && inv.status !== "paid" && (
+                  {inv.status !== "void" && (
                     <Button size="sm" variant="danger" onClick={() => voidInvoice(inv)}>
                       Void
                     </Button>
@@ -1186,6 +1201,10 @@ function InvoiceBuilder({
   // Carried-through linkage (e.g. `co:<id>` for a change-order invoice) so the
   // server-side suggestion stops re-offering it once the invoice exists.
   const prefillNotes = prefill?.notes ?? null;
+  // Amount is calculated (read-only) when the invoice type is milestone, trade, or final
+  // and was opened from a suggestion row. Manual invoices remain fully editable.
+  const CALCULATED_TYPES = new Set(["milestone", "trade_completion", "final"]);
+  const amountLocked = prefill != null && CALCULATED_TYPES.has(invoiceType);
 
   const amt = Number(amount);
   const taxN = Number(tax) || 0;
@@ -1247,15 +1266,21 @@ function InvoiceBuilder({
           onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
         />
       </FormField>
-      <FormField label="Amount" required>
-        <input
-          class="form-input"
-          type="number"
-          min="0"
-          step="0.01"
-          value={amount}
-          onInput={(e) => setAmount((e.target as HTMLInputElement).value)}
-        />
+      <FormField label={amountLocked ? "Amount (calculated)" : "Amount"} required>
+        {amountLocked ? (
+          <div class="form-input form-input--readonly">
+            {formatCurrency(Number(amount))}
+          </div>
+        ) : (
+          <input
+            class="form-input"
+            type="number"
+            min="0"
+            step="0.01"
+            value={amount}
+            onInput={(e) => setAmount((e.target as HTMLInputElement).value)}
+          />
+        )}
       </FormField>
       <div class="form-row">
         <FormField label="Tax">

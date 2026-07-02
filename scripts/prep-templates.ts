@@ -172,6 +172,37 @@ function prepLienWaiverConditional(xml: string): string {
     "in the sum of ${{payment_amount}},",
   );
 
+  // ── Signature block ─────────────────────────────────────────────────────────
+  // The source template has blank underline paragraphs for signature, printed name,
+  // and date. Inject placeholders matching document-generator.ts SIG_RUN_PATTERN
+  // so the runtime engine can embed the contractor signature image and date.
+  //
+  // Signature line uses w:val="40"; must be changed to w:val="28" to match
+  // SIG_RUN_PATTERN:  /<w:r><w:rPr><w:sz w:val="28"\/><w:szCs w:val="28"\/><\/w:rPr>
+  //                    <w:t xml:space="preserve">\{\{contractor_signature\}\}<\/w:t><\/w:r>/
+  out = out.replace(
+    '<w:r><w:rPr><w:sz w:val="40"/><w:szCs w:val="40"/></w:rPr><w:t xml:space="preserve"></w:t></w:r>',
+    '<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve">{{contractor_signature}}</w:t></w:r>',
+  );
+  // Printed Name and Title line (context-anchored to avoid ambiguity with other empty runs)
+  out = out.replace(
+    '<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve"></w:t></w:r></w:p>' +
+    '<w:p><w:pPr><w:spacing w:after="60" w:before="60"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:cs="Arial" w:eastAsia="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>' +
+    '<w:t xml:space="preserve">Printed Name and Title</w:t></w:r></w:p>',
+    '<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve">{{contractor_name}}</w:t></w:r></w:p>' +
+    '<w:p><w:pPr><w:spacing w:after="60" w:before="60"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:cs="Arial" w:eastAsia="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>' +
+    '<w:t xml:space="preserve">Printed Name and Title</w:t></w:r></w:p>',
+  );
+  // Date Signed line (context-anchored)
+  out = out.replace(
+    '<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve"></w:t></w:r></w:p>' +
+    '<w:p><w:pPr><w:spacing w:after="60" w:before="60"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:cs="Arial" w:eastAsia="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>' +
+    '<w:t xml:space="preserve">Date Signed</w:t></w:r></w:p>',
+    '<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve">{{contractor_date}}</w:t></w:r></w:p>' +
+    '<w:p><w:pPr><w:spacing w:after="60" w:before="60"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:cs="Arial" w:eastAsia="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>' +
+    '<w:t xml:space="preserve">Date Signed</w:t></w:r></w:p>',
+  );
+
   return out;
 }
 

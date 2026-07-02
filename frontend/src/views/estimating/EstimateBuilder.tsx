@@ -40,11 +40,13 @@ import {
 
 interface BuilderProps extends RoutableProps {
   requestId?: string;
+  /** Direct estimate ID — used for Jobber-imported estimates that have no request_id. */
+  estimateId?: string;
 }
 
 const LOW_MARGIN = 15;
 
-export function EstimateBuilder({ requestId }: BuilderProps) {
+export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
   const toast = useToast();
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,19 +61,26 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
 
   const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
 
-  // Create-or-open the estimate for this request on mount.
+  // Create-or-open the estimate. Two paths:
+  //   1. requestId provided → POST create-or-open (normal workflow)
+  //   2. estimateId provided, no requestId → GET by ID (Jobber-imported estimates)
   useEffect(() => {
     let cancelled = false;
-    if (!requestId) {
+    if (!requestId && !estimateId) {
       setError("No request specified.");
       setLoading(false);
       return;
     }
     (async () => {
       try {
-        const res = await api.post<{ estimate: Estimate; created: boolean }>("/api/estimates", {
-          estimate_request_id: requestId,
-        });
+        let res: { estimate: Estimate };
+        if (estimateId && !requestId) {
+          res = await api.get<{ estimate: Estimate }>(`/api/estimates/${estimateId}`);
+        } else {
+          res = await api.post<{ estimate: Estimate; created: boolean }>("/api/estimates", {
+            estimate_request_id: requestId,
+          });
+        }
         if (cancelled) return;
         setEstimate(res.estimate);
       } catch (e) {
@@ -83,7 +92,7 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
     return () => {
       cancelled = true;
     };
-  }, [requestId]);
+  }, [requestId, estimateId]);
 
   // Load active templates + reviews for the selectors.
   useEffect(() => {
@@ -233,15 +242,27 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
             {saving && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>Saving…</span>}
           </div>
           <p class="view-subtitle">
-            {e.client_name ?? "—"} · {e.title ?? formatStatus(e.job_type ?? "")}
+            {e.client_id ? (
+              <a
+                href={`/app/clients/${e.client_id}`}
+                style={{ color: "inherit", textDecoration: "underline", textDecorationColor: "var(--color-border)", textUnderlineOffset: "2px" }}
+                onClick={(ev) => { ev.preventDefault(); go(`/clients/${e.client_id}`); }}
+              >
+                {e.client_name ?? "—"}
+              </a>
+            ) : (e.client_name ?? "—")}
+            {" · "}{e.title ?? formatStatus(e.job_type ?? "")}
           </p>
         </div>
         <div class="view-header__right">
-          <Button variant="tertiary" onClick={() => e.request_id && go(`/estimating/${e.request_id}`)}>
-            ← Request
+          <Button
+            variant="tertiary"
+            onClick={() => e.request_id ? go(`/estimating/${e.request_id}`) : go("/estimates")}
+          >
+            {e.request_id ? "← Request" : "← Estimates"}
           </Button>
           {sent && (
-            <Button variant="secondary" onClick={() => mutate(() => api.post(`/api/estimates/${e.id}/revise`).then((r: any) => go(`/estimating/${r.estimate.request_id}/estimate`)), "Revision created")}>
+            <Button variant="secondary" onClick={() => mutate(() => api.post(`/api/estimates/${e.id}/revise`).then((r: any) => r.estimate.request_id ? go(`/estimating/${r.estimate.request_id}/estimate`) : go(`/estimates/${r.estimate.id}`)), "Revision created")}>
               Revise
             </Button>
           )}
@@ -253,6 +274,13 @@ export function EstimateBuilder({ requestId }: BuilderProps) {
       </div>
 
       {sent && <SentStatusCard estimate={e} />}
+
+      {/* Notice for imported estimates with no resolvable client (orphaned FK from Jobber migration) */}
+      {!e.request_id && !e.client_name && (
+        <div class="notice notice--warning" style={{ marginBottom: "var(--space-md)" }}>
+          No client on file — imported from Jobber. Client identity was not carried over during migration.
+        </div>
+      )}
 
       {/* ── Top bar ─────────────────────────────────────────────── */}
       <Card>

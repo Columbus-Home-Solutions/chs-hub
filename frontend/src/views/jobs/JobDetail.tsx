@@ -132,7 +132,18 @@ export function JobDetail({ id }: DetailProps) {
           </div>
           <p class="view-subtitle">
             {job.job_display ?? "JOB"}
-            {job.client_name ? ` · ${job.client_name}` : ""}
+            {job.client_name && job.client_id ? (
+              <>
+                {" · "}
+                <a
+                  href={`/app/clients/${job.client_id}`}
+                  style={{ color: "inherit", textDecoration: "underline", textDecorationColor: "var(--color-border)", textUnderlineOffset: "2px" }}
+                  onClick={(e) => { e.preventDefault(); go(`/clients/${job.client_id}`); }}
+                >
+                  {job.client_name}
+                </a>
+              </>
+            ) : job.client_name ? ` · ${job.client_name}` : ""}
             {fullAddress ? ` · ${fullAddress}` : ""}
           </p>
         </div>

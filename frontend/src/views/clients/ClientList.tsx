@@ -11,6 +11,7 @@ import { formatCurrency, formatDate, formatPhone } from "../../lib/format";
 import { go } from "../../lib/nav";
 import { useMessageCenter } from "../../store/messageCenter";
 import type { Client } from "../../types";
+import { GoogleGMark } from "../social/ReviewsPage";
 
 const FILTERS = [
   { key: "all", label: "All" },
@@ -96,6 +97,13 @@ export function ClientList(_props: RoutableProps) {
       sortValue: (c) => c.last_interaction_date ?? "",
       render: (c) => formatDate(c.last_interaction_date),
     },
+    {
+      key: "has_reviewed",
+      header: "Review",
+      render: (c) => c.has_reviewed
+        ? <span title="Left a Google review" style={{ display: "inline-flex", alignItems: "center" }}><GoogleGMark size={16} /></span>
+        : null,
+    },
   ];
 
   return (
@@ -144,13 +152,15 @@ export function ClientList(_props: RoutableProps) {
         </div>
       )}
       {!loading && !error && rows.length > 0 && (
-        <Table
-          columns={columns}
-          rows={rows}
-          rowKey={(c) => c.id}
-          onRowClick={(c) => go(`/clients/${c.id}`)}
-          initialSort="name"
-        />
+        <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 260px)" }}>
+          <Table
+            columns={columns}
+            rows={rows}
+            rowKey={(c) => c.id}
+            onRowClick={(c) => go(`/clients/${c.id}`)}
+            initialSort="name"
+          />
+        </div>
       )}
 
       <ClientForm

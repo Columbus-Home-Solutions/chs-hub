@@ -269,7 +269,12 @@ const NAV: NavSection[] = [
       {
         label: "Post Manager",
         href: to("/social"),
-        activeTest: (p) => p === to("/social") || p.startsWith(to("/social") + "/"),
+        activeTest: (p) => p === to("/social"),
+      },
+      {
+        label: "Reviews",
+        href: to("/social/reviews"),
+        activeTest: (p) => p === to("/social/reviews") || p.startsWith(to("/social/reviews") + "/"),
       },
       {
         label: "Google Business",

@@ -88,6 +88,7 @@ interface ClientRow {
   mailing_state: string | null;
   mailing_zip: string | null;
   lead_source: string | null;
+  referral_source_id: string | null;
   high_level_contact_id: string | null;
   is_repeat_client: number | null;
   review_requested: number | null;
@@ -100,6 +101,7 @@ interface ClientRow {
   total_jobs?: number;
   total_revenue?: number;
   active_jobs?: number;
+  has_reviewed?: number;
 }
 
 /** Best-effort display name: native first/last, else legacy `name`. */
@@ -123,6 +125,7 @@ function shapeClient(row: ClientRow) {
     mailing_state: row.mailing_state,
     mailing_zip: row.mailing_zip,
     lead_source: row.lead_source,
+    referral_source_id: row.referral_source_id ?? null,
     high_level_contact_id: row.high_level_contact_id,
     is_repeat_client: (row.is_repeat_client ?? 0) === 1,
     review_requested: (row.review_requested ?? 0) === 1,
@@ -132,6 +135,7 @@ function shapeClient(row: ClientRow) {
     total_jobs: row.total_jobs ?? 0,
     total_revenue: row.total_revenue ?? 0,
     active_jobs: row.active_jobs ?? 0,
+    has_reviewed: (row.has_reviewed ?? 0) === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,
     created_by: row.created_by,
@@ -146,7 +150,9 @@ const CLIENT_SELECT = `
     COALESCE(s.total_jobs, 0) AS total_jobs,
     COALESCE(s.total_revenue, 0) AS total_revenue,
     (SELECT COUNT(*) FROM jobs j WHERE j.client_id = c.id
-       AND j.status IN (${ACTIVE_JOB_STATUSES.map(() => "?").join(",")})) AS active_jobs
+       AND j.status IN (${ACTIVE_JOB_STATUSES.map(() => "?").join(",")})) AS active_jobs,
+    (SELECT COUNT(*) > 0 FROM google_reviews gr
+       WHERE gr.matched_client_id = c.id AND gr.match_confidence = 'confirmed') AS has_reviewed
   FROM clients c
   LEFT JOIN v_client_summary s ON s.client_id = c.id
 `;
@@ -216,33 +222,104 @@ export async function handleClientGet(env: Env, id: string): Promise<Response> {
     .first<ClientRow>();
   if (!row) return err(404, "not_found", "Client not found");
 
-  const properties = await env.DB.prepare(
-    "SELECT * FROM properties WHERE client_id = ? ORDER BY created_at ASC",
-  )
-    .bind(id)
-    .all();
-
-  // Jobs are empty until the Job module ships; the section is built but returns
-  // whatever the legacy jobs table has for this client.
-  const jobs = await env.DB.prepare(
-    "SELECT id, job_number, title, status, contract_total, start_date, created_at FROM jobs WHERE client_id = ? ORDER BY created_at DESC LIMIT 200",
-  )
-    .bind(id)
-    .all();
-
-  const blockingJobs = await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM jobs WHERE client_id = ? AND status NOT IN ('closed', 'cancelled')",
-  )
-    .bind(id)
-    .first<{ n: number }>();
+  const [
+    properties,
+    jobs,
+    blockingJobs,
+    contacts,
+    tags,
+    referralSource,
+    unconvertedRequests,
+    quotes,
+    invoices,
+    payments,
+    googleReviews,
+  ] = await Promise.all([
+    env.DB.prepare("SELECT * FROM properties WHERE client_id = ? ORDER BY created_at ASC")
+      .bind(id)
+      .all(),
+    env.DB.prepare(
+      "SELECT id, job_number, title, status, contract_total, start_date, created_at FROM jobs WHERE client_id = ? ORDER BY created_at DESC LIMIT 200",
+    )
+      .bind(id)
+      .all(),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM jobs WHERE client_id = ? AND status NOT IN ('closed', 'cancelled')",
+    )
+      .bind(id)
+      .first<{ n: number }>(),
+    env.DB.prepare(
+      "SELECT * FROM client_contacts WHERE client_id = ? ORDER BY created_at ASC",
+    )
+      .bind(id)
+      .all(),
+    env.DB.prepare(
+      `SELECT td.id, td.tag_text, td.archived, ct.created_at AS assigned_at
+       FROM client_tags ct JOIN tag_definitions td ON td.id = ct.tag_definition_id
+       WHERE ct.client_id = ? ORDER BY ct.created_at ASC`,
+    )
+      .bind(id)
+      .all(),
+    row.referral_source_id
+      ? env.DB.prepare("SELECT id, label FROM referral_sources WHERE id = ?")
+          .bind(row.referral_source_id)
+          .first<{ id: string; label: string }>()
+      : Promise.resolve(null),
+    // Unconverted requests only — once estimate_id is set, the request is a quote.
+    env.DB.prepare(
+      `SELECT id, request_number, status, property_address, property_city, job_type, created_at
+       FROM estimate_requests WHERE client_id = ? AND estimate_id IS NULL ORDER BY created_at DESC LIMIT 100`,
+    )
+      .bind(id)
+      .all(),
+    // Quotes = estimates table (the client-facing quote built from a request).
+    env.DB.prepare(
+      `SELECT id, estimate_number, title, status, total, subtotal, client_signature, viewed_date, sent_at, created_at
+       FROM estimates WHERE client_id = ? ORDER BY created_at DESC LIMIT 100`,
+    )
+      .bind(id)
+      .all(),
+    // Invoices for this client (has direct client_id column).
+    env.DB.prepare(
+      `SELECT id, invoice_number, title, job_id, amount, total_due, status, due_date, created_at
+       FROM invoices WHERE client_id = ? ORDER BY created_at DESC LIMIT 200`,
+    )
+      .bind(id)
+      .all(),
+    // Payments for all invoices belonging to this client.
+    env.DB.prepare(
+      `SELECT p.id, p.invoice_id, p.amount, p.received_date, p.created_at, i.invoice_number
+       FROM payments p
+       JOIN invoices i ON i.id = p.invoice_id
+       WHERE i.client_id = ? ORDER BY COALESCE(p.received_date, p.created_at) DESC LIMIT 200`,
+    )
+      .bind(id)
+      .all(),
+    env.DB.prepare(
+      `SELECT id, reviewer_name, star_rating, comment_text, review_created_at,
+              reply_text, reply_sent_at, match_confidence, entry_source
+       FROM google_reviews WHERE matched_client_id = ? AND match_confidence = 'confirmed'
+       ORDER BY review_created_at DESC`,
+    )
+      .bind(id)
+      .all(),
+  ]);
 
   return json({
     client: {
       ...shapeClient(row),
       can_delete: (blockingJobs?.n ?? 0) === 0,
+      referral_source: referralSource ?? null,
     },
     properties: properties.results ?? [],
     jobs: jobs.results ?? [],
+    contacts: contacts.results ?? [],
+    tags: tags.results ?? [],
+    estimate_requests: unconvertedRequests.results ?? [],
+    quotes: quotes.results ?? [],
+    invoices: invoices.results ?? [],
+    payments: payments.results ?? [],
+    google_reviews: googleReviews.results ?? [],
   });
 }
 
@@ -442,6 +519,7 @@ const CLIENT_UPDATABLE = [
   "mailing_state",
   "mailing_zip",
   "lead_source",
+  "referral_source_id",
   "high_level_contact_id",
   "notes",
 ] as const;
@@ -785,4 +863,137 @@ export async function handleClientDelete(request: Request, env: Env, id: string)
   });
 
   return json({ ok: true, deleted: true, id });
+}
+
+// ─── Client Contacts ─────────────────────────────────────────────────────────
+
+export async function handleContactCreate(
+  request: Request,
+  env: Env,
+  clientId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const client = await env.DB.prepare("SELECT id FROM clients WHERE id = ?").bind(clientId).first();
+  if (!client) return err(404, "not_found", "Client not found");
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  const label = str(body.label);
+  const contactType = str(body.contact_type);
+  const value = str(body.value);
+
+  if (!label || !contactType || !value) {
+    return err(422, "validation_error", "label, contact_type and value are required");
+  }
+  if (!["phone", "email"].includes(contactType)) {
+    return err(422, "validation_error", "contact_type must be phone or email");
+  }
+
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    "INSERT INTO client_contacts (id, client_id, label, contact_type, value) VALUES (?, ?, ?, ?, ?)",
+  )
+    .bind(id, clientId, label, contactType, value)
+    .run();
+
+  await logAudit(env, user.email, "contact_created", "client_contact", id, { client_id: clientId, label });
+
+  const row = await env.DB.prepare("SELECT * FROM client_contacts WHERE id = ?").bind(id).first();
+  return json({ contact: row }, { status: 201 });
+}
+
+export async function handleContactDelete(
+  request: Request,
+  env: Env,
+  contactId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const existing = await env.DB.prepare("SELECT id, client_id FROM client_contacts WHERE id = ?")
+    .bind(contactId)
+    .first<{ id: string; client_id: string }>();
+  if (!existing) return err(404, "not_found", "Contact not found");
+
+  await env.DB.prepare("DELETE FROM client_contacts WHERE id = ?").bind(contactId).run();
+  await logAudit(env, user.email, "contact_deleted", "client_contact", contactId, {
+    client_id: existing.client_id,
+  });
+
+  return json({ ok: true });
+}
+
+// ─── Client Tags ─────────────────────────────────────────────────────────────
+
+export async function handleTagAssign(
+  request: Request,
+  env: Env,
+  clientId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const client = await env.DB.prepare("SELECT id FROM clients WHERE id = ?").bind(clientId).first();
+  if (!client) return err(404, "not_found", "Client not found");
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  let tagId = str(body.tag_definition_id);
+
+  // Inline creation: if tag_text is supplied instead of tag_definition_id, create the tag.
+  if (!tagId) {
+    const tagText = str(body.tag_text);
+    if (!tagText) return err(422, "validation_error", "tag_definition_id or tag_text is required");
+
+    const existing = await env.DB.prepare(
+      "SELECT id FROM tag_definitions WHERE LOWER(tag_text) = LOWER(?)",
+    )
+      .bind(tagText)
+      .first<{ id: string }>();
+
+    if (existing) {
+      tagId = existing.id;
+    } else {
+      tagId = crypto.randomUUID();
+      await env.DB.prepare("INSERT INTO tag_definitions (id, tag_text) VALUES (?, ?)")
+        .bind(tagId, tagText)
+        .run();
+    }
+  }
+
+  // Upsert — silently ignore if already assigned.
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO client_tags (client_id, tag_definition_id) VALUES (?, ?)",
+  )
+    .bind(clientId, tagId)
+    .run();
+
+  const tag = await env.DB.prepare("SELECT * FROM tag_definitions WHERE id = ?")
+    .bind(tagId)
+    .first();
+  return json({ tag }, { status: 201 });
+}
+
+export async function handleTagRemove(
+  request: Request,
+  env: Env,
+  clientId: string,
+  tagId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  await env.DB.prepare(
+    "DELETE FROM client_tags WHERE client_id = ? AND tag_definition_id = ?",
+  )
+    .bind(clientId, tagId)
+    .run();
+
+  return json({ ok: true });
 }

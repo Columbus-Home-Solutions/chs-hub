@@ -78,6 +78,7 @@ interface RequestJoin {
   id: string;
   status: string;
   client_id: string;
+  property_id: string | null;
   property_address: string;
   property_city: string;
   property_state: string | null;
@@ -128,7 +129,8 @@ export async function convertQuoteToJob(
   opts?: { payerId?: string | null },
 ): Promise<ConversionOutcome> {
   const row = await env.DB.prepare(
-    `SELECT er.id, er.status, er.client_id, er.property_address, er.property_city,
+    `SELECT er.id, er.status, er.client_id, er.property_id,
+            er.property_address, er.property_city,
             er.property_state, er.property_zip, er.lat, er.lon, er.job_type, er.lead_source,
             er.estimate_id, er.converted_job_id,
             e.id AS e_id, e.total AS e_total, e.title AS e_title,
@@ -277,12 +279,12 @@ export async function convertQuoteToJob(
     `INSERT INTO jobs (
        id, job_number, title, status, client_id, source, total,
        created_at, synced_at, updated_at, created_by,
-       billing_model, property_address, property_city, property_state, property_zip,
+       billing_model, property_id, property_address, property_city, property_state, property_zip,
        lat, lon,
        job_type, lead_source, estimate_id, contract_total, deposit_amount, deposit_paid,
        portal_token, portal_type, conversion_complete, payer_id
      )
-     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?`,
+     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?`,
   ).bind(
     jobId,
     title,
@@ -293,6 +295,7 @@ export async function convertQuoteToJob(
     nowIso,
     createdBy,
     billingModel,
+    row.property_id ?? null,
     row.property_address,
     row.property_city,
     row.property_state,

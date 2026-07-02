@@ -401,14 +401,14 @@ export async function handleInvoiceVoid(request: Request, env: Env, id: string):
   const inv = await loadInvoice(env, id);
   if (!inv) return err(404, "not_found", "Invoice not found.");
   if (inv.status === "void") return handleInvoiceGet(env, id); // idempotent
-  if (inv.status === "paid") {
-    return err(409, "invoice_paid", "A paid invoice can't be voided — use a refund / reverse-conversion instead.");
-  }
 
+  // Owner can void paid invoices (e.g. to correct a wrong-amount error and recreate).
+  // The payment row(s) are preserved for audit; total_paid math excludes them once
+  // the invoice is void so the job correctly shows a balance due again.
   const body = await readJson(request);
   const reason = body ? str(body.reason) : null;
   await env.DB.prepare("UPDATE invoices SET status = 'void' WHERE id = ?").bind(id).run();
-  await logAudit(env, user.email, "invoice_voided", id, { invoice_number: inv.invoice_number, reason });
+  await logAudit(env, user.email, "invoice_voided", id, { invoice_number: inv.invoice_number, reason, was_paid: inv.status === "paid" });
   return handleInvoiceGet(env, id);
 }
 
@@ -436,7 +436,12 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
     rows.filter((r) => r.status !== "void").reduce((s, r) => s + (r.total_due ?? r.amount ?? 0), 0),
   );
   const paidAgg = await env.DB.prepare(
-    "SELECT COALESCE(SUM(amount), 0) AS paid FROM payments WHERE job_id = ?",
+    // Exclude payments linked to voided invoices — they no longer count toward
+    // the balance-due. Orphaned payments (invoice_id IS NULL) still count.
+    `SELECT COALESCE(SUM(p.amount), 0) AS paid
+       FROM payments p
+       LEFT JOIN invoices i ON i.id = p.invoice_id
+      WHERE p.job_id = ? AND (p.invoice_id IS NULL OR i.status != 'void')`,
   )
     .bind(jobId)
     .first<{ paid: number }>();

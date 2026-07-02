@@ -134,9 +134,8 @@ BOLDSIGN_LIEN_WAIVER_CLIENT_TEMPLATE_ID = "7d6692c2-21e9-4ae9-ba2a-7f45c1f33eba"
 # ─── Scheduled jobs ────────────────────────────────────────────────────
 # All four schedules dispatch through src/index.ts → dispatchCron().
 #
-#   */30 * * * *  → Jobber → D1 sync + Wealthy Contractor workbook export
-#   15 * * * *    → heartbeat check + DLQ replay (every hour at :15 to dodge
-#                   the :00 / :30 sync windows)
+#   */30 * * * *  → Wealthy Contractor workbook export
+#   15 * * * *    → DLQ replay + Drive mirror (every hour at :15)
 #   15 7 * * *    → nightly D1 → R2 backup at 02:15 Central (07:15 UTC) +
 #                   30-day retention sweep
 #   0 12 * * *    → daily summary email at 07:00 Central (12:00 UTC)
@@ -171,15 +170,12 @@ enabled = true
 [build]
 command = "bash scripts/build-frontend.sh"
 
-# Drive mirror + Jobber full sync need many `fetch()`s and (on Paid) higher CPU for
-# long crons. The `[limits]` block is Workers Paid–only; it breaks `wrangler deploy`
-# on Free (API error re CPU / configurable caps). Uncomment after upgrading:
+# Drive mirror needs many `fetch()`s and (on Paid) higher CPU for long crons.
+# The `[limits]` block is Workers Paid–only; it breaks `wrangler deploy` on Free
+# (API error re CPU / configurable caps). Uncomment after upgrading:
 #
 #   [limits]
 #   subrequests = 10000
 #   cpu_ms = 300000
 #
 # See https://developers.cloudflare.com/workers/platform/limits/
-#
-# On Free, invocations are capped (e.g. 50 subrequests, low CPU per run) — fine for
-# smoke-testing routes and small jobs; a full Jobber + mirror pass may need Paid limits.

@@ -27,6 +27,7 @@ import { WarrantyCallDetail } from "./views/warranty/WarrantyCallDetail";
 import { NotificationSettings } from "./views/notifications/NotificationSettings";
 import { NotificationLogs } from "./views/notifications/NotificationLogs";
 import { SocialMedia } from "./views/social/SocialMedia";
+import { ReviewsPage } from "./views/social/ReviewsPage";
 import { FinancialDashboard } from "./views/financial/FinancialDashboard";
 import { PayerList } from "./views/payers/PayerList";
 import { PayerDetail } from "./views/payers/PayerDetail";
@@ -50,6 +51,7 @@ export function AppRouter() {
       <NotificationSettings path={`${BASE}/settings/notifications`} />
       <NotificationLogs path={`${BASE}/settings/notifications/logs`} />
       <EstimateList path={`${BASE}/estimates`} />
+      <EstimateBuilder path={`${BASE}/estimates/:estimateId`} />
       <EstimateRequestPipeline path={`${BASE}/estimating`} />
       <EstimateRequestForm path={`${BASE}/estimating/new`} />
       <EstimateTemplates path={`${BASE}/estimating/templates`} />
@@ -69,6 +71,7 @@ export function AppRouter() {
       <HubFiles path={`${BASE}/documents`} />
       <CompanyDocs path={`${BASE}/company-docs`} />
       <SocialMedia path={`${BASE}/social`} />
+      <ReviewsPage path={`${BASE}/social/reviews`} />
       <VoiceNoteCapture path={`${BASE}/voice-note`} />
       <UnmatchedVoiceNotes path={`${BASE}/voice-notes/unmatched`} />
       <NotFound default />

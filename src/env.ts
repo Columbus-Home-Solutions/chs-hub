@@ -6,9 +6,12 @@ export interface Env {
   FILES: R2Bucket;
   ASSETS: Fetcher;
 
-  JOBBER_CLIENT_ID: string;
-  JOBBER_CLIENT_SECRET: string;
-  JOBBER_REFRESH_TOKEN: string;
+  /** @deprecated Jobber sync decommissioned (Sprint 36). Secrets deleted from Cloudflare. */
+  JOBBER_CLIENT_ID?: string;
+  /** @deprecated Jobber sync decommissioned (Sprint 36). Secrets deleted from Cloudflare. */
+  JOBBER_CLIENT_SECRET?: string;
+  /** @deprecated Jobber sync decommissioned (Sprint 36). Secrets deleted from Cloudflare. */
+  JOBBER_REFRESH_TOKEN?: string;
 
   SYNC_TRIGGER_SECRET: string;
 

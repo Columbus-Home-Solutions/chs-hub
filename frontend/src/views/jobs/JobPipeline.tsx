@@ -202,7 +202,7 @@ export function JobPipeline(_props: RoutableProps) {
       {error && <div class="empty-state">Couldn't load the pipeline: {error}</div>}
 
       {!loading && !error && data && viewMode === "list" && (
-        <>
+        <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 240px)" }}>
         {statusFilter && (
           <div class="job-filter-badge">
             <span class="job-filter-badge__label">
@@ -263,7 +263,7 @@ export function JobPipeline(_props: RoutableProps) {
             ))}
           </tbody>
         </table>
-        </>
+        </div>
       )}
 
       {viewMode === "health" && (

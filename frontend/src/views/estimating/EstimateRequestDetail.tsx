@@ -389,7 +389,17 @@ export function EstimateRequestDetail({ id }: DetailProps) {
       <div class="view-header">
         <div>
           <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
-            <h1 class="view-title">{r.client_name}</h1>
+            <h1 class="view-title">
+              {r.client_id ? (
+                <a
+                  href={`/app/clients/${r.client_id}`}
+                  style={{ color: "inherit", textDecoration: "underline", textDecorationColor: "var(--color-border)", textUnderlineOffset: "2px" }}
+                  onClick={(e) => { e.preventDefault(); go(`/clients/${r.client_id}`); }}
+                >
+                  {r.client_name}
+                </a>
+              ) : r.client_name}
+            </h1>
             <span class={`er-status pipeline-col--${r.status}`}>{formatStatus(r.status)}</span>
             {r.is_repeat_client && <Badge tone="brand">Repeat</Badge>}
           </div>

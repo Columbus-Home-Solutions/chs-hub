@@ -1,21 +1,18 @@
 /**
- * completion-triggers.ts — Sprint 32: final-invoice-paid → client lien waiver auto-send.
+ * completion-triggers.ts — Sprint 32+: final-invoice-paid → client lien waiver auto-generate.
+ *
+ * Architecture correction (Sprint 36): the Conditional Lien Waiver is signed by the
+ * contractor (CHS), not the client. It is now auto-generated like the Warranty Certificate —
+ * contractor signature embedded at generation time, stored in job_documents, no BoldSign send.
  *
  * checkAndFireLienWaiver() is invoked non-blocking after invoice payments settle.
  * All heavy work runs inside ctx.waitUntil().
  */
 
 import type { Env } from "../env.js";
-import { getBoldSignConfig, sendDocumentForSignature } from "./boldsign.js";
 import { triggerNotification } from "./notification-engine.js";
 import { round2 } from "./invoicing.js";
-
-const DEFAULT_CLIENT_LIEN_WAIVER_TEMPLATE_ID = "7d6692c2-21e9-4ae9-ba2a-7f45c1f33eba";
-
-function resolveClientLienWaiverTemplateId(env: Env): string {
-  const fromEnv = (env.BOLDSIGN_LIEN_WAIVER_CLIENT_TEMPLATE_ID ?? "").trim();
-  return fromEnv || DEFAULT_CLIENT_LIEN_WAIVER_TEMPLATE_ID;
-}
+import { generateAndStoreDocument } from "../routes/job-documents.js";
 
 export async function checkAndFireLienWaiver({
   jobId,
@@ -30,7 +27,6 @@ export async function checkAndFireLienWaiver({
 }): Promise<void> {
   ctx.waitUntil(
     (async () => {
-      let waiverId: string | null = null;
       try {
         const job = await env.DB.prepare(
           `SELECT id, status, contract_total, client_id FROM jobs WHERE id = ?`,
@@ -40,6 +36,7 @@ export async function checkAndFireLienWaiver({
 
         if (!job || job.status !== "complete") return;
 
+        // All non-void invoices must be paid
         const unpaid = await env.DB.prepare(
           `SELECT COUNT(*) as count FROM invoices
             WHERE job_id = ? AND status NOT IN ('paid', 'void')`,
@@ -49,8 +46,13 @@ export async function checkAndFireLienWaiver({
 
         if (unpaid && unpaid.count > 0) return;
 
+        // Exclude payments linked to voided invoices — they no longer count toward
+        // "is this job fully paid". Orphaned payments (invoice_id IS NULL) still count.
         const financials = await env.DB.prepare(
-          `SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE job_id = ?`,
+          `SELECT COALESCE(SUM(p.amount), 0) as total_paid
+             FROM payments p
+             LEFT JOIN invoices i ON i.id = p.invoice_id
+            WHERE p.job_id = ? AND (p.invoice_id IS NULL OR i.status != 'void')`,
         )
           .bind(jobId)
           .first<{ total_paid: number }>();
@@ -59,95 +61,59 @@ export async function checkAndFireLienWaiver({
         const contractTotal = round2(job.contract_total ?? 0);
         if (totalPaid < contractTotal - 0.01) return;
 
-        const existing = await env.DB.prepare(
-          `SELECT id FROM client_lien_waivers
-            WHERE job_id = ? AND status NOT IN ('failed')
+        // Idempotency: stop if a lien waiver document already exists for this job
+        const existingDoc = await env.DB.prepare(
+          `SELECT id FROM job_documents
+            WHERE job_id = ? AND template_type = 'lien_waiver_conditional'
             LIMIT 1`,
         )
           .bind(jobId)
           .first<{ id: string }>();
 
-        if (existing) {
-          console.log(`[CompletionTrigger] Lien waiver already exists for job ${jobId}`);
+        if (existingDoc) {
+          console.log(`[CompletionTrigger] Lien waiver already generated for job ${jobId}`);
           return;
         }
 
-        const client = await env.DB.prepare(
-          `SELECT first_name, last_name, email FROM clients WHERE id = ?`,
-        )
-          .bind(job.client_id)
-          .first<{ first_name: string; last_name: string; email: string }>();
-
-        if (!client?.email) {
-          console.error(`[CompletionTrigger] No client email for job ${jobId}`);
-          return;
-        }
-
-        const invoice = await env.DB.prepare(`SELECT amount FROM invoices WHERE id = ?`)
+        // Gather data needed for the merge fields
+        const invoice = await env.DB.prepare(`SELECT amount, paid_date FROM invoices WHERE id = ?`)
           .bind(invoiceId)
-          .first<{ amount: number }>();
+          .first<{ amount: number; paid_date: string | null }>();
 
-        waiverId = crypto.randomUUID();
-        const templateId = resolveClientLienWaiverTemplateId(env);
+        const today = new Date().toISOString().slice(0, 10);
+        const paymentDate = invoice?.paid_date ?? today;
+        const paymentAmount = String(invoice?.amount ?? 0);
 
-        await env.DB.prepare(
-          `INSERT INTO client_lien_waivers
-             (id, job_id, waiver_type, payment_amount, invoice_id, boldsign_template_id, status, created_at, updated_at)
-           VALUES (?, ?, 'conditional', ?, ?, ?, 'pending', datetime('now'), datetime('now'))`,
-        )
-          .bind(waiverId, jobId, invoice?.amount ?? 0, invoiceId, templateId)
-          .run();
+        // Generate the lien waiver document (contractor signature embedded, signed immediately)
+        const result = await generateAndStoreDocument(
+          env,
+          jobId,
+          "lien_waiver_conditional",
+          {
+            payment_amount: paymentAmount,
+            payment_date: paymentDate,
+            through_date: paymentDate,
+          },
+          "system",
+          {
+            signImmediately: true,
+            autoGenerated: true,
+            triggerEvent: "client_payment",
+            relatedRecordId: invoiceId,
+          },
+        );
 
-        const config = await getBoldSignConfig(env);
-        if (!config) {
-          throw new Error("BOLDSIGN_API_KEY not configured");
-        }
-
-        const signerName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() || "Client";
-        const jobMeta = await env.DB.prepare("SELECT title, job_number FROM jobs WHERE id = ?")
-          .bind(jobId)
-          .first<{ title: string; job_number: string }>();
-        const title = jobMeta
-          ? `Conditional Lien Waiver — ${jobMeta.title} (#${jobMeta.job_number})`
-          : "Conditional Lien Waiver";
-
-        const boldSignResult = await sendDocumentForSignature(config, {
-          fileBlob: new Blob([]),
-          filename: "lien-waiver-conditional.docx",
-          title,
-          message: "Please review and sign this conditional lien waiver at your earliest convenience.",
-          signerEmail: client.email,
-          signerName,
-          signerRole: "Client",
-          templateId,
-        });
-
-        await env.DB.prepare(
-          `UPDATE client_lien_waivers
-              SET boldsign_document_id = ?, status = 'sent', sent_at = datetime('now'), updated_at = datetime('now')
-            WHERE id = ?`,
-        )
-          .bind(boldSignResult.documentId, waiverId)
-          .run();
-
-        await triggerNotification(env, "lien_waiver_sent", {
+        await triggerNotification(env, "lien_waiver_generated", {
           jobId,
           clientId: job.client_id,
           linkPath: `/app/jobs/${jobId}/completion-package`,
-          instanceKey: waiverId,
+          instanceKey: result.docId,
         });
 
-        console.log(`[CompletionTrigger] Lien waiver sent for job ${jobId}`);
+        console.log(`[CompletionTrigger] Lien waiver generated for job ${jobId}: doc ${result.docId}`);
       } catch (err) {
-        console.error(`[CompletionTrigger] BoldSign send failed for job ${jobId}:`, err);
-        if (waiverId) {
-          await env.DB.prepare(
-            `UPDATE client_lien_waivers SET status = 'failed', updated_at = datetime('now') WHERE id = ?`,
-          )
-            .bind(waiverId)
-            .run()
-            .catch(() => undefined);
-        }
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[CompletionTrigger] Lien waiver generation failed for job ${jobId}:`, errMsg);
       }
     })(),
   );

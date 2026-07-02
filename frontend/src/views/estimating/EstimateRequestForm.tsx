@@ -76,6 +76,14 @@ export function EstimateRequestForm(_props: RoutableProps) {
     company_name: "",
   });
   const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(propertyIdParam);
+  // "new" means user explicitly chose "+ Add new property"; null means no selection yet
+  const [addingNewProperty, setAddingNewProperty] = useState(false);
+
+  // When a client is selected via typeahead (not prefilled), fetch their properties.
+  const [typeaheadClientId, setTypeaheadClientId] = useState<string | null>(null);
+  const { data: typeaheadClientData } = useApi<ClientDetailResponse>(
+    typeaheadClientId && !fromClientProfile ? `/api/clients/${typeaheadClientId}` : null,
+  );
 
   // Request fields
   const [propertyAddress, setPropertyAddress] = useState("");
@@ -146,6 +154,8 @@ export function EstimateRequestForm(_props: RoutableProps) {
     if (pick) {
       setSelectedPropertyId(pick.id);
       applyProperty(pick, propertySetters);
+    } else if (properties.length > 1) {
+      // Multiple properties — let user pick; show selector without pre-filling
     } else if (properties.length === 0 && client.mailing_address) {
       applyProperty(
         {
@@ -174,10 +184,16 @@ export function EstimateRequestForm(_props: RoutableProps) {
       .slice(0, 8);
   }, [clientData, search]);
 
-  const clientProperties = prefilledClientData?.properties ?? [];
+  // Unified client properties (prefilled or typeahead)
+  const clientProperties = fromClientProfile
+    ? (prefilledClientData?.properties ?? [])
+    : (typeaheadClientData?.properties ?? []);
+
+  const showPropertySelector = clientProperties.length > 0 && !showNewClient;
 
   const selectProperty = (p: Property) => {
     setSelectedPropertyId(p.id);
+    setAddingNewProperty(false);
     applyProperty(p, propertySetters);
     setErrors((prev) => ({
       ...prev,
@@ -185,6 +201,17 @@ export function EstimateRequestForm(_props: RoutableProps) {
       property_city: "",
       property_zip: "",
     }));
+  };
+
+  const selectNewProperty = () => {
+    setSelectedPropertyId(null);
+    setAddingNewProperty(true);
+    setPropertyAddress("");
+    setCity("");
+    setState("Arkansas");
+    setZip("");
+    setLat(null);
+    setLon(null);
   };
 
   const validate = (): boolean => {
@@ -201,9 +228,6 @@ export function EstimateRequestForm(_props: RoutableProps) {
     if (!zip.trim()) e.property_zip = "Required";
     if (!jobType) e.job_type = "Required";
     if (!leadSource) e.lead_source = "Required";
-    if (fromClientProfile && clientProperties.length > 1 && !selectedPropertyId && !propertyAddress.trim()) {
-      e.property = "Select a property or enter an address";
-    }
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -229,6 +253,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
 
       const res = await api.post<{ request: EstimateRequest }>("/api/estimate-requests", {
         client_id: clientId,
+        property_id: selectedPropertyId || null,
         property_address: propertyAddress,
         property_city: city,
         property_state: state || "Arkansas",
@@ -274,7 +299,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
           </h1>
           <p class="view-subtitle">
             {fromClientProfile
-              ? "Repeat client — property and contact are pre-filled. Pick the job type and go."
+              ? "Repeat client — contact is pre-filled. Select a property or enter a new address."
               : "Capture a new lead and start it in the pipeline."}
           </p>
         </div>
@@ -303,7 +328,20 @@ export function EstimateRequestForm(_props: RoutableProps) {
                     </div>
                   </div>
                   {!fromClientProfile && (
-                    <Button size="sm" variant="secondary" onClick={() => setSelected(null)}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        setSelected(null);
+                        setTypeaheadClientId(null);
+                        setSelectedPropertyId(null);
+                        setAddingNewProperty(false);
+                        setPropertyAddress("");
+                        setCity("");
+                        setState("Arkansas");
+                        setZip("");
+                      }}
+                    >
                       Change
                     </Button>
                   )}
@@ -332,8 +370,15 @@ export function EstimateRequestForm(_props: RoutableProps) {
                           class="typeahead__item"
                           onClick={() => {
                             setSelected(c);
+                            setTypeaheadClientId(c.id);
                             setNewClient((p) => ({ ...p, company_name: c.company_name ?? "" }));
                             setSearch("");
+                            setSelectedPropertyId(null);
+                            setAddingNewProperty(false);
+                            setPropertyAddress("");
+                            setCity("");
+                            setState("Arkansas");
+                            setZip("");
                             setErrors((p) => ({ ...p, client: "" }));
                           }}
                         >
@@ -429,7 +474,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
         <div style={{ height: "var(--space-lg)" }} />
 
         <Card title="Property & Job">
-          {fromClientProfile && clientProperties.length > 1 && (
+          {showPropertySelector && (
             <FormField label="Saved properties" error={errors.property}>
               <div class="stack" style={{ gap: "var(--space-xs)" }}>
                 {clientProperties.map((p) => (
@@ -443,42 +488,57 @@ export function EstimateRequestForm(_props: RoutableProps) {
                     <strong>{p.address}</strong>
                     <span class="text--muted">
                       {p.city}, {p.state} {p.zip}
+                      {p.property_type ? ` · ${p.property_type}` : ""}
                     </span>
                   </button>
                 ))}
+                <button
+                  type="button"
+                  class={`typeahead__item${addingNewProperty ? " typeahead__item--active" : ""}`}
+                  style={{ textAlign: "left", width: "100%" }}
+                  onClick={selectNewProperty}
+                >
+                  <strong>+ Add new property</strong>
+                  <span class="text--muted">Enter a different address</span>
+                </button>
               </div>
             </FormField>
           )}
 
-          <FormField label="Property address" required error={errors.property_address}>
-            <AddressAutocomplete
-              initialValue={propertyAddress}
-              onInputChange={(v) => {
-                setPropertyAddress(v);
-                if (selectedPropertyId) setSelectedPropertyId(null);
-              }}
-              error={!!errors.property_address}
-              onSelect={handleAddressSelect}
-            />
-          </FormField>
-          <div class="form-row">
-            <FormField
-              label="City"
-              required
-              error={errors.property_city}
-              inputProps={{ value: city, onInput: (e) => setCity((e.target as HTMLInputElement).value) }}
-            />
-            <FormField
-              label="State"
-              inputProps={{ value: state, onInput: (e) => setState((e.target as HTMLInputElement).value) }}
-            />
-            <FormField
-              label="ZIP"
-              required
-              error={errors.property_zip}
-              inputProps={{ value: zip, onInput: (e) => setZip((e.target as HTMLInputElement).value) }}
-            />
-          </div>
+          {(!showPropertySelector || addingNewProperty || selectedPropertyId) && (
+            <>
+              <FormField label="Property address" required error={errors.property_address}>
+                <AddressAutocomplete
+                  initialValue={propertyAddress}
+                  onInputChange={(v) => {
+                    setPropertyAddress(v);
+                    if (selectedPropertyId) setSelectedPropertyId(null);
+                  }}
+                  error={!!errors.property_address}
+                  onSelect={handleAddressSelect}
+                />
+              </FormField>
+              <div class="form-row">
+                <FormField
+                  label="City"
+                  required
+                  error={errors.property_city}
+                  inputProps={{ value: city, onInput: (e) => setCity((e.target as HTMLInputElement).value) }}
+                />
+                <FormField
+                  label="State"
+                  inputProps={{ value: state, onInput: (e) => setState((e.target as HTMLInputElement).value) }}
+                />
+                <FormField
+                  label="ZIP"
+                  required
+                  error={errors.property_zip}
+                  inputProps={{ value: zip, onInput: (e) => setZip((e.target as HTMLInputElement).value) }}
+                />
+              </div>
+            </>
+          )}
+
           <div class="form-row">
             <FormField label="Job type" required error={errors.job_type}>
               <Select

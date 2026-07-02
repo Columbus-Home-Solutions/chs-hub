@@ -88,6 +88,13 @@ export async function sendImmediateReviewRequest(
 
   if (!clientId) return;
 
+  // Sprint 36: skip if the client already has a confirmed-matched Google review —
+  // they've already left one and don't need the request sequence.
+  const hasConfirmedReview = await env.DB.prepare(
+    "SELECT id FROM google_reviews WHERE matched_client_id = ? AND match_confidence = 'confirmed' LIMIT 1",
+  ).bind(clientId).first<{ id: string }>();
+  if (hasConfirmedReview) return;
+
   const client = await env.DB.prepare(
     "SELECT id, first_name, last_name, name, phone, email, notification_preferences FROM clients WHERE id = ?",
   ).bind(clientId).first<ClientInfo>();
@@ -220,6 +227,12 @@ export async function processReviewFollowUps(env: Env): Promise<ReviewFollowUpSt
 
 async function processOneJobFollowUp(env: Env, row: JobReviewRow): Promise<boolean> {
   if (!row.completion_package_sent_at || !row.client_id) return false;
+
+  // Sprint 36: skip if the client already has a confirmed-matched Google review.
+  const hasConfirmedReview = await env.DB.prepare(
+    "SELECT id FROM google_reviews WHERE matched_client_id = ? AND match_confidence = 'confirmed' LIMIT 1",
+  ).bind(row.client_id).first<{ id: string }>();
+  if (hasConfirmedReview) return false;
 
   const daysSince = calcDaysSince(row.completion_package_sent_at);
 

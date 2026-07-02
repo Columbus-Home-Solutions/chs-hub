@@ -217,6 +217,13 @@ input[type="time"].form-input {
 .form-textarea--error {
   border-color: var(--color-error);
 }
+.form-input--readonly {
+  background: var(--color-surface-secondary, #f7f9fc);
+  color: var(--color-text-primary);
+  cursor: default;
+  user-select: text;
+  font-weight: 600;
+}
 .form-input::placeholder {
   color: var(--color-text-disabled);
 }

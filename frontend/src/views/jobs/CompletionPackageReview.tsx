@@ -3,12 +3,12 @@ import { useCallback, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
-import { Spinner } from "../../components/ui/Spinner";
 import { Modal } from "../../components/ui/Modal";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatDateTime } from "../../lib/format";
+import { DocViewerModal } from "../../components/DocViewerModal";
 
 const GOOGLE_REVIEW_LINK = "https://g.page/r/CQ_gM4-vOzjFEBM/review";
 
@@ -16,6 +16,7 @@ interface CompletionPackageData {
   job: { id: string; title: string; client_name: string; job_number: string };
   warranty: {
     document_id: string | null;
+    filename: string | null;
     r2_key: string | null;
     generated_at: string | null;
     status: "ready" | "pending" | "missing";
@@ -27,11 +28,10 @@ interface CompletionPackageData {
     status: "ready" | "missing";
   };
   lien_waiver: {
-    waiver_id: string | null;
-    status: "pending" | "sent" | "signed" | "declined" | "failed" | "missing";
-    sent_at: string | null;
-    signed_at: string | null;
     document_id: string | null;
+    filename: string | null;
+    generated_at: string | null;
+    status: "ready" | "missing";
   };
   photos: {
     before: Array<{ id: string; r2_thumbnail_key: string | null; r2_url: string | null; caption: string | null }>;
@@ -70,7 +70,7 @@ function statusBanner(status: CompletionPackageData["package_status"], sentAt: s
   }
   return {
     className: "callout callout--warning completion-package-banner",
-    text: "Package not ready — lien waiver signature pending",
+    text: "Package not ready — missing items below",
   };
 }
 
@@ -208,8 +208,8 @@ export function CompletionPackageReview({ id }: DetailProps) {
             <h2 class="completion-package-section-title">What's in the package</h2>
             <div class="completion-package-grid">
               <WarrantyCard jobId={jobId} warranty={pkg.warranty} />
-              <InvoiceCard invoice={pkg.final_invoice} />
-              <LienWaiverCard lien={pkg.lien_waiver} />
+              <InvoiceCard invoice={pkg.final_invoice} jobId={jobId} onCreated={refetch} />
+              <LienWaiverCard lien={pkg.lien_waiver} jobId={jobId} />
               <PhotosCard jobId={jobId} before={pkg.photos.before} after={pkg.photos.after} />
             </div>
           </section>
@@ -223,7 +223,7 @@ export function CompletionPackageReview({ id }: DetailProps) {
               <Button
                 variant="primary"
                 disabled={packageStatus !== "ready_to_send"}
-                title={packageStatus !== "ready_to_send" ? "Lien waiver signature required" : undefined}
+                title={packageStatus !== "ready_to_send" ? "All items must be ready before sending" : undefined}
                 onClick={() => setConfirmOpen(true)}
               >
                 Send Completion Package
@@ -263,8 +263,8 @@ export function CompletionPackageReview({ id }: DetailProps) {
         }
       >
         <p style={{ margin: 0 }}>
-          Send completion package to {pkg?.job.client_name ?? "the client"} at {clientEmail}? This will
-          email the warranty certificate, final invoice, signed lien waiver, and {photoTotal} photo
+          Send completion package to {pkg?.job.client_name ?? "the client"} at {clientEmail}?           This will
+          email the warranty certificate, final invoice, conditional lien waiver, and {photoTotal} photo
           {photoTotal === 1 ? "" : "s"}.
         </p>
       </Modal>
@@ -279,92 +279,222 @@ function WarrantyCard({
   jobId: string;
   warranty: CompletionPackageData["warranty"];
 }) {
+  const [viewing, setViewing] = useState(false);
   const tone = warranty.status === "ready" ? "success" : warranty.status === "pending" ? "warning" : "error";
   const label =
     warranty.status === "ready" ? "Ready ✓" : warranty.status === "pending" ? "Generating…" : "Missing";
   return (
-    <div class="completion-package-card">
-      <div class="completion-package-card__head">
-        <span class="completion-package-card__icon" aria-hidden="true">🛡️</span>
-        <span class="completion-package-card__title">Warranty Certificate</span>
-        <Badge tone={tone}>{label}</Badge>
+    <>
+      <div class="completion-package-card">
+        <div class="completion-package-card__head">
+          <span class="completion-package-card__icon" aria-hidden="true">🛡️</span>
+          <span class="completion-package-card__title">Warranty Certificate</span>
+          <Badge tone={tone}>{label}</Badge>
+        </div>
+        {warranty.status === "ready" && warranty.generated_at && (
+          <div class="completion-package-card__body">
+            <div>Generated {formatDate(warranty.generated_at)}</div>
+            <div class="flex gap-sm">
+              {warranty.document_id && (
+                <Button size="sm" variant="tertiary" onClick={() => setViewing(true)}>
+                  View
+                </Button>
+              )}
+              {warranty.document_id && (
+                <a
+                  href={`/api/jobs/${jobId}/documents/${warranty.document_id}/download`}
+                  target="_blank"
+                  rel="noreferrer"
+                  class="btn btn--sm btn--tertiary"
+                >
+                  Download
+                </a>
+              )}
+            </div>
+          </div>
+        )}
       </div>
-      {warranty.status === "ready" && warranty.generated_at && (
+      {viewing && warranty.document_id && (
+        <DocViewerModal
+          jobId={jobId}
+          docId={warranty.document_id}
+          filename={warranty.filename ?? "warranty-certificate.docx"}
+          downloadPath={`/api/jobs/${jobId}/documents/${warranty.document_id}/download`}
+          onClose={() => setViewing(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function InvoiceCard({
+  invoice,
+  jobId,
+  onCreated,
+}: {
+  invoice: CompletionPackageData["final_invoice"];
+  jobId: string;
+  onCreated: () => void;
+}) {
+  const toast = useToast();
+  const ready = invoice.status === "ready";
+  const [generating, setGenerating] = useState(false);
+  const [confirmAmount, setConfirmAmount] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const generate = async () => {
+    setGenerating(true);
+    try {
+      const r = await api.get<{
+        summary: { contract_total: number; total_invoiced: number };
+        suggestions: { final: { amount: number } | null };
+      }>(`/api/jobs/${jobId}/invoices`);
+      // Prefer the suggestion (it excludes void invoices by spec); fall back to
+      // raw summary math if the suggestion engine didn't surface it (e.g. there
+      // are still pending milestones shown).
+      const amt =
+        r.suggestions?.final?.amount ??
+        Math.max(0, Math.round((r.summary.contract_total - r.summary.total_invoiced) * 100) / 100);
+      if (amt <= 0) {
+        toast.push("info", "No remaining balance — all invoiced");
+        return;
+      }
+      setConfirmAmount(amt);
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const createInvoice = async () => {
+    if (confirmAmount == null) return;
+    setCreating(true);
+    try {
+      await api.post(`/api/invoices`, {
+        job_id: jobId,
+        invoice_type: "final",
+        title: "Final Invoice — Remaining Balance",
+        amount: confirmAmount,
+      });
+      toast.push("success", "Final invoice created (draft)");
+      setConfirmAmount(null);
+      onCreated();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <>
+      <div class="completion-package-card">
+        <div class="completion-package-card__head">
+          <span class="completion-package-card__icon" aria-hidden="true">🧾</span>
+          <span class="completion-package-card__title">Final Invoice</span>
+          <Badge tone={ready ? "success" : "error"}>{ready ? "Paid ✓" : "Missing"}</Badge>
+        </div>
+        {ready && invoice.paid_at != null && invoice.amount != null && (
+          <div class="completion-package-card__body">
+            Paid {formatDate(invoice.paid_at)} · {formatCurrency(invoice.amount)}
+          </div>
+        )}
+        {!ready && (
+          <div class="completion-package-card__body">
+            <Button size="sm" variant="primary" disabled={generating} onClick={() => void generate()}>
+              {generating ? "Calculating…" : "Generate final invoice"}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <Modal
+        open={confirmAmount != null}
+        title="Create final invoice"
+        onClose={() => setConfirmAmount(null)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirmAmount(null)}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={creating} onClick={() => void createInvoice()}>
+              {creating ? "Creating…" : "Create draft"}
+            </Button>
+          </>
+        }
+      >
+        <p style={{ margin: "0 0 var(--space-md)" }}>
+          Calculated remaining balance — this amount is read-only and cannot be edited here.
+          Use the Financial tab to create a manual invoice if an adjustment is needed.
+        </p>
+        <div class="form-input form-input--readonly" style={{ fontSize: "var(--text-lg)", fontWeight: 700 }}>
+          {formatCurrency(confirmAmount ?? 0)}
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+function LienWaiverCard({
+  lien,
+  jobId,
+}: {
+  lien: CompletionPackageData["lien_waiver"];
+  jobId: string;
+}) {
+  const [viewing, setViewing] = useState(false);
+  const tone: "success" | "neutral" = lien.status === "ready" ? "success" : "neutral";
+  const label = lien.status === "ready" ? "Ready ✓" : "Not generated";
+
+  return (
+    <>
+      <div class="completion-package-card">
+        <div class="completion-package-card__head">
+          <span class="completion-package-card__icon" aria-hidden="true">✍️</span>
+          <span class="completion-package-card__title">Lien Waiver</span>
+          <Badge tone={tone}>{label}</Badge>
+        </div>
         <div class="completion-package-card__body">
-          <div>Generated {formatDate(warranty.generated_at)}</div>
-          {warranty.document_id && (
-            <a
-              href={`/api/jobs/${jobId}/documents/${warranty.document_id}/download`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Download
-            </a>
+          {lien.status === "ready" && lien.generated_at && (
+            <>
+              <div>Generated {formatDate(lien.generated_at)} — contractor signed</div>
+              <div class="flex gap-sm">
+                {lien.document_id && (
+                  <Button size="sm" variant="tertiary" onClick={() => setViewing(true)}>
+                    View
+                  </Button>
+                )}
+                {lien.document_id && (
+                  <a
+                    href={`/api/jobs/${jobId}/documents/${lien.document_id}/download`}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="btn btn--sm btn--tertiary"
+                  >
+                    Download
+                  </a>
+                )}
+              </div>
+            </>
+          )}
+          {lien.status === "missing" && (
+            <div class="text--muted">
+              Auto-generates when the final invoice is marked paid
+            </div>
           )}
         </div>
+      </div>
+      {viewing && lien.document_id && (
+        <DocViewerModal
+          jobId={jobId}
+          docId={lien.document_id}
+          filename={lien.filename ?? "lien-waiver-conditional.docx"}
+          downloadPath={`/api/jobs/${jobId}/documents/${lien.document_id}/download`}
+          onClose={() => setViewing(false)}
+        />
       )}
-    </div>
-  );
-}
-
-function InvoiceCard({ invoice }: { invoice: CompletionPackageData["final_invoice"] }) {
-  const ready = invoice.status === "ready";
-  return (
-    <div class="completion-package-card">
-      <div class="completion-package-card__head">
-        <span class="completion-package-card__icon" aria-hidden="true">🧾</span>
-        <span class="completion-package-card__title">Final Invoice</span>
-        <Badge tone={ready ? "success" : "error"}>{ready ? "Paid ✓" : "Missing"}</Badge>
-      </div>
-      {ready && invoice.paid_at != null && invoice.amount != null && (
-        <div class="completion-package-card__body">
-          Paid {formatDate(invoice.paid_at)} · {formatCurrency(invoice.amount)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LienWaiverCard({ lien }: { lien: CompletionPackageData["lien_waiver"] }) {
-  let tone: "success" | "warning" | "neutral" | "error" = "neutral";
-  let label = "Not sent";
-  if (lien.status === "signed") {
-    tone = "success";
-    label = "Signed ✓";
-  } else if (lien.status === "sent") {
-    tone = "warning";
-    label = "Awaiting signature";
-  } else if (lien.status === "missing") {
-    label = "Not sent";
-  } else if (lien.status === "failed" || lien.status === "declined") {
-    tone = "error";
-    label = formatStatusLabel(lien.status);
-  }
-
-  return (
-    <div class="completion-package-card">
-      <div class="completion-package-card__head">
-        <span class="completion-package-card__icon" aria-hidden="true">✍️</span>
-        <span class="completion-package-card__title">Lien Waiver</span>
-        <Badge tone={tone}>{label}</Badge>
-      </div>
-      <div class="completion-package-card__body">
-        {lien.status === "sent" && lien.sent_at && (
-          <div>Sent {formatDate(lien.sent_at)} — waiting on client</div>
-        )}
-        {lien.status === "signed" && lien.signed_at && (
-          <>
-            <div>Signed {formatDate(lien.signed_at)}</div>
-            {lien.document_id && (
-              <a href={`/api/documents/${lien.document_id}/file`} target="_blank" rel="noreferrer">
-                Download
-              </a>
-            )}
-          </>
-        )}
-        {lien.status === "missing" && <div class="text--muted">Not sent yet</div>}
-      </div>
-    </div>
+    </>
   );
 }
 

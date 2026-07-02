@@ -278,7 +278,11 @@ export function EstimateList(_props: RoutableProps) {
   const { sorted, sortKey, sortDir, toggle } = useClientSort(filtered, "created_at", "desc");
 
   function navToEstimate(row: EstimateRow) {
-    if (row.request_id) go(`/estimating/${row.request_id}/estimate`);
+    if (row.request_id) {
+      go(`/estimating/${row.request_id}/estimate`);
+    } else {
+      go(`/estimates/${row.id}`);
+    }
   }
 
   return (

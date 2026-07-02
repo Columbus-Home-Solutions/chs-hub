@@ -182,13 +182,23 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
        FROM invoices WHERE status IN ('sent', 'viewed', 'partial', 'past_due')`
     ).first<{ cnt: number; total: number; past_due_count: number }>(),
     env.DB.prepare(
-      "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE received_date >= ? AND received_date < ?"
+      // Exclude payments on voided invoices from revenue KPIs.
+      `SELECT COALESCE(SUM(p.amount), 0) as total
+         FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id
+        WHERE (p.invoice_id IS NULL OR i.status != 'void')
+          AND p.received_date >= ? AND p.received_date < ?`
     ).bind(week.start, week.end).first<{ total: number }>(),
     env.DB.prepare(
-      "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE received_date >= ? AND received_date < ?"
+      `SELECT COALESCE(SUM(p.amount), 0) as total
+         FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id
+        WHERE (p.invoice_id IS NULL OR i.status != 'void')
+          AND p.received_date >= ? AND p.received_date < ?`
     ).bind(week.prevStart, week.prevEnd).first<{ total: number }>(),
     env.DB.prepare(
-      "SELECT COALESCE(SUM(amount), 0) as revenue FROM payments WHERE received_date >= ?"
+      `SELECT COALESCE(SUM(p.amount), 0) as revenue
+         FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id
+        WHERE (p.invoice_id IS NULL OR i.status != 'void')
+          AND p.received_date >= ?`
     ).bind(ys).first<{ revenue: number }>(),
     computeYtdOperatingCosts(env, ys),
     computeYtdEarnedRevenue(env, ys),

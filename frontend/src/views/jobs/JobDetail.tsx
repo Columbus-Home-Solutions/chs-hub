@@ -44,6 +44,7 @@ interface DetailProps extends RoutableProps {
 
 type TabKey =
   | "overview"
+  | "scope"
   | "tasks"
   | "punch_list"
   | "schedule"
@@ -59,6 +60,7 @@ type TabKey =
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "overview", label: "Overview" },
+  { key: "scope", label: "Scope of Work" },
   { key: "tasks", label: "Tasks" },
   { key: "punch_list", label: "Punch List" },
   { key: "schedule", label: "Schedule" },
@@ -190,6 +192,7 @@ export function JobDetail({ id }: DetailProps) {
       </div>
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
+      {tab === "scope" && <ScopeOfWorkTab estimateId={job.estimate_id} />}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
       {tab === "punch_list" && id && (
         <PunchListTab
@@ -1040,4 +1043,119 @@ function ActivityTab({
 
 function stageLabel(key: JobStatus): string {
   return JOB_STAGES.find((s) => s.key === key)?.label ?? formatStatus(key);
+}
+
+// ─── Scope of Work ────────────────────────────────────────────────────────────
+
+interface ScopeLineItem {
+  id: string;
+  product_service: string;
+  description: string | null;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  total: number | null;
+}
+
+interface EstimateResponse {
+  estimate: { id: string; status: string };
+  line_items: ScopeLineItem[];
+}
+
+function ScopeOfWorkTab({ estimateId }: { estimateId: string | null }) {
+  const { data, loading, error } = useApi<EstimateResponse>(
+    estimateId ? `/api/estimates/${estimateId}` : null,
+  );
+
+  if (!estimateId) {
+    return (
+      <div class="empty-state" style={{ marginTop: "var(--space-lg)" }}>
+        <div class="empty-state__icon">📋</div>
+        <div class="empty-state__title">No estimate linked</div>
+        <div>This job does not have a linked estimate. Scope of work is only available for jobs created through the quote-to-job conversion flow.</div>
+      </div>
+    );
+  }
+
+  if (loading) return <Spinner center />;
+  if (error) {
+    return (
+      <div class="empty-state" style={{ marginTop: "var(--space-lg)" }}>
+        <div class="empty-state__title">Couldn&apos;t load scope</div>
+        <div>{error}</div>
+      </div>
+    );
+  }
+
+  const lineItems = data?.line_items ?? [];
+  const grandTotal = lineItems.reduce((sum, li) => sum + (li.total ?? 0), 0);
+
+  return (
+    <div class="tab-content">
+      <div class="flex items-center justify-between gap-sm" style={{ marginBottom: "var(--space-md)" }}>
+        <h2 class="view-title" style={{ fontSize: "var(--text-lg)", margin: 0 }}>Scope of Work</h2>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => go(`/estimates/${estimateId}`)}
+        >
+          View full estimate →
+        </Button>
+      </div>
+
+      {lineItems.length === 0 ? (
+        <div class="empty-state">
+          <div class="empty-state__title">No line items</div>
+          <div>This estimate has no line items yet.</div>
+        </div>
+      ) : (
+        <>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style={{ width: "45%" }}>Product / Service</th>
+                <th style={{ width: "10%", textAlign: "right" }}>Qty</th>
+                <th style={{ width: "20%", textAlign: "right" }}>Unit Price</th>
+                <th style={{ width: "25%", textAlign: "right" }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lineItems.map((li) => (
+                <tr key={li.id}>
+                  <td>
+                    <div style={{ fontWeight: "var(--font-semibold)" }}>{li.product_service}</div>
+                    {li.description && (
+                      <div class="text--muted" style={{ fontSize: "var(--text-sm)", marginTop: "2px", whiteSpace: "pre-wrap" }}>
+                        {li.description}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {li.quantity != null ? li.quantity : "—"}
+                    {li.unit ? ` ${li.unit}` : ""}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {li.unit_price != null ? formatCurrency(li.unit_price) : "—"}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {li.total != null ? formatCurrency(li.total) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={3} style={{ textAlign: "right", fontWeight: "var(--font-semibold)", borderTop: "2px solid var(--color-border)" }}>
+                  Total Price
+                </td>
+                <td style={{ textAlign: "right", fontWeight: "var(--font-semibold)", borderTop: "2px solid var(--color-border)" }}>
+                  {formatCurrency(grandTotal)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </>
+      )}
+    </div>
+  );
 }

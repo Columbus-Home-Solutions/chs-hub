@@ -3,8 +3,8 @@
  *
  * Requires service account in `GOOGLE_SERVICE_ACCOUNT_JSON` with Drive API
  * enabled and the account added to the target Shared Drive (e.g. Content
- * manager). Operator sets DRIVE_SHARED_DRIVE_ID + DRIVE_MIRROR_ROOT_FOLDER_ID
- * in wrangler [vars] so uploads land under a known folder.
+ * manager). Operator sets DRIVE_SHARED_DRIVE_ID in wrangler [vars].
+ * Year folders live at the drive root; DRIVE_MIRROR_ROOT_FOLDER_ID is deprecated.
  */
 
 import { getGoogleAccessToken } from "./auth.js";

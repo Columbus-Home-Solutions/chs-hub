@@ -96,9 +96,9 @@ RESEND_DRY_RUN = "0"
 # `wrangler deploy` does not drop a dashboard-only var and break Connect Google.
 # Google Cloud → APIs & Credentials → OAuth 2.0 Client IDs → Web client.
 DASHBOARD_OAUTH_CLIENT_ID = "249005729817-b238l4929ql3vkst04f7kohoa14cpgch.apps.googleusercontent.com"
-# Google Drive mirror — values must be folder/drive IDs only (from …/folders/ID), not full URLs.
-DRIVE_SHARED_DRIVE_ID = "0AEkL6Jrv29twUk9PVA"
-DRIVE_MIRROR_ROOT_FOLDER_ID = "1ZRJP1v8Ro3OrBoBWc2GppFnK3FKE8Ojf"
+# Google Drive mirror — "CHS Hub Backup" Shared Drive.
+# Year folders live at the drive root (no DRIVE_MIRROR_ROOT_FOLDER_ID needed).
+DRIVE_SHARED_DRIVE_ID = "0ABLCFrp_XkN8Uk9PVA"
 # ─── Notification engine (Sprint 7) ────────────────────────────────────
 # Dispatch mode. "live" attempts real SMS/email when the channel's credentials
 # are present (Twilio secrets / Resend key), and falls back to simulate when

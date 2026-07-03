@@ -28,6 +28,7 @@ const PRIORITY_ICON: Record<string, string> = {
   punch_list_item_done: "✅",
   punch_list_complete: "🎉",
   voice_note_unmatched: "🎤",
+  ai_extraction_failure: "🤖",
 };
 
 function relativeTime(iso: string): string {

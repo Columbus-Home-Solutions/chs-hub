@@ -406,9 +406,13 @@ export async function handlePublicQuoteSign(
 
   const now = new Date().toISOString();
   await env.DB.prepare(
-    "UPDATE estimates SET client_signature = ?, signed_date = ?, updated_at = ? WHERE id = ?",
+    `UPDATE estimates
+        SET client_signature = ?, signed_date = ?,
+            status = 'approved', approved_date = ?,
+            updated_at = ?
+      WHERE id = ?`,
   )
-    .bind(signature, signedDate, now, e.id)
+    .bind(signature, signedDate, now, now, e.id)
     .run();
 
   await logPublicAudit(env, token, qc.client_email, "quote_signed", e.id, {

@@ -1,8 +1,12 @@
 /**
- * Receipt line-item extraction + estimate matching (Sprint 30).
+ * Receipt line-item extraction + estimate/catalog matching (Sprint 30 + 37).
  *
- * Claude vision reads individual line items from a receipt photo; a text-only
- * call matches them to parent estimate_line_items for job costing. Failures
+ * Claude vision reads individual line items from a receipt photo; text-only
+ * calls match them to:
+ *   Match A — estimate_sub_items (for bid-accuracy variance report)
+ *   Match B — vendor_materials (for pricing-catalog updates)
+ *
+ * Extracted items are persisted to expense_line_items (Sprint 37). Failures
  * degrade gracefully — callers persist empty arrays, never abort upload.
  */
 
@@ -12,6 +16,7 @@ import { triggerNotification } from "./notification-engine.js";
 
 export const RECEIPT_MATCH_MODEL = "claude-sonnet-4-6";
 const MAX_EXTRACTED_ITEMS = 50;
+const PRICE_HISTORY_CAP = 20;
 
 export interface ExtractedItem {
   id: string;
@@ -21,6 +26,7 @@ export interface ExtractedItem {
   unit_price: number | null;
 }
 
+/** Match A — estimate_sub_items */
 export interface MatchResult {
   item_id: string;
   status: "matched" | "ambiguous" | "unmatched";
@@ -36,6 +42,24 @@ export interface MatchResult {
 export interface LineItemForMatching {
   id: string;
   description: string;
+}
+
+/** Match B — vendor_materials */
+export interface VendorMaterialForMatching {
+  id: string;
+  vendor_name: string;
+  material_name: string;
+  category: string | null;
+  unit: string | null;
+  last_price: number | null;
+}
+
+export interface VendorMatchResult {
+  item_id: string;
+  matched_vendor_material_id: string | null;
+  match_confidence: number;
+  /** true when unit_price is known but no catalog entry exists yet */
+  is_new_material_candidate: boolean;
 }
 
 const EXTRACT_SYSTEM = `You are a receipt parser. Extract every individual line item from this receipt photo.
@@ -311,6 +335,138 @@ Return only raw JSON — no markdown, no explanation.`;
   return results;
 }
 
+/** Match B: fuzzy-match extracted items against vendor_materials catalog via Claude. */
+export async function matchItemsToVendorMaterials(
+  extractedItems: ExtractedItem[],
+  vendorName: string | null,
+  materials: VendorMaterialForMatching[],
+  env: Env,
+): Promise<VendorMatchResult[]> {
+  const fallback = (item: ExtractedItem): VendorMatchResult => ({
+    item_id: item.id,
+    matched_vendor_material_id: null,
+    match_confidence: 0,
+    is_new_material_candidate: item.unit_price !== null && item.unit_price > 0,
+  });
+
+  if (extractedItems.length === 0) return [];
+
+  // No catalog entries yet → everything with a unit_price is a new-entry candidate.
+  if (materials.length === 0) {
+    return extractedItems.map(fallback);
+  }
+
+  const prompt = `You are helping match receipt line items to a vendor/material catalog for a residential contractor.
+
+Receipt vendor: ${vendorName ?? "unknown"}
+
+Catalog entries (vendor_materials):
+${JSON.stringify(materials.map((m) => ({ id: m.id, vendor_name: m.vendor_name, material_name: m.material_name, category: m.category, unit: m.unit })), null, 2)}
+
+Receipt items to match:
+${JSON.stringify(extractedItems.map((i) => ({ id: i.id, description: i.description, amount: i.amount, unit_price: i.unit_price })), null, 2)}
+
+For each receipt item, find the best matching catalog entry (same material, same or similar vendor).
+Return ONLY a JSON array, one object per receipt item in the same order as input:
+[
+  {
+    "item_id": "<receipt item id>",
+    "matched_vendor_material_id": "<catalog id or null if no good match>",
+    "confidence": 0.0 to 1.0
+  }
+]
+
+Confidence guidelines:
+- 0.85+: clear match (same material name, same vendor)
+- 0.65–0.84: likely same material but vendor differs slightly
+- below 0.65: no reliable match — set matched_vendor_material_id to null
+
+Return only raw JSON, no markdown.`;
+
+  const call = await claudeMessages(env, {
+    model: RECEIPT_MATCH_MODEL,
+    system: "Return only valid JSON arrays. No markdown fences or prose.",
+    maxTokens: 2048,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  if (!call.ok) {
+    console.warn(`[receipt-matching] vendor match call failed: ${call.error}`);
+    return extractedItems.map(fallback);
+  }
+
+  const parsed = parseJsonArray(call.text);
+  if (!parsed) {
+    console.warn("[receipt-matching] unparseable vendor match response");
+    return extractedItems.map(fallback);
+  }
+
+  const materialById = new Set(materials.map((m) => m.id));
+  const results: VendorMatchResult[] = [];
+
+  for (let i = 0; i < extractedItems.length; i++) {
+    const item = extractedItems[i];
+    const raw = parsed[i];
+    const row = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const confidence = clampConfidence(row.confidence);
+    const matchedId =
+      typeof row.matched_vendor_material_id === "string" && materialById.has(row.matched_vendor_material_id)
+        ? row.matched_vendor_material_id
+        : null;
+    const effectiveId = confidence >= 0.65 ? matchedId : null;
+    results.push({
+      item_id: item.id,
+      matched_vendor_material_id: effectiveId,
+      match_confidence: effectiveId ? confidence : 0,
+      is_new_material_candidate: !effectiveId && item.unit_price !== null && item.unit_price > 0,
+    });
+  }
+
+  return results;
+}
+
+/** Update vendor_materials price history on catalog update confirm. */
+export async function applyVendorMaterialPriceUpdate(
+  db: D1Database,
+  materialId: string,
+  newPrice: number,
+  purchaseDate: string,
+): Promise<void> {
+  const row = await db
+    .prepare("SELECT price_history FROM vendor_materials WHERE id = ?")
+    .bind(materialId)
+    .first<{ price_history: string | null }>();
+  if (!row) return;
+
+  let history: Array<{ price: number; date: string }> = [];
+  if (row.price_history) {
+    try {
+      const parsed = JSON.parse(row.price_history) as unknown;
+      if (Array.isArray(parsed)) {
+        history = parsed as Array<{ price: number; date: string }>;
+      }
+    } catch {
+      history = [];
+    }
+  }
+
+  history.push({ price: newPrice, date: purchaseDate });
+  if (history.length > PRICE_HISTORY_CAP) {
+    history = history.slice(history.length - PRICE_HISTORY_CAP);
+  }
+
+  const avgPrice = history.reduce((sum, e) => sum + e.price, 0) / history.length;
+
+  await db
+    .prepare(
+      `UPDATE vendor_materials
+       SET last_price = ?, last_purchased_date = ?, average_price = ?, price_history = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+    .bind(newPrice, purchaseDate, Math.round(avgPrice * 100) / 100, JSON.stringify(history), materialId)
+    .run();
+}
+
 async function maybeNotifyUnresolvedMatches(
   env: Env,
   receiptPhotoId: string,
@@ -348,33 +504,110 @@ export async function processReceiptMatching(
   env: Env,
 ): Promise<void> {
   try {
-    if (!jobId) {
-      await db
+    // Get vendor name from the receipt_photos AI extraction for Match B.
+    const rpRow = await db
+      .prepare("SELECT ai_vendor FROM receipt_photos WHERE id = ?")
+      .bind(receiptPhotoId)
+      .first<{ ai_vendor: string | null }>();
+    const vendorName = rpRow?.ai_vendor ?? null;
+
+    // Match A: use estimate_sub_items (not parent line items) so that
+    // expenses.estimate_line_item_id → estimate_sub_items.id for Report 5.
+    let estimateSubItems: LineItemForMatching[] = [];
+    if (jobId) {
+      const { results: subRows } = await db
         .prepare(
-          `UPDATE receipt_photos
-           SET extracted_items = '[]', match_results = '[]',
-               processing_status = CASE WHEN processing_status = 'confirmed' THEN 'confirmed' ELSE 'processed' END
-           WHERE id = ?`,
+          `SELECT esi.id, esi.description
+           FROM estimate_sub_items esi
+           JOIN estimate_line_items eli ON eli.id = esi.parent_line_item_id
+           JOIN estimates e ON e.id = eli.estimate_id
+           WHERE e.job_id = ?
+           ORDER BY eli.sort_order, esi.sort_order`,
         )
-        .bind(receiptPhotoId)
-        .run();
-      return;
+        .bind(jobId)
+        .all<{ id: string; description: string }>();
+      estimateSubItems = subRows ?? [];
     }
 
-    const { results: lineRows } = await db
+    // Match B: all vendor_materials (catalog is small, full scan is fine).
+    const { results: materialRows } = await db
       .prepare(
-        `SELECT eli.id, eli.description
-         FROM estimate_line_items eli
-         JOIN estimates e ON e.id = eli.estimate_id
-         WHERE e.job_id = ?
-         ORDER BY eli.sort_order`,
+        `SELECT id, vendor_name, material_name, category, unit, last_price
+         FROM vendor_materials
+         ORDER BY vendor_name, material_name`,
       )
-      .bind(jobId)
-      .all<{ id: string; description: string }>();
+      .all<VendorMaterialForMatching>();
+    const vendorMaterials = materialRows ?? [];
 
-    const estimateLineItems = lineRows ?? [];
     const extractedItems = await extractReceiptLineItems(photoR2Key, env);
-    const matchResults = await matchItemsToEstimate(extractedItems, estimateLineItems, env);
+    const matchResults = await matchItemsToEstimate(extractedItems, estimateSubItems, env);
+    const vendorMatchResults = await matchItemsToVendorMaterials(
+      extractedItems,
+      vendorName,
+      vendorMaterials,
+      env,
+    );
+
+    // Build a lookup for vendor match results by item_id.
+    const vendorMatchById = new Map(vendorMatchResults.map((r) => [r.item_id, r]));
+
+    // Persist expense_line_items rows (delete any stale rows from a reprocess first).
+    await db
+      .prepare("DELETE FROM expense_line_items WHERE receipt_photo_id = ? AND expense_id IS NULL")
+      .bind(receiptPhotoId)
+      .run();
+
+    for (const item of extractedItems) {
+      const matchA = matchResults.find((r) => r.item_id === item.id);
+      const matchB = vendorMatchById.get(item.id);
+      const subItemId =
+        matchA?.status === "matched" ? matchA.suggested_line_item_id : null;
+      await db
+        .prepare(
+          `INSERT INTO expense_line_items
+             (id, receipt_photo_id, description, quantity, unit, unit_price, amount,
+              matched_estimate_sub_item_id, matched_vendor_material_id, match_confidence, expense_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          receiptPhotoId,
+          item.description,
+          item.quantity,
+          null, // unit not extracted from receipt image currently
+          item.unit_price,
+          item.amount,
+          subItemId,
+          matchB?.matched_vendor_material_id ?? null,
+          matchA ? matchA.confidence : null,
+        )
+        .run();
+    }
+
+    // Fallback: if no individual items extracted, insert a single row for the
+    // whole receipt so the confirm flow always has at least one expense_line_items row.
+    if (extractedItems.length === 0) {
+      const rpFull = await db
+        .prepare("SELECT ai_vendor, ai_amount, ai_date, ai_category FROM receipt_photos WHERE id = ?")
+        .bind(receiptPhotoId)
+        .first<{ ai_vendor: string | null; ai_amount: number | null; ai_date: string | null; ai_category: string | null }>();
+      if (rpFull?.ai_amount && rpFull.ai_amount > 0) {
+        await db
+          .prepare(
+            `INSERT INTO expense_line_items
+               (id, receipt_photo_id, description, quantity, unit, unit_price, amount,
+                matched_estimate_sub_item_id, matched_vendor_material_id, match_confidence, expense_id, created_at)
+             VALUES (?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, datetime('now'))`,
+          )
+          .bind(
+            crypto.randomUUID(),
+            receiptPhotoId,
+            rpFull.ai_vendor ? `Receipt — ${rpFull.ai_vendor}` : "Receipt",
+            rpFull.ai_amount,
+          )
+          .run();
+      }
+    }
 
     await db
       .prepare(
@@ -387,7 +620,9 @@ export async function processReceiptMatching(
       .bind(JSON.stringify(extractedItems), JSON.stringify(matchResults), receiptPhotoId)
       .run();
 
-    await maybeNotifyUnresolvedMatches(env, receiptPhotoId, jobId, extractedItems, matchResults);
+    if (jobId) {
+      await maybeNotifyUnresolvedMatches(env, receiptPhotoId, jobId, extractedItems, matchResults);
+    }
   } catch (e) {
     console.error("[receipt-matching] processReceiptMatching failed:", (e as Error).message);
     try {

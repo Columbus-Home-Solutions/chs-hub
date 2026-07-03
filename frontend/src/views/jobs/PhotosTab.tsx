@@ -526,9 +526,10 @@ function PhotoDetailModal({
   const [annotating, setAnnotating] = useState(false);
   const [showAnnotated, setShowAnnotated] = useState(true);
   const [pairing, setPairing] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
 
-  const prev = () => index > 0 && onIndex(index - 1);
-  const next = () => index < photos.length - 1 && onIndex(index + 1);
+  const prev = () => { setZoomed(false); if (index > 0) onIndex(index - 1); };
+  const next = () => { setZoomed(false); if (index < photos.length - 1) onIndex(index + 1); };
 
   // The paired "before" photo, if this one is an "after" in a pair.
   const pairedBefore = p.before_after_pair_id
@@ -583,6 +584,7 @@ function PhotoDetailModal({
       await api.put(`/api/photos/${p.id}`, { caption: caption.trim() || null, photo_type: ptype });
       toast.push("success", "Photo updated");
       onChanged();
+      onClose();
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
@@ -634,9 +636,20 @@ function PhotoDetailModal({
         ) : pairedAfter ? (
           <BeforeAfterSlider beforeUrl={p.original_url} afterUrl={pairedAfter.original_url} />
         ) : annotatedSvg && showAnnotated ? (
-          <div class="photo-detail__img" dangerouslySetInnerHTML={{ __html: annotatedSvg }} />
+          <div
+            class="photo-detail__img photo-detail__img--clickable"
+            title="Click to enlarge"
+            onClick={() => setZoomed(true)}
+            dangerouslySetInnerHTML={{ __html: annotatedSvg }}
+          />
         ) : (
-          <img class="photo-detail__img" src={p.original_url} alt={p.caption ?? p.photo_type} />
+          <img
+            class="photo-detail__img photo-detail__img--clickable"
+            src={p.original_url}
+            alt={p.caption ?? p.photo_type}
+            title="Click to enlarge"
+            onClick={() => setZoomed(true)}
+          />
         )}
         <div class="stack">
           <FormField label="Caption">
@@ -653,7 +666,15 @@ function PhotoDetailModal({
             {p.uploaded_by ? ` · ${p.uploaded_by}` : ""}
           </div>
 
-          {p.receipt && <ReceiptConfirm receipt={p.receipt} jobId={p.job_id} onConfirmed={onChanged} toast={toast} />}
+          {p.receipt && (
+            <ReceiptConfirm
+              receipt={p.receipt}
+              jobId={p.job_id}
+              onConfirmed={onChanged}
+              onDone={() => { onChanged(); onClose(); }}
+              toast={toast}
+            />
+          )}
 
           <div class="flex gap-sm" style={{ flexWrap: "wrap" }}>
             <Button variant="secondary" size="sm" onClick={() => setAnnotating(true)}>
@@ -701,6 +722,15 @@ function PhotoDetailModal({
           toast={toast}
         />
       )}
+
+      {zoomed && (
+        <PhotoZoomView
+          key={p.id}
+          src={p.original_url}
+          alt={p.caption ?? p.photo_type}
+          onClose={() => setZoomed(false)}
+        />
+      )}
     </Modal>
   );
 }
@@ -709,11 +739,13 @@ export function ReceiptConfirm({
   receipt,
   jobId,
   onConfirmed,
+  onDone,
   toast,
 }: {
   receipt: PhotoReceipt;
   jobId: string | null;
   onConfirmed: () => void;
+  onDone?: () => void;
   toast: ReturnType<typeof useToast>;
 }) {
   // Pull the job's costing lines so the receipt confirm lands in the SAME full
@@ -759,7 +791,7 @@ export function ReceiptConfirm({
             toast={toast}
             onComplete={() => {
               setShowMatchReview(false);
-              onConfirmed();
+              onDone?.();
             }}
           />
         )}
@@ -786,6 +818,10 @@ export function ReceiptConfirm({
       toast.push("success", "Expense created from receipt");
       setConfirmed(true);
       setShowMatchReview(true);
+      // If there's no job, match review won't appear — close the modal now.
+      if (!jobId) {
+        onDone?.();
+      }
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
@@ -809,6 +845,195 @@ export function ReceiptConfirm({
       <Button variant="primary" size="sm" disabled={busy} onClick={confirm}>
         {busy ? "Saving…" : "Confirm → Create Expense"}
       </Button>
+    </div>
+  );
+}
+
+function PhotoZoomView({
+  src,
+  alt,
+  onClose,
+}: {
+  src: string;
+  alt: string;
+  onClose: () => void;
+}) {
+  const [scale, setScale] = useState(1);
+  const [tx, setTx] = useState(0);
+  const [ty, setTy] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
+  const dragStart = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
+  const pinchDist = useRef<number | null>(null);
+
+  // Mirror state in refs so non-passive event handlers always see current values.
+  const scaleRef = useRef(1);
+  const txRef = useRef(0);
+  const tyRef = useRef(0);
+
+  const MIN_SCALE = 1;
+  const MAX_SCALE = 6;
+
+  const applyScale = (s: number) => {
+    const clamped = Math.max(MIN_SCALE, Math.min(MAX_SCALE, s));
+    scaleRef.current = clamped;
+    setScale(clamped);
+    if (clamped <= MIN_SCALE) {
+      txRef.current = 0;
+      tyRef.current = 0;
+      setTx(0);
+      setTy(0);
+    }
+  };
+
+  const applyTranslate = (x: number, y: number) => {
+    txRef.current = x;
+    tyRef.current = y;
+    setTx(x);
+    setTy(y);
+  };
+
+  // Escape key closes the zoom view.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Wheel zoom — must be non-passive to call preventDefault.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      applyScale(scaleRef.current + (e.deltaY < 0 ? 0.25 : -0.25));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Touch pinch-to-zoom + drag — must be non-passive to call preventDefault.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        isDragging.current = false;
+        pinchDist.current = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY,
+        );
+      } else if (e.touches.length === 1 && scaleRef.current > 1) {
+        isDragging.current = true;
+        dragStart.current = {
+          x: e.touches[0].clientX,
+          y: e.touches[0].clientY,
+          tx: txRef.current,
+          ty: tyRef.current,
+        };
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 2 && pinchDist.current !== null) {
+        const d = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY,
+        );
+        applyScale(scaleRef.current * (d / pinchDist.current));
+        pinchDist.current = d;
+      } else if (e.touches.length === 1 && isDragging.current) {
+        applyTranslate(
+          dragStart.current.tx + (e.touches[0].clientX - dragStart.current.x),
+          dragStart.current.ty + (e.touches[0].clientY - dragStart.current.y),
+        );
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinchDist.current = null;
+      if (e.touches.length === 0) isDragging.current = false;
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd);
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+    };
+  }, []);
+
+  const onMouseDown = (e: MouseEvent) => {
+    if (scaleRef.current <= 1) return;
+    isDragging.current = true;
+    dragStart.current = { x: e.clientX, y: e.clientY, tx: txRef.current, ty: tyRef.current };
+  };
+
+  const onMouseMove = (e: MouseEvent) => {
+    if (!isDragging.current) return;
+    applyTranslate(
+      dragStart.current.tx + (e.clientX - dragStart.current.x),
+      dragStart.current.ty + (e.clientY - dragStart.current.y),
+    );
+  };
+
+  const onMouseUp = () => { isDragging.current = false; };
+
+  return (
+    <div
+      ref={containerRef}
+      class="photo-zoom-overlay"
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseUp}
+    >
+      <button
+        type="button"
+        class="photo-zoom-overlay__close"
+        aria-label="Close enlarged view"
+        onClick={onClose}
+      >
+        ✕
+      </button>
+
+      <div class="photo-zoom-overlay__controls">
+        <button
+          type="button"
+          class="photo-zoom-overlay__btn"
+          aria-label="Zoom in"
+          onClick={() => applyScale(scaleRef.current + 0.5)}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          class="photo-zoom-overlay__btn"
+          aria-label="Zoom out"
+          onClick={() => applyScale(scaleRef.current - 0.5)}
+        >
+          −
+        </button>
+      </div>
+
+      <div
+        class="photo-zoom-overlay__stage"
+        onMouseDown={onMouseDown}
+      >
+        <img
+          class="photo-zoom-overlay__img"
+          src={src}
+          alt={alt}
+          style={{
+            transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
+            cursor: scale > 1 ? "grab" : "zoom-in",
+          }}
+          draggable={false}
+        />
+      </div>
     </div>
   );
 }

@@ -32,9 +32,9 @@ export interface Env {
   /** Override redirect URI for Google Calendar OAuth callback. */
   GOOGLE_CALENDAR_REDIRECT_URI?: string;
 
-  /** Google Shared Drive ID (API `driveId`) — optional; enables D1/R2 → Drive mirror. */
+  /** Google Shared Drive ID for "CHS Hub Backup" — optional; enables D1/R2 → Drive mirror. */
   DRIVE_SHARED_DRIVE_ID?: string;
-  /** Folder ID inside the Shared Drive where CHS-Hub creates Photos / Expenses / Company. */
+  /** @deprecated v2 mirror structure: year folders live at drive root; this var is unused. */
   DRIVE_MIRROR_ROOT_FOLDER_ID?: string;
 
   // ─── Operational notifications (Resend) ─────────────────────────

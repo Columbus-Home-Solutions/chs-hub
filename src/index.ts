@@ -109,6 +109,9 @@ import {
   handleReceiptMatchesGet,
   handleReceiptMatchConfirm,
   handleReceiptMatchesApply,
+  handleReceiptLineItemsGet,
+  handleReceiptConfirmItems,
+  handleReceiptQueue,
 } from "./routes/photos.js";
 import {
   handleDeviceRegister,
@@ -527,7 +530,7 @@ import {
 } from "./routes/dlq.js";
 import { handleBackupStatus, handleBackupTrigger } from "./routes/backup.js";
 import { handleAdminHealth } from "./routes/health.js";
-import { handleCpaExport, handleFinancialReports, handlePricingIntelligence } from "./routes/reports.js";
+import { handleCpaExport, handleFinancialReports, handleLineItemVariance, handlePricingIntelligence } from "./routes/reports.js";
 import { handleMapsConfig } from "./routes/config.js";
 import {
   handleIntegrationTest,
@@ -603,7 +606,10 @@ export default {
         p.startsWith("/api/sub/") ||
         p === "/api/webhooks/stripe" ||
         p === "/api/webhooks/twilio/call-whisper" ||
-        p === "/api/integrations/boldsign/webhook";
+        p === "/api/integrations/boldsign/webhook" ||
+        // Legal pages — required on custom domain for A2P 10DLC compliance (unauthenticated).
+        p === "/privacy-policy" ||
+        p === "/terms-and-conditions";
       if (!allowed) {
         return new Response(JSON.stringify({ error: "Not found" }), {
           status: 404,
@@ -1483,7 +1489,7 @@ export default {
         return handlePhotoStream(env, photoId, "original");
       }
       if (request.method === "PUT") {
-        return handlePhotoPut(env, request, photoId);
+        return handlePhotoPut(env, request, photoId, ctx);
       }
       if (request.method === "DELETE") {
         return handlePhotoDelete(env, request, photoId);
@@ -1522,6 +1528,19 @@ export default {
     const receiptConfirm = url.pathname.match(/^\/api\/receipt-photos\/([^/]+)\/confirm$/);
     if (receiptConfirm && request.method === "POST") {
       return handleReceiptConfirm(env, request, decodeURIComponent(receiptConfirm[1]));
+    }
+    // Sprint 37: itemized confirm (one expense per line item + catalog updates).
+    const receiptConfirmItems = url.pathname.match(/^\/api\/receipt-photos\/([^/]+)\/confirm-items$/);
+    if (receiptConfirmItems && request.method === "POST") {
+      return handleReceiptConfirmItems(env, request, decodeURIComponent(receiptConfirmItems[1]));
+    }
+    // Sprint 37: expense_line_items for a receipt.
+    const receiptLineItems = url.pathname.match(/^\/api\/receipt-photos\/([^/]+)\/line-items$/);
+    if (receiptLineItems && request.method === "GET") {
+      return handleReceiptLineItemsGet(env, request, decodeURIComponent(receiptLineItems[1]));
+    }
+    if (url.pathname === "/api/receipt-photos/queue" && request.method === "GET") {
+      return handleReceiptQueue(env, request, url);
     }
     const receiptById = url.pathname.match(/^\/api\/receipt-photos\/([^/]+)$/);
     if (receiptById && request.method === "GET") {

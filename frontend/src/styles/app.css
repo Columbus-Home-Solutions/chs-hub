@@ -2247,6 +2247,108 @@
   height: auto;
   max-height: 60vh;
 }
+.photo-detail__img--clickable {
+  cursor: zoom-in;
+  transition: opacity 0.15s ease;
+}
+.photo-detail__img--clickable:hover {
+  opacity: 0.88;
+}
+
+/* ── Photo zoom overlay (click-to-enlarge within the detail modal) ──────── */
+.photo-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-photo-zoom);
+  background: rgba(0, 0, 0, 0.93);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.photo-zoom-overlay__stage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.photo-zoom-overlay__img {
+  max-width: min(92vw, 1400px);
+  max-height: 88vh;
+  object-fit: contain;
+  transform-origin: center center;
+  will-change: transform;
+  pointer-events: none;
+  border-radius: var(--radius-sm);
+}
+.photo-zoom-overlay__close {
+  position: absolute;
+  top: var(--space-md);
+  right: var(--space-md);
+  z-index: 10;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(30, 30, 30, 0.7);
+  color: #fff;
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: background 0.15s ease;
+}
+.photo-zoom-overlay__close:hover {
+  background: rgba(60, 60, 60, 0.9);
+}
+.photo-zoom-overlay__controls {
+  position: absolute;
+  bottom: var(--space-xl);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  gap: var(--space-sm);
+}
+.photo-zoom-overlay__btn {
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(30, 30, 30, 0.7);
+  color: #fff;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: background 0.15s ease;
+}
+.photo-zoom-overlay__btn:hover {
+  background: rgba(60, 60, 60, 0.9);
+}
+@media (max-width: 640px) {
+  .photo-zoom-overlay__controls {
+    bottom: var(--space-lg);
+  }
+  .photo-zoom-overlay__btn {
+    width: 3.5rem;
+    height: 3.5rem;
+  }
+}
+
 .photo-thumb__badge--annot {
   right: auto;
   left: 4px;
@@ -2478,6 +2580,133 @@
   border-radius: var(--radius-md);
   padding: var(--space-md);
   background: var(--color-surface-2);
+}
+
+/* ── Receipt queue view ──────────────────────────────────────────────────── */
+.receipt-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+.receipt-queue__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+.receipt-queue__count {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.receipt-queue__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
+  gap: var(--space-lg);
+  align-items: start;
+}
+.receipt-queue__photo-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.receipt-queue__img {
+  width: 100%;
+  max-height: 55vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  cursor: zoom-in;
+  transition: opacity 0.15s ease;
+}
+.receipt-queue__img:hover {
+  opacity: 0.9;
+}
+.receipt-queue__form-col {
+  display: flex;
+  flex-direction: column;
+}
+.receipt-queue__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-md);
+}
+.receipt-queue__list-label {
+  margin-bottom: var(--space-2xs);
+}
+.receipt-queue__list-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 0.1s ease;
+}
+.receipt-queue__list-item:hover {
+  background: var(--color-surface-2);
+}
+.receipt-queue__list-item--active {
+  border-color: var(--color-primary, var(--color-brand));
+  background: var(--color-brand-subtle, var(--color-surface-2));
+}
+.receipt-queue__list-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.receipt-queue__list-meta {
+  flex: 1;
+  min-width: 0;
+}
+.receipt-queue__list-vendor {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .receipt-queue__body {
+    grid-template-columns: 1fr;
+  }
+  .receipt-queue__img {
+    max-height: 40vh;
+  }
+}
+
+/* ── Per-job receipt queue indicator (Financial tab) ─────────────────────── */
+.receipt-queue-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-warning, #f59e0b);
+  background: var(--color-warning-subtle, rgba(245, 158, 11, 0.08));
+  cursor: pointer;
+  transition: background 0.15s ease;
+  margin-bottom: var(--space-md);
+}
+.receipt-queue-indicator:hover {
+  background: var(--color-warning-subtle-hover, rgba(245, 158, 11, 0.14));
+}
+.receipt-queue-indicator__icon {
+  font-size: var(--text-lg);
+  flex-shrink: 0;
+}
+.receipt-queue-indicator__arrow {
+  margin-left: auto;
+  font-size: var(--text-lg);
+  color: var(--color-text-muted);
 }
 
 /* ── Sprint 10: expenses, job costing, time, mileage ─────────────────────── */
@@ -2957,7 +3186,9 @@
   gap: var(--space-lg);
 }
 
-/* Empty doc-review wrapper would double the flex gap between weather and action items */
+/* Empty wrappers contribute a flex gap even at zero height — hide them so they don't
+   push sibling cards down. */
+.dashboard-order-weather:empty,
 .dashboard-order-doc-review:empty {
   display: none;
 }

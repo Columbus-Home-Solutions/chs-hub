@@ -686,6 +686,80 @@ export async function handleJobRevenue(request: Request, env: Env): Promise<Resp
   });
 }
 
+// ─── Report 5 — Estimated vs. Actual by Line Item ────────────────────────────
+//
+// Joins estimate_sub_items → expenses via expenses.estimate_line_item_id to show
+// where CHS is consistently over- or under-bidding. Empty at launch (expected —
+// data accumulates as receipts are confirmed through the Sprint 37 flow).
+
+interface VarianceRow {
+  description: string;
+  category: string | null;
+  job_count: number;
+  avg_estimated: number;
+  avg_actual: number | null;
+  variance_amount: number | null;
+  variance_pct: number | null;
+}
+
+export async function handleLineItemVariance(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+
+  // Group by description for cross-job comparison. SQLite free-text grouping
+  // works when estimate builders use consistent names (e.g. "Cabinet install").
+  // When descriptions diverge, group by category instead — both variants are
+  // surfaced by including category in the output.
+  const rows = (
+    await env.DB.prepare(
+      `SELECT
+         esi.description,
+         esi.category,
+         COUNT(DISTINCT e_job.job_id) AS job_count,
+         AVG(esi.total_cost) AS avg_estimated,
+         AVG(actual.total_actual) AS avg_actual,
+         AVG(actual.total_actual) - AVG(esi.total_cost) AS variance_amount,
+         ROUND(
+           (AVG(actual.total_actual) - AVG(esi.total_cost)) /
+           NULLIF(AVG(esi.total_cost), 0) * 100,
+           1
+         ) AS variance_pct
+       FROM estimate_sub_items esi
+       JOIN estimate_line_items eli ON eli.id = esi.parent_line_item_id
+       JOIN estimates e_job ON e_job.id = eli.estimate_id
+       LEFT JOIN (
+         SELECT estimate_line_item_id, SUM(amount) AS total_actual
+         FROM expenses
+         WHERE estimate_line_item_id IS NOT NULL
+           AND (is_active IS NULL OR is_active != 0)
+         GROUP BY estimate_line_item_id
+       ) actual ON actual.estimate_line_item_id = esi.id
+       WHERE actual.total_actual IS NOT NULL
+       GROUP BY esi.description
+       HAVING job_count >= 1
+       ORDER BY ABS(variance_amount) DESC`,
+    ).all<VarianceRow>()
+  ).results ?? [];
+
+  const items = rows.map((r) => ({
+    description: r.description,
+    category: r.category,
+    job_count: r.job_count,
+    avg_estimated: r.avg_estimated ?? 0,
+    avg_actual: r.avg_actual ?? 0,
+    variance_amount: r.variance_amount ?? 0,
+    variance_pct: r.variance_pct ?? null,
+  }));
+
+  return reportJson({
+    summary: {
+      total_line_items: items.length,
+      has_data: items.length > 0,
+    },
+    items,
+  });
+}
+
 export async function handleFinancialReports(
   request: Request,
   env: Env,
@@ -702,6 +776,9 @@ export async function handleFinancialReports(
   }
   if (url.pathname === "/api/reports/job-revenue" && request.method === "GET") {
     return handleJobRevenue(request, env);
+  }
+  if (url.pathname === "/api/reports/line-item-variance" && request.method === "GET") {
+    return handleLineItemVariance(request, env);
   }
   return null;
 }

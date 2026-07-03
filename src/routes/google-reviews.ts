@@ -277,7 +277,7 @@ export async function handleGoogleReviewGenerateResponse(
     .join("\n");
 
   const result = await claudeMessages(env, {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-6",
     maxTokens: 300,
     system: systemPrompt,
     messages: [{ role: "user", content: userPrompt }],

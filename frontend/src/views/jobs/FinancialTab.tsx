@@ -22,6 +22,8 @@ import {
 } from "../financial/ReceiptMatchReview";
 import { CycleManager } from "./CycleManager";
 import { LineItemBilling } from "./LineItemBilling";
+import { go } from "../../lib/nav";
+import type { QueueItem } from "../financial/ReceiptQueueView";
 import type { JobCard, Payer } from "../../types";
 
 /**
@@ -491,6 +493,8 @@ export function FinancialTab({ jobId }: { jobId: string }) {
       {canSeeCosting && (
         <BudgetVsActual costing={costing.data?.costing ?? null} loading={costing.loading} />
       )}
+
+      <ReceiptQueueIndicator jobId={jobId} />
 
       <ExpensesSection
         jobId={jobId}
@@ -1627,5 +1631,35 @@ function InvoiceDetailModal({
         </>
       )}
     </Modal>
+  );
+}
+
+// ── Receipt queue indicator ──────────────────────────────────────────────────
+
+function ReceiptQueueIndicator({ jobId }: { jobId: string }) {
+  const { data } = useApi<{ queue: QueueItem[]; total: number }>(
+    `/api/receipt-photos/queue?job_id=${jobId}`,
+  );
+  const count = data?.total ?? 0;
+  if (count === 0) return null;
+  return (
+    <div
+      class="receipt-queue-indicator"
+      role="button"
+      tabIndex={0}
+      onClick={() => go(`/financial?tab=receipts&job_id=${jobId}`)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") go(`/financial?tab=receipts&job_id=${jobId}`);
+      }}
+    >
+      <span class="receipt-queue-indicator__icon">💵</span>
+      <span>
+        <strong>
+          {count} receipt{count !== 1 ? "s" : ""} to review
+        </strong>{" "}
+        — tap to open review queue
+      </span>
+      <span class="receipt-queue-indicator__arrow">→</span>
+    </div>
   );
 }

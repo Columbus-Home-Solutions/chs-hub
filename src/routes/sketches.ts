@@ -147,7 +147,11 @@ export async function handleSketchSave(
     return err(400, "Body must be multipart/form-data");
   }
 
-  const dataEntry = form.get("data");
+  // Cast to string | Blob | null: @cloudflare/workers-types narrows FormData.get()
+  // to string | null, but the Workers runtime genuinely returns a File (subclass of
+  // Blob) when the field was submitted as a file part. The cast preserves the existing
+  // runtime behaviour without silencing the error via any/@ts-ignore.
+  const dataEntry = form.get("data") as string | Blob | null;
   if (dataEntry === null) {
     return err(400, "data field is required");
   }
@@ -168,7 +172,7 @@ export async function handleSketchSave(
 
   await saveSketchData(env.FILES, requestId, sketchId, data);
 
-  const thumbnailEntry = form.get("thumbnail");
+  const thumbnailEntry = form.get("thumbnail") as string | Blob | null;
   if (thumbnailEntry instanceof Blob && thumbnailEntry.size > 0) {
     await saveSketchThumbnail(env.FILES, requestId, sketchId, await thumbnailEntry.arrayBuffer());
   }

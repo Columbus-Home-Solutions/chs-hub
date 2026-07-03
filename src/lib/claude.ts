@@ -24,7 +24,7 @@ const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 
 // Match the model the existing dashboard/PWA proxy calls use.
-export const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+export const CLAUDE_MODEL = "claude-sonnet-4-6";
 
 export type ClaudeBlock =
   | { type: "text"; text: string }

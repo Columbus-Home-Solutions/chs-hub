@@ -108,7 +108,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
 
   // First open: apply defaults when contract/billing are set but schedule is blank.
   useEffect(() => {
-    if (!estimate || estimate.status === "sent" || estimate.status === "approved") return;
+    if (!estimate || estimate.status === "sent" || estimate.status === "viewed" || estimate.status === "approved") return;
     if (scheduleBootstrappedRef.current === estimate.id) return;
     scheduleBootstrappedRef.current = estimate.id;
     if (isPerLineItemBilling(estimate.billing_model)) return;
@@ -134,7 +134,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
   };
 
   async function applyDefaultSchedule(est: Estimate, successMsg?: string) {
-    if (!est || est.status === "sent" || est.status === "approved") return;
+    if (!est || est.status === "sent" || est.status === "viewed" || est.status === "approved") return;
     if (isPerLineItemBilling(est.billing_model)) return;
     if (!isScheduleUnconfigured(est.payment_schedule)) return;
     setSaving(true);
@@ -183,7 +183,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
   }
 
   const e = estimate;
-  const sent = e.status === "sent" || e.status === "approved";
+  const sent = e.status === "sent" || e.status === "viewed" || e.status === "approved";
   const marginLow = e.total > 0 && e.margin_percent < LOW_MARGIN;
 
   const patchHeader = (body: Record<string, unknown>, msg?: string) =>
@@ -236,7 +236,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
               EST-{String(e.estimate_number ?? 0).padStart(3, "0")}
               {e.version > 1 ? ` · v${e.version}` : ""}
             </h1>
-            <Badge tone={e.status === "sent" ? "info" : e.status === "approved" ? "success" : "neutral"}>
+            <Badge tone={e.status === "sent" || e.status === "viewed" ? "info" : e.status === "approved" ? "success" : "neutral"}>
               {formatStatus(e.status)}
             </Badge>
             {saving && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>Saving…</span>}
@@ -274,6 +274,18 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
       </div>
 
       {sent && <SentStatusCard estimate={e} />}
+
+      {/* Revision chain notices */}
+      {e.status === "revised" && (
+        <div class="notice notice--warning" style={{ marginBottom: "var(--space-4)" }}>
+          <strong>This estimate has been revised.</strong> It is a historical version and can no longer be edited or sent. The client's portal link now points to the current version.
+        </div>
+      )}
+      {e.revised_from_id && e.status !== "revised" && (
+        <div class="notice notice--info" style={{ marginBottom: "var(--space-4)" }}>
+          <strong>Revision {e.version}</strong> — this is a revised version of an earlier estimate.
+        </div>
+      )}
 
       {/* Notice for imported estimates with no resolvable client (orphaned FK from Jobber migration) */}
       {!e.request_id && !e.client_name && (

@@ -9,13 +9,14 @@ import { Button } from "../../components/ui/Button";
 import { formatCurrency, formatDate } from "../../lib/format";
 import { downloadCsv } from "../../lib/csv-export";
 
-type ReportKey = "aged" | "projected" | "reengagement" | "revenue";
+type ReportKey = "aged" | "projected" | "reengagement" | "revenue" | "variance";
 
 const REPORTS: { key: ReportKey; label: string; endpoint: string }[] = [
   { key: "aged", label: "Aged Receivables", endpoint: "/api/reports/aged-receivables" },
   { key: "projected", label: "Projected Income", endpoint: "/api/reports/projected-income" },
   { key: "reengagement", label: "Client Re-engagement", endpoint: "/api/reports/client-reengagement" },
   { key: "revenue", label: "Job Revenue", endpoint: "/api/reports/job-revenue" },
+  { key: "variance", label: "Est. vs. Actual", endpoint: "/api/reports/line-item-variance" },
 ];
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -57,10 +58,11 @@ export function FinancialReports() {
       {error && <div class="empty-state">Couldn't load report: {error}</div>}
       {!loading && !error && data && (
         <>
-          {report === "aged" && <AgedReceivablesReport data={data as AgedData} />}
-          {report === "projected" && <ProjectedIncomeReport data={data as ProjectedData} />}
-          {report === "reengagement" && <ReengagementReport data={data as ReengagementData} />}
-          {report === "revenue" && <JobRevenueReport data={data as RevenueData} year={year} />}
+          {report === "aged" && <AgedReceivablesReport data={data as unknown as AgedData} />}
+          {report === "projected" && <ProjectedIncomeReport data={data as unknown as ProjectedData} />}
+          {report === "reengagement" && <ReengagementReport data={data as unknown as ReengagementData} />}
+          {report === "revenue" && <JobRevenueReport data={data as unknown as RevenueData} year={year} />}
+          {report === "variance" && <LineItemVarianceReport data={data as unknown as VarianceData} />}
         </>
       )}
     </div>
@@ -314,6 +316,103 @@ function EmptyReport() {
     <div class="empty-state" style={{ marginTop: "var(--space-lg)" }}>
       <div class="empty-state__title">No data</div>
       <div>Nothing matches this report right now.</div>
+    </div>
+  );
+}
+
+// ── Report 5 — Estimated vs. Actual by Line Item ──────────────────────────
+
+interface VarianceItem {
+  description: string;
+  category: string | null;
+  job_count: number;
+  avg_estimated: number;
+  avg_actual: number;
+  variance_amount: number;
+  variance_pct: number | null;
+}
+
+interface VarianceData {
+  summary: { total_line_items: number; has_data: boolean };
+  items: VarianceItem[];
+}
+
+function LineItemVarianceReport({ data }: { data: VarianceData }) {
+  const rows = data.items ?? [];
+  const cols = [
+    { key: "description", label: "Line Item" },
+    { key: "category", label: "Category" },
+    { key: "job_count", label: "Jobs" },
+    { key: "avg_estimated", label: "Avg Estimated" },
+    { key: "avg_actual", label: "Avg Actual" },
+    { key: "variance_amount", label: "Variance $" },
+    { key: "variance_pct", label: "Variance %" },
+  ];
+
+  if (!data.summary.has_data) {
+    return (
+      <div>
+        <ReportHeader
+          title="Estimated vs. Actual by Line Item"
+          onCsv={() => downloadCsv("line-item-variance.csv", rows as unknown as Record<string, unknown>[], cols)}
+          disabled
+        />
+        <div class="empty-state" style={{ marginTop: "var(--space-lg)" }}>
+          <div class="empty-state__title">Not enough data yet</div>
+          <div>
+            This report populates as receipts are processed and confirmed through
+            the itemized receipt flow. Upload and confirm a few receipts to see
+            estimated vs. actual variance by line item.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <ReportHeader
+        title="Estimated vs. Actual by Line Item"
+        onCsv={() => downloadCsv("line-item-variance.csv", rows as unknown as Record<string, unknown>[], cols)}
+        disabled={rows.length === 0}
+      />
+      <div class="report-summary-grid">
+        <SummaryCard label="Line Items Tracked" value={String(data.summary.total_line_items)} />
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Line Item</th>
+            <th>Category</th>
+            <th>Jobs</th>
+            <th>Avg Estimated</th>
+            <th>Avg Actual</th>
+            <th>Variance $</th>
+            <th>Variance %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => {
+            const variance = r.variance_amount ?? 0;
+            const overBudget = variance > 0;
+            return (
+              <tr key={i}>
+                <td>{r.description}</td>
+                <td>{r.category ?? "—"}</td>
+                <td>{r.job_count}</td>
+                <td>{formatCurrency(r.avg_estimated)}</td>
+                <td>{formatCurrency(r.avg_actual)}</td>
+                <td class={overBudget ? "text--error" : "text--success"}>
+                  {overBudget ? "+" : ""}{formatCurrency(variance)}
+                </td>
+                <td class={overBudget ? "text--error" : "text--success"}>
+                  {r.variance_pct !== null ? `${overBudget ? "+" : ""}${r.variance_pct}%` : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

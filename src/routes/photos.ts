@@ -31,10 +31,12 @@ import type { Env } from "../env.js";
 import { dateBucket, photoOriginalKey, photoThumbKey, putImage, streamObject } from "../lib/r2.js";
 import { extractReceipt } from "../lib/receipt-ai.js";
 import {
+  applyVendorMaterialPriceUpdate,
   hasUnresolvedMatches,
   parseStoredExtractedItems,
   parseStoredMatchResults,
   processReceiptMatching,
+  type ExtractedItem,
   type MatchResult,
 } from "../lib/receipt-matching.js";
 import { guard } from "../middleware/guard.js";
@@ -682,11 +684,52 @@ export async function handleReceiptMatchesGet(
   const extractedItems = parseStoredExtractedItems(row.extracted_items) ?? [];
   const matchResults = parseStoredMatchResults(row.match_results) ?? [];
 
+  // Include expense_line_items rows so the UI gets Match B (catalog) data
+  // alongside Match A (estimate sub-item) data in one request.
+  const { results: lineItemRows } = await env.DB.prepare(
+    `SELECT eli.id, eli.description, eli.quantity, eli.unit, eli.unit_price, eli.amount,
+            eli.matched_estimate_sub_item_id, eli.matched_vendor_material_id, eli.match_confidence,
+            eli.expense_id,
+            vm.vendor_name AS vm_vendor_name, vm.material_name AS vm_material_name,
+            vm.unit AS vm_unit, vm.last_price AS vm_last_price
+     FROM expense_line_items eli
+     LEFT JOIN vendor_materials vm ON vm.id = eli.matched_vendor_material_id
+     WHERE eli.receipt_photo_id = ?
+     ORDER BY eli.created_at ASC`,
+  )
+    .bind(receiptId)
+    .all<Record<string, unknown>>();
+
+  const expenseLineItems = (lineItemRows ?? []).map((r) => ({
+    id: r.id,
+    description: r.description,
+    quantity: r.quantity,
+    unit: r.unit,
+    unit_price: r.unit_price,
+    amount: r.amount,
+    matched_estimate_sub_item_id: r.matched_estimate_sub_item_id,
+    matched_vendor_material_id: r.matched_vendor_material_id,
+    match_confidence: r.match_confidence,
+    expense_id: r.expense_id,
+    vendor_material: r.matched_vendor_material_id
+      ? {
+          id: r.matched_vendor_material_id,
+          vendor_name: r.vm_vendor_name,
+          material_name: r.vm_material_name,
+          unit: r.vm_unit,
+          last_price: r.vm_last_price,
+        }
+      : null,
+    is_new_material_candidate:
+      !r.matched_vendor_material_id && r.unit_price !== null && (r.unit_price as number) > 0,
+  }));
+
   return jsonResponse({
     status: "processed",
     extracted_items: extractedItems,
     match_results: matchResults,
     has_unresolved: hasUnresolvedMatches(extractedItems, matchResults),
+    expense_line_items: expenseLineItems,
   });
 }
 
@@ -727,7 +770,8 @@ export async function handleReceiptMatchConfirm(
       ? null
       : str(body.line_item_id);
   if (lineItemId) {
-    const valid = await env.DB.prepare("SELECT 1 AS ok FROM estimate_line_items WHERE id = ?")
+    // Match A now targets estimate_sub_items — validate against that table.
+    const valid = await env.DB.prepare("SELECT 1 AS ok FROM estimate_sub_items WHERE id = ?")
       .bind(lineItemId)
       .first<{ ok: number }>();
     if (!valid) return jsonErr(400, "invalid_line_item_id");
@@ -883,7 +927,12 @@ export async function handlePhotoMeta(env: Env, id: string): Promise<Response> {
 // wired around them this sprint (social = S16, before/after = S18). annotate is
 // a deferred seam (see handlePhotoAnnotate).
 
-export async function handlePhotoPut(env: Env, request: Request, id: string): Promise<Response> {
+export async function handlePhotoPut(
+  env: Env,
+  request: Request,
+  id: string,
+  ctx: ExecutionContext,
+): Promise<Response> {
   const guarded = await guard(request, env, [...CAPTURE_ROLES]);
   if (guarded instanceof Response) return guarded;
 
@@ -893,13 +942,16 @@ export async function handlePhotoPut(env: Env, request: Request, id: string): Pr
   } catch {
     return jsonErr(400, "invalid_json");
   }
-  const existing = await env.DB.prepare("SELECT id FROM photos WHERE id = ?")
+  const existing = await env.DB.prepare(
+    "SELECT id, r2_key, job_id FROM photos WHERE id = ?",
+  )
     .bind(id)
-    .first<{ id: string }>();
+    .first<{ id: string; r2_key: string; job_id: string }>();
   if (!existing) return jsonErr(404, "not_found");
 
   const sets: string[] = [];
   const binds: unknown[] = [];
+  let taggingAsReceipt = false;
   if ("caption" in body) {
     sets.push("caption = ?");
     binds.push(str(body.caption));
@@ -909,6 +961,7 @@ export async function handlePhotoPut(env: Env, request: Request, id: string): Pr
     const photo_type = PHOTO_TYPES.has(t) ? t : "job_progress";
     sets.push("photo_type = ?", "category = ?");
     binds.push(photo_type, LEGACY_CATEGORY[photo_type] ?? "progress");
+    if (photo_type === "receipt") taggingAsReceipt = true;
   }
   if ("task_id" in body) {
     sets.push("task_id = ?");
@@ -931,6 +984,98 @@ export async function handlePhotoPut(env: Env, request: Request, id: string): Pr
   await env.DB.prepare(`UPDATE photos SET ${sets.join(", ")} WHERE id = ?`)
     .bind(...binds)
     .run();
+
+  // When an existing photo is tagged as a receipt, run the same pipeline that
+  // POST /api/photos/receipt uses: extract via Claude, create/update receipt_photos
+  // row, then fire matching. Idempotent for already-confirmed/processed rows;
+  // re-runs for failed rows so retrying (re-save with Receipt type) works.
+  if (taggingAsReceipt) {
+    const existingReceipt = await env.DB.prepare(
+      "SELECT id, processing_status FROM receipt_photos WHERE photo_id = ?",
+    )
+      .bind(id)
+      .first<{ id: string; processing_status: string }>();
+
+    const shouldProcess =
+      !existingReceipt || existingReceipt.processing_status === "failed";
+
+    if (shouldProcess) {
+      const obj = await env.FILES.get(existing.r2_key);
+      const bytes = obj ? await obj.arrayBuffer() : null;
+
+      if (bytes) {
+        const contentType = obj?.httpMetadata?.contentType ?? "image/jpeg";
+        const extraction = await extractReceipt(env, bytes, contentType);
+        const status = extraction.ok ? "processed" : "failed";
+
+        if (existingReceipt) {
+          // Re-run on a previously failed row — update in place.
+          await env.DB.prepare(
+            `UPDATE receipt_photos
+               SET ai_vendor = ?, ai_amount = ?, ai_date = ?, ai_category = ?,
+                   ai_confidence = ?, processing_status = ?
+             WHERE id = ?`,
+          )
+            .bind(
+              extraction.vendor,
+              extraction.amount,
+              extraction.date,
+              extraction.category,
+              extraction.confidence,
+              status,
+              existingReceipt.id,
+            )
+            .run();
+
+          if (extraction.ok) {
+            ctx.waitUntil(
+              processReceiptMatching(
+                existingReceipt.id,
+                existing.r2_key,
+                existing.job_id,
+                env.DB,
+                env,
+              ).catch((e) =>
+                console.error("[photos] tag-as-receipt matching failed:", (e as Error).message),
+              ),
+            );
+          }
+        } else {
+          // First time — insert a new row.
+          const receiptId = crypto.randomUUID();
+          await env.DB.prepare(
+            `INSERT INTO receipt_photos
+               (id, photo_id, ai_vendor, ai_amount, ai_date, ai_category, ai_confidence,
+                expense_id, processing_status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, datetime('now'))`,
+          )
+            .bind(
+              receiptId,
+              id,
+              extraction.vendor,
+              extraction.amount,
+              extraction.date,
+              extraction.category,
+              extraction.confidence,
+              status,
+            )
+            .run();
+
+          if (extraction.ok) {
+            ctx.waitUntil(
+              processReceiptMatching(receiptId, existing.r2_key, existing.job_id, env.DB, env).catch(
+                (e) =>
+                  console.error("[photos] tag-as-receipt matching failed:", (e as Error).message),
+              ),
+            );
+          }
+        }
+      } else {
+        console.error("[photos] tag-as-receipt: R2 object not found for key", existing.r2_key);
+      }
+    }
+  }
+
   const row = await env.DB.prepare(`SELECT ${PHOTO_SELECT} WHERE p.id = ?`)
     .bind(id)
     .first<PhotoRow>();
@@ -1111,6 +1256,246 @@ export async function handlePhotoUnpair(env: Env, request: Request): Promise<Res
   return jsonResponse({ ok: true, after_id: afterId, unpaired: true });
 }
 
+// ─── GET /api/receipt-photos/:id/line-items (Sprint 37) ─────────────────────
+//
+// Returns expense_line_items rows for this receipt, including vendor_material
+// match info, so the ReceiptMatchReview UI can show catalog update prompts.
+
+interface ExpenseLineItemRow {
+  id: string;
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  amount: number;
+  matched_estimate_sub_item_id: string | null;
+  matched_vendor_material_id: string | null;
+  match_confidence: number | null;
+  expense_id: string | null;
+}
+
+interface VendorMaterialStub {
+  id: string;
+  vendor_name: string;
+  material_name: string;
+  unit: string | null;
+  last_price: number | null;
+}
+
+export async function handleReceiptLineItemsGet(
+  env: Env,
+  request: Request,
+  receiptId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...MATCH_READ_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const { results: rows } = await env.DB.prepare(
+    `SELECT id, description, quantity, unit, unit_price, amount,
+            matched_estimate_sub_item_id, matched_vendor_material_id, match_confidence, expense_id
+     FROM expense_line_items
+     WHERE receipt_photo_id = ?
+     ORDER BY created_at ASC`,
+  )
+    .bind(receiptId)
+    .all<ExpenseLineItemRow>();
+
+  // Hydrate vendor_material details for each matched item.
+  const vmIds = [...new Set((rows ?? []).map((r) => r.matched_vendor_material_id).filter(Boolean))] as string[];
+  const vmById = new Map<string, VendorMaterialStub>();
+  if (vmIds.length > 0) {
+    const placeholders = vmIds.map(() => "?").join(",");
+    const { results: vmRows } = await env.DB.prepare(
+      `SELECT id, vendor_name, material_name, unit, last_price FROM vendor_materials WHERE id IN (${placeholders})`,
+    )
+      .bind(...vmIds)
+      .all<VendorMaterialStub>();
+    for (const vm of vmRows ?? []) vmById.set(vm.id, vm);
+  }
+
+  const lineItems = (rows ?? []).map((r) => ({
+    ...r,
+    vendor_material: r.matched_vendor_material_id ? (vmById.get(r.matched_vendor_material_id) ?? null) : null,
+    is_new_material_candidate:
+      !r.matched_vendor_material_id && r.unit_price !== null && r.unit_price > 0,
+  }));
+
+  return jsonResponse({ line_items: lineItems });
+}
+
+// ─── POST /api/receipt-photos/:id/confirm-items (Sprint 37) ─────────────────
+//
+// Unified itemized confirm: creates one expense per line item, applies catalog
+// updates, marks the receipt confirmed. Replaces the two-step confirm + apply
+// flow for Sprint 37+ receipts.
+//
+// Body:
+// {
+//   job_id?: string,
+//   date?: string,
+//   items: [{
+//     id: string,                            expense_line_items.id
+//     matched_estimate_sub_item_id?: string | null,  user's final choice for Match A
+//     catalog_update?: boolean,              update vendor_materials price (Match B)
+//     add_to_catalog?: boolean,              create new vendor_materials entry
+//     // For add_to_catalog, vendor_name + material_name + unit inferred from
+//     // existing receipt/extraction data — can be overridden here.
+//     new_vendor_name?: string,
+//     new_material_name?: string,
+//     new_unit?: string,
+//   }]
+// }
+
+interface ConfirmItemInput {
+  id: string;
+  matched_estimate_sub_item_id: string | null;
+  catalog_update: boolean;
+  add_to_catalog: boolean;
+  new_vendor_name: string | null;
+  new_material_name: string | null;
+  new_unit: string | null;
+}
+
+export async function handleReceiptConfirmItems(
+  env: Env,
+  request: Request,
+  receiptId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...EXPENSE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return jsonErr(400, "invalid_json");
+  }
+
+  const rp = await env.DB.prepare(
+    `SELECT rp.id, rp.photo_id, rp.expense_id, rp.ai_vendor, rp.ai_date,
+            p.job_id AS photo_job_id
+     FROM receipt_photos rp JOIN photos p ON p.id = rp.photo_id WHERE rp.id = ?`,
+  )
+    .bind(receiptId)
+    .first<{ id: string; photo_id: string; expense_id: string | null; ai_vendor: string | null; ai_date: string | null; photo_job_id: string | null }>();
+  if (!rp) return jsonErr(404, "not_found");
+  if (rp.expense_id) {
+    return jsonResponse({ ok: true, already_confirmed: true, expense_id: rp.expense_id });
+  }
+
+  const jobId = str(body.job_id) ?? rp.photo_job_id;
+  const date = str(body.date) ?? rp.ai_date ?? new Date().toISOString().slice(0, 10);
+  const vendorName = rp.ai_vendor;
+
+  const rawItems = Array.isArray(body.items) ? (body.items as unknown[]) : [];
+  if (rawItems.length === 0) return jsonErr(400, "items_required");
+
+  // Load the expense_line_items rows so we have amount, description etc.
+  const eliIds = rawItems.map((i) => str((i as Record<string, unknown>).id)).filter(Boolean) as string[];
+  if (eliIds.length === 0) return jsonErr(400, "invalid_items");
+
+  const placeholders = eliIds.map(() => "?").join(",");
+  const { results: eliRows } = await env.DB.prepare(
+    `SELECT id, description, quantity, unit, unit_price, amount, matched_vendor_material_id
+     FROM expense_line_items WHERE receipt_photo_id = ? AND id IN (${placeholders})`,
+  )
+    .bind(receiptId, ...eliIds)
+    .all<ExpenseLineItemRow>();
+
+  const eliById = new Map((eliRows ?? []).map((r) => [r.id, r]));
+
+  const createdExpenseIds: string[] = [];
+  let firstExpenseId: string | null = null;
+
+  for (const rawItem of rawItems) {
+    const item = rawItem as Record<string, unknown>;
+    const eliId = str(item.id);
+    if (!eliId) continue;
+    const eli = eliById.get(eliId);
+    if (!eli) continue;
+
+    const confirmed: ConfirmItemInput = {
+      id: eliId,
+      matched_estimate_sub_item_id: item.matched_estimate_sub_item_id != null
+        ? str(item.matched_estimate_sub_item_id)
+        : null,
+      catalog_update: Boolean(item.catalog_update),
+      add_to_catalog: Boolean(item.add_to_catalog),
+      new_vendor_name: str(item.new_vendor_name),
+      new_material_name: str(item.new_material_name),
+      new_unit: str(item.new_unit),
+    };
+
+    const expenseId = await insertFullExpense(env, {
+      job_id: jobId,
+      expense_type: "material",
+      vendor: vendorName,
+      description: eli.description,
+      amount: eli.amount,
+      incurred_date: date,
+      estimate_line_item_id: confirmed.matched_estimate_sub_item_id,
+      tax_category: null,
+      sub_id: null,
+      is_1099_reportable: false,
+      receipt_photo_id: rp.photo_id,
+      receipt_r2_key: null,
+      entered_via: "receipt_capture",
+      created_by: user.email,
+    });
+
+    await env.DB.prepare(
+      "UPDATE expense_line_items SET expense_id = ?, matched_estimate_sub_item_id = ? WHERE id = ?",
+    )
+      .bind(expenseId, confirmed.matched_estimate_sub_item_id, eliId)
+      .run();
+
+    createdExpenseIds.push(expenseId);
+    if (!firstExpenseId) firstExpenseId = expenseId;
+
+    // Catalog update (Match B): update existing vendor_material price.
+    if (confirmed.catalog_update && eli.matched_vendor_material_id && eli.unit_price !== null) {
+      await applyVendorMaterialPriceUpdate(env.DB, eli.matched_vendor_material_id, eli.unit_price, date);
+    }
+
+    // Add new catalog entry.
+    if (confirmed.add_to_catalog && eli.unit_price !== null) {
+      const newVendor = confirmed.new_vendor_name ?? vendorName ?? "Unknown Vendor";
+      const newMaterial = confirmed.new_material_name ?? eli.description;
+      const newUnit = confirmed.new_unit ?? eli.unit ?? null;
+      const newId = crypto.randomUUID();
+      const priceHistory = JSON.stringify([{ price: eli.unit_price, date }]);
+      await env.DB.prepare(
+        `INSERT INTO vendor_materials
+           (id, vendor_name, material_name, category, unit, last_price, last_purchased_date,
+            average_price, price_history, notes, created_at, updated_at)
+         VALUES (?, ?, ?, 'materials', ?, ?, ?, ?, ?, NULL, datetime('now'), datetime('now'))`,
+      )
+        .bind(newId, newVendor, newMaterial, newUnit, eli.unit_price, date, eli.unit_price, priceHistory)
+        .run();
+      // Link the expense_line_items row back to the new material.
+      await env.DB.prepare(
+        "UPDATE expense_line_items SET matched_vendor_material_id = ? WHERE id = ?",
+      )
+        .bind(newId, eliId)
+        .run();
+    }
+  }
+
+  if (!firstExpenseId) return jsonErr(400, "no_items_processed");
+
+  await env.DB.prepare(
+    `UPDATE receipt_photos SET expense_id = ?, processing_status = 'confirmed' WHERE id = ?`,
+  )
+    .bind(firstExpenseId, receiptId)
+    .run();
+
+  return jsonResponse(
+    { ok: true, expense_ids: createdExpenseIds, receipt_id: receiptId },
+    { status: 201 },
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Legacy carry-forward handlers (used by the deployed dashboard + PWA). The
 // streaming + active-jobs + list endpoints below are unchanged in contract.
@@ -1238,4 +1623,91 @@ export async function handlePhotoPatch(env: Env, id: string, request: Request): 
     .bind(...binds)
     .run();
   return jsonResponse({ ok: true, id });
+}
+
+// ─── GET /api/receipt-photos/queue ──────────────────────────────────────────
+//
+// Returns all receipt_photos with processing_status='processed' (extracted but
+// not yet confirmed), joined with photos + jobs + clients for context.
+// Optional ?job_id= narrows to a single job. Ordered oldest-first so backlog
+// is reviewed in arrival order.
+
+export async function handleReceiptQueue(
+  env: Env,
+  request: Request,
+  url: URL,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...MATCH_READ_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const jobId = url.searchParams.get("job_id");
+
+  const sql = jobId
+    ? `SELECT
+         rp.id AS receipt_id,
+         rp.photo_id,
+         rp.ai_vendor,
+         rp.ai_amount,
+         rp.ai_date,
+         rp.ai_category,
+         rp.ai_confidence,
+         rp.expense_id,
+         rp.processing_status,
+         rp.created_at,
+         p.job_id,
+         j.job_number,
+         j.title AS job_title,
+         c.name AS client_name
+       FROM receipt_photos rp
+       JOIN photos p ON p.id = rp.photo_id
+       LEFT JOIN jobs j ON j.id = p.job_id
+       LEFT JOIN clients c ON c.id = j.client_id
+       WHERE rp.processing_status = 'processed' AND p.job_id = ?
+       ORDER BY rp.created_at ASC`
+    : `SELECT
+         rp.id AS receipt_id,
+         rp.photo_id,
+         rp.ai_vendor,
+         rp.ai_amount,
+         rp.ai_date,
+         rp.ai_category,
+         rp.ai_confidence,
+         rp.expense_id,
+         rp.processing_status,
+         rp.created_at,
+         p.job_id,
+         j.job_number,
+         j.title AS job_title,
+         c.name AS client_name
+       FROM receipt_photos rp
+       JOIN photos p ON p.id = rp.photo_id
+       LEFT JOIN jobs j ON j.id = p.job_id
+       LEFT JOIN clients c ON c.id = j.client_id
+       WHERE rp.processing_status = 'processed'
+       ORDER BY rp.created_at ASC`;
+
+  const rows = jobId
+    ? await env.DB.prepare(sql).bind(jobId).all<Record<string, unknown>>()
+    : await env.DB.prepare(sql).all<Record<string, unknown>>();
+
+  const queue = (rows.results ?? []).map((row) => ({
+    receipt_id: row.receipt_id as string,
+    photo_id: row.photo_id as string,
+    job_id: (row.job_id as string | null) ?? null,
+    job_number: (row.job_number as number | null) ?? null,
+    job_title: (row.job_title as string | null) ?? null,
+    client_name: (row.client_name as string | null) ?? null,
+    thumb_url: `/api/photos/${row.photo_id}/thumb`,
+    original_url: `/api/photos/${row.photo_id}`,
+    ai_vendor: (row.ai_vendor as string | null) ?? null,
+    ai_amount: (row.ai_amount as number | null) ?? null,
+    ai_date: (row.ai_date as string | null) ?? null,
+    ai_category: (row.ai_category as string | null) ?? null,
+    ai_confidence: (row.ai_confidence as number | null) ?? null,
+    expense_id: (row.expense_id as string | null) ?? null,
+    processing_status: row.processing_status as string,
+    created_at: row.created_at as string,
+  }));
+
+  return jsonResponse({ queue, total: queue.length });
 }

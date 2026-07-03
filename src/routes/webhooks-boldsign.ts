@@ -516,11 +516,14 @@ async function handleEstimateCompleted(
     .bind(serializeSignatureMeta(meta), signedOn, docRow.id)
     .run();
 
-  // Unlock deposit payment on the portal by stamping estimate.client_signature.
+  // Unlock deposit payment on the portal and advance status to approved.
   if (docRow.estimate_id && signerName) {
     await env.DB.prepare(
       `UPDATE estimates
-          SET client_signature = ?, signed_date = ?, updated_at = datetime('now')
+          SET client_signature = ?, signed_date = ?,
+              status = CASE WHEN status IN ('sent','viewed') THEN 'approved' ELSE status END,
+              approved_date = CASE WHEN status IN ('sent','viewed') THEN datetime('now') ELSE approved_date END,
+              updated_at = datetime('now')
         WHERE id = ?`,
     )
       .bind(signerName, signedOn, docRow.estimate_id)

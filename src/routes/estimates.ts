@@ -150,6 +150,7 @@ interface EstimateRow {
   notes: string | null;
   version: number | null;
   revised_from_id: string | null;
+  is_current_version: number | null;
   sent_at: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -380,6 +381,7 @@ function shapeEstimateHeader(r: EstimateRow, totals: Totals) {
     notes: r.notes,
     version: r.version ?? 1,
     revised_from_id: r.revised_from_id,
+    is_current_version: (r.is_current_version ?? 1) === 1,
     sent_at: r.sent_at,
     created_at: r.created_at,
     updated_at: r.updated_at,
@@ -1144,6 +1146,23 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
     .first<EstimateRow>();
   if (!orig) return err(404, "not_found", "Estimate not found");
 
+  // Only allow revision on estimates that have been sent to a client.
+  if (!["sent", "viewed", "approved"].includes(orig.status)) {
+    return err(409, "invalid_state", `Cannot revise an estimate with status '${orig.status}'. Revise is only available for sent, viewed, or approved estimates.`);
+  }
+
+  // Block revision if this estimate has already been converted to a job.
+  if (orig.request_id) {
+    const req = await env.DB.prepare(
+      "SELECT converted_job_id FROM estimate_requests WHERE id = ?",
+    )
+      .bind(orig.request_id)
+      .first<{ converted_job_id: string | null }>();
+    if (req?.converted_job_id) {
+      return err(409, "already_converted", "This estimate has already been converted to a job. Use Change Orders to modify the project scope.");
+    }
+  }
+
   const newId = crypto.randomUUID();
   const now = new Date().toISOString();
   const maxNum = await env.DB.prepare(
@@ -1284,15 +1303,24 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
       .run();
   }
 
-  // Preserve the original; mark it revised, and point the request at the new
-  // version. The clone above intentionally omits portal_token / sent_at /
-  // expiration_date / signature, so the new draft gets a FRESH portal_token on
-  // its next send. Reset the request's follow-up timers (count, last follow-up,
-  // sent_date) and walk it back to "building" so the §4.6 follow-up clock
-  // restarts for the revised quote rather than carrying the old one forward.
-  await env.DB.prepare("UPDATE estimates SET status = 'revised', updated_at = ? WHERE id = ?")
+  // Mark the original as revised + non-current. Null out its portal_token first
+  // so the UNIQUE constraint doesn't fire when we assign it to the new row.
+  await env.DB.prepare(
+    "UPDATE estimates SET status = 'revised', is_current_version = 0, portal_token = NULL, updated_at = ? WHERE id = ?",
+  )
     .bind(now, id)
     .run();
+
+  // Transfer the portal_token to the new version so the customer's existing
+  // link continues to work — the token resolves to the current version because
+  // this row now holds it. Also mark the new row as current version.
+  if (orig.portal_token) {
+    await env.DB.prepare(
+      "UPDATE estimates SET portal_token = ?, is_current_version = 1, updated_at = ? WHERE id = ?",
+    )
+      .bind(orig.portal_token, now, newId)
+      .run();
+  }
   if (orig.request_id) {
     await env.DB.prepare(
       `UPDATE estimate_requests

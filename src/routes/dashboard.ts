@@ -76,6 +76,9 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
       return meta.jobId ? `/jobs/${meta.jobId}?tab=punch_list` : "/jobs";
     case "voice_note_unmatched":
       return "/voice-notes/unmatched";
+    case "ai_extraction_failure":
+      // Link to the job's Photos tab if a single job, otherwise Financial Expenses for review.
+      return meta.jobId ? `/jobs/${meta.jobId}?tab=photos` : "/financial?tab=expenses";
     default:
       return meta.jobId ? `/jobs/${meta.jobId}` : "/";
   }
@@ -328,6 +331,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     pendingWaivers,
     readyPackages,
     notifyPunchVoice,
+    aiExtractionFailures,
   ] = await Promise.all([
     // HIGH: invoices past due
     env.DB.prepare(
@@ -446,6 +450,15 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
         ORDER BY created_at DESC
         LIMIT 15`,
     ).all<{ id: string; trigger_event: string; body: string; job_id: string | null; created_at: string }>(),
+
+    // HIGH: AI extraction failures in last 24h — groups by source feature for extensibility.
+    // Threshold: 2+ failures within window → alert. Auto-clears when failures drop below threshold.
+    env.DB.prepare(
+      `SELECT COUNT(*) as cnt, MAX(rp.created_at) as latest_at
+         FROM receipt_photos rp
+        WHERE rp.processing_status = 'failed'
+          AND rp.created_at >= datetime('now', '-24 hours')`,
+    ).first<{ cnt: number; latest_at: string | null }>(),
   ]);
 
   const items: ActionItem[] = [];
@@ -634,6 +647,32 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       meta: { jobId: row.job_id, notificationLogId: row.id },
       link: actionItemLink(row.trigger_event, { jobId: row.job_id }),
       createdAt: row.created_at,
+    });
+  }
+
+  // HIGH: AI extraction failure rate alert.
+  // Threshold: 2+ receipt_photos failures in last 24h → surface alert.
+  // ID is date-bucketed so it auto-clears the next UTC day if failures stop,
+  // but can still be manually dismissed for the current day.
+  // meta.source is an extensibility seam — future AI features (Google Reviews
+  // AI replies, Smart Notes, etc.) can emit their own source keys here.
+  const aiFailCount = aiExtractionFailures?.cnt ?? 0;
+  if (aiFailCount >= 2) {
+    const dateBucket = todayUtc();
+    const alertId = `ai_extraction_failure_receipt_extraction_${dateBucket}`;
+    const plural = aiFailCount === 1 ? "receipt" : "receipts";
+    items.push({
+      id: alertId,
+      priority: "high",
+      type: "ai_extraction_failure",
+      title: `AI extraction failing — ${aiFailCount} ${plural} failed in the last 24h`,
+      meta: {
+        source: "receipt_extraction",
+        failCount: aiFailCount,
+        latestAt: aiExtractionFailures?.latest_at ?? null,
+      },
+      link: actionItemLink("ai_extraction_failure", {}),
+      createdAt: aiExtractionFailures?.latest_at ?? today,
     });
   }
 

@@ -2,16 +2,33 @@
  * One-way D1 + R2 → Google Shared Drive mirror (insurance + human access).
  * Runs on the hourly cron; bounded batch size. Never blocks PWA uploads.
  *
- * Config (all optional; missing = skip with log):
- *   DRIVE_SHARED_DRIVE_ID, DRIVE_MIRROR_ROOT_FOLDER_ID
+ * Target drive: "CHS Hub Backup" (Shared Drive — DRIVE_SHARED_DRIVE_ID).
+ * DRIVE_MIRROR_ROOT_FOLDER_ID is no longer used; year folders live directly
+ * at the drive root (parentId = driveId itself).
  *
- * Job-scoped paths (Hub Files–aligned):
- *   Jobs/<year>/<client>/<#N title>/
- *     SITE PHOTOS/Before|Progress|Final
- *     PROJECT FILES/Drawings & plans|Field notes|Contracts|…
- *   Job-linked expense receipts → PROJECT FILES/Project receipts.
- *   Example: `#99 Deck Railing`. Unassigned → …/Unassigned clients/…
- * Year from job start_at → created_at → synced_at (ISO).
+ * Folder structure:
+ *   CHS Hub Backup/  (Shared Drive root, ID in DRIVE_SHARED_DRIVE_ID)
+ *   ├── {year}/                                ← anchored to earliest estimate_request.created_at for client
+ *   │   └── {Last, First} — {clientId[:8]}/   ← lazy per client
+ *   │       ├── Estimates/                      ← pre-job docs (client_id, no job_id)
+ *   │       └── {address or #N}/               ← lazy per job
+ *   │           ├── Contracts & Signed Docs/
+ *   │           ├── Change Orders/
+ *   │           ├── Permits/
+ *   │           ├── Photos/
+ *   │           ├── Invoices & Payments/
+ *   │           ├── Completion Package/
+ *   │           └── Other/                     ← lazy, only when needed
+ *   └── Company Documents/                     ← hardcoded IDs, already exists
+ *       ├── Licenses & Insurance/
+ *       ├── SOPs/
+ *       └── Templates/
+ *
+ * Year anchor:   MIN(estimate_requests.created_at) WHERE client_id = ?
+ * Folder cache:  drive_mirror_folders (path_key → drive_folder_id), v2_ prefix.
+ * On failure:    mirror_status='failed' on documents; retried next cycle.
+ *                photos/expenses/job_files retain NULL drive_mirrored_at; retried.
+ * Canonical:     R2 + D1 stay canonical regardless of mirror state.
  */
 
 import type { Env } from "../../env.js";
@@ -22,88 +39,58 @@ import {
   uploadFileMultipart,
 } from "../google/drive.js";
 
-const BATCH_PHOTOS = 5;
-const BATCH_EXPENSES = 5;
-const BATCH_JOB_FILES = 5;
-const BATCH_COMPANY = 5;
-/** Sprint 15: documents (the unified Document Management table) mirror batch. */
-const BATCH_DOCUMENTS = 5;
-/** Max jobs per mirror run to pre-create SITE PHOTOS + PROJECT FILES trees. Keep low:
- * each stub triggers many Drive `fetch` calls; the cron also runs photo/expense/file/company batches. */
-const BATCH_JOB_FOLDER_STUBS = 4;
+// ─── CHS Hub Backup — fixed folder IDs (hardcoded; created manually by Tony) ─
+const COMPANY_DOCS_ROOT = "1rzUnoOSMLVlWQClOmZJ5gG1ZngrpIDSV";
+const COMPANY_LICENSES_AND_INSURANCE = "1kstPZhRtv89wcHR_0pVgkNeEv3RKGg5x";
+const COMPANY_SOPS = "10pclierBe9c96iI2Mg41noqX8X0OiD2A";
+const COMPANY_TEMPLATES = "1gPB3IYv-MK0sZ7ILYOYj7tdZdUCPh1Ta";
 
-const SITE_PHOTOS_ROOT = "SITE PHOTOS";
-const PROJECT_FILES_ROOT = "PROJECT FILES";
-
-const MIRROR_PHOTO_FOLDER: Record<string, string> = {
-  before: "Before",
-  progress: "Progress",
-  final: "Final",
+// ─── document_category → job subfolder label ──────────────────────────────
+const JOB_CATEGORY_SUBFOLDER: Record<string, string> = {
+  contract: "Contracts & Signed Docs",
+  change_order: "Change Orders",
+  permit: "Permits",
+  photo_report: "Photos",
+  invoice: "Invoices & Payments",
+  completion_package: "Completion Package",
 };
 
-const MIRROR_JOB_FILE_FOLDER: Record<string, string> = {
-  drawings: "Drawings & plans",
-  notes: "Field notes",
-  contracts: "Contracts",
-  receipts: "Project receipts",
-  pay_stub: "Sub / pay records",
-  design: "Design & finishes",
-  other: "Design & finishes",
-};
-
-/** Sprint 15: map a `documents.document_category` to the job PROJECT FILES
- * subfolder docType the mirror already knows (reuses ensureProjectFileLeafFolder). */
-const DOC_CATEGORY_TO_DOCTYPE: Record<string, string> = {
-  contract: "contracts",
-  change_order: "contracts",
-  lien_waiver: "contracts",
-  permit: "design",
-  plan_drawing: "drawings",
-  invoice: "design",
-  photo_report: "design",
-  completion_package: "design",
+// job_files.doc_type → document_category equivalent for subfolder routing
+const JOB_FILE_CATEGORY: Record<string, string> = {
+  contracts: "contract",
+  pay_stub: "contract",
+  receipts: "invoice",
+  drawings: "other",
+  notes: "other",
+  design: "other",
   other: "other",
 };
 
-function mirrorPhotoCategoryKey(dbCategory: string | null | undefined): string {
-  const c = (dbCategory || "progress").toLowerCase();
-  if (c === "before" || c === "progress" || c === "final") return c;
-  return "progress";
-}
+const BATCH = 5;
 
-function mirrorJobFileSubfolderLabel(docType: string): string {
-  return MIRROR_JOB_FILE_FOLDER[docType] ?? MIRROR_JOB_FILE_FOLDER.design;
-}
-
-/** Stable cache key under `j_<jobId>_pf_*` (legacy `other` → design). */
-function mirrorJobFileCacheDocKey(docType: string): string {
-  if (docType === "other") return "design";
-  return MIRROR_JOB_FILE_FOLDER[docType] ? docType : "design";
-}
+// ─── Public types ─────────────────────────────────────────────────────────
 
 export interface DriveMirrorResult {
   skipped: boolean;
   reason?: string;
-  /** Newly ensured per-job folder trees: SITE PHOTOS + PROJECT FILES. */
+  /** Kept for API compat — unused in v2 structure (no pre-created job stubs). */
   job_folder_stubs: number;
   photos: number;
   expenses: number;
   job_files: number;
   company: number;
-  /** Sprint 15: rows mirrored from the unified `documents` table this cycle. */
   documents: number;
   errors: string[];
   duration_ms: number;
 }
 
-/** Same secret as other ops. Shows config + pending counts; does not upload. */
 export interface DriveMirrorStatus {
   configured: boolean;
   reason?: string;
   has_service_account: boolean;
   drive_shared_drive_id: boolean;
+  /** Always false in v2 — year folders live at drive root; no separate root folder. */
   mirror_root_folder_id: boolean;
-  /** Rows that match the mirror’s filters and are not yet marked mirrored */
   pending: {
     photos: number;
     expenses_with_receipt: number;
@@ -111,61 +98,38 @@ export interface DriveMirrorStatus {
     company_documents: number;
     documents: number;
   };
-  /** When all Drive vars are set, whether a Drive-scoped token can be minted */
   drive_token_ok: boolean | null;
   drive_token_error?: string;
-  /** What this job copies (for operator expectations) */
   mirrors: readonly ["photos", "expense_receipts", "job_files", "company_documents", "documents"];
-  /** `jobs` rows with no `stub_<id>` in `drive_mirror_folders` yet (folder tree not created in Drive). */
+  /** Always 0 in v2 — no pre-created job stubs. */
   jobs_without_drive_stub: number;
 }
+
+// ─── Status endpoint ──────────────────────────────────────────────────────
 
 export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus> {
   const hasServiceAccount = !!env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
   const driveId = env.DRIVE_SHARED_DRIVE_ID;
-  const rootId = env.DRIVE_MIRROR_ROOT_FOLDER_ID;
-  const configured = !!(hasServiceAccount && driveId && rootId);
+  const configured = !!(hasServiceAccount && driveId);
 
   let reason: string | undefined;
   if (!hasServiceAccount) reason = "no GOOGLE_SERVICE_ACCOUNT_JSON";
-  else if (!driveId || !rootId) {
-    reason = "DRIVE_SHARED_DRIVE_ID or DRIVE_MIRROR_ROOT_FOLDER_ID unset";
-  }
+  else if (!driveId) reason = "DRIVE_SHARED_DRIVE_ID unset";
 
-  const [ph, ex, jf, co, doc, stub] = await Promise.all([
+  const [ph, ex, jf, co, doc] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) as n FROM photos WHERE drive_mirrored_at IS NULL")
       .first<{ n: number }>(),
     env.DB.prepare(
-      `SELECT COUNT(*) as n FROM expenses
-       WHERE receipt_r2_key IS NOT NULL AND drive_mirrored_at IS NULL`,
+      "SELECT COUNT(*) as n FROM expenses WHERE receipt_r2_key IS NOT NULL AND drive_mirrored_at IS NULL",
     ).first<{ n: number }>(),
-    env.DB.prepare("SELECT COUNT(*) as n FROM job_files WHERE drive_mirrored_at IS NULL").first<{
-      n: number;
-    }>(),
-    env.DB.prepare("SELECT COUNT(*) as n FROM company_documents WHERE drive_mirrored_at IS NULL").first<{
-      n: number;
-    }>(),
+    env.DB.prepare("SELECT COUNT(*) as n FROM job_files WHERE drive_mirrored_at IS NULL")
+      .first<{ n: number }>(),
+    env.DB.prepare("SELECT COUNT(*) as n FROM company_documents WHERE drive_mirrored_at IS NULL")
+      .first<{ n: number }>(),
     env.DB.prepare(
-      `SELECT COUNT(*) as n FROM documents
-       WHERE COALESCE(is_active,1)=1 AND COALESCE(mirror_status,'pending') IN ('pending','failed')`,
-    ).first<{ n: number }>(),
-    env.DB.prepare(
-      `SELECT COUNT(*) as n FROM jobs j
-       WHERE NOT EXISTS (
-         SELECT 1 FROM drive_mirror_folders f WHERE f.path_key = ('stub_' || j.id)
-       )`,
+      "SELECT COUNT(*) as n FROM documents WHERE COALESCE(is_active,1)=1 AND COALESCE(mirror_status,'pending') IN ('pending','failed')",
     ).first<{ n: number }>(),
   ]);
-
-  const pending = {
-    photos: ph?.n ?? 0,
-    expenses_with_receipt: ex?.n ?? 0,
-    job_files: jf?.n ?? 0,
-    company_documents: co?.n ?? 0,
-    documents: doc?.n ?? 0,
-  };
-
-  const jobs_without_drive_stub = stub?.n ?? 0;
 
   let drive_token_ok: boolean | null = null;
   let drive_token_error: string | undefined;
@@ -184,14 +148,22 @@ export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus>
     reason: configured ? undefined : reason,
     has_service_account: hasServiceAccount,
     drive_shared_drive_id: !!driveId,
-    mirror_root_folder_id: !!rootId,
-    pending,
+    mirror_root_folder_id: false,
+    pending: {
+      photos: ph?.n ?? 0,
+      expenses_with_receipt: ex?.n ?? 0,
+      job_files: jf?.n ?? 0,
+      company_documents: co?.n ?? 0,
+      documents: doc?.n ?? 0,
+    },
     drive_token_ok,
     drive_token_error,
     mirrors: ["photos", "expense_receipts", "job_files", "company_documents", "documents"] as const,
-    jobs_without_drive_stub,
+    jobs_without_drive_stub: 0,
   };
 }
+
+// ─── Main run ─────────────────────────────────────────────────────────────
 
 export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
   const t0 = Date.now();
@@ -212,11 +184,9 @@ export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
     out.duration_ms = Date.now() - t0;
     return out;
   }
-  const driveId = (env as Env & { DRIVE_SHARED_DRIVE_ID?: string }).DRIVE_SHARED_DRIVE_ID;
-  const rootId = (env as Env & { DRIVE_MIRROR_ROOT_FOLDER_ID?: string })
-    .DRIVE_MIRROR_ROOT_FOLDER_ID;
-  if (!driveId || !rootId) {
-    out.reason = "DRIVE_SHARED_DRIVE_ID or DRIVE_MIRROR_ROOT_FOLDER_ID unset";
+  const driveId = env.DRIVE_SHARED_DRIVE_ID;
+  if (!driveId) {
+    out.reason = "DRIVE_SHARED_DRIVE_ID unset";
     out.duration_ms = Date.now() - t0;
     return out;
   }
@@ -232,17 +202,11 @@ export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
   }
 
   try {
-    const jobsRootId = await ensureFolderCached(env, token, driveId, rootId, "Jobs", "seg_Jobs");
-    const photosId = await segmentFolderId(env, token, driveId, rootId, "Photos");
-    const expensesId = await segmentFolderId(env, token, driveId, rootId, "Expenses");
-    const companyRootId = await segmentFolderId(env, token, driveId, rootId, "Company");
-
-    await mirrorJobFolderStubsBatch(env, token, driveId, jobsRootId, out);
-    await mirrorPhotosBatch(env, token, driveId, photosId, jobsRootId, out);
-    await mirrorExpensesBatch(env, token, driveId, expensesId, jobsRootId, out);
-    await mirrorJobFilesBatch(env, token, driveId, jobsRootId, out);
-    await mirrorCompanyBatch(env, token, driveId, companyRootId, out);
-    await mirrorDocumentsBatch(env, token, driveId, jobsRootId, companyRootId, out);
+    await mirrorDocumentsBatch(env, token, driveId, out);
+    await mirrorPhotosBatch(env, token, driveId, out);
+    await mirrorJobFilesBatch(env, token, driveId, out);
+    await mirrorExpensesBatch(env, token, driveId, out);
+    await mirrorCompanyBatch(env, token, driveId, out);
   } catch (e) {
     out.errors.push((e as Error).message);
   }
@@ -251,140 +215,7 @@ export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
   return out;
 }
 
-async function ensureJobMirrorTreeStub(
-  env: Env,
-  token: string,
-  driveId: string,
-  jobsRootId: string,
-  jobId: string,
-  jobNumber: number | null,
-  jobTitle: string | null,
-  clientId: string | null,
-  clientName: string | null,
-  jobStartAt: string | null,
-  jobCreatedAt: string | null,
-  jobSyncedAt: string | null,
-): Promise<void> {
-  const stubKey = `stub_${jobId}`;
-  const done = await env.DB.prepare("SELECT drive_folder_id FROM drive_mirror_folders WHERE path_key = ?")
-    .bind(stubKey)
-    .first<{ drive_folder_id: string }>();
-  if (done?.drive_folder_id) return;
-
-  const ctx = {
-    jobStartAt,
-    jobCreatedAt,
-    jobSyncedAt,
-  };
-  const jobRootId = await ensureJobFolderId(
-    env,
-    token,
-    driveId,
-    jobsRootId,
-    jobId,
-    jobNumber,
-    jobTitle,
-    clientId,
-    clientName,
-    ctx,
-  );
-
-  const spRoot = await ensureFolderCached(
-    env,
-    token,
-    driveId,
-    jobRootId,
-    SITE_PHOTOS_ROOT,
-    `j_${jobId}_hub_sproot`,
-  );
-  for (const key of ["before", "progress", "final"] as const) {
-    await ensureFolderCached(
-      env,
-      token,
-      driveId,
-      spRoot,
-      MIRROR_PHOTO_FOLDER[key],
-      `j_${jobId}_sp_${key}`,
-    );
-  }
-
-  const pfRoot = await ensureFolderCached(
-    env,
-    token,
-    driveId,
-    jobRootId,
-    PROJECT_FILES_ROOT,
-    `j_${jobId}_hub_pfroot`,
-  );
-  for (const dt of ["drawings", "notes", "contracts", "receipts", "pay_stub", "design"] as const) {
-    await ensureFolderCached(
-      env,
-      token,
-      driveId,
-      pfRoot,
-      MIRROR_JOB_FILE_FOLDER[dt],
-      `j_${jobId}_pf_${dt}`,
-    );
-  }
-
-  await env.DB.prepare(
-    "INSERT OR REPLACE INTO drive_mirror_folders (path_key, drive_folder_id) VALUES (?, ?)",
-  )
-    .bind(stubKey, jobRootId)
-    .run();
-}
-
-async function mirrorJobFolderStubsBatch(
-  env: Env,
-  token: string,
-  driveId: string,
-  jobsRootId: string,
-  out: DriveMirrorResult,
-): Promise<void> {
-  const rows = await env.DB.prepare(
-    `SELECT j.id, j.job_number AS job_number, j.title AS job_title, j.client_id AS client_id,
-            c.name AS client_name, j.start_at AS job_start_at, j.created_at AS job_created_at, j.synced_at AS job_synced_at
-     FROM jobs j
-     LEFT JOIN clients c ON c.id = j.client_id
-     WHERE NOT EXISTS (
-       SELECT 1 FROM drive_mirror_folders f WHERE f.path_key = ('stub_' || j.id)
-     )
-     ORDER BY datetime(COALESCE(j.created_at, j.synced_at)) DESC
-     LIMIT ?`,
-  )
-    .bind(BATCH_JOB_FOLDER_STUBS)
-    .all<{
-      id: string;
-      job_number: number | null;
-      job_title: string | null;
-      client_id: string | null;
-      client_name: string | null;
-      job_start_at: string | null;
-      job_created_at: string | null;
-      job_synced_at: string | null;
-    }>();
-  for (const r of rows.results ?? []) {
-    try {
-      await ensureJobMirrorTreeStub(
-        env,
-        token,
-        driveId,
-        jobsRootId,
-        r.id,
-        r.job_number,
-        r.job_title,
-        r.client_id,
-        r.client_name,
-        r.job_start_at,
-        r.job_created_at,
-        r.job_synced_at,
-      );
-      out.job_folder_stubs++;
-    } catch (e) {
-      out.errors.push(`job_stub ${r.id}: ${(e as Error).message}`);
-    }
-  }
-}
+// ─── Folder cache ─────────────────────────────────────────────────────────
 
 async function ensureFolderCached(
   env: Env,
@@ -394,7 +225,9 @@ async function ensureFolderCached(
   folderName: string,
   pathKey: string,
 ): Promise<string> {
-  const row = await env.DB.prepare("SELECT drive_folder_id FROM drive_mirror_folders WHERE path_key = ?")
+  const row = await env.DB.prepare(
+    "SELECT drive_folder_id FROM drive_mirror_folders WHERE path_key = ?",
+  )
     .bind(pathKey)
     .first<{ drive_folder_id: string }>();
   if (row?.drive_folder_id) return row.drive_folder_id;
@@ -407,527 +240,250 @@ async function ensureFolderCached(
   return id;
 }
 
-function jobCalendarYear(
-  startAt: string | null | undefined,
-  createdAt: string | null | undefined,
-  syncedAt: string | null | undefined,
+// ─── Label helpers ────────────────────────────────────────────────────────
+
+function sanitizeName(raw: string, maxLen: number): string {
+  return (raw || "")
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}\s.,'\-#&]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen);
+}
+
+/** "{Last, First} — {first 8 alphanum chars of clientId}" */
+function clientFolderLabel(
+  lastName: string | null | undefined,
+  firstName: string | null | undefined,
+  fullName: string | null | undefined,
+  clientId: string,
 ): string {
-  const raw =
-    (startAt && startAt.length >= 4 ? startAt : null)
-    || (createdAt && createdAt.length >= 4 ? createdAt : null)
-    || (syncedAt && syncedAt.length >= 4 ? syncedAt : null)
-    || "";
-  const y = raw.slice(0, 4);
-  if (/^\d{4}$/.test(y)) return y;
+  const id8 = clientId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || clientId.slice(0, 8);
+  const last = sanitizeName(lastName || "", 60);
+  const first = sanitizeName(firstName || "", 40);
+  let name: string;
+  if (last || first) {
+    name = last && first ? `${last}, ${first}` : last || first;
+  } else {
+    const full = sanitizeName(fullName || "", 80);
+    if (full) {
+      // Best-effort "First Last" → "Last, First" split
+      const parts = full.split(/\s+/);
+      name =
+        parts.length >= 2
+          ? `${parts[parts.length - 1]}, ${parts.slice(0, -1).join(" ")}`
+          : full;
+    } else {
+      name = "Unknown";
+    }
+  }
+  return `${name.slice(0, 80)} — ${id8}`;
+}
+
+/** Address street (no city/state), or "#N", or "Job {tail}". */
+function jobFolderLabel(
+  jobId: string,
+  address: string | null | undefined,
+  jobNumber: number | null | undefined,
+): string {
+  if (address?.trim()) {
+    const street = sanitizeName(address.split(",")[0], 80);
+    if (street) return street;
+  }
+  if (jobNumber != null && Number.isFinite(jobNumber)) return `#${Math.trunc(jobNumber)}`;
+  const tail = jobId.replace(/[^a-zA-Z0-9]/g, "").slice(-8) || "unknown";
+  return `Job ${tail}`;
+}
+
+/** Parse year from ISO date string; fall back to current UTC year. */
+function parseYear(
+  anchor: string | null | undefined,
+  fallback: string | null | undefined,
+): string {
+  for (const raw of [anchor, fallback]) {
+    if (raw && raw.length >= 4) {
+      const y = raw.slice(0, 4);
+      if (/^\d{4}$/.test(y)) return y;
+    }
+  }
   return String(new Date().getUTCFullYear());
 }
 
-/** Last alphanumeric run of an id — short disambiguator (not a full Jobber gid in the label). */
-function shortTailId(rawId: string, len: number): string {
-  const alnum = rawId.replace(/[^a-zA-Z0-9]/g, "");
-  if (alnum.length >= len) return alnum.slice(-len);
-  const stripped = rawId.replace(/[^a-zA-Z0-9]/g, "");
-  if (stripped.length >= 1) return stripped.slice(-Math.min(len, stripped.length));
-  return "id";
+/** Map document_category (or doc_type) to the Company Documents child folder ID. */
+function companyFolderId(category: string): string {
+  const c = (category || "").toLowerCase();
+  if (c === "license" || c === "insurance") return COMPANY_LICENSES_AND_INSURANCE;
+  if (c === "sop") return COMPANY_SOPS;
+  if (c === "template") return COMPANY_TEMPLATES;
+  return COMPANY_DOCS_ROOT;
 }
 
-function clientFolderCacheKey(clientId: string | null | undefined): string {
-  return clientId ? `client_${clientId}` : "client__none";
-}
+// ─── Folder resolution ────────────────────────────────────────────────────
 
-/** Remove ` (abcdef)` when it matches our short id tail (legacy folder labels / copy-paste). */
-function stripTrailingClientTailSuffix(display: string, clientId: string): string {
-  const t = shortTailId(clientId, 6);
-  if (!t || t === "id") return display;
-  const suf = ` (${t})`;
-  if (display.endsWith(suf)) return display.slice(0, -suf.length).trimEnd();
-  return display;
-}
-
-/** Folder under `<year>/` — Jobber client name only (same idea as Hub Files tree). */
-function clientFolderDisplayName(
-  clientId: string | null | undefined,
-  clientName: string | null | undefined,
-): string {
-  if (!clientId) return "Unassigned clients";
-  let human = (clientName ?? "")
-    .normalize("NFKC")
-    .replace(/[^\p{L}\p{N}\s.'&-]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 88);
-  human = stripTrailingClientTailSuffix(human, clientId);
-  if (!human) return "Unknown client";
-  return human;
-}
-
-/**
- * Folder under `<client>/` — `#99 Deck Railing` when number + title exist; else `#99`, else title + tail.
- * Cached under `job_<jobId>`.
- */
-function jobSubfolderLabel(jobNumber: number | null, jobId: string, title: string | null | undefined): string {
-  const rawTitle = (title ?? "")
-    .normalize("NFKC")
-    .replace(/[^\p{L}\p{N}\s.'-]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 82);
-  const hasNum = jobNumber != null && Number.isFinite(jobNumber);
-  const tail = shortTailId(jobId, 6);
-  if (hasNum && rawTitle) return `#${Math.trunc(jobNumber)} ${rawTitle}`.slice(0, 100);
-  if (hasNum) return `#${Math.trunc(jobNumber)}`.slice(0, 100);
-  if (rawTitle) return `${rawTitle} (${tail})`.slice(0, 100);
-  return `Job ${tail}`.slice(0, 100);
-}
-
-type JobFolderDates = {
-  jobStartAt: string | null | undefined;
-  jobCreatedAt: string | null | undefined;
-  jobSyncedAt: string | null | undefined;
-};
-
-async function ensureJobFolderId(
+/** Year folder — lives directly at the Shared Drive root (parentId = driveId). */
+async function ensureYearFolder(
   env: Env,
   token: string,
   driveId: string,
-  jobsRootId: string,
+  year: string,
+): Promise<string> {
+  return ensureFolderCached(env, token, driveId, driveId, year, `v2_yr_${year}`);
+}
+
+/** Client folder — "{Last, First} — {id8}" under the year folder. */
+async function ensureClientFolder(
+  env: Env,
+  token: string,
+  driveId: string,
+  clientId: string,
+  year: string,
+  lastName: string | null,
+  firstName: string | null,
+  fullName: string | null,
+): Promise<string> {
+  const yearFolderId = await ensureYearFolder(env, token, driveId, year);
+  const label = clientFolderLabel(lastName, firstName, fullName, clientId);
+  return ensureFolderCached(env, token, driveId, yearFolderId, label, `v2_cl_${year}_${clientId}`);
+}
+
+/** "Estimates" subfolder under a client folder — for pre-job documents. */
+async function ensureEstimatesFolder(
+  env: Env,
+  token: string,
+  driveId: string,
+  clientFolderId: string,
+  clientId: string,
+  year: string,
+): Promise<string> {
+  return ensureFolderCached(
+    env,
+    token,
+    driveId,
+    clientFolderId,
+    "Estimates",
+    `v2_est_${year}_${clientId}`,
+  );
+}
+
+/** Job folder — "{address or #N}" — under the client folder. */
+async function ensureJobFolder(
+  env: Env,
+  token: string,
+  driveId: string,
+  clientFolderId: string,
   jobId: string,
   jobNumber: number | null,
-  jobTitle: string | null | undefined,
-  clientId: string | null | undefined,
-  clientName: string | null | undefined,
-  dates: JobFolderDates,
+  address: string | null,
 ): Promise<string> {
-  const jobYear = jobCalendarYear(dates.jobStartAt, dates.jobCreatedAt, dates.jobSyncedAt);
-  const yearKey = `yr_${jobYear}`;
-  const yearFolderId = await ensureFolderCached(env, token, driveId, jobsRootId, jobYear, yearKey);
-
-  const cKey = clientFolderCacheKey(clientId);
-  const clientLabel = clientFolderDisplayName(clientId, clientName);
-  const underYearKey = `yc_${jobYear}_${cKey}`;
-  const clientFolderId = await ensureFolderCached(env, token, driveId, yearFolderId, clientLabel, underYearKey);
-
-  const jobLabel = jobSubfolderLabel(jobNumber, jobId, jobTitle);
-  const jobKey = `job_${jobId}`;
-  return ensureFolderCached(env, token, driveId, clientFolderId, jobLabel, jobKey);
+  const label = jobFolderLabel(jobId, address, jobNumber);
+  return ensureFolderCached(env, token, driveId, clientFolderId, label, `v2_job_${jobId}`);
 }
 
-async function ensureSitePhotoLeafFolder(
+/** Category subfolder under a job folder — lazy, created on first use. */
+async function ensureJobCategoryFolder(
   env: Env,
   token: string,
   driveId: string,
-  jobRootId: string,
+  jobFolderId: string,
   jobId: string,
-  categoryKey: string,
+  category: string,
 ): Promise<string> {
-  const spRoot = await ensureFolderCached(
+  const label = JOB_CATEGORY_SUBFOLDER[category] ?? "Other";
+  const cacheKey = JOB_CATEGORY_SUBFOLDER[category] ? category : "other";
+  return ensureFolderCached(
     env,
     token,
     driveId,
-    jobRootId,
-    SITE_PHOTOS_ROOT,
-    `j_${jobId}_hub_sproot`,
+    jobFolderId,
+    label,
+    `v2_jcat_${jobId}_${cacheKey}`,
   );
-  const ck = mirrorPhotoCategoryKey(categoryKey);
-  const label = MIRROR_PHOTO_FOLDER[ck] ?? "Progress";
-  return ensureFolderCached(env, token, driveId, spRoot, label, `j_${jobId}_sp_${ck}`);
 }
 
-async function ensureProjectFileLeafFolder(
-  env: Env,
-  token: string,
-  driveId: string,
-  jobRootId: string,
-  jobId: string,
-  docType: string,
-): Promise<string> {
-  const pfRoot = await ensureFolderCached(
-    env,
-    token,
-    driveId,
-    jobRootId,
-    PROJECT_FILES_ROOT,
-    `j_${jobId}_hub_pfroot`,
-  );
-  const cacheK = mirrorJobFileCacheDocKey(docType);
-  const label = mirrorJobFileSubfolderLabel(docType);
-  return ensureFolderCached(env, token, driveId, pfRoot, label, `j_${jobId}_pf_${cacheK}`);
-}
+// ─── Shared parent resolver ───────────────────────────────────────────────
 
-async function segmentFolderId(
-  env: Env,
-  token: string,
-  driveId: string,
-  rootId: string,
-  segment: "Photos" | "Expenses" | "Company",
-): Promise<string> {
-  return ensureFolderCached(env, token, driveId, rootId, segment, `seg_${segment}`);
-}
-
-async function docTypeFolderId(
-  env: Env,
-  token: string,
-  driveId: string,
-  companyRootId: string,
-  docType: string,
-): Promise<string> {
-  const pathKey = `co_${docType}`;
-  const row = await env.DB.prepare("SELECT drive_folder_id FROM drive_mirror_folders WHERE path_key = ?")
-    .bind(pathKey)
-    .first<{ drive_folder_id: string }>();
-  if (row?.drive_folder_id) return row.drive_folder_id;
-  const id = await getOrCreateFolder({ token, driveId, parentId: companyRootId, name: docType });
-  await env.DB.prepare(
-    "INSERT OR REPLACE INTO drive_mirror_folders (path_key, drive_folder_id) VALUES (?, ?)",
-  )
-    .bind(pathKey, id)
-    .run();
-  return id;
-}
-
-async function mirrorPhotosBatch(
-  env: Env,
-  token: string,
-  driveId: string,
-  flatPhotosParentId: string,
-  jobsRootId: string,
-  out: DriveMirrorResult,
-): Promise<void> {
-  const rows = await env.DB.prepare(
-    `SELECT p.id, p.r2_key, p.job_id, p.category, p.created_at, j.job_number AS job_number, j.title AS job_title,
-            j.client_id AS client_id, c.name AS client_name,
-            j.start_at AS job_start_at, j.created_at AS job_created_at, j.synced_at AS job_synced_at
-     FROM photos p
-     LEFT JOIN jobs j ON j.id = p.job_id
-     LEFT JOIN clients c ON c.id = j.client_id
-     WHERE p.drive_mirrored_at IS NULL
-     ORDER BY datetime(p.created_at) ASC
-     LIMIT ?`,
-  )
-    .bind(BATCH_PHOTOS)
-    .all<{
-      id: string;
-      r2_key: string;
-      job_id: string | null;
-      category: string;
-      created_at: string;
-      job_number: number | null;
-      job_title: string | null;
-      client_id: string | null;
-      client_name: string | null;
-      job_start_at: string | null;
-      job_created_at: string | null;
-      job_synced_at: string | null;
-    }>();
-  for (const r of rows.results ?? []) {
-    try {
-      const obj = await env.FILES.get(r.r2_key);
-      if (!obj) {
-        out.errors.push(`photo ${r.id}: missing R2 ${r.r2_key}`);
-        continue;
-      }
-      const buf = await obj.arrayBuffer();
-      const jobSeg = (r.job_id ?? "general").replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 64);
-      const day = (r.created_at || "").slice(0, 10) || "unknown";
-      const name = `photo_${jobSeg}_${day}_${r.id}.jpg`;
-      const mime = obj.httpMetadata?.contentType || guessMimeFromKey(r.r2_key);
-      const dates = {
-        jobStartAt: r.job_start_at,
-        jobCreatedAt: r.job_created_at,
-        jobSyncedAt: r.job_synced_at,
-      };
-      let parentId: string;
-      if (r.job_id) {
-        const jobRootId = await ensureJobFolderId(
-          env,
-          token,
-          driveId,
-          jobsRootId,
-          r.job_id,
-          r.job_number,
-          r.job_title,
-          r.client_id,
-          r.client_name,
-          dates,
-        );
-        parentId = await ensureSitePhotoLeafFolder(env, token, driveId, jobRootId, r.job_id, r.category);
-      } else {
-        parentId = flatPhotosParentId;
-      }
-      await uploadFileMultipart({
-        token,
-        name,
-        parents: [parentId],
-        body: buf,
-        mimeType: mime || "image/jpeg",
-      });
-      const now = new Date().toISOString();
-      await env.DB.prepare("UPDATE photos SET drive_mirrored_at = ? WHERE id = ?")
-        .bind(now, r.id)
-        .run();
-      out.photos++;
-    } catch (e) {
-      out.errors.push(`photo ${r.id}: ${(e as Error).message}`);
-    }
-  }
-}
-
-async function mirrorExpensesBatch(
-  env: Env,
-  token: string,
-  driveId: string,
-  flatExpensesParentId: string,
-  jobsRootId: string,
-  out: DriveMirrorResult,
-): Promise<void> {
-  const rows = await env.DB.prepare(
-    `SELECT e.id, e.receipt_r2_key, e.job_id, j.job_number AS job_number, j.title AS job_title,
-            j.client_id AS client_id, c.name AS client_name,
-            j.start_at AS job_start_at, j.created_at AS job_created_at, j.synced_at AS job_synced_at
-     FROM expenses e
-     LEFT JOIN jobs j ON j.id = e.job_id
-     LEFT JOIN clients c ON c.id = j.client_id
-     WHERE e.receipt_r2_key IS NOT NULL
-       AND e.drive_mirrored_at IS NULL
-     ORDER BY COALESCE(e.incurred_at, e.synced_at) ASC, e.id ASC
-     LIMIT ?`,
-  )
-    .bind(BATCH_EXPENSES)
-    .all<{
-      id: string;
-      receipt_r2_key: string;
-      job_id: string | null;
-      job_number: number | null;
-      job_title: string | null;
-      client_id: string | null;
-      client_name: string | null;
-      job_start_at: string | null;
-      job_created_at: string | null;
-      job_synced_at: string | null;
-    }>();
-  for (const r of rows.results ?? []) {
-    try {
-      const obj = await env.FILES.get(r.receipt_r2_key);
-      if (!obj) {
-        out.errors.push(`expense ${r.id}: missing R2 ${r.receipt_r2_key}`);
-        continue;
-      }
-      const buf = await obj.arrayBuffer();
-      const ext = r.receipt_r2_key.split(".").pop() || "jpg";
-      const name = `receipt_${r.id}.${ext}`;
-      const mime = obj.httpMetadata?.contentType || guessMimeFromKey(r.receipt_r2_key);
-      const dates = {
-        jobStartAt: r.job_start_at,
-        jobCreatedAt: r.job_created_at,
-        jobSyncedAt: r.job_synced_at,
-      };
-      let parentId: string;
-      if (r.job_id) {
-        const jobRootId = await ensureJobFolderId(
-          env,
-          token,
-          driveId,
-          jobsRootId,
-          r.job_id,
-          r.job_number,
-          r.job_title,
-          r.client_id,
-          r.client_name,
-          dates,
-        );
-        parentId = await ensureProjectFileLeafFolder(env, token, driveId, jobRootId, r.job_id, "receipts");
-      } else {
-        parentId = flatExpensesParentId;
-      }
-      await uploadFileMultipart({
-        token,
-        name,
-        parents: [parentId],
-        body: buf,
-        mimeType: mime || "image/jpeg",
-      });
-      const now = new Date().toISOString();
-      await env.DB.prepare("UPDATE expenses SET drive_mirrored_at = ? WHERE id = ?")
-        .bind(now, r.id)
-        .run();
-      out.expenses++;
-    } catch (e) {
-      out.errors.push(`expense ${r.id}: ${(e as Error).message}`);
-    }
-  }
-}
-
-async function mirrorJobFilesBatch(
-  env: Env,
-  token: string,
-  driveId: string,
-  jobsRootId: string,
-  out: DriveMirrorResult,
-): Promise<void> {
-  const rows = await env.DB.prepare(
-    `SELECT jf.id, jf.r2_key, jf.filename, jf.doc_type, jf.mime_type, jf.job_id,
-            j.job_number AS job_number, j.title AS job_title,
-            j.client_id AS client_id, c.name AS client_name,
-            j.start_at AS job_start_at, j.created_at AS job_created_at, j.synced_at AS job_synced_at
-     FROM job_files jf
-     INNER JOIN jobs j ON j.id = jf.job_id
-     LEFT JOIN clients c ON c.id = j.client_id
-     WHERE jf.drive_mirrored_at IS NULL
-     ORDER BY datetime(jf.created_at) ASC
-     LIMIT ?`,
-  )
-    .bind(BATCH_JOB_FILES)
-    .all<{
-      id: string;
-      r2_key: string;
-      filename: string;
-      doc_type: string;
-      mime_type: string;
-      job_id: string;
-      job_number: number | null;
-      job_title: string | null;
-      client_id: string | null;
-      client_name: string | null;
-      job_start_at: string | null;
-      job_created_at: string | null;
-      job_synced_at: string | null;
-    }>();
-  for (const r of rows.results ?? []) {
-    try {
-      const obj = await env.FILES.get(r.r2_key);
-      if (!obj) {
-        out.errors.push(`job_file ${r.id}: missing R2 ${r.r2_key}`);
-        continue;
-      }
-      const buf = await obj.arrayBuffer();
-      const jobRootId = await ensureJobFolderId(
-        env,
-        token,
-        driveId,
-        jobsRootId,
-        r.job_id,
-        r.job_number,
-        r.job_title,
-        r.client_id,
-        r.client_name,
-        {
-          jobStartAt: r.job_start_at,
-          jobCreatedAt: r.job_created_at,
-          jobSyncedAt: r.job_synced_at,
-        },
-      );
-      const parentId = await ensureProjectFileLeafFolder(
-        env,
-        token,
-        driveId,
-        jobRootId,
-        r.job_id,
-        r.doc_type,
-      );
-      const safe = r.filename.replace(/[\\/]/g, "_").slice(0, 200);
-      const name = `${r.doc_type}_${r.id}__${safe || "file"}`;
-      const mime = obj.httpMetadata?.contentType || r.mime_type || guessMimeFromKey(r.r2_key);
-      await uploadFileMultipart({
-        token,
-        name,
-        parents: [parentId],
-        body: buf,
-        mimeType: mime || "application/octet-stream",
-      });
-      const now = new Date().toISOString();
-      await env.DB.prepare("UPDATE job_files SET drive_mirrored_at = ? WHERE id = ?")
-        .bind(now, r.id)
-        .run();
-      out.job_files++;
-    } catch (e) {
-      out.errors.push(`job_file ${r.id}: ${(e as Error).message}`);
-    }
-  }
-}
-
-async function mirrorCompanyBatch(
-  env: Env,
-  token: string,
-  driveId: string,
-  companyRootId: string,
-  out: DriveMirrorResult,
-): Promise<void> {
-  const rows = await env.DB.prepare(
-    `SELECT id, title, filename, r2_key, doc_type
-     FROM company_documents
-     WHERE drive_mirrored_at IS NULL
-     ORDER BY datetime(created_at) ASC
-     LIMIT ?`,
-  )
-    .bind(BATCH_COMPANY)
-    .all<{
-      id: string;
-      title: string;
-      filename: string;
-      r2_key: string;
-      doc_type: string;
-    }>();
-  for (const r of rows.results ?? []) {
-    try {
-      const obj = await env.FILES.get(r.r2_key);
-      if (!obj) {
-        out.errors.push(`company ${r.id}: missing R2 ${r.r2_key}`);
-        continue;
-      }
-      const buf = await obj.arrayBuffer();
-      const typeFolder = await docTypeFolderId(env, token, driveId, companyRootId, r.doc_type);
-      const safe = r.filename.replace(/[\\/]/g, "_").slice(0, 200);
-      const name = `company_${r.id}__${safe || "file"}`;
-      const mime = obj.httpMetadata?.contentType || guessMimeFromKey(r.r2_key);
-      await uploadFileMultipart({
-        token,
-        name,
-        parents: [typeFolder],
-        body: buf,
-        mimeType: mime || "application/octet-stream",
-      });
-      const now = new Date().toISOString();
-      await env.DB.prepare("UPDATE company_documents SET drive_mirrored_at = ? WHERE id = ?")
-        .bind(now, r.id)
-        .run();
-      out.company++;
-    } catch (e) {
-      out.errors.push(`company ${r.id}: ${(e as Error).message}`);
-    }
-  }
-}
+type FileContext = {
+  clientId: string | null;
+  lastName: string | null;
+  firstName: string | null;
+  fullName: string | null;
+  jobId: string | null;
+  jobNumber: number | null;
+  address: string | null;
+  yearAnchor: string | null;
+  fallbackDate: string | null;
+};
 
 /**
- * Sprint 15 — mirror the unified `documents` table. Picks up rows whose
- * mirror_status is pending OR failed (best-effort retry next cycle, business
- * rule 2), copies R2 → Drive, stamps google_drive_id/url + mirror_date and
- * flips mirror_status to 'synced'. On error → 'failed' (re-tried next run).
- * Job-context docs land in the job's PROJECT FILES tree (reusing the existing
- * folder cache); company docs go under the flat Company segment. R2 + D1 stay
- * canonical. Runs inside the SAME hourly 15 * * * handler — NO new cron.
+ * Resolve the Drive parent folder for a job- or client-scoped file.
+ * - company context → handled separately (hardcoded IDs, don't call this)
+ * - job_id present → year/client/job/category subfolder
+ * - client_id only (no job) → year/client/Estimates
+ * - neither → Company Documents root (safety valve for orphans)
  */
+async function resolveParentFolder(
+  env: Env,
+  token: string,
+  driveId: string,
+  ctx: FileContext,
+  category: string,
+): Promise<string> {
+  if (!ctx.clientId) return COMPANY_DOCS_ROOT;
+
+  const year = parseYear(ctx.yearAnchor, ctx.fallbackDate);
+  const clientFolderId = await ensureClientFolder(
+    env,
+    token,
+    driveId,
+    ctx.clientId,
+    year,
+    ctx.lastName,
+    ctx.firstName,
+    ctx.fullName,
+  );
+
+  if (!ctx.jobId) {
+    return ensureEstimatesFolder(env, token, driveId, clientFolderId, ctx.clientId, year);
+  }
+
+  const jobFolderId = await ensureJobFolder(
+    env,
+    token,
+    driveId,
+    clientFolderId,
+    ctx.jobId,
+    ctx.jobNumber,
+    ctx.address,
+  );
+  return ensureJobCategoryFolder(env, token, driveId, jobFolderId, ctx.jobId, category);
+}
+
+// ─── Mirror batches ───────────────────────────────────────────────────────
+
 async function mirrorDocumentsBatch(
   env: Env,
   token: string,
   driveId: string,
-  jobsRootId: string,
-  companyRootId: string,
   out: DriveMirrorResult,
 ): Promise<void> {
   const rows = await env.DB.prepare(
-    `SELECT d.id, d.r2_key, d.file_type, d.title, d.context_type, d.document_category, d.job_id,
-            j.job_number AS job_number, j.title AS job_title, j.client_id AS client_id,
-            c.name AS client_name, j.start_at AS job_start_at, j.created_at AS job_created_at,
-            j.synced_at AS job_synced_at
+    `SELECT d.id, d.r2_key, d.file_type, d.title, d.context_type, d.document_category,
+            d.job_id, COALESCE(d.client_id, j.client_id) AS client_id,
+            j.job_number,
+            (SELECT property_address FROM estimate_requests WHERE converted_job_id = j.id LIMIT 1) AS address,
+            c.last_name, c.first_name, c.name AS client_name,
+            (SELECT MIN(er.created_at) FROM estimate_requests er
+             WHERE er.client_id = COALESCE(d.client_id, j.client_id)) AS year_anchor,
+            d.created_at AS fallback_date
        FROM documents d
        LEFT JOIN jobs j ON j.id = d.job_id
-       LEFT JOIN clients c ON c.id = j.client_id
-      WHERE COALESCE(d.is_active,1)=1
+       LEFT JOIN clients c ON c.id = COALESCE(d.client_id, j.client_id)
+      WHERE COALESCE(d.is_active,1) = 1
         AND COALESCE(d.mirror_status,'pending') IN ('pending','failed')
       ORDER BY datetime(d.created_at) ASC
       LIMIT ?`,
   )
-    .bind(BATCH_DOCUMENTS)
+    .bind(BATCH)
     .all<{
       id: string;
       r2_key: string;
@@ -936,46 +492,55 @@ async function mirrorDocumentsBatch(
       context_type: string;
       document_category: string;
       job_id: string | null;
-      job_number: number | null;
-      job_title: string | null;
       client_id: string | null;
+      job_number: number | null;
+      address: string | null;
+      last_name: string | null;
+      first_name: string | null;
       client_name: string | null;
-      job_start_at: string | null;
-      job_created_at: string | null;
-      job_synced_at: string | null;
+      year_anchor: string | null;
+      fallback_date: string;
     }>();
+
   for (const r of rows.results ?? []) {
     try {
       const obj = await env.FILES.get(r.r2_key);
       if (!obj) {
-        // No bytes to mirror — mark failed so it isn't retried forever-fast.
-        await env.DB.prepare("UPDATE documents SET mirror_status='failed' WHERE id = ?").bind(r.id).run();
+        await env.DB.prepare("UPDATE documents SET mirror_status='failed' WHERE id = ?")
+          .bind(r.id)
+          .run();
         out.errors.push(`document ${r.id}: missing R2 ${r.r2_key}`);
         continue;
       }
       const buf = await obj.arrayBuffer();
+
       let parentId: string;
-      if (r.job_id) {
-        const jobRootId = await ensureJobFolderId(
+      if (r.context_type === "company") {
+        parentId = companyFolderId(r.document_category);
+      } else {
+        parentId = await resolveParentFolder(
           env,
           token,
           driveId,
-          jobsRootId,
-          r.job_id,
-          r.job_number,
-          r.job_title,
-          r.client_id,
-          r.client_name,
-          { jobStartAt: r.job_start_at, jobCreatedAt: r.job_created_at, jobSyncedAt: r.job_synced_at },
+          {
+            clientId: r.client_id,
+            lastName: r.last_name,
+            firstName: r.first_name,
+            fullName: r.client_name,
+            jobId: r.job_id,
+            jobNumber: r.job_number,
+            address: r.address,
+            yearAnchor: r.year_anchor,
+            fallbackDate: r.fallback_date,
+          },
+          r.document_category,
         );
-        const docType = DOC_CATEGORY_TO_DOCTYPE[r.document_category] ?? "other";
-        parentId = await ensureProjectFileLeafFolder(env, token, driveId, jobRootId, r.job_id, docType);
-      } else {
-        parentId = await docTypeFolderId(env, token, driveId, companyRootId, r.document_category || "other");
       }
+
       const safe = r.title.replace(/[\\/]/g, "_").slice(0, 200);
       const name = `doc_${r.id}__${safe || "document"}`;
-      const mime = obj.httpMetadata?.contentType || r.file_type || guessMimeFromKey(r.r2_key);
+      const mime =
+        obj.httpMetadata?.contentType || r.file_type || guessMimeFromKey(r.r2_key);
       const driveFileId = await uploadFileMultipart({
         token,
         name,
@@ -986,8 +551,7 @@ async function mirrorDocumentsBatch(
       const now = new Date().toISOString();
       await env.DB.prepare(
         `UPDATE documents
-            SET mirror_status='synced', mirror_date=?, google_drive_id=?,
-                google_drive_url=?
+            SET mirror_status='synced', mirror_date=?, google_drive_id=?, google_drive_url=?
           WHERE id = ?`,
       )
         .bind(now, driveFileId, `https://drive.google.com/file/d/${driveFileId}/view`, r.id)
@@ -999,6 +563,307 @@ async function mirrorDocumentsBatch(
         .run()
         .catch(() => undefined);
       out.errors.push(`document ${r.id}: ${(e as Error).message}`);
+    }
+  }
+}
+
+async function mirrorPhotosBatch(
+  env: Env,
+  token: string,
+  driveId: string,
+  out: DriveMirrorResult,
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT p.id, p.r2_key, p.job_id, p.created_at AS fallback_date,
+            j.job_number, j.client_id,
+            (SELECT property_address FROM estimate_requests WHERE converted_job_id = j.id LIMIT 1) AS address,
+            c.last_name, c.first_name, c.name AS client_name,
+            (SELECT MIN(er.created_at) FROM estimate_requests er
+             WHERE er.client_id = j.client_id) AS year_anchor
+       FROM photos p
+       LEFT JOIN jobs j ON j.id = p.job_id
+       LEFT JOIN clients c ON c.id = j.client_id
+      WHERE p.drive_mirrored_at IS NULL
+      ORDER BY datetime(p.created_at) ASC
+      LIMIT ?`,
+  )
+    .bind(BATCH)
+    .all<{
+      id: string;
+      r2_key: string;
+      job_id: string | null;
+      fallback_date: string;
+      job_number: number | null;
+      client_id: string | null;
+      address: string | null;
+      last_name: string | null;
+      first_name: string | null;
+      client_name: string | null;
+      year_anchor: string | null;
+    }>();
+
+  for (const r of rows.results ?? []) {
+    try {
+      const obj = await env.FILES.get(r.r2_key);
+      if (!obj) {
+        out.errors.push(`photo ${r.id}: missing R2 ${r.r2_key}`);
+        continue;
+      }
+      const buf = await obj.arrayBuffer();
+      const parentId = await resolveParentFolder(
+        env,
+        token,
+        driveId,
+        {
+          clientId: r.client_id,
+          lastName: r.last_name,
+          firstName: r.first_name,
+          fullName: r.client_name,
+          jobId: r.job_id,
+          jobNumber: r.job_number,
+          address: r.address,
+          yearAnchor: r.year_anchor,
+          fallbackDate: r.fallback_date,
+        },
+        "photo_report",
+      );
+      const day = (r.fallback_date || "").slice(0, 10) || "unknown";
+      const name = `photo_${r.id}_${day}.jpg`;
+      const mime = obj.httpMetadata?.contentType || guessMimeFromKey(r.r2_key);
+      await uploadFileMultipart({
+        token,
+        name,
+        parents: [parentId],
+        body: buf,
+        mimeType: mime || "image/jpeg",
+      });
+      await env.DB.prepare("UPDATE photos SET drive_mirrored_at = ? WHERE id = ?")
+        .bind(new Date().toISOString(), r.id)
+        .run();
+      out.photos++;
+    } catch (e) {
+      out.errors.push(`photo ${r.id}: ${(e as Error).message}`);
+    }
+  }
+}
+
+async function mirrorJobFilesBatch(
+  env: Env,
+  token: string,
+  driveId: string,
+  out: DriveMirrorResult,
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT jf.id, jf.r2_key, jf.filename, jf.doc_type, jf.mime_type,
+            jf.job_id, jf.created_at AS fallback_date,
+            j.job_number, j.client_id,
+            (SELECT property_address FROM estimate_requests WHERE converted_job_id = j.id LIMIT 1) AS address,
+            c.last_name, c.first_name, c.name AS client_name,
+            (SELECT MIN(er.created_at) FROM estimate_requests er
+             WHERE er.client_id = j.client_id) AS year_anchor
+       FROM job_files jf
+      INNER JOIN jobs j ON j.id = jf.job_id
+       LEFT JOIN clients c ON c.id = j.client_id
+      WHERE jf.drive_mirrored_at IS NULL
+      ORDER BY datetime(jf.created_at) ASC
+      LIMIT ?`,
+  )
+    .bind(BATCH)
+    .all<{
+      id: string;
+      r2_key: string;
+      filename: string;
+      doc_type: string;
+      mime_type: string;
+      job_id: string;
+      fallback_date: string;
+      job_number: number | null;
+      client_id: string | null;
+      address: string | null;
+      last_name: string | null;
+      first_name: string | null;
+      client_name: string | null;
+      year_anchor: string | null;
+    }>();
+
+  for (const r of rows.results ?? []) {
+    try {
+      const obj = await env.FILES.get(r.r2_key);
+      if (!obj) {
+        out.errors.push(`job_file ${r.id}: missing R2 ${r.r2_key}`);
+        continue;
+      }
+      const buf = await obj.arrayBuffer();
+      const category = JOB_FILE_CATEGORY[r.doc_type] ?? "other";
+      const parentId = await resolveParentFolder(
+        env,
+        token,
+        driveId,
+        {
+          clientId: r.client_id,
+          lastName: r.last_name,
+          firstName: r.first_name,
+          fullName: r.client_name,
+          jobId: r.job_id,
+          jobNumber: r.job_number,
+          address: r.address,
+          yearAnchor: r.year_anchor,
+          fallbackDate: r.fallback_date,
+        },
+        category,
+      );
+      const safe = r.filename.replace(/[\\/]/g, "_").slice(0, 200);
+      const name = `${r.doc_type}_${r.id}__${safe || "file"}`;
+      const mime =
+        obj.httpMetadata?.contentType || r.mime_type || guessMimeFromKey(r.r2_key);
+      await uploadFileMultipart({
+        token,
+        name,
+        parents: [parentId],
+        body: buf,
+        mimeType: mime || "application/octet-stream",
+      });
+      await env.DB.prepare("UPDATE job_files SET drive_mirrored_at = ? WHERE id = ?")
+        .bind(new Date().toISOString(), r.id)
+        .run();
+      out.job_files++;
+    } catch (e) {
+      out.errors.push(`job_file ${r.id}: ${(e as Error).message}`);
+    }
+  }
+}
+
+async function mirrorExpensesBatch(
+  env: Env,
+  token: string,
+  driveId: string,
+  out: DriveMirrorResult,
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT e.id, e.receipt_r2_key, e.job_id,
+            COALESCE(e.incurred_at, e.created_at) AS fallback_date,
+            j.job_number, j.client_id,
+            (SELECT property_address FROM estimate_requests WHERE converted_job_id = j.id LIMIT 1) AS address,
+            c.last_name, c.first_name, c.name AS client_name,
+            (SELECT MIN(er.created_at) FROM estimate_requests er
+             WHERE er.client_id = j.client_id) AS year_anchor
+       FROM expenses e
+       LEFT JOIN jobs j ON j.id = e.job_id
+       LEFT JOIN clients c ON c.id = j.client_id
+      WHERE e.receipt_r2_key IS NOT NULL
+        AND e.drive_mirrored_at IS NULL
+      ORDER BY COALESCE(e.incurred_at, e.created_at) ASC, e.id ASC
+      LIMIT ?`,
+  )
+    .bind(BATCH)
+    .all<{
+      id: string;
+      receipt_r2_key: string;
+      job_id: string | null;
+      fallback_date: string | null;
+      job_number: number | null;
+      client_id: string | null;
+      address: string | null;
+      last_name: string | null;
+      first_name: string | null;
+      client_name: string | null;
+      year_anchor: string | null;
+    }>();
+
+  for (const r of rows.results ?? []) {
+    try {
+      const obj = await env.FILES.get(r.receipt_r2_key);
+      if (!obj) {
+        out.errors.push(`expense ${r.id}: missing R2 ${r.receipt_r2_key}`);
+        continue;
+      }
+      const buf = await obj.arrayBuffer();
+      // Expense receipts → Invoices & Payments subfolder
+      const parentId = await resolveParentFolder(
+        env,
+        token,
+        driveId,
+        {
+          clientId: r.client_id,
+          lastName: r.last_name,
+          firstName: r.first_name,
+          fullName: r.client_name,
+          jobId: r.job_id,
+          jobNumber: r.job_number,
+          address: r.address,
+          yearAnchor: r.year_anchor,
+          fallbackDate: r.fallback_date,
+        },
+        "invoice",
+      );
+      const ext = r.receipt_r2_key.split(".").pop() || "jpg";
+      const name = `receipt_${r.id}.${ext}`;
+      const mime = obj.httpMetadata?.contentType || guessMimeFromKey(r.receipt_r2_key);
+      await uploadFileMultipart({
+        token,
+        name,
+        parents: [parentId],
+        body: buf,
+        mimeType: mime || "image/jpeg",
+      });
+      await env.DB.prepare("UPDATE expenses SET drive_mirrored_at = ? WHERE id = ?")
+        .bind(new Date().toISOString(), r.id)
+        .run();
+      out.expenses++;
+    } catch (e) {
+      out.errors.push(`expense ${r.id}: ${(e as Error).message}`);
+    }
+  }
+}
+
+async function mirrorCompanyBatch(
+  env: Env,
+  token: string,
+  driveId: string,
+  out: DriveMirrorResult,
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT id, title, filename, r2_key, doc_type
+       FROM company_documents
+      WHERE drive_mirrored_at IS NULL
+      ORDER BY datetime(created_at) ASC
+      LIMIT ?`,
+  )
+    .bind(BATCH)
+    .all<{
+      id: string;
+      title: string;
+      filename: string;
+      r2_key: string;
+      doc_type: string;
+    }>();
+
+  for (const r of rows.results ?? []) {
+    try {
+      const obj = await env.FILES.get(r.r2_key);
+      if (!obj) {
+        out.errors.push(`company ${r.id}: missing R2 ${r.r2_key}`);
+        continue;
+      }
+      const buf = await obj.arrayBuffer();
+      // company_documents always go to fixed Company Documents folders — no Drive API call for the folder
+      const parentId = companyFolderId(r.doc_type);
+      const safe = r.filename.replace(/[\\/]/g, "_").slice(0, 200);
+      const name = `company_${r.id}__${safe || "file"}`;
+      const mime = obj.httpMetadata?.contentType || guessMimeFromKey(r.r2_key);
+      await uploadFileMultipart({
+        token,
+        name,
+        parents: [parentId],
+        body: buf,
+        mimeType: mime || "application/octet-stream",
+      });
+      await env.DB.prepare("UPDATE company_documents SET drive_mirrored_at = ? WHERE id = ?")
+        .bind(new Date().toISOString(), r.id)
+        .run();
+      out.company++;
+    } catch (e) {
+      out.errors.push(`company ${r.id}: ${(e as Error).message}`);
     }
   }
 }

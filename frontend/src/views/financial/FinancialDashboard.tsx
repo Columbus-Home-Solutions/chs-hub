@@ -18,8 +18,9 @@ import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
 import { FinancialReports } from "./FinancialReports";
 import { PricingIntelligence } from "./PricingIntelligence";
+import { ReceiptQueueView } from "./ReceiptQueueView";
 
-type FinTab = "invoices" | "reports" | "pricing";
+type FinTab = "invoices" | "reports" | "pricing" | "receipts";
 
 interface InvoiceRow {
   id: string;
@@ -116,6 +117,7 @@ export function FinancialDashboard(_props: RoutableProps) {
     const urlTab = params.get("tab");
     if (urlTab === "reports") setTab("reports");
     else if (urlTab === "pricing") setTab("pricing");
+    else if (urlTab === "receipts") setTab("receipts");
     else if (urlTab === "invoices" || urlTab === "payments") setTab("invoices");
     else setTab("invoices"); // default / no ?tab= param
 
@@ -168,8 +170,9 @@ export function FinancialDashboard(_props: RoutableProps) {
     return invoices;
   }, [invoices, statusFilter, dueSoonDate, paymentsResp.data?.payments]);
 
-  // Pricing Intelligence tab renders immediately without waiting for invoices/jobs.
-  if (tab === "pricing") {
+  // Receipt Queue and Pricing Intelligence tabs render without waiting for invoices/jobs.
+  if (tab === "receipts" || tab === "pricing") {
+    const jobId = new URLSearchParams(currentSearch).get("job_id") ?? undefined;
     return (
       <div>
         <div class="view-header">
@@ -177,29 +180,12 @@ export function FinancialDashboard(_props: RoutableProps) {
             <h1 class="view-title">Financial</h1>
           </div>
         </div>
-        <div class="segmented" style={{ marginBottom: "var(--space-lg)" }}>
-          <button
-            type="button"
-            class="segmented__btn"
-            onClick={() => setTab("invoices")}
-          >
-            Invoices
-          </button>
-          <button
-            type="button"
-            class="segmented__btn"
-            onClick={() => setTab("reports")}
-          >
-            Reports
-          </button>
-          <button
-            type="button"
-            class="segmented__btn segmented__btn--active"
-          >
-            Pricing Intelligence
-          </button>
-        </div>
-        <PricingIntelligence />
+        <FinTabBar tab={tab} setTab={setTab} />
+        {tab === "receipts" ? (
+          <ReceiptQueueView jobId={jobId} />
+        ) : (
+          <PricingIntelligence />
+        )}
       </div>
     );
   }
@@ -226,29 +212,7 @@ export function FinancialDashboard(_props: RoutableProps) {
         </button>
       </div>
 
-      <div class="segmented" style={{ marginBottom: "var(--space-lg)" }}>
-        <button
-          type="button"
-          class={`segmented__btn${tab === "invoices" ? " segmented__btn--active" : ""}`}
-          onClick={() => setTab("invoices")}
-        >
-          Invoices
-        </button>
-        <button
-          type="button"
-          class={`segmented__btn${tab === "reports" ? " segmented__btn--active" : ""}`}
-          onClick={() => setTab("reports")}
-        >
-          Reports
-        </button>
-        <button
-          type="button"
-          class={`segmented__btn${tab === "pricing" ? " segmented__btn--active" : ""}`}
-          onClick={() => setTab("pricing")}
-        >
-          Pricing Intelligence
-        </button>
-      </div>
+      <FinTabBar tab={tab} setTab={setTab} />
 
       {tab === "reports" ? (
         <FinancialReports />
@@ -364,6 +328,47 @@ export function FinancialDashboard(_props: RoutableProps) {
       )}
         </>
       )}
+    </div>
+  );
+}
+
+function FinTabBar({
+  tab,
+  setTab,
+}: {
+  tab: FinTab;
+  setTab: (t: FinTab) => void;
+}) {
+  return (
+    <div class="segmented" style={{ marginBottom: "var(--space-lg)" }}>
+      <button
+        type="button"
+        class={`segmented__btn${tab === "invoices" ? " segmented__btn--active" : ""}`}
+        onClick={() => setTab("invoices")}
+      >
+        Invoices
+      </button>
+      <button
+        type="button"
+        class={`segmented__btn${tab === "reports" ? " segmented__btn--active" : ""}`}
+        onClick={() => setTab("reports")}
+      >
+        Reports
+      </button>
+      <button
+        type="button"
+        class={`segmented__btn${tab === "pricing" ? " segmented__btn--active" : ""}`}
+        onClick={() => setTab("pricing")}
+      >
+        Pricing
+      </button>
+      <button
+        type="button"
+        class={`segmented__btn${tab === "receipts" ? " segmented__btn--active" : ""}`}
+        onClick={() => setTab("receipts")}
+      >
+        💵 Receipts
+      </button>
     </div>
   );
 }

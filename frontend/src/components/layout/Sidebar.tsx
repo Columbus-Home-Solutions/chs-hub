@@ -188,6 +188,12 @@ const NAV: NavSection[] = [
     // No navPath — label + chevron both toggle only (same as Jobs)
     children: [
       {
+        label: "Receipt Queue",
+        href: to("/financial") + "?tab=receipts",
+        activeTest: (p, s) =>
+          p === to("/financial") && new URLSearchParams(s).get("tab") === "receipts",
+      },
+      {
         label: "Reports",
         href: to("/financial") + "?tab=reports",
         activeTest: (p, s) =>

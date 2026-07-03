@@ -434,6 +434,7 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     result.rows_matched[settings.marketingTab] = row;
     if (row == null) {
       result.tabs_failed.push(settings.marketingTab);
+      result.error_message = (result.error_message ? result.error_message + " | " : "") + `marketing: ROW_MISSING week=${wk.start}`;
       console.warn(`[wc] ROW_MISSING marketing week=${wk.start} — skipping Marketing tab`);
     } else {
       const lc = weekly.lead_by_column;

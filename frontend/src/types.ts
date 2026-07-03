@@ -496,6 +496,7 @@ export interface Estimate {
   notes: string | null;
   version: number;
   revised_from_id: string | null;
+  is_current_version: boolean;
   sent_at: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -888,11 +889,35 @@ export interface LineItemForMatching {
   description: string;
 }
 
+export interface VendorMaterialStub {
+  id: string;
+  vendor_name: string;
+  material_name: string;
+  unit: string | null;
+  last_price: number | null;
+}
+
+export interface ExpenseLineItem {
+  id: string;
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  amount: number;
+  matched_estimate_sub_item_id: string | null;
+  matched_vendor_material_id: string | null;
+  match_confidence: number | null;
+  expense_id: string | null;
+  vendor_material: VendorMaterialStub | null;
+  is_new_material_candidate: boolean;
+}
+
 export interface MatchData {
   status: "pending" | "processed";
   extracted_items: ExtractedItem[];
   match_results: MatchResult[];
   has_unresolved: boolean;
+  expense_line_items: ExpenseLineItem[];
 }
 
 export interface ReceiptMatchResponse {
@@ -900,4 +925,5 @@ export interface ReceiptMatchResponse {
   extracted_items?: ExtractedItem[];
   match_results?: MatchResult[];
   has_unresolved?: boolean;
+  expense_line_items?: ExpenseLineItem[];
 }

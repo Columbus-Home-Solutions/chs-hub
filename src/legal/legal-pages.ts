@@ -154,7 +154,7 @@ export const PRIVACY_POLICY_HTML = pageShell(
 <p>Message and data rates may apply. Standard carrier rates apply to all messages sent and received.</p>
 <p><strong>To get help:</strong> Reply HELP to any message or email us at tony@homesolutionsar.com</p>
 <p><strong>To opt out:</strong> Reply STOP to any message at any time. You will receive one confirmation message and no further texts will be sent. Opting out does not affect your ability to receive service.</p>
-<p>We do not sell or share your phone number with third parties for their marketing purposes. Your consent to receive SMS is not required as a condition of receiving our services.</p>
+<p>We do not sell or share your phone number with third parties for marketing purposes. Text messaging originator opt-in data and consent will not be shared with any third parties or affiliates for marketing or promotional purposes. Your consent to receive SMS is not required as a condition of receiving our services.</p>
 
 <h2>4. How We Share Your Information</h2>
 <p>We do not sell your personal information. We may share it with:</p>
@@ -164,6 +164,8 @@ export const PRIVACY_POLICY_HTML = pageShell(
   <li>Legal authorities when required by law or to protect our rights</li>
 </ul>
 <p>All service providers are contractually required to protect your information and use it only for the purpose of providing services to us.</p>
+
+<p>Mobile Information Sharing Exclusion: Notwithstanding anything else in this Privacy Policy, no mobile information or text messaging originator opt-in data and consent will be shared with third parties, affiliates, or subcontractors for marketing or promotional purposes. All the above categories exclude text messaging originator opt-in data and consent; this information will not be shared with any third parties.</p>
 
 <h2>5. Data Retention</h2>
 <p>We retain your information for as long as necessary to:</p>

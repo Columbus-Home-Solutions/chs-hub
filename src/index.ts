@@ -61,6 +61,7 @@ import {
   handleJobReverseConversion,
   handleJobCloseEligibility,
   handleJobReviewReceived,
+  handleJobQuickCreate,
   handleTaskList,
   handleTaskCreate,
   handleTaskUpdate,
@@ -1026,6 +1027,9 @@ export default {
     // Fixed/sub-resource paths before the bare :id route.
     if (url.pathname === "/api/jobs" && request.method === "GET") {
       return handleJobList(env, url);
+    }
+    if (url.pathname === "/api/jobs/quick" && request.method === "POST") {
+      return handleJobQuickCreate(request, env);
     }
     if (url.pathname === "/api/jobs/map" && request.method === "GET") {
       return handleJobMap(request, env);

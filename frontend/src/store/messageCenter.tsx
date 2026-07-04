@@ -12,7 +12,12 @@ import type { ComponentChildren } from "preact";
 interface MessageCenterState {
   isOpen: boolean;
   activeClientId: string | null;
+  /** Set when openCompose() was called; MessageCenter reads and clears this on mount. */
+  pendingCompose: boolean;
   open: (clientId?: string) => void;
+  /** Open the panel directly to the New Message compose screen. */
+  openCompose: () => void;
+  clearPendingCompose: () => void;
   close: () => void;
   toggle: () => void;
 }
@@ -20,7 +25,10 @@ interface MessageCenterState {
 const MessageCenterContext = createContext<MessageCenterState>({
   isOpen: false,
   activeClientId: null,
+  pendingCompose: false,
   open: () => {},
+  openCompose: () => {},
+  clearPendingCompose: () => {},
   close: () => {},
   toggle: () => {},
 });
@@ -28,11 +36,21 @@ const MessageCenterContext = createContext<MessageCenterState>({
 export function MessageCenterProvider({ children }: { children: ComponentChildren }) {
   const [isOpen, setIsOpen] = useState(false);
   const [activeClientId, setActiveClientId] = useState<string | null>(null);
+  const [pendingCompose, setPendingCompose] = useState(false);
 
   const open = useCallback((clientId?: string) => {
     setActiveClientId(clientId ?? null);
+    setPendingCompose(false);
     setIsOpen(true);
   }, []);
+
+  const openCompose = useCallback(() => {
+    setActiveClientId(null);
+    setPendingCompose(true);
+    setIsOpen(true);
+  }, []);
+
+  const clearPendingCompose = useCallback(() => setPendingCompose(false), []);
 
   const close = useCallback(() => {
     setIsOpen(false);
@@ -44,7 +62,9 @@ export function MessageCenterProvider({ children }: { children: ComponentChildre
   }, []);
 
   return (
-    <MessageCenterContext.Provider value={{ isOpen, activeClientId, open, close, toggle }}>
+    <MessageCenterContext.Provider
+      value={{ isOpen, activeClientId, pendingCompose, open, openCompose, clearPendingCompose, close, toggle }}
+    >
       {children}
     </MessageCenterContext.Provider>
   );

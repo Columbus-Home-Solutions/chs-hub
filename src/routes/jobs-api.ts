@@ -1271,3 +1271,105 @@ export async function handleJobDelete(request: Request, env: Env, id: string): P
 
   return json({ ok: true, deleted: true, id });
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// POST /api/jobs/quick — create a job directly (no estimate required).
+//
+// Narrow exception to the "jobs only via quote-to-job" rule, for
+// hourly/simple-service client relationships where no estimate, scope, or
+// signature applies. Lands on "in_progress" with Fixed Price billing by
+// default — Financial tab is immediately ready for a manual invoice.
+// ────────────────────────────────────────────────────────────────────────────
+
+function strQ(body: Record<string, unknown>, key: string): string | null {
+  const v = body[key];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+export async function handleJobQuickCreate(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guarded = await guard(request, env, ["owner", "project_manager", "office_admin"]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return err(400, "bad_request", "Body must be JSON");
+  }
+
+  const clientId = strQ(body, "client_id");
+  if (!clientId) return err(400, "bad_request", "client_id is required");
+
+  const client = await env.DB.prepare(
+    "SELECT id, first_name, last_name, name FROM clients WHERE id = ?",
+  )
+    .bind(clientId)
+    .first<{ id: string; first_name: string | null; last_name: string | null; name: string | null }>();
+  if (!client) return err(404, "not_found", "Client not found");
+
+  const billingModel = strQ(body, "billing_model") ?? "fixed_price";
+  const portalType = billingModel === "cost_plus" ? "cost_plus" : "standard";
+  const clientLabel =
+    [client.first_name, client.last_name].filter(Boolean).join(" ").trim() ||
+    client.name ||
+    "Client";
+  const title = strQ(body, "title") ?? `Quick Job — ${clientLabel}`;
+  const jobType = strQ(body, "job_type") ?? "Hourly / Simple Service";
+  const propertyAddress = strQ(body, "property_address");
+  const propertyCity = strQ(body, "property_city");
+  const propertyState = strQ(body, "property_state");
+  const propertyZip = strQ(body, "property_zip");
+
+  const jobId = crypto.randomUUID();
+  const portalToken = crypto.randomUUID().replace(/-/g, "");
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT INTO jobs (
+       id, job_number, title, status, client_id, source, total,
+       created_at, synced_at, updated_at,
+       billing_model, property_address, property_city, property_state, property_zip,
+       job_type, estimate_id, portal_token, portal_type, conversion_complete
+     )
+     SELECT
+       ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1,
+       ?, 'in_progress', ?, 'quick_job', 0,
+       ?, ?, ?,
+       ?, ?, ?, ?, ?,
+       ?, NULL, ?, ?, 1`,
+  )
+    .bind(
+      jobId,
+      title,
+      clientId,
+      now,
+      now, // synced_at NOT NULL (legacy Jobber-sync column; set to creation time for native rows)
+      now,
+      billingModel,
+      propertyAddress,
+      propertyCity,
+      propertyState,
+      propertyZip,
+      jobType,
+      portalToken,
+      portalType,
+    )
+    .run();
+
+  const jobRow = await env.DB.prepare("SELECT id, job_number FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ id: string; job_number: number }>();
+
+  await logAudit(env, user.email, "quick_job_created", "job", jobId, {
+    job_number: jobRow?.job_number,
+    client_id: clientId,
+    billing_model: billingModel,
+    title,
+  });
+
+  return json({ job: { id: jobId, job_number: jobRow?.job_number ?? null } }, { status: 201 });
+}

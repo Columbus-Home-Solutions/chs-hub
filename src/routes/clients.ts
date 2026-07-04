@@ -178,11 +178,16 @@ export async function handleClientList(env: Env, url: URL): Promise<Response> {
     where.push("COALESCE(c.is_repeat_client, 0) = 1");
   }
 
+  // When a free-text search is present, fetch all rows first so the JS-side
+  // substring filter can match any client — not just the top N by recency.
+  // The caller's `limit` is applied after filtering.
+  const sqlLimit = search ? 2000 : limit;
+
   const sql = `${CLIENT_SELECT}
     ${where.length ? "WHERE " + where.join(" AND ") : ""}
     ORDER BY c.last_interaction_date DESC, c.updated_at DESC, c.created_at DESC
     LIMIT ?`;
-  const { results } = await env.DB.prepare(sql).bind(...binds, limit).all<ClientRow>();
+  const { results } = await env.DB.prepare(sql).bind(...binds, sqlLimit).all<ClientRow>();
   let rows = (results ?? []).map(shapeClient);
 
   // Active/past quick filters depend on the computed active_jobs count.
@@ -207,8 +212,10 @@ export async function handleClientList(env: Env, url: URL): Promise<Response> {
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
-      return hay.includes(search) || digits(r.phone).includes(digits(search));
+      const searchDigits = digits(search);
+      return hay.includes(search) || (searchDigits.length > 0 && digits(r.phone ?? "").includes(searchDigits));
     });
+    rows = rows.slice(0, limit);
   }
 
   return json({ as_of: new Date().toISOString(), total: rows.length, clients: rows });

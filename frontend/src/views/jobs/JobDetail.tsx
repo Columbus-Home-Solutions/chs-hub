@@ -192,7 +192,7 @@ export function JobDetail({ id }: DetailProps) {
       </div>
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
-      {tab === "scope" && <ScopeOfWorkTab estimateId={job.estimate_id} />}
+      {tab === "scope" && <ScopeOfWorkTab estimateId={job.estimate_id} jobSource={job.source} />}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
       {tab === "punch_list" && id && (
         <PunchListTab
@@ -1062,17 +1062,22 @@ interface EstimateResponse {
   line_items: ScopeLineItem[];
 }
 
-function ScopeOfWorkTab({ estimateId }: { estimateId: string | null }) {
+function ScopeOfWorkTab({ estimateId, jobSource }: { estimateId: string | null; jobSource?: string | null }) {
   const { data, loading, error } = useApi<EstimateResponse>(
     estimateId ? `/api/estimates/${estimateId}` : null,
   );
 
   if (!estimateId) {
+    const isQuickJob = jobSource === "quick_job";
     return (
       <div class="empty-state" style={{ marginTop: "var(--space-lg)" }}>
-        <div class="empty-state__icon">📋</div>
-        <div class="empty-state__title">No estimate linked</div>
-        <div>This job does not have a linked estimate. Scope of work is only available for jobs created through the quote-to-job conversion flow.</div>
+        <div class="empty-state__icon">{isQuickJob ? "⚡" : "📋"}</div>
+        <div class="empty-state__title">{isQuickJob ? "Quick Job — no scope of work" : "No estimate linked"}</div>
+        <div>
+          {isQuickJob
+            ? "This is a Quick Job created without an estimate. Use the Financial tab to add invoices and track payments."
+            : "This job does not have a linked estimate. Scope of work is only available for jobs created through the quote-to-job conversion flow."}
+        </div>
       </div>
     );
   }

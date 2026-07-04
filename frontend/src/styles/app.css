@@ -5517,3 +5517,68 @@
   padding-bottom: var(--space-xs);
   border-bottom: 1px solid var(--color-border);
 }
+
+/* ─── Quick Action modals (New Estimate / New Invoice / Quick Job) ─── */
+.quick-action-modal__selected-client {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-weight: var(--weight-medium);
+}
+.quick-action-modal__chooser {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.quick-action-modal__choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  width: 100%;
+}
+.quick-action-modal__choice:hover {
+  background: var(--color-surface-3);
+  border-color: var(--color-accent);
+}
+.quick-action-modal__choice-icon {
+  font-size: 1.75rem;
+  flex-shrink: 0;
+}
+.quick-action-modal__choice-title {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-md);
+  color: var(--color-text-primary);
+}
+.quick-action-modal__choice-desc {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+.quick-action-modal__choice-arrow {
+  margin-left: auto;
+  font-size: var(--text-lg);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+.quick-action-modal__job-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.quick-action-modal__quick-job {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}

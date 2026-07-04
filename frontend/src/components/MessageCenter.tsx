@@ -503,7 +503,7 @@ function ConversationList({
 type PanelState = "list" | "thread" | "compose";
 
 export function MessageCenter() {
-  const { isOpen, activeClientId, close } = useMessageCenter();
+  const { isOpen, activeClientId, pendingCompose, clearPendingCompose, close } = useMessageCenter();
   const [panelState, setPanelState] = useState<PanelState>("list");
   const [threadClientId, setThreadClientId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -521,15 +521,19 @@ export function MessageCenter() {
       .finally(() => setLoadingConvs(false));
   }, [isOpen]);
 
-  // When activeClientId is set (external open), jump to that thread
+  // Determine initial panel state when opened
   useEffect(() => {
-    if (isOpen && activeClientId) {
+    if (!isOpen) return;
+    if (activeClientId) {
       setThreadClientId(activeClientId);
       setPanelState("thread");
-    } else if (isOpen && !activeClientId) {
+    } else if (pendingCompose) {
+      clearPendingCompose();
+      setPanelState("compose");
+    } else {
       setPanelState("list");
     }
-  }, [isOpen, activeClientId]);
+  }, [isOpen, activeClientId, pendingCompose]);
 
   // Close on Escape
   useEffect(() => {

@@ -705,8 +705,74 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
   if (!body) return err(400, "bad_request", "Body must be JSON");
 
   const requestId = str(body.estimate_request_id) ?? str(body.request_id);
-  if (!requestId) return err(400, "bad_request", "estimate_request_id is required");
+  const directClientId = str(body.client_id);
 
+  // Either a request_id (normal flow) or a direct client_id (standalone quick estimate) is required.
+  if (!requestId && !directClientId) {
+    return err(400, "bad_request", "estimate_request_id or client_id is required");
+  }
+
+  // ── Standalone (no request) path ──────────────────────────────────────────
+  if (!requestId && directClientId) {
+    const client = await env.DB.prepare("SELECT id, name, first_name, last_name FROM clients WHERE id = ?")
+      .bind(directClientId)
+      .first<{ id: string; name: string | null; first_name: string | null; last_name: string | null }>();
+    if (!client) return err(404, "not_found", "Client not found");
+
+    const mode = str(body.mode) ?? str(body.estimate_mode) ?? "trade_by_trade";
+    const billingModel = str(body.billing_model) ?? "fixed_price";
+    const clientLabel =
+      [client.first_name, client.last_name].filter(Boolean).join(" ").trim() ||
+      client.name ||
+      "Client";
+    const title = str(body.title) ?? `Estimate — ${clientLabel}`;
+    const maxNum = await env.DB.prepare(
+      "SELECT COALESCE(MAX(estimate_number), 0) AS n FROM estimates",
+    ).first<{ n: number }>();
+    const estimateNumber = (maxNum?.n ?? 0) + 1;
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const dep = await defaultDeposit(env, billingModel, 0, null);
+
+    await env.DB.prepare(
+      `INSERT INTO estimates (
+        id, estimate_number, request_id, client_id, title, estimate_mode, billing_model,
+        status, subtotal, tax_amount, total, margin_percent,
+        deposit_amount, deposit_type, deposit_percentage, valid_days,
+        include_reviews, include_contract, version,
+        created_at, updated_at, created_by
+      ) VALUES (?, ?, NULL, ?, ?, ?, ?, 'draft', 0, 0, 0, 0, ?, ?, ?, 7, 1, 1, 1, ?, ?, ?)`,
+    )
+      .bind(
+        id,
+        estimateNumber,
+        directClientId,
+        title,
+        mode,
+        billingModel,
+        dep.deposit_amount,
+        dep.deposit_type,
+        dep.deposit_percentage,
+        now,
+        now,
+        user.id,
+      )
+      .run();
+
+    await logAudit(env, user.email, "estimate_created", "estimate", id, {
+      estimate_number: estimateNumber,
+      request_id: null,
+      client_id: directClientId,
+      mode,
+      billing_model: billingModel,
+      standalone: true,
+    });
+
+    const estimate = await loadFullEstimate(env, id);
+    return json({ estimate, created: true }, { status: 201 });
+  }
+
+  // ── Normal (request-linked) path ──────────────────────────────────────────
   const req = await env.DB.prepare(
     `SELECT id, client_id, job_type,
             property_address, property_city, property_state, property_zip, estimate_id

@@ -261,6 +261,11 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
           >
             {e.request_id ? "← Request" : "← Estimates"}
           </Button>
+          {e.linked_job_id && e.is_current_version && (
+            <Button variant="secondary" onClick={() => go(`/jobs/${e.linked_job_id}`)}>
+              Go to Job {e.linked_job_number != null ? `#${e.linked_job_number}` : ""} →
+            </Button>
+          )}
           {sent && (
             <Button variant="secondary" onClick={() => mutate(() => api.post(`/api/estimates/${e.id}/revise`).then((r: any) => r.estimate.request_id ? go(`/estimating/${r.estimate.request_id}/estimate`) : go(`/estimates/${r.estimate.id}`)), "Revision created")}>
               Revise

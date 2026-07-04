@@ -493,6 +493,7 @@ export interface Estimate {
   approved_date: string | null;
   portal_path: string | null;
   linked_job_id: string | null;
+  linked_job_number: number | null;
   notes: string | null;
   version: number;
   revised_from_id: string | null;

@@ -25,6 +25,26 @@ export async function getDriveAccessToken(serviceAccountJson: string): Promise<s
 }
 
 /**
+ * Lightweight preflight: verify the service account can list files in the
+ * Shared Drive. Throws with a descriptive message on 403/404 (permission
+ * not granted, drive ID wrong, etc.).
+ */
+export async function verifyDriveAccess(token: string, driveId: string): Promise<void> {
+  const url = `${DRIVE_BASE}/files?supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=drive&driveId=${encodeURIComponent(driveId)}&pageSize=1&fields=files(id)`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const body = await res.text();
+    if (res.status === 403 || res.status === 404) {
+      throw new Error(
+        `Drive access denied for shared drive ${driveId} (${res.status}). ` +
+          `Grant the service account "Content Manager" access to the Shared Drive, then retry. Raw: ${body.slice(0, 300)}`,
+      );
+    }
+    throw new Error(`Drive preflight failed (${res.status}): ${body.slice(0, 300)}`);
+  }
+}
+
+/**
  * Create a child folder, or return existing if name matches in parent.
  * Uses corpora on shared drive.
  */

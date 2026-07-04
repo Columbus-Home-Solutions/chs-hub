@@ -37,6 +37,7 @@ import {
   getOrCreateFolder,
   guessMimeFromKey,
   uploadFileMultipart,
+  verifyDriveAccess,
 } from "../google/drive.js";
 
 // ─── CHS Hub Backup — fixed folder IDs (hardcoded; created manually by Tony) ─
@@ -197,6 +198,19 @@ export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
     token = await getDriveAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON);
   } catch (e) {
     out.errors.push(`token: ${(e as Error).message}`);
+    out.duration_ms = Date.now() - t0;
+    return out;
+  }
+
+  // Preflight: verify the service account can actually access the Shared Drive.
+  // This surfaces a clear error (e.g. service account not yet added to the drive)
+  // instead of silently failing per item with cryptic 403s.
+  try {
+    await verifyDriveAccess(token, driveId);
+  } catch (e) {
+    out.errors.push(`preflight: ${(e as Error).message}`);
+    out.skipped = true;
+    out.reason = `Drive access check failed — ${(e as Error).message.slice(0, 120)}`;
     out.duration_ms = Date.now() - t0;
     return out;
   }

@@ -448,13 +448,16 @@ async function loadFullEstimate(env: Env, id: string) {
     (ctx?.client_name as string) ||
     null;
 
-  const linkedJob = await env.DB.prepare("SELECT id FROM jobs WHERE estimate_id = ? LIMIT 1")
+  const linkedJob = await env.DB.prepare(
+    "SELECT id, job_number FROM jobs WHERE estimate_id = ? LIMIT 1",
+  )
     .bind(id)
-    .first<{ id: string }>();
+    .first<{ id: string; job_number: number | null }>();
 
   return {
     ...shapeEstimateHeader(row, totals),
     linked_job_id: linkedJob?.id ?? null,
+    linked_job_number: linkedJob?.job_number ?? null,
     client_name: clientName,
     client_phone: ctx?.client_phone ?? null,
     client_email: ctx?.client_email ?? null,

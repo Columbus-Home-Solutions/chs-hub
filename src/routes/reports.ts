@@ -715,7 +715,7 @@ export async function handleLineItemVariance(request: Request, env: Env): Promis
       `SELECT
          esi.description,
          esi.category,
-         COUNT(DISTINCT e_job.job_id) AS job_count,
+         COUNT(DISTINCT e_job.id) AS job_count,
          AVG(esi.total_cost) AS avg_estimated,
          AVG(actual.total_actual) AS avg_actual,
          AVG(actual.total_actual) - AVG(esi.total_cost) AS variance_amount,

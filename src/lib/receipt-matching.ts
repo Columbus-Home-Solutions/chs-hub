@@ -210,21 +210,42 @@ export async function extractReceiptLineItems(
   return items;
 }
 
+export interface PastCorrection {
+  receipt_description: string;
+  ai_suggested_name: string | null;
+  human_chosen_name: string;
+}
+
 /** Match extracted receipt items to parent estimate line items via Claude. */
 export async function matchItemsToEstimate(
   extractedItems: ExtractedItem[],
   estimateLineItems: LineItemForMatching[],
   env: Env,
+  pastCorrections: PastCorrection[] = [],
 ): Promise<MatchResult[]> {
   if (extractedItems.length === 0 || estimateLineItems.length === 0) {
     return extractedItems.map(unmatchedResult);
   }
 
+  // Few-shot correction context — injected when corrections exist; empty at cold start.
+  const correctionContext =
+    pastCorrections.length > 0
+      ? `\nPast corrections from this company (use these as hints — a similar item description
+was manually re-assigned to the listed line item after the AI's initial suggestion was wrong):
+${pastCorrections
+  .map(
+    (c) =>
+      `- "${c.receipt_description}" → allocated to "${c.human_chosen_name}"` +
+      (c.ai_suggested_name ? ` (AI had suggested "${c.ai_suggested_name}")` : " (AI had no suggestion)"),
+  )
+  .join("\n")}\n`
+      : "";
+
   const prompt = `You are helping match receipt line items to construction estimate line items for job costing.
 
 Estimate line items for this job:
 ${JSON.stringify(estimateLineItems, null, 2)}
-
+${correctionContext}
 Receipt items to match:
 ${JSON.stringify(
     extractedItems.map((i) => ({ id: i.id, description: i.description, amount: i.amount })),
@@ -521,7 +542,8 @@ export async function processReceiptMatching(
            FROM estimate_sub_items esi
            JOIN estimate_line_items eli ON eli.id = esi.parent_line_item_id
            JOIN estimates e ON e.id = eli.estimate_id
-           WHERE e.job_id = ?
+           JOIN jobs j ON j.estimate_id = e.id
+           WHERE j.id = ?
            ORDER BY eli.sort_order, esi.sort_order`,
         )
         .bind(jobId)
@@ -539,8 +561,76 @@ export async function processReceiptMatching(
       .all<VendorMaterialForMatching>();
     const vendorMaterials = materialRows ?? [];
 
+    // Pull recent corrections (where AI suggestion ≠ human choice) as few-shot
+    // context for the match prompt. Scoped to same client/job first; falls back
+    // to company-wide if fewer than 5 local examples exist. Cap at 15 total so
+    // the prompt stays lean.
+    let pastCorrections: PastCorrection[] = [];
+    if (jobId) {
+      const clientRow = await db
+        .prepare("SELECT client_id FROM jobs WHERE id = ?")
+        .bind(jobId)
+        .first<{ client_id: string | null }>();
+      const clientId = clientRow?.client_id ?? null;
+
+      if (clientId) {
+        const { results: localRows } = await db
+          .prepare(
+            `SELECT eli.description AS receipt_description,
+                    ai_sub.description AS ai_suggested_name,
+                    human_sub.description AS human_chosen_name
+             FROM expense_line_items eli
+             JOIN expenses exp ON exp.id = eli.expense_id
+             JOIN jobs j ON j.id = exp.job_id
+             JOIN clients c ON c.id = j.client_id
+             LEFT JOIN estimate_sub_items ai_sub ON ai_sub.id = eli.ai_suggested_sub_item_id
+             LEFT JOIN estimate_sub_items human_sub ON human_sub.id = eli.matched_estimate_sub_item_id
+             WHERE c.id = ?
+               AND eli.expense_id IS NOT NULL
+               AND eli.matched_estimate_sub_item_id IS NOT NULL
+               AND (eli.ai_suggested_sub_item_id IS NULL
+                    OR eli.ai_suggested_sub_item_id != eli.matched_estimate_sub_item_id)
+             ORDER BY eli.created_at DESC
+             LIMIT 15`,
+          )
+          .bind(clientId)
+          .all<{ receipt_description: string; ai_suggested_name: string | null; human_chosen_name: string }>();
+        pastCorrections = localRows ?? [];
+      }
+
+      // Fall back to company-wide corrections if local set is sparse.
+      if (pastCorrections.length < 5) {
+        const { results: globalRows } = await db
+          .prepare(
+            `SELECT eli.description AS receipt_description,
+                    ai_sub.description AS ai_suggested_name,
+                    human_sub.description AS human_chosen_name
+             FROM expense_line_items eli
+             JOIN expenses exp ON exp.id = eli.expense_id
+             LEFT JOIN estimate_sub_items ai_sub ON ai_sub.id = eli.ai_suggested_sub_item_id
+             LEFT JOIN estimate_sub_items human_sub ON human_sub.id = eli.matched_estimate_sub_item_id
+             WHERE eli.expense_id IS NOT NULL
+               AND eli.matched_estimate_sub_item_id IS NOT NULL
+               AND (eli.ai_suggested_sub_item_id IS NULL
+                    OR eli.ai_suggested_sub_item_id != eli.matched_estimate_sub_item_id)
+             ORDER BY eli.created_at DESC
+             LIMIT 15`,
+          )
+          .all<{ receipt_description: string; ai_suggested_name: string | null; human_chosen_name: string }>();
+        // Merge: local first, then fill from global (dedup by receipt_description).
+        const seen = new Set(pastCorrections.map((c) => c.receipt_description.toLowerCase()));
+        for (const row of globalRows ?? []) {
+          if (!seen.has(row.receipt_description.toLowerCase())) {
+            pastCorrections.push(row);
+            seen.add(row.receipt_description.toLowerCase());
+          }
+          if (pastCorrections.length >= 15) break;
+        }
+      }
+    }
+
     const extractedItems = await extractReceiptLineItems(photoR2Key, env);
-    const matchResults = await matchItemsToEstimate(extractedItems, estimateSubItems, env);
+    const matchResults = await matchItemsToEstimate(extractedItems, estimateSubItems, env, pastCorrections);
     const vendorMatchResults = await matchItemsToVendorMaterials(
       extractedItems,
       vendorName,
@@ -560,14 +650,17 @@ export async function processReceiptMatching(
     for (const item of extractedItems) {
       const matchA = matchResults.find((r) => r.item_id === item.id);
       const matchB = vendorMatchById.get(item.id);
+      // Only consider "matched" (high-confidence) suggestions as the AI's choice;
+      // ambiguous/unmatched leave ai_suggested_sub_item_id null.
       const subItemId =
         matchA?.status === "matched" ? matchA.suggested_line_item_id : null;
       await db
         .prepare(
           `INSERT INTO expense_line_items
              (id, receipt_photo_id, description, quantity, unit, unit_price, amount,
-              matched_estimate_sub_item_id, matched_vendor_material_id, match_confidence, expense_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))`,
+              matched_estimate_sub_item_id, ai_suggested_sub_item_id,
+              matched_vendor_material_id, match_confidence, expense_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))`,
         )
         .bind(
           crypto.randomUUID(),
@@ -578,6 +671,7 @@ export async function processReceiptMatching(
           item.unit_price,
           item.amount,
           subItemId,
+          subItemId, // ai_suggested_sub_item_id — same initial value, never overwritten after this
           matchB?.matched_vendor_material_id ?? null,
           matchA ? matchA.confidence : null,
         )

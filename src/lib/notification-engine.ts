@@ -748,12 +748,22 @@ async function sendResendEmail(
   to: string,
   subject: string,
   text: string,
+  attachment?: { filename: string; content: string },
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   try {
+    const payload: Record<string, unknown> = {
+      from,
+      to: [to],
+      subject: subject || "Columbus Home Solutions",
+      text,
+    };
+    if (attachment) {
+      payload.attachments = [{ filename: attachment.filename, content: attachment.content }];
+    }
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [to], subject: subject || "Columbus Home Solutions", text }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -763,6 +773,50 @@ async function sendResendEmail(
     return { ok: true, id: data.id ?? `resend:${crypto.randomUUID()}` };
   } catch (e) {
     return { ok: false, error: `resend_exception: ${(e as Error).message}` };
+  }
+}
+
+/**
+ * Shared sub-facing email helper.
+ *
+ * Handles the mode-gate, credential checks, simulate logging, and Resend call.
+ * Non-fatal: logs a warning on failure but never throws. Attachment is optional
+ * (for punch list PDF sends). SMS stays primary everywhere; call this ALONGSIDE
+ * sendSms, not instead of it.
+ *
+ * Uses NOTIFICATIONS_EMAIL_FROM (same from-address as client notifications).
+ */
+export async function sendSubEmail(
+  env: Env,
+  to: string,
+  subject: string,
+  text: string,
+  attachment?: { filename: string; pdfBytes: Uint8Array },
+): Promise<void> {
+  const live = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase() === "live";
+  const from = (env.NOTIFICATIONS_EMAIL_FROM ?? "").trim();
+  const apiKey = (env.RESEND_API_KEY ?? "").trim();
+
+  if (!live || !from || !apiKey || env.RESEND_DRY_RUN === "1") {
+    const attachmentNote = attachment ? ` attachment=${attachment.filename}` : "";
+    console.log(`[sub_email][SIMULATE] to=${to} subject="${subject}"${attachmentNote}`);
+    return;
+  }
+
+  let b64Attachment: { filename: string; content: string } | undefined;
+  if (attachment) {
+    const bytes = attachment.pdfBytes;
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    b64Attachment = {
+      filename: attachment.filename,
+      content: btoa(binary),
+    };
+  }
+
+  const r = await sendResendEmail(apiKey, from, to, subject, text, b64Attachment);
+  if (!r.ok) {
+    console.warn(`[sub_email] send to ${to} failed: ${r.error}`);
   }
 }
 
@@ -1170,20 +1224,46 @@ export async function triggerSubScheduled(env: Env, scheduleEntryId: string): Pr
       result.reasons.push("no_sub");
       return result;
     }
-    return await triggerNotification(env, "sub_scheduled", {
+
+    const merge = {
+      trade_or_work: entry.trade_or_work ?? "scheduled work",
+      property_address: (entry.address ?? "").replace(/^[,\s]+|[,\s]+$/g, "") || "the job site",
+      scheduled_date: entry.scheduled_date ? formatDate(entry.scheduled_date) : "",
+      start_time: entry.start_time ?? "",
+      end_time: entry.end_time ?? "",
+      notes: entry.notes ?? "",
+    };
+
+    const triggerResult = await triggerNotification(env, "sub_scheduled", {
       jobId: entry.job_id,
       clientId: entry.client_id,
       subId: entry.sub_id,
       instanceKey: entry.id, // one notify per schedule entry (idempotent)
-      merge: {
-        trade_or_work: entry.trade_or_work ?? "scheduled work",
-        property_address: (entry.address ?? "").replace(/^[,\s]+|[,\s]+$/g, "") || "the job site",
-        scheduled_date: entry.scheduled_date ? formatDate(entry.scheduled_date) : "",
-        start_time: entry.start_time ?? "",
-        end_time: entry.end_time ?? "",
-        notes: entry.notes ?? "",
-      },
+      merge,
     });
+
+    // Additive email channel — SMS is primary; email sends alongside when sub has one.
+    const sub = await env.DB.prepare(
+      "SELECT email, COALESCE(contact_name, primary_contact, company_name) AS name FROM subcontractors WHERE id = ?",
+    )
+      .bind(entry.sub_id)
+      .first<{ email: string | null; name: string | null }>();
+    if (sub?.email) {
+      const emailBody =
+        `You've been scheduled for ${merge.trade_or_work} at ${merge.property_address}` +
+        ` on ${merge.scheduled_date}` +
+        (merge.start_time ? ` from ${merge.start_time}` : "") +
+        (merge.end_time ? ` to ${merge.end_time}` : "") +
+        (merge.notes ? `.\n\nNotes: ${merge.notes}` : ".");
+      await sendSubEmail(
+        env,
+        sub.email,
+        `Scheduled: ${merge.trade_or_work} on ${merge.scheduled_date}`,
+        emailBody,
+      );
+    }
+
+    return triggerResult;
   } catch (err) {
     console.error("[notify] triggerSubScheduled failed:", (err as Error).message);
     result.reasons.push(`error:${(err as Error).message}`);

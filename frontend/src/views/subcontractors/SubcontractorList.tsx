@@ -14,6 +14,26 @@ import { formatPhone } from "../../lib/format";
 import { go } from "../../lib/nav";
 import { TRADES, type Subcontractor } from "../../types";
 
+/** Returns days until the given ISO date (negative = already expired). */
+export function daysUntilExpiration(isoDate: string | null): number | null {
+  if (!isoDate) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const exp = new Date(`${isoDate}T00:00:00`);
+  return Math.round((exp.getTime() - today.getTime()) / 86_400_000);
+}
+
+/** Badge that shows expiration status for COI/license dates. */
+export function ExpirationBadge({ date }: { date: string | null }) {
+  if (!date) return <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>—</span>;
+  const days = daysUntilExpiration(date);
+  if (days === null) return <span class="text--muted">—</span>;
+  if (days < 0) return <Badge tone="danger">Expired</Badge>;
+  if (days <= 15) return <Badge tone="danger">{days}d left</Badge>;
+  if (days <= 30) return <Badge tone="warning">{days}d left</Badge>;
+  return <span style={{ fontSize: "var(--text-sm)" }}>{date}</span>;
+}
+
 interface SubListResponse {
   total: number;
   trades: string[];
@@ -69,6 +89,16 @@ export function SubcontractorList(_props: RoutableProps) {
       key: "w9_on_file",
       header: "W-9",
       render: (s) => (s.w9_on_file ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge>),
+    },
+    {
+      key: "coi_expiration_date",
+      header: "COI Exp.",
+      render: (s) => <ExpirationBadge date={s.coi_expiration_date} />,
+    },
+    {
+      key: "license_expiration_date",
+      header: "License Exp.",
+      render: (s) => <ExpirationBadge date={s.license_expiration_date} />,
     },
     {
       key: "is_active",
@@ -172,6 +202,8 @@ export function SubForm({
   const [w9, setW9] = useState(sub?.w9_on_file ?? false);
   const [active, setActive] = useState(sub?.is_active ?? true);
   const [notes, setNotes] = useState(sub?.notes ?? "");
+  const [coiExp, setCoiExp] = useState(sub?.coi_expiration_date ?? "");
+  const [licenseExp, setLicenseExp] = useState(sub?.license_expiration_date ?? "");
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
@@ -193,6 +225,8 @@ export function SubForm({
         w9_on_file: w9,
         is_active: active,
         notes,
+        coi_expiration_date: coiExp || null,
+        license_expiration_date: licenseExp || null,
       };
       if (mode === "create") await api.post("/api/subcontractors", body);
       else await api.put(`/api/subcontractors/${sub!.id}`, body);
@@ -271,6 +305,24 @@ export function SubForm({
         label="License number"
         inputProps={{ value: license, onInput: (e) => setLicense((e.target as HTMLInputElement).value) }}
       />
+      <div class="form-row">
+        <FormField label="COI Expiration Date" hint="Leave blank if not on file">
+          <input
+            class="form-input"
+            type="date"
+            value={coiExp}
+            onInput={(e) => setCoiExp((e.target as HTMLInputElement).value)}
+          />
+        </FormField>
+        <FormField label="License Expiration Date" hint="Leave blank if not applicable">
+          <input
+            class="form-input"
+            type="date"
+            value={licenseExp}
+            onInput={(e) => setLicenseExp((e.target as HTMLInputElement).value)}
+          />
+        </FormField>
+      </div>
       <div class="flex gap-lg flex-wrap mb-lg">
         <label class="flex items-center gap-sm" style={{ fontSize: "var(--text-sm)" }}>
           <input type="checkbox" checked={insurance} onChange={(e) => setInsurance((e.target as HTMLInputElement).checked)} />

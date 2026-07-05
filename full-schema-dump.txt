@@ -1,0 +1,344 @@
+
+ ⛅️ wrangler 4.85.0 (update available 4.107.0)
+──────────────────────────────────────────────
+Resource location: remote 
+
+🌀 Executing on remote database chs-hub-db (bfcb169f-04ec-48d4-a07a-37a8d6f561e4):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 1.01ms
+[
+  {
+    "results": [
+      {
+        "name": "_cf_KV",
+        "sql": "CREATE TABLE _cf_KV (\n        key TEXT PRIMARY KEY,\n        value BLOB\n      ) WITHOUT ROWID"
+      },
+      {
+        "name": "ai_generations",
+        "sql": "CREATE TABLE ai_generations (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL,                     \n  file_id TEXT REFERENCES files(id),\n  prompt TEXT NOT NULL,\n  model TEXT NOT NULL,                    \n  cost_cents INTEGER,\n  input_tokens INTEGER,\n  output_tokens INTEGER,\n  generated_at TEXT NOT NULL,\n  generated_by TEXT REFERENCES users(id)\n)"
+      },
+      {
+        "name": "audit_log",
+        "sql": "CREATE TABLE audit_log (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  user_id TEXT REFERENCES users(id),\n  action TEXT NOT NULL,                   \n  entity_type TEXT,\n  entity_id TEXT,\n  metadata TEXT,                          \n  ip_address TEXT,\n  user_agent TEXT,\n  occurred_at TEXT NOT NULL\n)"
+      },
+      {
+        "name": "audit_logs",
+        "sql": "CREATE TABLE audit_logs (\n  id TEXT PRIMARY KEY,\n  user_email TEXT NOT NULL,\n  action TEXT NOT NULL,\n  entity_type TEXT NOT NULL,\n  entity_id TEXT NOT NULL,\n  details TEXT,\n  ip_address TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "billing_cycles",
+        "sql": "CREATE TABLE billing_cycles (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id),\n  cycle_number INTEGER NOT NULL,\n  period_start TEXT NOT NULL,\n  period_end TEXT NOT NULL,\n  is_final_cycle INTEGER DEFAULT 0,\n  status TEXT NOT NULL CHECK(status IN ('planning','active','reconciling','closed')),\n  projected_materials REAL DEFAULT 0,\n  projected_labor REAL DEFAULT 0,\n  projected_subs REAL DEFAULT 0,\n  projected_subtotal REAL,\n  pm_fee_rate REAL NOT NULL DEFAULT 0.10,\n  contractor_fee_rate REAL NOT NULL DEFAULT 0.20,\n  projected_pm_fee REAL,\n  projected_contractor_fee REAL,\n  projected_total REAL,\n  actual_materials REAL DEFAULT 0,\n  actual_labor REAL DEFAULT 0,\n  actual_subs REAL DEFAULT 0,\n  actual_subtotal REAL,\n  actual_pm_fee REAL,\n  actual_contractor_fee REAL,\n  actual_total REAL,\n  delta REAL,\n  credit_from_prior REAL DEFAULT 0,\n  credit_to_next REAL DEFAULT 0,\n  invoice_id TEXT REFERENCES invoices(id),\n  reconciliation_invoice_id TEXT REFERENCES invoices(id),\n  reconciliation_date TEXT,\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "billing_schedule",
+        "sql": "CREATE TABLE billing_schedule (\n  id            TEXT PRIMARY KEY,\n  job_id        TEXT NOT NULL REFERENCES jobs(id),\n  billing_model TEXT NOT NULL,\n  sequence      INTEGER NOT NULL,                 -- display / draw order\n  label         TEXT NOT NULL,                    -- e.g. \"Draw 1 — Materials Deposit\"\n  trigger_type  TEXT NOT NULL,                    -- milestone | trade_completion | cost_plus_cycle\n  trigger_ref   TEXT,                             -- milestone #, task_group name, or cycle marker\n  percentage    REAL,                             -- fixed_price draws (nullable)\n  amount        REAL,                             -- scaffolded dollar amount (nullable)\n  period_start  TEXT,                             -- cost_plus cycle window start (nullable)\n  period_end    TEXT,                             -- cost_plus cycle window end (nullable)\n  status        TEXT NOT NULL DEFAULT 'draft',    -- draft until Sprint 9 invoices it\n  created_at    TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "change_orders",
+        "sql": "CREATE TABLE change_orders (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id),\n  change_order_number INTEGER NOT NULL,\n  title TEXT NOT NULL,\n  description TEXT NOT NULL,\n  amount REAL NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('draft','sent','approved','rejected')),\n  requested_date TEXT NOT NULL DEFAULT (datetime('now')),\n  approved_date TEXT,\n  client_signature TEXT,\n  triggered_by_note_id TEXT REFERENCES smart_notes(id),\n  created_by TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n, applied_at TEXT, end_date_extension_days INTEGER DEFAULT 0, signed_name TEXT, signed_ip TEXT)"
+      },
+      {
+        "name": "client_contacts",
+        "sql": "CREATE TABLE client_contacts (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,\n  label TEXT NOT NULL,\n  contact_type TEXT NOT NULL CHECK(contact_type IN ('phone', 'email')),\n  value TEXT NOT NULL,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "client_lien_waivers",
+        "sql": "CREATE TABLE client_lien_waivers (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,\n  waiver_type TEXT NOT NULL DEFAULT 'conditional'\n    CHECK(waiver_type IN ('conditional', 'final')),\n  payment_amount REAL NOT NULL,\n  invoice_id TEXT REFERENCES invoices(id),\n  boldsign_document_id TEXT,\n  boldsign_template_id TEXT,\n  status TEXT NOT NULL DEFAULT 'pending'\n    CHECK(status IN ('pending','sent','signed','declined','failed')),\n  sent_at TEXT,\n  signed_at TEXT,\n  r2_key TEXT,\n  document_id TEXT REFERENCES documents(id),\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n, error_message TEXT)"
+      },
+      {
+        "name": "client_tags",
+        "sql": "CREATE TABLE client_tags (\n  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,\n  tag_definition_id TEXT NOT NULL REFERENCES tag_definitions(id),\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  PRIMARY KEY (client_id, tag_definition_id)\n)"
+      },
+      {
+        "name": "clients",
+        "sql": "CREATE TABLE clients (\n  id TEXT PRIMARY KEY,\n  name TEXT,\n  phone TEXT,\n  email TEXT,\n  address_street TEXT,\n  address_city TEXT,\n  address_state TEXT,\n  address_postal TEXT,\n  custom_fields TEXT,                     \n  synced_at TEXT NOT NULL\n, first_name TEXT, last_name TEXT, phone_secondary TEXT, mailing_address TEXT, mailing_city TEXT, mailing_state TEXT, mailing_zip TEXT, lead_source TEXT, high_level_contact_id TEXT, is_repeat_client INTEGER DEFAULT 0, review_requested INTEGER DEFAULT 0, google_review_left INTEGER DEFAULT 0, notes TEXT, last_interaction_date TEXT, created_at TEXT, updated_at TEXT, created_by TEXT, notification_preferences TEXT, qbo_customer_id TEXT, company_name TEXT, data_source TEXT, sms_opt_out INTEGER NOT NULL DEFAULT 0, sms_opt_out_at TEXT, referral_source_id TEXT REFERENCES referral_sources(id))"
+      },
+      {
+        "name": "communications",
+        "sql": "CREATE TABLE communications (\n  id TEXT PRIMARY KEY,\n  client_id TEXT NOT NULL REFERENCES clients(id),\n  job_id TEXT REFERENCES jobs(id),\n  channel TEXT NOT NULL CHECK(channel IN ('phone_call','text_sms','email','portal_message','in_person','other')),\n  direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),\n  summary TEXT NOT NULL,\n  body TEXT,\n  duration_seconds INTEGER,\n  call_recording_url TEXT,\n  sent_via TEXT,\n  high_level_message_id TEXT,\n  attachments TEXT,\n  logged_by TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n, twilio_sid TEXT)"
+      },
+      {
+        "name": "company_documents",
+        "sql": "CREATE TABLE company_documents (\n  id TEXT PRIMARY KEY,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n  title TEXT NOT NULL,\n  doc_type TEXT NOT NULL DEFAULT 'other',\n  r2_key TEXT NOT NULL,\n  filename TEXT NOT NULL,\n  mime_type TEXT NOT NULL,\n  size_bytes INTEGER NOT NULL,\n  effective_date TEXT,\n  expires_at TEXT,\n  notes TEXT,\n  uploaded_by TEXT,\n  drive_mirrored_at TEXT\n)"
+      },
+      {
+        "name": "content_schedules",
+        "sql": "CREATE TABLE content_schedules (\n  id TEXT PRIMARY KEY,\n  month INTEGER NOT NULL,\n  year INTEGER NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('draft','active','completed')),\n  generated_date TEXT NOT NULL DEFAULT (datetime('now')),\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "d1_migrations",
+        "sql": "CREATE TABLE d1_migrations(\n\t\tid         INTEGER PRIMARY KEY AUTOINCREMENT,\n\t\tname       TEXT UNIQUE,\n\t\tapplied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n)"
+      },
+      {
+        "name": "daily_logs",
+        "sql": "CREATE TABLE daily_logs (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id),\n  log_date TEXT NOT NULL,\n  weather TEXT,\n  work_performed TEXT NOT NULL,\n  issues TEXT,\n  materials_used TEXT,\n  crew_on_site TEXT,\n  hours_worked REAL,\n  photo_ids TEXT,\n  entered_via TEXT NOT NULL,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  created_by TEXT\n)"
+      },
+      {
+        "name": "dead_letter_queue",
+        "sql": "CREATE TABLE dead_letter_queue (\n  id TEXT PRIMARY KEY,\n  operation TEXT NOT NULL,\n  payload TEXT,\n  error_message TEXT,\n  retry_count INTEGER NOT NULL DEFAULT 0,\n  max_retries INTEGER NOT NULL DEFAULT 3,\n  status TEXT NOT NULL CHECK(status IN ('pending','retrying','resolved','dismissed')),\n  next_retry_at TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  resolved_at TEXT\n)"
+      },
+      {
+        "name": "device_tokens",
+        "sql": "CREATE TABLE device_tokens (\n  id            TEXT PRIMARY KEY,\n  user_id       TEXT NOT NULL REFERENCES users(id),\n  platform      TEXT NOT NULL CHECK (platform IN ('ios','android','web')),\n  token         TEXT NOT NULL,\n  is_active     INTEGER NOT NULL DEFAULT 1,\n  created_at    TEXT NOT NULL DEFAULT (datetime('now')),\n  last_seen_at  TEXT\n)"
+      },
+      {
+        "name": "document_templates",
+        "sql": "CREATE TABLE document_templates (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  template_type TEXT NOT NULL,\n  content TEXT NOT NULL,\n  merge_fields TEXT NOT NULL,\n  is_active INTEGER NOT NULL DEFAULT 1,\n  version INTEGER NOT NULL DEFAULT 1,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n, previous_version_id TEXT)"
+      },
+      {
+        "name": "documents",
+        "sql": "CREATE TABLE documents (\n  id TEXT PRIMARY KEY,\n  title TEXT NOT NULL,\n  file_type TEXT NOT NULL,\n  file_size INTEGER,\n  r2_key TEXT NOT NULL,\n  r2_url TEXT NOT NULL,\n  google_drive_id TEXT,\n  google_drive_url TEXT,\n  mirror_status TEXT,\n  mirror_date TEXT,\n  context_type TEXT NOT NULL CHECK(context_type IN ('job','client','estimate','company','template')),\n  job_id TEXT REFERENCES jobs(id),\n  client_id TEXT REFERENCES clients(id),\n  estimate_id TEXT REFERENCES estimates(id),\n  document_category TEXT NOT NULL,\n  is_signed INTEGER DEFAULT 0,\n  signed_date TEXT,\n  signature_data TEXT,\n  share_token TEXT UNIQUE,\n  share_expiration TEXT,\n  is_active INTEGER NOT NULL DEFAULT 1,\n  uploaded_by TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "drive_mirror_folders",
+        "sql": "CREATE TABLE drive_mirror_folders (\n  path_key TEXT PRIMARY KEY,\n  drive_folder_id TEXT NOT NULL\n)"
+      },
+      {
+        "name": "estimate_line_items",
+        "sql": "CREATE TABLE estimate_line_items (\n  id TEXT PRIMARY KEY,\n  estimate_id TEXT NOT NULL REFERENCES estimates(id) ON DELETE CASCADE,\n  sort_order INTEGER NOT NULL,\n  product_service TEXT NOT NULL,\n  description TEXT NOT NULL,\n  quantity REAL NOT NULL DEFAULT 1,\n  unit TEXT,\n  unit_price REAL NOT NULL,\n  total REAL,\n  includes_note TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n, completion_status TEXT DEFAULT 'not_started', completed_date TEXT, blocked_by_line_item_id TEXT REFERENCES estimate_line_items(id))"
+      },
+      {
+        "name": "estimate_requests",
+        "sql": "CREATE TABLE estimate_requests (\n  id TEXT PRIMARY KEY,\n  request_number INTEGER NOT NULL UNIQUE,\n  status TEXT NOT NULL CHECK(status IN ('new_request','appointment_set','visit_done','building','sent','follow_up','won','lost')),\n  client_id TEXT NOT NULL REFERENCES clients(id),\n  property_address TEXT NOT NULL,\n  property_city TEXT NOT NULL,\n  property_state TEXT NOT NULL DEFAULT 'Arkansas',\n  property_zip TEXT NOT NULL,\n  job_type TEXT NOT NULL,\n  lead_source TEXT NOT NULL,\n  lead_source_detail TEXT,\n  high_level_opportunity_id TEXT,\n  appointment_date TEXT,\n  appointment_completed INTEGER DEFAULT 0,\n  visit_notes TEXT,\n  visit_photo_ids TEXT,\n  estimate_id TEXT REFERENCES estimates(id),\n  sent_date TEXT,\n  follow_up_count INTEGER DEFAULT 0,\n  last_follow_up_date TEXT,\n  lost_reason TEXT,\n  lost_notes TEXT,\n  converted_job_id TEXT REFERENCES jobs(id),\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n  created_by TEXT\n, appointment_time TEXT, lat REAL, lon REAL, last_sms_at TEXT, last_sms_preview TEXT, source TEXT DEFAULT 'manual'\n  CHECK(source IN ('manual', 'inbound_sms', 'high_level', 'website_form')), follow_up_sequence_active INTEGER DEFAULT 0, follow_up_completed_at TEXT, proposal_review_date TEXT, lead_outreach_sequence_active INTEGER DEFAULT 0, lead_outreach_count INTEGER DEFAULT 0, last_outreach_date TEXT, lead_outreach_completed_at TEXT, scope_draft TEXT, sketches TEXT, property_id TEXT REFERENCES properties(id))"
+      },
+      {
+        "name": "estimate_sub_items",
+        "sql": "CREATE TABLE estimate_sub_items (\n  id TEXT PRIMARY KEY,\n  parent_line_item_id TEXT NOT NULL REFERENCES estimate_line_items(id) ON DELETE CASCADE,\n  sort_order INTEGER NOT NULL,\n  description TEXT NOT NULL,\n  category TEXT NOT NULL,\n  vendor TEXT,\n  quantity REAL,\n  unit TEXT,\n  unit_cost REAL NOT NULL,\n  total_cost REAL,\n  material_id TEXT REFERENCES vendor_materials(id),\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "estimate_templates",
+        "sql": "CREATE TABLE estimate_templates (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  job_type TEXT NOT NULL,\n  description TEXT,\n  default_billing_model TEXT,\n  line_items TEXT NOT NULL,\n  default_payment_schedule TEXT,\n  is_active INTEGER NOT NULL DEFAULT 1,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "estimates",
+        "sql": "CREATE TABLE estimates (\n  id TEXT PRIMARY KEY,\n  lead_id TEXT REFERENCES leads(id),\n  status TEXT NOT NULL,                   \n  jobber_quote_id TEXT,\n\n  extracted_scope TEXT,                   \n  extracted_items TEXT,                   \n\n  line_items TEXT,                        \n  subtotal REAL,\n  total REAL,\n  margin_percent REAL,\n\n  created_at TEXT NOT NULL,\n  created_by TEXT REFERENCES users(id),\n  updated_at TEXT NOT NULL,\n  sent_at TEXT\n, estimate_number INTEGER, request_id TEXT, client_id TEXT, title TEXT, estimate_mode TEXT, billing_model TEXT, tax_amount REAL DEFAULT 0, deposit_amount REAL, deposit_type TEXT, deposit_percentage REAL, valid_days INTEGER DEFAULT 7, expiration_date TEXT, portal_token TEXT, include_reviews INTEGER DEFAULT 1, review_ids TEXT, include_contract INTEGER DEFAULT 1, contract_template_id TEXT, client_signature TEXT, signed_date TEXT, notes TEXT, version INTEGER DEFAULT 1, revised_from_id TEXT, viewed_date TEXT, approved_date TEXT, contract_text TEXT, data_source TEXT, is_current_version INTEGER NOT NULL DEFAULT 1)"
+      },
+      {
+        "name": "expense_line_items",
+        "sql": "CREATE TABLE expense_line_items (\n  id                          TEXT    PRIMARY KEY,\n  receipt_photo_id            TEXT    NOT NULL,\n  description                 TEXT    NOT NULL,\n  quantity                    REAL,\n  unit                        TEXT,\n  unit_price                  REAL,\n  amount                      REAL    NOT NULL,\n  -- Match A: estimate_sub_items (for bid-accuracy variance report)\n  matched_estimate_sub_item_id TEXT,\n  -- Match B: vendor_materials (for pricing catalog updates)\n  matched_vendor_material_id  TEXT,\n  match_confidence            REAL,\n  -- Set when user confirms → links to the expenses row created from this line\n  expense_id                  TEXT,\n  created_at                  TEXT    NOT NULL DEFAULT (datetime('now'))\n, ai_suggested_sub_item_id TEXT)"
+      },
+      {
+        "name": "expenses",
+        "sql": "CREATE TABLE expenses (\n  id TEXT PRIMARY KEY,\n  job_id TEXT REFERENCES jobs(id),\n  amount REAL,\n  description TEXT,\n  incurred_at TEXT,\n  synced_at TEXT NOT NULL\n, vendor TEXT, receipt_r2_key TEXT, entered_via TEXT NOT NULL DEFAULT 'jobber', pushed_to_jobber_at TEXT, jobber_id TEXT, drive_mirrored_at TEXT, expense_type TEXT, incurred_date TEXT, estimate_line_item_id TEXT, receipt_photo_id TEXT, tax_category TEXT, is_1099_reportable INTEGER DEFAULT 0, sub_id TEXT, pushed_to_qbo INTEGER DEFAULT 0, qbo_transaction_id TEXT, created_at TEXT, created_by TEXT, is_active INTEGER NOT NULL DEFAULT 1)"
+      },
+      {
+        "name": "file_shares",
+        "sql": "CREATE TABLE file_shares (\n  id TEXT PRIMARY KEY,                    \n  file_id TEXT REFERENCES files(id) ON DELETE CASCADE,\n  shared_with_email TEXT,                 \n  created_by TEXT REFERENCES users(id),\n  created_at TEXT NOT NULL,\n  expires_at TEXT NOT NULL,\n  last_viewed_at TEXT,\n  view_count INTEGER DEFAULT 0\n)"
+      },
+      {
+        "name": "file_tags",
+        "sql": "CREATE TABLE file_tags (\n  file_id TEXT REFERENCES files(id) ON DELETE CASCADE,\n  tag TEXT NOT NULL,\n  PRIMARY KEY (file_id, tag)\n)"
+      },
+      {
+        "name": "files",
+        "sql": "CREATE TABLE files (\n  id TEXT PRIMARY KEY,                    \n  r2_key TEXT NOT NULL UNIQUE,            \n  filename TEXT NOT NULL,                 \n  mime_type TEXT NOT NULL,\n  size_bytes INTEGER NOT NULL,\n  sha256 TEXT,                            \n  uploaded_by TEXT REFERENCES users(id),\n  uploaded_at TEXT NOT NULL,\n\n  \n  job_id TEXT REFERENCES jobs(id),\n  lead_id TEXT REFERENCES leads(id),\n  estimate_id TEXT REFERENCES estimates(id),\n\n  \n  category TEXT,                          \n                                          \n                                          \n  taken_at TEXT,                          \n\n  \n  captured_lat REAL,\n  captured_lon REAL,\n  captured_by_device TEXT,\n\n  \n  deleted_at TEXT,                        \n  archived INTEGER DEFAULT 0              \n)"
+      },
+      {
+        "name": "google_calendar_events",
+        "sql": "CREATE TABLE google_calendar_events (\n  id TEXT PRIMARY KEY,\n  calendar_id TEXT NOT NULL,\n  title TEXT NOT NULL,\n  start_time TEXT NOT NULL,\n  end_time TEXT NOT NULL,\n  meet_link TEXT,\n  description TEXT,\n  event_type TEXT DEFAULT 'meeting',\n  synced_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "google_reviews",
+        "sql": "CREATE TABLE google_reviews (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  google_review_id TEXT UNIQUE,\n  reviewer_name TEXT NOT NULL,\n  reviewer_photo_url TEXT,\n  star_rating INTEGER NOT NULL CHECK(star_rating BETWEEN 1 AND 5),\n  comment_text TEXT,\n  review_created_at TEXT NOT NULL,\n  review_updated_at TEXT,\n  reply_text TEXT,\n  reply_sent_at TEXT,\n  reply_source TEXT CHECK(reply_source IN ('cms', 'external')),\n  matched_client_id TEXT REFERENCES clients(id),\n  match_confidence TEXT CHECK(match_confidence IN ('confirmed', 'suggested')),\n  entry_source TEXT NOT NULL DEFAULT 'manual' CHECK(entry_source IN ('manual', 'sync')),\n  synced_at TEXT NOT NULL DEFAULT (datetime('now')),\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "integration_connections",
+        "sql": "CREATE TABLE \"integration_connections\" (\n  id TEXT PRIMARY KEY,\n  service TEXT NOT NULL CHECK(service IN (\n    'stripe','quickbooks','twilio','high_level','google_drive',\n    'facebook','instagram','replicate','google_calendar'\n  )),\n  status TEXT NOT NULL CHECK(status IN ('connected','disconnected','error','pending')),\n  access_token TEXT,\n  refresh_token TEXT,\n  token_expiry TEXT,\n  account_id TEXT,\n  configuration TEXT,\n  last_sync TEXT,\n  last_error TEXT,\n  connected_at TEXT,\n  connected_by TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "integrations",
+        "sql": "CREATE TABLE integrations (\n  id TEXT PRIMARY KEY,                    \n  kind TEXT NOT NULL,                     \n  config TEXT,                            \n  access_token TEXT,                      \n  refresh_token TEXT,                     \n  token_expires_at TEXT,\n  last_synced_at TEXT,\n  last_error TEXT,\n  enabled INTEGER DEFAULT 1,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL\n)"
+      },
+      {
+        "name": "invoices",
+        "sql": "CREATE TABLE invoices (\n  id TEXT PRIMARY KEY,\n  job_id TEXT REFERENCES jobs(id),\n  status TEXT,\n  total REAL,\n  payments_total REAL,\n  issued_date TEXT,\n  due_date TEXT,\n  synced_at TEXT NOT NULL\n, invoice_number INTEGER, client_id TEXT, billing_model TEXT, invoice_type TEXT, title TEXT, description TEXT, amount REAL, tax_amount REAL DEFAULT 0, late_fee_amount REAL DEFAULT 0, credits_applied REAL DEFAULT 0, total_due REAL, sent_date TEXT, paid_date TEXT, paid_amount REAL, payment_method TEXT, stripe_payment_id TEXT, portal_link TEXT, cost_plus_cycle_id TEXT, milestone_number INTEGER, trade_line_item_id TEXT, notes TEXT, created_at TEXT, created_by TEXT, payment_token TEXT, viewed_date TEXT, qbo_invoice_id TEXT, qbo_synced_at  TEXT, data_source TEXT, line_item_ids TEXT, payer_id TEXT REFERENCES payers(id))"
+      },
+      {
+        "name": "job_documents",
+        "sql": "CREATE TABLE job_documents (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), template_type TEXT NOT NULL, filename TEXT NOT NULL, r2_key TEXT NOT NULL, generated_at TEXT NOT NULL DEFAULT (datetime('now')), generated_by TEXT, notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), review_status TEXT NOT NULL DEFAULT 'manual', auto_generated INTEGER NOT NULL DEFAULT 0, trigger_event TEXT, related_record_id TEXT, reviewed_at TEXT, reviewed_by TEXT, signature_status TEXT NOT NULL DEFAULT 'none', boldsign_document_id TEXT, signature_sent_at TEXT, signature_completed_at TEXT, signed_r2_key TEXT, signer_email TEXT, signer_name TEXT)"
+      },
+      {
+        "name": "job_files",
+        "sql": "CREATE TABLE job_files (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n  title TEXT NOT NULL,\n  doc_type TEXT NOT NULL DEFAULT 'other',\n  r2_key TEXT NOT NULL,\n  filename TEXT NOT NULL,\n  mime_type TEXT NOT NULL,\n  size_bytes INTEGER NOT NULL,\n  notes TEXT,\n  uploaded_by TEXT\n, drive_mirrored_at TEXT, source TEXT NOT NULL DEFAULT 'dashboard', jobber_attachment_id TEXT)"
+      },
+      {
+        "name": "jobs",
+        "sql": "CREATE TABLE jobs (\n  id TEXT PRIMARY KEY,                    \n  job_number INTEGER,\n  title TEXT,\n  status TEXT,                            \n  client_id TEXT REFERENCES clients(id),\n  source TEXT,\n  total REAL,\n  created_at TEXT,                        \n  start_at TEXT,\n  completed_at TEXT,\n  synced_at TEXT NOT NULL\n, billing_model TEXT, property_address TEXT, property_city TEXT, property_state TEXT DEFAULT 'Arkansas', property_zip TEXT, job_type TEXT, lead_source TEXT, estimate_id TEXT, start_date TEXT, target_end_date TEXT, actual_end_date TEXT, contract_total REAL, deposit_amount REAL, deposit_paid INTEGER DEFAULT 0, portal_token TEXT, portal_type TEXT, notes TEXT, warranty_expiration TEXT, updated_at TEXT, created_by TEXT, conversion_complete INTEGER DEFAULT 0, conversion_reversed INTEGER DEFAULT 0, reversal_reason TEXT, reversed_at TEXT, lat REAL, lon REAL, data_source TEXT, payer_id TEXT REFERENCES payers(id), ai_closeout_review TEXT, ai_closeout_generated_at TEXT, assigned_to TEXT REFERENCES users(id), completion_package_sent_at TEXT, review_enabled INTEGER NOT NULL DEFAULT 1, review_received INTEGER NOT NULL DEFAULT 0, review_received_at TEXT, property_id TEXT REFERENCES properties(id))"
+      },
+      {
+        "name": "kv_cache",
+        "sql": "CREATE TABLE kv_cache (\n  key TEXT PRIMARY KEY,                   \n  value TEXT,\n  updated_at TEXT NOT NULL\n)"
+      },
+      {
+        "name": "leads",
+        "sql": "CREATE TABLE leads (\n  id TEXT PRIMARY KEY,\n  name TEXT,\n  phone TEXT,\n  email TEXT,\n  source TEXT,\n  status TEXT,                            \n  assigned_to TEXT,\n  created_at TEXT,\n  last_contact_at TEXT,\n  synced_at TEXT NOT NULL\n)"
+      },
+      {
+        "name": "lien_waivers",
+        "sql": "CREATE TABLE lien_waivers (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id),\n  sub_id TEXT NOT NULL REFERENCES subcontractors(id),\n  waiver_type TEXT NOT NULL CHECK(waiver_type IN ('conditional','unconditional','partial','final')),\n  payment_amount REAL NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('requested','received','filed')),\n  requested_date TEXT NOT NULL DEFAULT (datetime('now')),\n  received_date TEXT,\n  document_id TEXT REFERENCES documents(id),\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "line_item_catalog",
+        "sql": "CREATE TABLE line_item_catalog (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  description TEXT,\n  unit TEXT,\n  unit_price REAL NOT NULL DEFAULT 0,\n  is_active INTEGER NOT NULL DEFAULT 1,\n  sort_order INTEGER NOT NULL DEFAULT 0,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "line_items",
+        "sql": "CREATE TABLE line_items (\n  id TEXT PRIMARY KEY,\n  job_id TEXT REFERENCES jobs(id),\n  name TEXT,\n  quantity REAL,\n  unit_price REAL,\n  unit_cost REAL,\n  synced_at TEXT NOT NULL\n)"
+      },
+      {
+        "name": "mileage",
+        "sql": "CREATE TABLE mileage (\n  id TEXT PRIMARY KEY,\n  job_id TEXT REFERENCES jobs(id),\n  trip_purpose TEXT NOT NULL,\n  start_location TEXT,\n  end_location TEXT,\n  distance_miles REAL NOT NULL,\n  trip_date TEXT NOT NULL,\n  irs_rate REAL,\n  deduction_amount REAL,\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "notes",
+        "sql": "CREATE TABLE notes (\n  id TEXT PRIMARY KEY,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n  category TEXT,\n  raw_text TEXT NOT NULL,\n  summary TEXT,\n  tags TEXT,\n  tasks_extracted TEXT,\n  task_count INTEGER NOT NULL DEFAULT 0,\n  status TEXT NOT NULL DEFAULT 'active',\n  archived_at TEXT,\n  meeting_source TEXT\n, job_id TEXT)"
+      },
+      {
+        "name": "notification_logs",
+        "sql": "CREATE TABLE notification_logs (\n  id TEXT PRIMARY KEY,\n  template_id TEXT NOT NULL REFERENCES notification_templates(id),\n  trigger_event TEXT NOT NULL,\n  recipient_type TEXT NOT NULL,\n  recipient_name TEXT NOT NULL,\n  recipient_contact TEXT NOT NULL,\n  channel TEXT NOT NULL,\n  subject TEXT,\n  body TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('queued','sent','delivered','failed','bounced')),\n  error_message TEXT,\n  job_id TEXT REFERENCES jobs(id),\n  client_id TEXT REFERENCES clients(id),\n  estimate_request_id TEXT REFERENCES estimate_requests(id),\n  communication_id TEXT REFERENCES communications(id),\n  sent_at TEXT,\n  delivered_at TEXT,\n  external_id TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n, scheduled_for TEXT, retry_count INTEGER NOT NULL DEFAULT 0, next_retry_at TEXT, recipient_user_id TEXT, is_read INTEGER NOT NULL DEFAULT 0, read_at TEXT, link_path TEXT, dedupe_key TEXT)"
+      },
+      {
+        "name": "notification_templates",
+        "sql": "CREATE TABLE notification_templates (\n  id TEXT PRIMARY KEY,\n  trigger_event TEXT NOT NULL,\n  name TEXT NOT NULL,\n  recipient_type TEXT NOT NULL CHECK(recipient_type IN ('client','subcontractor','internal','owner')),\n  channel TEXT NOT NULL CHECK(channel IN ('sms','email','push','in_app')),\n  subject TEXT,\n  body_template TEXT NOT NULL,\n  merge_fields TEXT NOT NULL,\n  is_active INTEGER NOT NULL DEFAULT 1,\n  delay_minutes INTEGER DEFAULT 0,\n  send_time TEXT,\n  phase TEXT,\n  sort_order INTEGER,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "payers",
+        "sql": "CREATE TABLE payers (\n  id TEXT PRIMARY KEY,\n  company_name TEXT,\n  contact_name TEXT NOT NULL,\n  email TEXT NOT NULL,\n  phone TEXT,\n  billing_address TEXT,\n  billing_city TEXT,\n  billing_state TEXT,\n  billing_zip TEXT,\n  stripe_customer_id TEXT,\n  stripe_payment_method_id TEXT,\n  card_brand TEXT,\n  card_last4 TEXT,\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n  created_by TEXT\n)"
+      },
+      {
+        "name": "payment_schedules",
+        "sql": "CREATE TABLE payment_schedules (\n  id TEXT PRIMARY KEY,\n  estimate_id TEXT NOT NULL REFERENCES estimates(id) ON DELETE CASCADE,\n  sort_order INTEGER NOT NULL,\n  description TEXT NOT NULL,\n  percentage REAL,\n  fixed_amount REAL,\n  amount REAL,\n  is_deposit INTEGER DEFAULT 0,\n  trigger TEXT,\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "payments",
+        "sql": "CREATE TABLE payments (\n  id TEXT PRIMARY KEY,\n  job_id TEXT REFERENCES jobs(id),\n  invoice_id TEXT REFERENCES invoices(id),\n  amount REAL,\n  collected_at TEXT,                      \n  synced_at TEXT NOT NULL\n, client_id TEXT, payment_method TEXT, stripe_payment_id TEXT, stripe_fee REAL, convenience_fee REAL, net_amount REAL, received_date TEXT, deposited_date TEXT, notes TEXT, created_at TEXT, estimate_id TEXT, qbo_payment_id TEXT, qbo_synced_at  TEXT, data_source TEXT)"
+      },
+      {
+        "name": "permits",
+        "sql": "CREATE TABLE permits (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id),\n  permit_type TEXT NOT NULL,\n  permit_number TEXT,\n  status TEXT NOT NULL CHECK(status IN ('applied','approved','inspection_scheduled','passed','failed','closed')),\n  applied_date TEXT,\n  approved_date TEXT,\n  inspection_date TEXT,\n  inspection_result TEXT,\n  cost REAL,\n  document_id TEXT REFERENCES documents(id),\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "photos",
+        "sql": "CREATE TABLE photos (\n  id TEXT PRIMARY KEY,\n  created_at TEXT NOT NULL,                  \n  taken_at TEXT,                             \n  job_id TEXT,                               \n  category TEXT NOT NULL DEFAULT 'progress', \n  r2_key TEXT NOT NULL,\n  thumb_key TEXT NOT NULL,\n  uploaded_by TEXT,                          \n  gps_lat REAL,\n  gps_lng REAL,\n  tags TEXT,                                 \n  caption TEXT,                              \n  before_after_pair_id TEXT                  \n, drive_mirrored_at TEXT, estimate_request_id TEXT, r2_thumbnail_key TEXT, r2_url TEXT, google_drive_id TEXT, photo_type TEXT, latitude REAL, longitude REAL, location_accuracy REAL, uploaded_at TEXT, synced_from_offline INTEGER DEFAULT 0, task_id TEXT, daily_log_id TEXT, is_annotated INTEGER DEFAULT 0, annotation_data TEXT, is_social_ready INTEGER DEFAULT 0, is_before_photo INTEGER DEFAULT 0, is_after_photo INTEGER DEFAULT 0, ai_tags TEXT, entered_via TEXT, is_active INTEGER DEFAULT 1, created_by TEXT)"
+      },
+      {
+        "name": "properties",
+        "sql": "CREATE TABLE properties (\n  id TEXT PRIMARY KEY,\n  client_id TEXT NOT NULL REFERENCES clients(id),\n  address TEXT NOT NULL,\n  city TEXT NOT NULL,\n  state TEXT NOT NULL DEFAULT 'Arkansas',\n  zip TEXT NOT NULL,\n  property_type TEXT,\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "punch_list_items",
+        "sql": "CREATE TABLE punch_list_items (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  punch_list_id TEXT NOT NULL REFERENCES punch_lists(id) ON DELETE CASCADE,\n  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,\n  description TEXT NOT NULL,\n  sub_id TEXT REFERENCES subcontractors(id),\n  photo_ids TEXT,\n  status TEXT NOT NULL DEFAULT 'open'\n    CHECK(status IN ('open','done')),\n  scheduled_date TEXT,\n  completed_at TEXT,\n  completed_note TEXT,\n  sort_order INTEGER NOT NULL DEFAULT 0,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "punch_list_sub_tokens",
+        "sql": "CREATE TABLE punch_list_sub_tokens (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  punch_list_id TEXT NOT NULL REFERENCES punch_lists(id) ON DELETE CASCADE,\n  sub_id TEXT NOT NULL REFERENCES subcontractors(id),\n  token TEXT NOT NULL UNIQUE,\n  notified_at TEXT,\n  reminder_sent_at TEXT,\n  followup_sent_at TEXT,\n  is_active INTEGER NOT NULL DEFAULT 1,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "punch_lists",
+        "sql": "CREATE TABLE punch_lists (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,\n  status TEXT NOT NULL DEFAULT 'open'\n    CHECK(status IN ('open','sent','closed')),\n  scheduled_date TEXT,\n  sent_at TEXT,\n  closed_at TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "quotes",
+        "sql": "CREATE TABLE quotes (\n  id TEXT PRIMARY KEY,\n  job_id TEXT REFERENCES jobs(id),\n  quote_number INTEGER,\n  status TEXT,                            \n  subtotal REAL,\n  created_at TEXT,\n  transitioned_at TEXT,\n  synced_at TEXT NOT NULL\n, client_id TEXT REFERENCES clients(id))"
+      },
+      {
+        "name": "receipt_photos",
+        "sql": "CREATE TABLE receipt_photos (\n  id TEXT PRIMARY KEY,\n  photo_id TEXT NOT NULL UNIQUE REFERENCES photos(id) ON DELETE CASCADE,\n  ai_vendor TEXT,\n  ai_amount REAL,\n  ai_date TEXT,\n  ai_category TEXT,\n  ai_confidence REAL,\n  expense_id TEXT REFERENCES expenses(id),\n  processing_status TEXT NOT NULL CHECK(processing_status IN ('pending','processed','confirmed','failed')),\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n, extracted_items TEXT, match_results TEXT)"
+      },
+      {
+        "name": "referral_sources",
+        "sql": "CREATE TABLE referral_sources (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  label TEXT NOT NULL UNIQUE,\n  archived INTEGER NOT NULL DEFAULT 0,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "saved_reviews",
+        "sql": "CREATE TABLE saved_reviews (\n  id TEXT PRIMARY KEY,\n  reviewer_name TEXT NOT NULL,\n  review_date TEXT,\n  rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),\n  review_text TEXT NOT NULL,\n  source TEXT NOT NULL,\n  is_active INTEGER NOT NULL DEFAULT 1,\n  sort_order INTEGER,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "schedule_entries",
+        "sql": "CREATE TABLE schedule_entries (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id),\n  scheduled_date TEXT NOT NULL,\n  trade_or_work TEXT NOT NULL,\n  sub_id TEXT REFERENCES subcontractors(id),\n  start_time TEXT,\n  end_time TEXT,\n  notes TEXT,\n  notification_sent INTEGER DEFAULT 0,\n  status TEXT NOT NULL CHECK(status IN ('scheduled','in_progress','completed','cancelled','weather_delay')),\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "signature_events",
+        "sql": "CREATE TABLE signature_events (\n  id TEXT PRIMARY KEY,\n  job_document_id TEXT NOT NULL REFERENCES job_documents(id),\n  boldsign_document_id TEXT,\n  event_type TEXT NOT NULL,\n  raw_payload TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "smart_notes",
+        "sql": "CREATE TABLE smart_notes (\n  id TEXT PRIMARY KEY,\n  job_id TEXT REFERENCES jobs(id),\n  raw_content TEXT NOT NULL,\n  ai_summary TEXT,\n  ai_category TEXT,\n  ai_extracted_tasks TEXT,\n  ai_extracted_expense TEXT,\n  ai_extracted_change_order TEXT,\n  is_processed INTEGER DEFAULT 0,\n  processing_status TEXT,\n  entered_via TEXT NOT NULL,\n  created_by TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "social_posts",
+        "sql": "CREATE TABLE social_posts (\n  id TEXT PRIMARY KEY,\n  post_type TEXT NOT NULL CHECK(post_type IN ('job_completion','seasonal_tips','tips_tricks','promotion','review_highlight','manual')),\n  status TEXT NOT NULL CHECK(status IN ('draft','pending_approval','approved','scheduled','published','rejected','failed')),\n  caption TEXT NOT NULL,\n  hashtags TEXT,\n  platform TEXT NOT NULL CHECK(platform IN ('both','facebook_only','instagram_only')),\n  scheduled_date TEXT,\n  published_date TEXT,\n  job_id TEXT REFERENCES jobs(id),\n  photo_ids TEXT,\n  ai_generated_image_url TEXT,\n  facebook_post_id TEXT,\n  instagram_post_id TEXT,\n  facebook_url TEXT,\n  instagram_url TEXT,\n  engagement_data TEXT,\n  rejection_reason TEXT,\n  generated_by TEXT NOT NULL,\n  approved_by TEXT,\n  approved_date TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n, image_variation_index INTEGER NOT NULL DEFAULT 0)"
+      },
+      {
+        "name": "sqlite_sequence",
+        "sql": "CREATE TABLE sqlite_sequence(name,seq)"
+      },
+      {
+        "name": "sub_access_tokens",
+        "sql": "CREATE TABLE sub_access_tokens (\n  id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  sub_id     TEXT NOT NULL UNIQUE REFERENCES subcontractors(id),\n  token      TEXT NOT NULL UNIQUE,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  last_viewed_at TEXT\n)"
+      },
+      {
+        "name": "subcontractors",
+        "sql": "CREATE TABLE subcontractors (\n  id TEXT PRIMARY KEY,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n\n  company           TEXT,   -- Company / Individual (required in practice)\n  trade             TEXT,   -- Trade / Scope (Electrical, Plumbing, etc.)\n  primary_contact   TEXT,\n  reference_type    TEXT,   -- General Contractor, Homeowner, Architect, …\n  phone             TEXT,\n  email             TEXT,\n  city_state        TEXT,   -- \"Dallas, TX\"\n  service_area      TEXT,\n  license_number    TEXT,   -- \"EC-123456 / TX\"\n  insurance_verified INTEGER NOT NULL DEFAULT 0,  -- 0/1\n  years_worked      REAL,\n  last_project      TEXT,\n  last_project_date TEXT,   -- ISO YYYY-MM-DD\n  rating            INTEGER,-- 1–5\n  would_rehire      INTEGER,-- NULL unknown, 0 No, 1 Yes\n  notes             TEXT,\n  website           TEXT,\n  follow_up_date    TEXT,   -- ISO YYYY-MM-DD\n  active_status     TEXT NOT NULL DEFAULT 'Active'  -- Active | Inactive\n, company_name TEXT, contact_name TEXT, insurance_on_file INTEGER DEFAULT 0, w9_on_file INTEGER DEFAULT 0, hourly_rate REAL, flat_rate_notes TEXT, is_active INTEGER DEFAULT 1, qbo_vendor_id   TEXT, tax_id TEXT, calendar_color TEXT DEFAULT '#10B981')"
+      },
+      {
+        "name": "sync_dead_letters",
+        "sql": "CREATE TABLE sync_dead_letters (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  job_name TEXT NOT NULL,                 \n  entity_type TEXT NOT NULL,              \n  entity_id TEXT,                         \n  payload TEXT,                           \n  error_message TEXT NOT NULL,\n  first_seen_at TEXT NOT NULL,            \n  last_seen_at TEXT NOT NULL,             \n  attempts INTEGER NOT NULL DEFAULT 1,\n  resolved_at TEXT,                       \n  last_attempt_status TEXT,               \n  alerted_at TEXT                         \n)"
+      },
+      {
+        "name": "sync_log",
+        "sql": "CREATE TABLE sync_log (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  job_name TEXT NOT NULL,                 \n  started_at TEXT NOT NULL,\n  finished_at TEXT,\n  status TEXT NOT NULL,                   \n  rows_affected INTEGER DEFAULT 0,\n  error_message TEXT,\n  duration_ms INTEGER\n, details TEXT)"
+      },
+      {
+        "name": "system_settings",
+        "sql": "CREATE TABLE system_settings (\n  key TEXT PRIMARY KEY,\n  value TEXT NOT NULL,\n  value_type TEXT NOT NULL CHECK(value_type IN ('string','number','boolean','json')),\n  category TEXT NOT NULL,\n  label TEXT NOT NULL,\n  description TEXT,\n  updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_by TEXT\n)"
+      },
+      {
+        "name": "tag_definitions",
+        "sql": "CREATE TABLE tag_definitions (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  tag_text TEXT NOT NULL UNIQUE,\n  archived INTEGER NOT NULL DEFAULT 0,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "tasks",
+        "sql": "CREATE TABLE tasks (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,\n  task_group TEXT NOT NULL,\n  task_group_order INTEGER NOT NULL,\n  title TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('pending','in_progress','complete','skipped')),\n  assigned_to TEXT,\n  scheduled_date TEXT,\n  completed_date TEXT,\n  completed_by TEXT,\n  notes TEXT,\n  sort_order INTEGER NOT NULL,\n  is_punch_list INTEGER DEFAULT 0,\n  photo_ids TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "time_entries",
+        "sql": "CREATE TABLE time_entries (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id),\n  worker TEXT NOT NULL,\n  role TEXT NOT NULL CHECK(role IN ('general','pm_skilled')),\n  clock_in TEXT NOT NULL,\n  clock_out TEXT,\n  hours REAL,\n  hourly_rate REAL,\n  labor_cost REAL,\n  notes TEXT,\n  entered_via TEXT NOT NULL,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "users",
+        "sql": "CREATE TABLE users (\n  id TEXT PRIMARY KEY,\n  email TEXT NOT NULL UNIQUE,\n  name TEXT NOT NULL,\n  role TEXT NOT NULL,                     \n  default_crew TEXT,\n  current_job_id TEXT REFERENCES jobs(id),\n  created_at TEXT NOT NULL,\n  last_login_at TEXT,\n  disabled INTEGER DEFAULT 0\n, first_name TEXT, last_name TEXT, phone TEXT, is_active INTEGER DEFAULT 1, last_login TEXT, notification_preferences TEXT, updated_at TEXT, calendar_color TEXT DEFAULT '#3B82F6', business_phone TEXT)"
+      },
+      {
+        "name": "vendor_materials",
+        "sql": "CREATE TABLE vendor_materials (\n  id TEXT PRIMARY KEY,\n  vendor_name TEXT NOT NULL,\n  material_name TEXT NOT NULL,\n  category TEXT NOT NULL,\n  unit TEXT NOT NULL,\n  last_price REAL NOT NULL,\n  last_purchased_date TEXT,\n  average_price REAL,\n  price_history TEXT,\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "warranties",
+        "sql": "CREATE TABLE warranties (\n  id TEXT PRIMARY KEY,\n  job_id TEXT NOT NULL REFERENCES jobs(id),\n  claim_date TEXT NOT NULL,\n  description TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('reported','scheduled','resolved')),\n  resolution TEXT,\n  resolved_date TEXT,\n  cost REAL,\n  photo_ids TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      },
+      {
+        "name": "warranty_calls",
+        "sql": "CREATE TABLE warranty_calls (\n  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),\n  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,\n  title TEXT NOT NULL,\n  description TEXT,\n  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'scheduled', 'completed', 'cancelled')),\n  assigned_to TEXT REFERENCES users(id),\n  assigned_sub_id TEXT REFERENCES subcontractors(id),\n  scheduled_date TEXT,\n  scheduled_end TEXT,\n  completed_date TEXT,\n  notes TEXT,\n  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n)"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "ENAM",
+      "served_by_colo": "ORD",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 1.0083
+      },
+      "duration": 1.0083,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 2691072,
+      "rows_read": 398,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

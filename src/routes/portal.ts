@@ -68,6 +68,7 @@ interface PortalJob {
   property_zip: string | null;
   conversion_reversed: number | null;
   assigned_to: string | null;
+  warranty_expiration: string | null;
 }
 
 /** Resolve the one job a portal_token maps to (rule #2). Null → invalid token. */
@@ -77,7 +78,7 @@ async function resolveJob(env: Env, token: string): Promise<PortalJob | null> {
     `SELECT id, job_number, title, status, client_id, payer_id, billing_model, portal_type,
             contract_total, deposit_amount,
             property_address, property_city, property_state, property_zip,
-            conversion_reversed, assigned_to
+            conversion_reversed, assigned_to, warranty_expiration
        FROM jobs WHERE portal_token = ?`,
   )
     .bind(token)
@@ -220,12 +221,18 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
     }
   }
 
+  const withinWarranty =
+    job.warranty_expiration != null &&
+    new Date(`${job.warranty_expiration}T00:00:00Z`) >=
+      new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+
   return json({
     ok: true,
     company_name: await companyName(env),
     portal_type: job.portal_type ?? "standard",
     is_cost_plus: (job.portal_type ?? "") === "cost_plus",
     completion_package_available: !!sentPkg,
+    within_warranty: withinWarranty,
     on_hold: onHold,
     billing_party,
     project_manager,
@@ -872,6 +879,210 @@ async function handlePortalDocFile(env: Env, token: string, docId: string): Prom
   });
 }
 
+// ─── GET /api/portal/:token/warranty-claims ────────────────────────────────────
+// Returns the client's submitted warranty claims for this job. Only shows claims
+// submitted by the client (submitted_by='client'). Status is read-only here.
+
+async function handleWarrantyClaimsGet(env: Env, token: string): Promise<Response> {
+  const job = await resolveJob(env, token);
+  if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, claim_date, description, status, resolution, resolved_date, photo_ids, created_at
+       FROM warranties
+      WHERE job_id = ? AND submitted_by = 'client'
+      ORDER BY created_at DESC`,
+  )
+    .bind(job.id)
+    .all<{
+      id: string;
+      claim_date: string;
+      description: string;
+      status: string;
+      resolution: string | null;
+      resolved_date: string | null;
+      photo_ids: string | null;
+      created_at: string;
+    }>();
+
+  return json({
+    ok: true,
+    within_warranty: await isWithinWarranty(env, job.id),
+    claims: (results ?? []).map((c) => ({
+      id: c.id,
+      claim_date: c.claim_date,
+      description: c.description,
+      status: c.status,
+      resolution: c.resolution,
+      resolved_date: c.resolved_date,
+      photo_ids: c.photo_ids ? (JSON.parse(c.photo_ids) as string[]) : [],
+      created_at: c.created_at,
+    })),
+  });
+}
+
+// ─── POST /api/portal/:token/warranty-claims ───────────────────────────────────
+// Client submits a warranty claim. Eligibility: job must be within warranty window
+// (warranty_expiration IS NOT NULL AND warranty_expiration >= today).
+// Accepts multipart/form-data: description (text) + optional photo (file).
+
+const WARRANTY_CLAIM_MAX_DESC = 2000;
+const WARRANTY_CLAIM_RATE_WINDOW_SECONDS = 300; // 5 min
+const WARRANTY_CLAIM_RATE_MAX = 3;
+
+async function isWithinWarranty(env: Env, jobId: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT warranty_expiration FROM jobs WHERE id = ?`,
+  )
+    .bind(jobId)
+    .first<{ warranty_expiration: string | null }>();
+  if (!row?.warranty_expiration) return false;
+  // SQLite date comparison: warranty_expiration >= date('now')
+  const exp = new Date(`${row.warranty_expiration}T00:00:00Z`);
+  return exp >= new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+}
+
+async function handleWarrantyClaimsPost(
+  request: Request,
+  env: Env,
+  token: string,
+): Promise<Response> {
+  const job = await resolveJob(env, token);
+  if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
+  if (!job.client_id) return err(409, "no_client", "This project has no client on file.");
+
+  // Eligibility gate
+  if (!(await isWithinWarranty(env, job.id))) {
+    return err(422, "outside_warranty_window",
+      "Warranty claims can only be submitted while the project is within its warranty period. " +
+      "Please contact us directly if you have a concern.");
+  }
+
+  // Rate limit: max 3 claims per 5 minutes per portal token
+  const recentCount = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM warranties
+      WHERE job_id = ? AND submitted_by = 'client'
+        AND created_at >= datetime('now', ?)`,
+  )
+    .bind(job.id, `-${WARRANTY_CLAIM_RATE_WINDOW_SECONDS} seconds`)
+    .first<{ n: number }>();
+  if ((recentCount?.n ?? 0) >= WARRANTY_CLAIM_RATE_MAX) {
+    return err(429, "rate_limited", "You're submitting too quickly. Please wait a few minutes.");
+  }
+
+  // Parse body — accept both JSON and multipart
+  let description = "";
+  let photoBlob: Blob | null = null;
+  let photoFilename = "photo.jpg";
+
+  const contentType = request.headers.get("content-type") ?? "";
+  if (contentType.includes("multipart/form-data")) {
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      return err(400, "bad_request", "Could not parse form data.");
+    }
+    description = (form.get("description") as string | null)?.trim() ?? "";
+    const photoEntry = form.get("photo");
+    if (photoEntry instanceof Blob && photoEntry.size > 0) {
+      photoBlob = photoEntry;
+      photoFilename = (photoEntry as File).name ?? "photo.jpg";
+    }
+  } else {
+    let body: { description?: unknown } = {};
+    try {
+      body = (await request.json()) as { description?: unknown };
+    } catch {
+      return err(400, "bad_request", "Body must be JSON or multipart/form-data.");
+    }
+    description = typeof body.description === "string" ? body.description.trim() : "";
+  }
+
+  if (!description) return err(422, "empty_description", "Please describe the issue.");
+  if (description.length > WARRANTY_CLAIM_MAX_DESC) {
+    return err(422, "description_too_long", `Description is limited to ${WARRANTY_CLAIM_MAX_DESC} characters.`);
+  }
+
+  // Optional photo upload → R2 + photos row
+  let photoIds: string[] = [];
+  if (photoBlob) {
+    try {
+      const photoId = crypto.randomUUID();
+      const ext = photoFilename.split(".").pop()?.toLowerCase() ?? "jpg";
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const r2Key = `photos/${job.client_id}/${dateStr}/${photoId}.${ext}`;
+      const contentTypePhoto = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : "image/jpeg";
+      const photoBytes = await photoBlob.arrayBuffer();
+      await env.FILES.put(r2Key, photoBytes, { httpMetadata: { contentType: contentTypePhoto } });
+      // Create photos row so the owner can see it
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        `INSERT INTO photos (id, created_at, taken_at, job_id, category, r2_key, thumb_key,
+            photo_type, r2_url, uploaded_at, is_active, entered_via)
+         VALUES (?, ?, ?, ?, 'warranty', ?, ?, 'warranty', ?, ?, 1, 'portal')`,
+      )
+        .bind(photoId, now, now, job.id, r2Key, r2Key, `/api/photos/${photoId}`, now)
+        .run();
+      photoIds = [photoId];
+    } catch (uploadErr) {
+      console.error("[portal warranty claim] photo upload failed:", (uploadErr as Error).message);
+      // Non-fatal — proceed without photo rather than blocking the claim
+    }
+  }
+
+  // Create the warranty claim
+  const claimId = crypto.randomUUID();
+  const claimDate = new Date().toISOString().slice(0, 10);
+  await env.DB.prepare(
+    `INSERT INTO warranties
+       (id, job_id, claim_date, description, status, submitted_by, viewed_by_owner,
+        photo_ids, created_at)
+     VALUES (?, ?, ?, ?, 'reported', 'client', 0, ?, datetime('now'))`,
+  )
+    .bind(
+      claimId,
+      job.id,
+      claimDate,
+      description,
+      photoIds.length > 0 ? JSON.stringify(photoIds) : null,
+    )
+    .run();
+
+  // Notify owner in-app (bell)
+  const cName = await clientName(env, job.client_id);
+  const jobTitle = (
+    await env.DB.prepare("SELECT title, job_number FROM jobs WHERE id = ?")
+      .bind(job.id)
+      .first<{ title: string | null; job_number: number | null }>()
+  );
+  const displayTitle =
+    jobTitle?.title ??
+    (jobTitle?.job_number != null ? `JOB-${String(jobTitle.job_number).padStart(3, "0")}` : "a project");
+
+  await createOwnerInApp(env, {
+    message: `New warranty claim from ${cName || "client"} on "${displayTitle}": ${description.slice(0, 120)}${description.length > 120 ? "…" : ""}`,
+    linkPath: `/app/jobs/${job.id}?tab=warranty`,
+    clientId: job.client_id,
+    dedupe: `warranty_claim_submitted:${claimId}`,
+  });
+
+  return json(
+    {
+      ok: true,
+      claim: {
+        id: claimId,
+        claim_date: claimDate,
+        description,
+        status: "reported",
+        photo_ids: photoIds,
+        created_at: new Date().toISOString(),
+      },
+    },
+    { status: 201 },
+  );
+}
+
 // ─── dispatcher ────────────────────────────────────────────────────────────────
 
 /**
@@ -944,6 +1155,26 @@ export async function handlePortalApi(
 
   const completion = p.match(/^\/api\/portal\/([^/]+)\/completion-package$/);
   if (completion && method === "GET") return handleCompletionPackage(env, decodeURIComponent(completion[1]));
+
+  const warrantyClaims = p.match(/^\/api\/portal\/([^/]+)\/warranty-claims$/);
+  if (warrantyClaims) {
+    const tok = decodeURIComponent(warrantyClaims[1]);
+    if (method === "GET") return handleWarrantyClaimsGet(env, tok);
+    if (method === "POST") return handleWarrantyClaimsPost(request, env, tok);
+  }
+
+  // Selections — client views + approves material choices.
+  const selectionsApprove = p.match(/^\/api\/portal\/([^/]+)\/selections\/([^/]+)\/approve$/);
+  if (selectionsApprove && method === "POST") {
+    const { handlePortalSelectionsApprove } = await import("./selections.js");
+    return handlePortalSelectionsApprove(request, env, decodeURIComponent(selectionsApprove[1]), decodeURIComponent(selectionsApprove[2]));
+  }
+
+  const selections = p.match(/^\/api\/portal\/([^/]+)\/selections$/);
+  if (selections && method === "GET") {
+    const { handlePortalSelectionsList } = await import("./selections.js");
+    return handlePortalSelectionsList(env, decodeURIComponent(selections[1]));
+  }
 
   // Landing — match LAST so it never shadows the sub-routes above.
   const landing = p.match(/^\/api\/portal\/([^/]+)$/);

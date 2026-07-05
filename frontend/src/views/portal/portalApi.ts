@@ -33,6 +33,7 @@ export interface PortalLanding {
   portal_type: string;
   is_cost_plus: boolean;
   completion_package_available?: boolean;
+  within_warranty?: boolean;
   on_hold: boolean;
   billing_party?: {
     company_name: string | null;

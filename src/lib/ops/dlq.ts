@@ -166,15 +166,21 @@ async function replayOne(
     payload: string | null;
   },
 ): Promise<void> {
-  if (!row.payload) {
-    throw new Error("no payload to replay");
-  }
-  const payload = JSON.parse(row.payload);
-
   switch (row.entity_type) {
     case "job":
       // Jobber sync decommissioned — these legacy DLQ entries cannot be replayed.
       throw new Error("Jobber job replay decommissioned; resolve this DLQ entry manually.");
+
+    case "wc_spreadsheet": {
+      // Run a full sync cycle. entity_id may be a tab name or "all" — in both
+      // cases a fresh full sync is the correct replay (the sync is idempotent).
+      // Dynamic import avoids a circular dep at load time (wc-spreadsheet imports dlq).
+      const { runWcSpreadsheetSync } = await import("../../services/wc-spreadsheet.js");
+      const r = await runWcSpreadsheetSync(env);
+      if (r.status === "success" || r.status === "skipped") return;
+      throw new Error(r.error_message ?? `wc_spreadsheet sync returned status=${r.status}`);
+    }
+
     // For other types, defer to the next full sync. Recording these still
     // gives us visibility (and an alert if they keep failing); the sync
     // job will retry naturally on its own pass.
@@ -182,11 +188,13 @@ async function replayOne(
     case "quote":
     case "expense":
     case "payment":
-    case "client":
-    case "wc_spreadsheet":
+    case "client": {
+      if (!row.payload) throw new Error("no payload to replay");
       throw new Error(
         `replay not yet implemented for ${row.entity_type}; awaiting next full sync`,
       );
+    }
+
     default:
       throw new Error(`unknown entity_type: ${row.entity_type}`);
   }

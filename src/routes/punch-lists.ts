@@ -18,7 +18,7 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
-import { triggerNotification } from "../lib/notification-engine.js";
+import { triggerNotification, sendSubEmail } from "../lib/notification-engine.js";
 import {
   buildPunchListPdf,
   punchListSecureLink,
@@ -108,14 +108,6 @@ async function storePunchCompletionPhoto(
     .run();
 }
 
-function arrayBufferToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
 
 interface PunchListRow {
   id: string;
@@ -234,45 +226,6 @@ async function buildBySub(
   return bySub;
 }
 
-async function sendSubEmailWithPdf(
-  env: Env,
-  to: string,
-  subject: string,
-  text: string,
-  pdfBytes: Uint8Array,
-  filename: string,
-): Promise<void> {
-  const live = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase() === "live";
-  const from = (env.NOTIFICATIONS_EMAIL_FROM ?? "").trim();
-  const apiKey = (env.RESEND_API_KEY ?? "").trim();
-
-  if (!live || !from || !apiKey || env.RESEND_DRY_RUN === "1") {
-    console.log(`[punch-list][SIMULATE] email to=${to} subject="${subject}" attachment=${filename}`);
-    return;
-  }
-
-  const b64 = arrayBufferToBase64(pdfBytes);
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from,
-      to: [to],
-      subject,
-      text,
-      attachments: [{ filename, content: b64 }],
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.warn(`[punch-list] email to ${to} failed: ${res.status} ${body.slice(0, 200)}`);
-  }
-}
-
 async function notifySub(
   env: Env,
   sub: {
@@ -297,14 +250,8 @@ async function notifySub(
   }
 
   if (sub.email) {
-    await sendSubEmailWithPdf(
-      env,
-      sub.email,
-      emailSubject,
-      smsBody,
-      pdfBytes,
-      `punch-list-${jobTitle.replace(/[^a-z0-9]+/gi, "-").slice(0, 40)}.pdf`,
-    );
+    const filename = `punch-list-${jobTitle.replace(/[^a-z0-9]+/gi, "-").slice(0, 40)}.pdf`;
+    await sendSubEmail(env, sub.email, emailSubject, smsBody, { filename, pdfBytes });
   } else {
     console.warn(`[punch-list] no phone or email for sub=${sub.id} — token still created`);
   }
@@ -656,26 +603,7 @@ export async function handlePunchListRenotify(
       await sendSms(twilioCfg, sub.phone, msg);
     }
     if (sub.email) {
-      const live = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase() === "live";
-      const from = (env.NOTIFICATIONS_EMAIL_FROM ?? "").trim();
-      const apiKey = (env.RESEND_API_KEY ?? "").trim();
-      if (live && from && apiKey && env.RESEND_DRY_RUN !== "1") {
-        await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            from,
-            to: [sub.email],
-            subject: `Updated Punch List — ${jobTitle}`,
-            text: msg,
-          }),
-        });
-      } else {
-        console.log(`[punch-list][SIMULATE] renotify email to=${sub.email}`);
-      }
+      await sendSubEmail(env, sub.email, `Updated Punch List — ${jobTitle}`, msg);
     }
   }
 

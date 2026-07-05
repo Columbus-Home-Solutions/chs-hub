@@ -81,6 +81,8 @@ interface RawSub {
   is_active: number | null;
   active_status: string | null;
   tax_id: string | null;
+  coi_expiration_date: string | null;
+  license_expiration_date: string | null;
 }
 
 /** Normalize a raw row (legacy + canonical columns) into the canonical shape. */
@@ -104,6 +106,8 @@ function shape(row: RawSub) {
     notes: row.notes,
     is_active: isActive,
     tax_id: row.tax_id,
+    coi_expiration_date: row.coi_expiration_date ?? null,
+    license_expiration_date: row.license_expiration_date ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -374,6 +378,8 @@ export async function handleSubcontractorUpdate(
   }
   if ("notes" in body) set("notes", str(body.notes));
   if ("tax_id" in body) set("tax_id", str(body.tax_id));
+  if ("coi_expiration_date" in body) set("coi_expiration_date", str(body.coi_expiration_date));
+  if ("license_expiration_date" in body) set("license_expiration_date", str(body.license_expiration_date));
   if ("is_active" in body) {
     const v = bool(body.is_active);
     set("is_active", v);

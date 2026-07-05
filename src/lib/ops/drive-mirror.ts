@@ -106,15 +106,28 @@ export interface DriveMirrorStatus {
   jobs_without_drive_stub: number;
 }
 
+// ─── SA JSON helper ───────────────────────────────────────────────────────
+
+/**
+ * Return the service-account JSON to use for Drive API calls.
+ * Primary:  GOOGLE_SERVICE_ACCOUNT_JSON  (dedicated Drive SA or shared SA)
+ * Fallback: WC_SHEETS_SERVICE_ACCOUNT    (same SA also has Drive scope per design)
+ * See env.ts: "same SA powers Drive + Sheets".
+ */
+function resolveServiceAccountJson(env: Env): string | undefined {
+  return env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim() || env.WC_SHEETS_SERVICE_ACCOUNT?.trim() || undefined;
+}
+
 // ─── Status endpoint ──────────────────────────────────────────────────────
 
 export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus> {
-  const hasServiceAccount = !!env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
+  const saJson = resolveServiceAccountJson(env);
+  const hasServiceAccount = !!saJson;
   const driveId = env.DRIVE_SHARED_DRIVE_ID;
   const configured = !!(hasServiceAccount && driveId);
 
   let reason: string | undefined;
-  if (!hasServiceAccount) reason = "no GOOGLE_SERVICE_ACCOUNT_JSON";
+  if (!hasServiceAccount) reason = "no GOOGLE_SERVICE_ACCOUNT_JSON (and no WC_SHEETS_SERVICE_ACCOUNT fallback)";
   else if (!driveId) reason = "DRIVE_SHARED_DRIVE_ID unset";
 
   const [ph, ex, jf, co, doc] = await Promise.all([
@@ -136,7 +149,7 @@ export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus>
   let drive_token_error: string | undefined;
   if (configured) {
     try {
-      await getDriveAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON!);
+      await getDriveAccessToken(saJson!);
       drive_token_ok = true;
     } catch (e) {
       drive_token_ok = false;
@@ -180,8 +193,9 @@ export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
     duration_ms: 0,
   };
 
-  if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-    out.reason = "no GOOGLE_SERVICE_ACCOUNT_JSON";
+  const saJson = resolveServiceAccountJson(env);
+  if (!saJson) {
+    out.reason = "no GOOGLE_SERVICE_ACCOUNT_JSON (and no WC_SHEETS_SERVICE_ACCOUNT fallback)";
     out.duration_ms = Date.now() - t0;
     return out;
   }
@@ -195,7 +209,7 @@ export async function runDriveMirror(env: Env): Promise<DriveMirrorResult> {
   out.skipped = false;
   let token: string;
   try {
-    token = await getDriveAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    token = await getDriveAccessToken(saJson);
   } catch (e) {
     out.errors.push(`token: ${(e as Error).message}`);
     out.duration_ms = Date.now() - t0;

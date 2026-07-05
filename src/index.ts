@@ -449,6 +449,30 @@ import {
 import { handleJobHealth } from "./routes/job-health.js";
 import { handleSubPublicGet, handleSubItemDone } from "./routes/sub-access.js";
 import {
+  handleCreateBidRequest,
+  handleGetBidRequest,
+  handleAwardBid,
+  handleBidLanding,
+  handleBidSubmit,
+} from "./routes/bid-requests.js";
+import {
+  handleSendPacket,
+  handleListPackets,
+  handleApprovePacket,
+  handleSendAgreement,
+  handlePacketLanding,
+  handleUploadDocument,
+  handleWorkersCompExempt,
+  handleSubmitPacket,
+} from "./routes/sub-packets.js";
+import {
+  handleCreateEstimateSelection,
+  handleListEstimateSelections,
+  handleCreateJobSelection,
+  handleListJobSelections,
+  handleAddChoice,
+} from "./routes/selections.js";
+import {
   handleVoiceNoteCreate,
   handleVoiceNoteUnmatchedList,
   handleVoiceNoteAssign,
@@ -474,6 +498,12 @@ import {
   handleWarrantyCallDelete,
   handleJobWarrantyCalls,
 } from "./routes/warranty-calls.js";
+import {
+  handleJobWarrantiesList,
+  handleJobWarrantyCreate,
+  handleWarrantyUpdate,
+} from "./routes/warranties.js";
+import { checkSubComplianceAlerts } from "./lib/sub-compliance.js";
 import { handleCalendarEvents } from "./routes/calendar-events.js";
 import {
   handleGcalStatus,
@@ -605,6 +635,12 @@ export default {
         // Sprint 34: persistent sub access link (token auth, no Access).
         p === "/sub" || p.startsWith("/sub/") ||
         p.startsWith("/api/sub/") ||
+        // Sprint 38 Run 3: sub-facing bid submission (token auth, no Access).
+        p === "/bid" || p.startsWith("/bid/") ||
+        p.startsWith("/api/bid/") ||
+        // Sprint 39 Run 1: sub-facing onboarding packet (token auth, no Access).
+        p === "/packet" || p.startsWith("/packet/") ||
+        p.startsWith("/api/packet/") ||
         p === "/api/webhooks/stripe" ||
         p === "/api/webhooks/twilio/call-whisper" ||
         p === "/api/integrations/boldsign/webhook" ||
@@ -716,6 +752,34 @@ export default {
     const subGet = url.pathname.match(/^\/api\/sub\/([^/]+)$/);
     if (subGet && request.method === "GET") {
       return handleSubPublicGet(env, decodeURIComponent(subGet[1]));
+    }
+
+    // ── Bid solicitation — sub-facing (Sprint 38 Run 3) — token, no Access ─
+    const bidSubmit = url.pathname.match(/^\/api\/bid\/([^/]+)\/submit$/);
+    if (bidSubmit && request.method === "POST") {
+      return handleBidSubmit(request, env, decodeURIComponent(bidSubmit[1]));
+    }
+    const bidLanding = url.pathname.match(/^\/api\/bid\/([^/]+)$/);
+    if (bidLanding && request.method === "GET") {
+      return handleBidLanding(request, env, decodeURIComponent(bidLanding[1]));
+    }
+
+    // ── Sub onboarding packets — sub-facing (Sprint 39 Run 1) — token, no Access ─
+    const packetDocUpload = url.pathname.match(/^\/api\/packet\/([^/]+)\/documents$/);
+    if (packetDocUpload && request.method === "POST") {
+      return handleUploadDocument(request, env, decodeURIComponent(packetDocUpload[1]));
+    }
+    const packetWCExempt = url.pathname.match(/^\/api\/packet\/([^/]+)\/workers-comp-exempt$/);
+    if (packetWCExempt && request.method === "POST") {
+      return handleWorkersCompExempt(request, env, decodeURIComponent(packetWCExempt[1]));
+    }
+    const packetSubmit = url.pathname.match(/^\/api\/packet\/([^/]+)\/submit$/);
+    if (packetSubmit && request.method === "POST") {
+      return handleSubmitPacket(env, decodeURIComponent(packetSubmit[1]));
+    }
+    const packetLanding = url.pathname.match(/^\/api\/packet\/([^/]+)$/);
+    if (packetLanding && request.method === "GET") {
+      return handlePacketLanding(env, decodeURIComponent(packetLanding[1]));
     }
 
     // ── Public punch list (Sprint 33) — token auth, no Access ────────
@@ -1249,6 +1313,13 @@ export default {
     if (jobWarranty && request.method === "GET") {
       return handleJobWarrantyCalls(env, decodeURIComponent(jobWarranty[1]));
     }
+    // Warranties (claims) per job — Sprint 38.
+    const jobWarranties = url.pathname.match(/^\/api\/jobs\/([^/]+)\/warranties$/);
+    if (jobWarranties) {
+      const jid = decodeURIComponent(jobWarranties[1]);
+      if (request.method === "GET") return handleJobWarrantiesList(request, env, jid);
+      if (request.method === "POST") return handleJobWarrantyCreate(request, env, jid);
+    }
     const jobById = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (jobById) {
       const jid = decodeURIComponent(jobById[1]);
@@ -1372,6 +1443,11 @@ export default {
       if (request.method === "GET") return handleWarrantyCallDetail(env, wid);
       if (request.method === "PATCH") return handleWarrantyCallUpdate(request, env, wid);
       if (request.method === "DELETE") return handleWarrantyCallDelete(request, env, wid);
+    }
+    // ── Warranties (claims) individual update — Sprint 38 ───────────────
+    const warrantyClaimById = url.pathname.match(/^\/api\/warranties\/([^/]+)$/);
+    if (warrantyClaimById && request.method === "PATCH") {
+      return handleWarrantyUpdate(request, env, decodeURIComponent(warrantyClaimById[1]));
     }
 
     // ── Permits (Sprint 13) ──────────────────────────────────────────
@@ -1954,6 +2030,53 @@ export default {
       if (request.method === "PUT") return handleSubcontractorUpdate(request, env, sid);
     }
 
+    // ── Sub onboarding packets — owner-facing (Sprint 39 Run 1) ─────────────
+    const subPacketsRoute = url.pathname.match(/^\/api\/subcontractors\/([^/]+)\/packets$/);
+    if (subPacketsRoute) {
+      const sid = decodeURIComponent(subPacketsRoute[1]);
+      if (request.method === "POST") return handleSendPacket(request, env, sid);
+      if (request.method === "GET") return handleListPackets(request, env, sid);
+    }
+    const packetApprove = url.pathname.match(/^\/api\/packets\/([^/]+)\/approve$/);
+    if (packetApprove && request.method === "POST") {
+      return handleApprovePacket(request, env, decodeURIComponent(packetApprove[1]));
+    }
+    const packetSendAgreement = url.pathname.match(/^\/api\/packets\/([^/]+)\/send-agreement$/);
+    if (packetSendAgreement && request.method === "POST") {
+      return handleSendAgreement(request, env, decodeURIComponent(packetSendAgreement[1]));
+    }
+
+    // ── Bid solicitation — owner-facing (Sprint 38 Run 3) ────────────────
+    if (url.pathname === "/api/bid-requests" && request.method === "POST") {
+      return handleCreateBidRequest(request, env);
+    }
+    const bidRequestAward = url.pathname.match(/^\/api\/bid-requests\/([^/]+)\/award$/);
+    if (bidRequestAward && request.method === "POST") {
+      return handleAwardBid(request, env, decodeURIComponent(bidRequestAward[1]));
+    }
+    const bidRequestById = url.pathname.match(/^\/api\/bid-requests\/([^/]+)$/);
+    if (bidRequestById && request.method === "GET") {
+      return handleGetBidRequest(request, env, decodeURIComponent(bidRequestById[1]));
+    }
+
+    // ── Selections & Allowances — owner-facing (Sprint 38 Run 4) ────────────
+    const estimateSelectionsRoute = url.pathname.match(/^\/api\/estimates\/([^/]+)\/selections$/);
+    if (estimateSelectionsRoute) {
+      const eid = decodeURIComponent(estimateSelectionsRoute[1]);
+      if (request.method === "POST") return handleCreateEstimateSelection(request, env, eid);
+      if (request.method === "GET") return handleListEstimateSelections(request, env, eid);
+    }
+    const jobSelectionsRoute = url.pathname.match(/^\/api\/jobs\/([^/]+)\/selections$/);
+    if (jobSelectionsRoute) {
+      const jid = decodeURIComponent(jobSelectionsRoute[1]);
+      if (request.method === "POST") return handleCreateJobSelection(request, env, jid);
+      if (request.method === "GET") return handleListJobSelections(request, env, jid);
+    }
+    const selectionChoicesRoute = url.pathname.match(/^\/api\/selections\/([^/]+)\/choices$/);
+    if (selectionChoicesRoute && request.method === "POST") {
+      return handleAddChoice(request, env, decodeURIComponent(selectionChoicesRoute[1]));
+    }
+
     // ── Estimate requests (Estimating Pipeline — Sprint 3) ───────────
     // Sub-resource / fixed paths must be tested before the bare :id route.
     if (url.pathname === "/api/estimate-requests") {
@@ -2281,6 +2404,22 @@ export default {
       return env.ASSETS.fetch(new Request(subHtmlUrl.toString(), { method: "GET" }));
     }
 
+    // ── Sub-facing bid submission (Sprint 38 Run 3) ──────────────────
+    // /bid/:token — token-gated, no-auth, reuses sub.html Vite entry.
+    if (url.pathname === "/bid" || url.pathname.startsWith("/bid/")) {
+      const bidHtmlUrl = new URL(request.url);
+      bidHtmlUrl.pathname = "/app/sub.html";
+      return env.ASSETS.fetch(new Request(bidHtmlUrl.toString(), { method: "GET" }));
+    }
+
+    // ── Sub onboarding packet (Sprint 39 Run 1) ──────────────────────
+    // /packet/:token — token-gated, no-auth, reuses sub.html Vite entry.
+    if (url.pathname === "/packet" || url.pathname.startsWith("/packet/")) {
+      const packetHtmlUrl = new URL(request.url);
+      packetHtmlUrl.pathname = "/app/sub.html";
+      return env.ASSETS.fetch(new Request(packetHtmlUrl.toString(), { method: "GET" }));
+    }
+
     // ── New Preact app (Sprint 2+) ───────────────────────────────────
     // Built by Vite into ./app and served at /app. Handled before the
     // dashboard-host rewrite so it resolves on every host. Deep links
@@ -2570,6 +2709,19 @@ async function runNightly(env: Env): Promise<void> {
     }
   } catch (err) {
     console.error(`[cron 15 7 * * *] review_followups failed:`, (err as Error).message);
+  }
+
+  // Sub compliance expiration alerts (Sprint 38) — COI + license expiry at 30/15/0 days.
+  // Rides the existing nightly tick — no new cron trigger.
+  try {
+    const sc = await checkSubComplianceAlerts(env);
+    if (sc.scanned > 0 || sc.alerted > 0 || sc.errors > 0) {
+      console.log(
+        `[cron 15 7 * * *] sub_compliance: scanned=${sc.scanned} alerted=${sc.alerted} errors=${sc.errors} in ${sc.duration_ms}ms`,
+      );
+    }
+  } catch (err) {
+    console.error(`[cron 15 7 * * *] sub_compliance failed:`, (err as Error).message);
   }
 }
 

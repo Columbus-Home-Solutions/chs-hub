@@ -7,6 +7,8 @@ import { InvoicesTab } from "./InvoicesTab";
 import { BudgetTab } from "./BudgetTab";
 import { MessagesTab } from "./MessagesTab";
 import { ScheduleTab, ChangeOrdersTab, DocumentsTab, CompletionPackageTab } from "./SeamTabs";
+import { WarrantyClaimsTab } from "./WarrantyClaimsTab";
+import { SelectionsTab } from "./SelectionsTab";
 
 type TabKey =
   | "photos"
@@ -14,8 +16,10 @@ type TabKey =
   | "invoices"
   | "budget"
   | "change_orders"
+  | "selections"
   | "documents"
   | "completion"
+  | "warranty"
   | "messages";
 
 const TAB_LABELS: Record<TabKey, string> = {
@@ -24,8 +28,10 @@ const TAB_LABELS: Record<TabKey, string> = {
   invoices: "Invoices & Payments",
   budget: "Budget & Costs",
   change_orders: "Change Orders",
+  selections: "Selections",
   documents: "Documents",
   completion: "Completion Package",
+  warranty: "Warranty",
   messages: "Messages",
 };
 
@@ -81,8 +87,10 @@ export function PortalApp() {
     "invoices",
     ...(landing.is_cost_plus ? (["budget"] as TabKey[]) : []),
     "change_orders",
+    "selections",
     "documents",
     ...(landing.completion_package_available ? (["completion"] as TabKey[]) : []),
+    ...(landing.within_warranty ? (["warranty"] as TabKey[]) : []),
     "messages",
   ];
 
@@ -179,8 +187,10 @@ export function PortalApp() {
         )}
         {tab === "budget" && <BudgetTab token={token} />}
         {tab === "change_orders" && <ChangeOrdersTab token={token} />}
+        {tab === "selections" && <SelectionsTab />}
         {tab === "documents" && <DocumentsTab token={token} />}
         {tab === "completion" && <CompletionPackageTab token={token} />}
+        {tab === "warranty" && <WarrantyClaimsTab />}
         {tab === "messages" && <MessagesTab token={token} />}
       </main>
 

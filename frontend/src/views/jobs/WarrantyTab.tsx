@@ -7,7 +7,7 @@ import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
-import { formatDateTime, formatStatus } from "../../lib/format";
+import { formatDate, formatDateTime, formatStatus } from "../../lib/format";
 import { WarrantyFormModal } from "../warranty/WarrantyCalls";
 
 interface WarrantyCall {
@@ -18,6 +18,17 @@ interface WarrantyCall {
   status: string;
   assignee_name: string | null;
   scheduled_date: string | null;
+}
+
+interface WarrantyClaim {
+  id: string;
+  claim_date: string;
+  description: string;
+  status: string;
+  resolution: string | null;
+  submitted_by: "owner" | "client";
+  viewed_by_owner: boolean;
+  created_at: string;
 }
 
 interface Props {
@@ -31,7 +42,13 @@ export function WarrantyTab({ jobId }: Props) {
   const { data, loading, error, refetch } = useApi<{ warranty_calls: WarrantyCall[] }>(
     `/api/jobs/${jobId}/warranty-calls`,
   );
+  const { data: claimsData, refetch: refetchClaims } = useApi<{
+    warranties: WarrantyClaim[];
+    total: number;
+  }>(`/api/jobs/${jobId}/warranties`);
   const [creating, setCreating] = useState(false);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [resolveText, setResolveText] = useState("");
 
   if (loading) return <Spinner center />;
   if (error || !data) {
@@ -44,6 +61,9 @@ export function WarrantyTab({ jobId }: Props) {
   }
 
   const calls = data.warranty_calls;
+  const claims = claimsData?.warranties ?? [];
+  const clientClaims = claims.filter((c) => c.submitted_by === "client");
+  const unreadCount = clientClaims.filter((c) => !c.viewed_by_owner).length;
 
   const complete = async (id: string) => {
     try {
@@ -55,8 +75,120 @@ export function WarrantyTab({ jobId }: Props) {
     }
   };
 
+  const resolveClaimSubmit = async (claimId: string) => {
+    try {
+      await api.patch(`/api/warranties/${claimId}`, {
+        status: "resolved",
+        resolution: resolveText || null,
+      });
+      toast.push("success", "Claim marked resolved");
+      setResolvingId(null);
+      setResolveText("");
+      void refetchClaims();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    }
+  };
+
+  const statusTone = (s: string) =>
+    s === "resolved" || s === "closed"
+      ? "success"
+      : s === "in_progress"
+        ? "info"
+        : "warning";
+
   return (
     <div class="stack">
+      {/* ── Warranty Claims (from warranties table) ───────────────────── */}
+      <div class="flex items-center justify-between gap-sm">
+        <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+          {claims.length} warranty claim(s)
+          {unreadCount > 0 && (
+            <Badge tone="warning" style={{ marginLeft: "var(--space-xs)" }}>
+              {unreadCount} new from client
+            </Badge>
+          )}
+        </span>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={async () => {
+            try {
+              await api.post(`/api/jobs/${jobId}/warranties`, {
+                description: "Warranty issue",
+              });
+              toast.push("success", "Claim logged");
+              void refetchClaims();
+            } catch (e) {
+              toast.push("error", errMsg(e));
+            }
+          }}
+        >
+          + Log Warranty Claim
+        </Button>
+      </div>
+
+      <Card title="Warranty Claims">
+        {claims.length === 0 ? (
+          <div class="empty-state">
+            <div class="empty-state__icon">🛡️</div>
+            <div class="empty-state__title">No warranty claims</div>
+            <div>Client-submitted and owner-logged warranty issues appear here.</div>
+          </div>
+        ) : (
+          <div class="invoice-list">
+            {claims.map((c) => (
+              <div class="invoice-row" key={c.id}>
+                <div class="invoice-row__main">
+                  <div class="invoice-row__title">
+                    {c.description.length > 80 ? `${c.description.slice(0, 80)}…` : c.description}
+                    <Badge tone={statusTone(c.status)}>{formatStatus(c.status)}</Badge>
+                    {c.submitted_by === "client" && (
+                      <Badge tone="info">Submitted by client</Badge>
+                    )}
+                  </div>
+                  <div class="invoice-row__meta">
+                    {formatDate(c.claim_date)}
+                    {c.resolution && ` · ${c.resolution}`}
+                  </div>
+                  {resolvingId === c.id && (
+                    <div class="stack" style={{ marginTop: "var(--space-sm)" }}>
+                      <input
+                        class="form-input"
+                        placeholder="Resolution notes (optional)"
+                        value={resolveText}
+                        onInput={(e) => setResolveText((e.target as HTMLInputElement).value)}
+                      />
+                      <div class="flex gap-sm">
+                        <Button size="sm" variant="primary" onClick={() => void resolveClaimSubmit(c.id)}>
+                          Save Resolution
+                        </Button>
+                        <Button size="sm" variant="tertiary" onClick={() => setResolvingId(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {c.status !== "resolved" && c.status !== "closed" && resolvingId !== c.id && (
+                  <Button
+                    variant="tertiary"
+                    size="sm"
+                    onClick={() => {
+                      setResolvingId(c.id);
+                      setResolveText("");
+                    }}
+                  >
+                    Resolve
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* ── Warranty Calls (scheduling/tracking) ────────────────────── */}
       <div class="flex items-center justify-between gap-sm">
         <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
           {calls.length} warranty call(s) · no billing
@@ -69,7 +201,7 @@ export function WarrantyTab({ jobId }: Props) {
       <Card title="Warranty Calls">
         {calls.length === 0 ? (
           <div class="empty-state">
-            <div class="empty-state__icon">🛡️</div>
+            <div class="empty-state__icon">📋</div>
             <div class="empty-state__title">No warranty calls</div>
             <div>Log callbacks and punch-list follow-ups here.</div>
           </div>

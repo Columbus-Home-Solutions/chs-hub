@@ -40,6 +40,10 @@ export interface WcSyncResult {
   reason?: string;
   tabs_updated: string[];
   tabs_failed: string[];
+  /** Tabs skipped because the spreadsheet row was not found (ROW_MISSING).
+   *  Per spec §8: warn + skip, never DLQ or alert — the coaching team adds
+   *  rows manually and the sync will write them on the next cycle they exist. */
+  tabs_skipped: string[];
   rows_matched: Record<string, number | null>;
   data_snapshot: Record<string, unknown>;
   error_message?: string;
@@ -355,6 +359,7 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     status: "success",
     tabs_updated: [],
     tabs_failed: [],
+    tabs_skipped: [],
     rows_matched: {},
     data_snapshot: {},
     duration_ms: 0,
@@ -413,9 +418,9 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     const row = await findKpiRow(client, settings, ctToday(now));
     result.rows_matched[settings.kpiTab] = row;
     if (row == null) {
-      result.tabs_failed.push(settings.kpiTab);
+      result.tabs_skipped.push(settings.kpiTab);
       result.rows_matched[settings.kpiTab] = null;
-      console.warn(`[wc] ROW_MISSING kpi week=${wk.start} — skipping KPI tab`);
+      console.warn(`[wc] ROW_MISSING kpi week=${wk.start} — skipping KPI tab (row not yet added to sheet)`);
     } else {
       const { start, end } = colRange(settings.kpiDataCols);
       updates.push({
@@ -433,9 +438,9 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     const row = await findMarketingRow(client, settings, wk.start);
     result.rows_matched[settings.marketingTab] = row;
     if (row == null) {
-      result.tabs_failed.push(settings.marketingTab);
-      result.error_message = (result.error_message ? result.error_message + " | " : "") + `marketing: ROW_MISSING week=${wk.start}`;
-      console.warn(`[wc] ROW_MISSING marketing week=${wk.start} — skipping Marketing tab`);
+      result.tabs_skipped.push(settings.marketingTab);
+      result.rows_matched[settings.marketingTab] = null;
+      console.warn(`[wc] ROW_MISSING marketing week=${wk.start} — skipping Marketing tab (row not yet added to sheet)`);
     } else {
       const lc = weekly.lead_by_column;
       updates.push(
@@ -459,8 +464,9 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     const row = await findMonthlyRow(client, settings, mo.monthIndex);
     result.rows_matched[settings.monthlyTab] = row;
     if (row == null) {
-      result.tabs_failed.push(settings.monthlyTab);
-      console.warn(`[wc] ROW_MISSING monthly month=${mo.label} — skipping Monthly tab`);
+      result.tabs_skipped.push(settings.monthlyTab);
+      result.rows_matched[settings.monthlyTab] = null;
+      console.warn(`[wc] ROW_MISSING monthly month=${mo.label} — skipping Monthly tab (row not yet added to sheet)`);
     } else {
       const { start, end } = colRange(settings.monthlyDataCols);
       updates.push({
@@ -502,9 +508,10 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
 }
 
 function deriveStatus(r: WcSyncResult): WcSyncStatus {
+  // tabs_skipped (ROW_MISSING) are spec-compliant warn+skip — they don't
+  // count as failures and don't trigger DLQ or alerts.
   if (r.tabs_updated.length > 0 && r.tabs_failed.length > 0) return "partial_failure";
   if (r.tabs_updated.length === 0 && r.tabs_failed.length > 0) return "failure";
-  if (r.tabs_updated.length === 0 && r.tabs_failed.length === 0) return "success"; // nothing to write but no error
   return "success";
 }
 
@@ -527,6 +534,7 @@ async function logSync(env: Env, r: WcSyncResult): Promise<void> {
       JSON.stringify({
         tabs_updated: r.tabs_updated,
         tabs_failed: r.tabs_failed,
+        tabs_skipped: r.tabs_skipped,
         rows_matched: r.rows_matched,
         reason: r.reason,
         data_snapshot: r.data_snapshot,

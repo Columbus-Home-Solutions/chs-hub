@@ -23,6 +23,7 @@ import {
   serializeSignatureMeta,
   type EstimateSignatureMeta,
 } from "../lib/estimate-contract-document.js";
+import { applySelectionChoiceApproval } from "./selections.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const h = new Headers(init.headers);
@@ -227,6 +228,101 @@ async function processWebhookEvent(
 
     if (clientWaiver) {
       await handleClientLienWaiverEvent(env, clientWaiver, boldSignDocumentId, eventType, event, rawBody);
+      return;
+    }
+
+    // Selection choice approval document.
+    // selection_id / choice_id / job_id are all inside signature_data JSON — no context_id column exists.
+    const selectionDoc = await env.DB.prepare(
+      `SELECT id, signature_data
+         FROM documents
+        WHERE context_type = 'selection'
+          AND json_extract(signature_data, '$.boldsign_document_id') = ?
+        LIMIT 1`,
+    )
+      .bind(boldSignDocumentId)
+      .first<{
+        id: string;
+        signature_data: string | null;
+      }>();
+
+    if (selectionDoc) {
+      if (eventType === "Completed" && selectionDoc.signature_data) {
+        try {
+          const sigData = JSON.parse(selectionDoc.signature_data) as {
+            boldsign_document_id: string;
+            selection_id: string;
+            choice_id: string;
+            job_id: string;
+          };
+          const signedAt =
+            getSignerDetails(event)?.[0]?.SignedOn ?? new Date().toISOString();
+          await applySelectionChoiceApproval(env, sigData, signedAt);
+          // Download + store the signed PDF in R2
+          try {
+            const config = await getBoldSignConfig(env);
+            if (config) {
+              const pdfBlob = await downloadSignedDocument(config, boldSignDocumentId);
+              const r2Key = `selection-approvals/${sigData.selection_id}/${sigData.choice_id}/${selectionDoc.id}.pdf`;
+              await env.FILES.put(r2Key, await pdfBlob.arrayBuffer(), {
+                httpMetadata: { contentType: "application/pdf" },
+              });
+              await env.DB.prepare(`UPDATE documents SET r2_key = ? WHERE id = ?`)
+                .bind(r2Key, selectionDoc.id)
+                .run();
+            }
+          } catch (dlErr) {
+            console.warn(`[boldsign_webhook] selection PDF download failed: ${(dlErr as Error).message}`);
+          }
+        } catch (applyErr) {
+          console.error(`[boldsign_webhook] applySelectionChoiceApproval failed: ${(applyErr as Error).message}`);
+        }
+      }
+      return;
+    }
+
+    // Subcontractor agreement document
+    const agreementDoc = await env.DB.prepare(
+      `SELECT id, signature_data
+         FROM documents
+        WHERE context_type = 'subcontractor_agreement'
+          AND json_extract(signature_data, '$.boldsign_document_id') = ?
+        LIMIT 1`,
+    )
+      .bind(boldSignDocumentId)
+      .first<{ id: string; signature_data: string | null }>();
+
+    if (agreementDoc) {
+      if (eventType === "Completed" && agreementDoc.signature_data) {
+        try {
+          const sigData = JSON.parse(agreementDoc.signature_data) as {
+            boldsign_document_id: string;
+            packet_id: string;
+            sub_id: string;
+          };
+          const signedAt =
+            getSignerDetails(event)?.[0]?.SignedOn ?? new Date().toISOString();
+
+          // Download + store signed PDF in R2
+          const signedPdfKey = `sub-agreements/${sigData.sub_id}/${sigData.packet_id}/${agreementDoc.id}-signed.pdf`;
+          try {
+            const agreementConfig = await getBoldSignConfig(env);
+            if (agreementConfig) {
+              const pdfBlob = await downloadSignedDocument(agreementConfig, boldSignDocumentId);
+              await env.FILES.put(signedPdfKey, await pdfBlob.arrayBuffer(), {
+                httpMetadata: { contentType: "application/pdf" },
+              });
+            }
+          } catch (dlErr) {
+            console.warn(`[boldsign_webhook] agreement PDF download failed: ${(dlErr as Error).message}`);
+          }
+
+          const { applyAgreementSigned } = await import("./sub-packets.js");
+          await applyAgreementSigned(env, sigData.packet_id, agreementDoc.id, signedPdfKey, signedAt);
+        } catch (applyErr) {
+          console.error(`[boldsign_webhook] applyAgreementSigned failed: ${(applyErr as Error).message}`);
+        }
+      }
       return;
     }
 

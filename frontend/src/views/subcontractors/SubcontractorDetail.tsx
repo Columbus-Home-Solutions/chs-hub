@@ -11,7 +11,7 @@ import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib
 import { useAuth } from "../../store/auth";
 import { isOwner } from "../../lib/rbac";
 import type { Subcontractor } from "../../types";
-import { SubForm } from "./SubcontractorList";
+import { SubForm, ExpirationBadge, daysUntilExpiration } from "./SubcontractorList";
 
 const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3];
@@ -217,13 +217,54 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
                 </span>
               </div>
               <div class="kv__row">
+                <span class="kv__label">COI Expiration</span>
+                <span class="kv__value">
+                  {s.coi_expiration_date ? (
+                    <span class="flex items-center gap-sm">
+                      <span>{formatDate(s.coi_expiration_date)}</span>
+                      <ExpirationBadge date={s.coi_expiration_date} />
+                    </span>
+                  ) : (
+                    <span class="text--muted">—</span>
+                  )}
+                </span>
+              </div>
+              <div class="kv__row">
                 <span class="kv__label">W-9</span>
                 <span class="kv__value">
                   {s.w9_on_file ? <Badge tone="success">On file</Badge> : <Badge>No</Badge>}
                 </span>
               </div>
+              <div class="kv__row">
+                <span class="kv__label">License Expiration</span>
+                <span class="kv__value">
+                  {s.license_expiration_date ? (
+                    <span class="flex items-center gap-sm">
+                      <span>{formatDate(s.license_expiration_date)}</span>
+                      <ExpirationBadge date={s.license_expiration_date} />
+                    </span>
+                  ) : (
+                    <span class="text--muted">—</span>
+                  )}
+                </span>
+              </div>
             </div>
           </Card>
+
+          {/* Compliance alert banner when a date is expired or expiring within 30 days */}
+          {(daysUntilExpiration(s.coi_expiration_date) !== null && (daysUntilExpiration(s.coi_expiration_date) ?? 999) <= 30 ||
+            daysUntilExpiration(s.license_expiration_date) !== null && (daysUntilExpiration(s.license_expiration_date) ?? 999) <= 30) && (
+            <div class="alert alert--warning" role="alert">
+              <strong>Compliance alert:</strong>{" "}
+              {(daysUntilExpiration(s.coi_expiration_date) ?? 999) <= 30 && s.coi_expiration_date && (
+                <span>COI expires {(daysUntilExpiration(s.coi_expiration_date) ?? 0) <= 0 ? "TODAY" : `in ${daysUntilExpiration(s.coi_expiration_date)} days`}. </span>
+              )}
+              {(daysUntilExpiration(s.license_expiration_date) ?? 999) <= 30 && s.license_expiration_date && (
+                <span>License expires {(daysUntilExpiration(s.license_expiration_date) ?? 0) <= 0 ? "TODAY" : `in ${daysUntilExpiration(s.license_expiration_date)} days`}.</span>
+              )}
+              {" "}Update the expiration date once renewed.
+            </div>
+          )}
 
           {s.flat_rate_notes && (
             <Card title="Rate notes">

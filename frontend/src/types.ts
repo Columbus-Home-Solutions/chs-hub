@@ -185,6 +185,8 @@ export interface Subcontractor {
   notes: string | null;
   tax_id: string | null;
   is_active: boolean;
+  coi_expiration_date: string | null;
+  license_expiration_date: string | null;
   created_at: string | null;
   updated_at: string | null;
 }

@@ -661,7 +661,7 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                       tone={
                         estimate.status === "sent"
                           ? "info"
-                          : estimate.status === "approved"
+                          : estimate.status === "approved" || estimate.status === "signed"
                             ? "success"
                             : "neutral"
                       }
@@ -1054,8 +1054,8 @@ function EstimateClientProgress({ estimate }: { estimate: Estimate }) {
   };
 
   const steps = [
-    { label: "Sent", done: ["sent", "viewed", "approved"].includes(estimate.status) },
-    { label: "Viewed", done: !!estimate.viewed_date || ["viewed", "approved"].includes(estimate.status) },
+    { label: "Sent", done: ["sent", "viewed", "approved", "signed"].includes(estimate.status) },
+    { label: "Viewed", done: !!estimate.viewed_date || ["viewed", "approved", "signed"].includes(estimate.status) },
     { label: "Signed", done: estimate.signed },
     { label: "Deposit Paid", done: estimate.status === "approved" },
   ];

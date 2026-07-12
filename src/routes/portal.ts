@@ -69,6 +69,7 @@ interface PortalJob {
   conversion_reversed: number | null;
   assigned_to: string | null;
   warranty_expiration: string | null;
+  estimate_id: string | null;
 }
 
 /** Resolve the one job a portal_token maps to (rule #2). Null → invalid token. */
@@ -78,7 +79,7 @@ async function resolveJob(env: Env, token: string): Promise<PortalJob | null> {
     `SELECT id, job_number, title, status, client_id, payer_id, billing_model, portal_type,
             contract_total, deposit_amount,
             property_address, property_city, property_state, property_zip,
-            conversion_reversed, assigned_to, warranty_expiration
+            conversion_reversed, assigned_to, warranty_expiration, estimate_id
        FROM jobs WHERE portal_token = ?`,
   )
     .bind(token)
@@ -780,6 +781,40 @@ async function handleChangeOrderSign(
 
 const PORTAL_HIDDEN_DOC_CATEGORIES = ["receipt", "sop", "insurance", "license", "completion_package"];
 
+function signedR2KeyFromMeta(signatureData: string | null): string | null {
+  if (!signatureData) return null;
+  try {
+    const meta = JSON.parse(signatureData) as { signed_r2_key?: unknown };
+    return typeof meta.signed_r2_key === "string" && meta.signed_r2_key.trim()
+      ? meta.signed_r2_key.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function portalSelectionJobId(signatureData: string | null): string | null {
+  if (!signatureData) return null;
+  try {
+    const meta = JSON.parse(signatureData) as { job_id?: unknown };
+    return typeof meta.job_id === "string" && meta.job_id.trim() ? meta.job_id.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function portalSelectionEstimateId(signatureData: string | null): string | null {
+  if (!signatureData) return null;
+  try {
+    const meta = JSON.parse(signatureData) as { estimate_id?: unknown };
+    return typeof meta.estimate_id === "string" && meta.estimate_id.trim()
+      ? meta.estimate_id.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function handleDocuments(env: Env, token: string): Promise<Response> {
   const job = await resolveJob(env, token);
   if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
@@ -788,11 +823,39 @@ async function handleDocuments(env: Env, token: string): Promise<Response> {
     await env.DB.prepare(
       `SELECT id, title, file_type, document_category, is_signed, signed_date, created_at
          FROM documents
-        WHERE job_id = ? AND COALESCE(is_active, 1) = 1
+        WHERE COALESCE(is_active, 1) = 1
           AND document_category NOT IN (${placeholders})
+          AND (
+            job_id = ?
+            OR (
+              ? IS NOT NULL
+              AND estimate_id = ?
+              AND COALESCE(is_signed, 0) = 1
+              AND document_category IN ('contract', 'selection_approval')
+            )
+            OR (
+              document_category = 'selection_approval'
+              AND COALESCE(is_signed, 0) = 1
+              AND (
+                json_extract(signature_data, '$.job_id') = ?
+                OR (
+                  ? IS NOT NULL
+                  AND json_extract(signature_data, '$.estimate_id') = ?
+                )
+              )
+            )
+          )
         ORDER BY document_category ASC, created_at DESC`,
     )
-      .bind(job.id, ...PORTAL_HIDDEN_DOC_CATEGORIES)
+      .bind(
+        ...PORTAL_HIDDEN_DOC_CATEGORIES,
+        job.id,
+        job.estimate_id,
+        job.estimate_id,
+        job.id,
+        job.estimate_id,
+        job.estimate_id,
+      )
       .all<Record<string, unknown> & { document_category: string }>()
   ).results ?? [];
   const groups: Record<string, unknown[]> = {};
@@ -845,35 +908,69 @@ async function handleCompletionPackage(env: Env, token: string): Promise<Respons
 // ─── GET /api/portal/:token/documents/:doc_id/file — signed PDF download ──────
 // Token-gated, no CF Access. Only streams documents that:
 //   1. Belong to the job identified by the portal token.
-//   2. Are is_signed = 1 (completed signed docs created by the BoldSign webhook).
+//   2. Are is_signed = 1 (completed signed docs), OR working_agreement (reference-only,
+//      never signed by design).
 //   3. Are not from category lien_waiver (sub-facing; blocked from client portal).
 async function handlePortalDocFile(env: Env, token: string, docId: string): Promise<Response> {
   const job = await resolveJob(env, token);
   if (!job) return err(404, "invalid_token", "This portal link is invalid or no longer available.");
 
   const doc = await env.DB.prepare(
-    `SELECT title, r2_key, file_type, document_category, is_signed
+    `SELECT title, r2_key, file_type, document_category, is_signed, signature_data, job_id, estimate_id
        FROM documents
-      WHERE id = ? AND job_id = ? AND COALESCE(is_active, 1) = 1`,
+      WHERE id = ? AND COALESCE(is_active, 1) = 1`,
   )
-    .bind(docId, job.id)
-    .first<{ title: string | null; r2_key: string; file_type: string | null; document_category: string; is_signed: number | null }>();
+    .bind(docId)
+    .first<{
+      title: string | null;
+      r2_key: string;
+      file_type: string | null;
+      document_category: string;
+      is_signed: number | null;
+      signature_data: string | null;
+      job_id: string | null;
+      estimate_id: string | null;
+    }>();
 
   if (!doc) return err(404, "not_found", "Document not found.");
-  if (!doc.is_signed) return err(403, "not_signed", "Only signed documents are downloadable from the portal.");
+
+  const jobLinked = doc.job_id === job.id;
+  const estimateLinked =
+    !!job.estimate_id &&
+    doc.estimate_id === job.estimate_id &&
+    !!doc.is_signed &&
+    (doc.document_category === "contract" || doc.document_category === "selection_approval");
+  const legacySelectionLinked =
+    doc.document_category === "selection_approval" &&
+    !!doc.is_signed &&
+    (portalSelectionJobId(doc.signature_data) === job.id ||
+      (!!job.estimate_id &&
+        portalSelectionEstimateId(doc.signature_data) === job.estimate_id));
+  if (!jobLinked && !estimateLinked && !legacySelectionLinked) {
+    return err(404, "not_found", "Document not found.");
+  }
+
+  const isWorkingAgreementReference = doc.document_category === "working_agreement";
+  if (!doc.is_signed && !isWorkingAgreementReference) {
+    return err(403, "not_signed", "Only signed documents are downloadable from the portal.");
+  }
   if (doc.document_category === "lien_waiver") {
     return err(403, "not_available", "This document is not available in the client portal.");
   }
 
-  const obj = await env.FILES.get(doc.r2_key);
+  const signedR2Key = signedR2KeyFromMeta(doc.signature_data);
+  const r2Key = signedR2Key ?? doc.r2_key;
+  const obj = await env.FILES.get(r2Key);
   if (!obj) return err(404, "file_not_found", "Document file not available.");
 
-  const contentType = doc.file_type ?? "application/octet-stream";
+  const contentType = signedR2Key
+    ? "application/pdf"
+    : (doc.file_type ?? obj.httpMetadata?.contentType ?? "application/octet-stream");
   const filename = doc.title ?? "signed-document.pdf";
   return new Response(obj.body, {
     headers: {
       "Content-Type": contentType,
-      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Disposition": `inline; filename="${filename.replace(/"/g, "")}"`,
       "Cache-Control": "private, no-cache",
     },
   });
@@ -1164,6 +1261,17 @@ export async function handlePortalApi(
   }
 
   // Selections — client views + approves material choices.
+  const selectionsSignLink = p.match(/^\/api\/portal\/([^/]+)\/selections\/([^/]+)\/sign-link$/);
+  if (selectionsSignLink && method === "GET") {
+    const { handlePortalSelectionSignLink } = await import("./selections.js");
+    return handlePortalSelectionSignLink(
+      request,
+      env,
+      decodeURIComponent(selectionsSignLink[1]),
+      decodeURIComponent(selectionsSignLink[2]),
+    );
+  }
+
   const selectionsApprove = p.match(/^\/api\/portal\/([^/]+)\/selections\/([^/]+)\/approve$/);
   if (selectionsApprove && method === "POST") {
     const { handlePortalSelectionsApprove } = await import("./selections.js");

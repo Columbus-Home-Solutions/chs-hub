@@ -10,8 +10,12 @@ import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
 import { useAuth } from "../../store/auth";
 import { isOwner } from "../../lib/rbac";
+import { useToast } from "../../store/toast";
+import { api, ApiError } from "../../api";
 import type { Subcontractor } from "../../types";
 import { SubForm, ExpirationBadge, daysUntilExpiration } from "./SubcontractorList";
+import { PacketReviewModal } from "./PacketReviewModal";
+import type { Packet } from "./PacketReviewModal";
 
 const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3];
@@ -52,9 +56,16 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
   const { data, loading, error, refetch } = useApi<SubDetailResponse>(
     id ? `/api/subcontractors/${id}` : null,
   );
+  const { data: packetsData, refetch: refetchPackets } = useApi<{ packets: Packet[] }>(
+    id ? `/api/subcontractors/${id}/packets` : null,
+  );
   const [editing, setEditing] = useState(false);
   const [cpaModalOpen, setCpaModalOpen] = useState(false);
   const [cpaYear, setCpaYear] = useState(String(CURRENT_YEAR));
+  const [reviewPacket, setReviewPacket] = useState<Packet | null>(null);
+  const [sendingPacket, setSendingPacket] = useState(false);
+  const [packetSendError, setPacketSendError] = useState<string | null>(null);
+  const [packetSendOk, setPacketSendOk] = useState(false);
 
   if (loading) return <Spinner center />;
   if (error || !data) {
@@ -81,6 +92,7 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
           <Button variant="tertiary" onClick={() => go("/subcontractors")}>
             ← Back
           </Button>
+          {isOwner(user) && id && <ComplianceCheckButton subId={id} />}
           <Button variant="secondary" onClick={() => setEditing(true)}>
             Edit
           </Button>
@@ -277,6 +289,35 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
               <p style={{ margin: 0, fontSize: "var(--text-sm)" }}>{s.notes}</p>
             </Card>
           )}
+
+          {/* ── Onboarding Packet (Sprint 39) ───────────────────────── */}
+          {isOwner(user) && (
+            <OnboardingCard
+              subId={id ?? ""}
+              subName={s.company_name ?? s.contact_name ?? "Sub"}
+              packets={packetsData?.packets ?? []}
+              sendingPacket={sendingPacket}
+              packetSendError={packetSendError}
+              packetSendOk={packetSendOk}
+              onSendPacket={async () => {
+                setSendingPacket(true);
+                setPacketSendError(null);
+                setPacketSendOk(false);
+                try {
+                  const res = await fetch(`/api/subcontractors/${id}/packets`, { method: "POST" });
+                  const body = await res.json().catch(() => ({}));
+                  if (!res.ok) throw new Error((body as { details?: string; error?: string })?.details ?? (body as { error?: string })?.error ?? "Failed to send");
+                  setPacketSendOk(true);
+                  refetchPackets();
+                } catch (e) {
+                  setPacketSendError((e as Error).message);
+                } finally {
+                  setSendingPacket(false);
+                }
+              }}
+              onReviewPacket={setReviewPacket}
+            />
+          )}
         </div>
       </div>
 
@@ -288,6 +329,18 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
           onSaved={() => {
             setEditing(false);
             refetch();
+          }}
+        />
+      )}
+
+      {reviewPacket && (
+        <PacketReviewModal
+          packet={reviewPacket}
+          subName={s.company_name ?? s.contact_name ?? "Sub"}
+          onClose={() => setReviewPacket(null)}
+          onApproved={() => {
+            setReviewPacket(null);
+            refetchPackets();
           }}
         />
       )}
@@ -336,5 +389,222 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
         </Modal>
       )}
     </div>
+  );
+}
+
+// ── OnboardingCard ─────────────────────────────────────────────────────────────
+// Shows the most recent packet status + actions. Wires into PacketReviewModal for
+// submitted / approved / awaiting_signature / signed packets.
+
+const PACKET_STATUS_LABELS: Record<string, string> = {
+  sent: "Link sent — awaiting sub",
+  in_progress: "Sub working on it",
+  submitted: "Submitted — review needed",
+  approved: "Documents approved",
+  awaiting_signature: "Agreement sent — awaiting signature",
+  signed: "Signed — onboarding complete",
+};
+
+const PACKET_STATUS_TONES: Record<string, "success" | "warning" | "info" | "error" | undefined> = {
+  sent: undefined,
+  in_progress: "info",
+  submitted: "warning",
+  approved: "info",
+  awaiting_signature: "info",
+  signed: "success",
+};
+
+interface OnboardingCardProps {
+  subId: string;
+  subName: string;
+  packets: Packet[];
+  sendingPacket: boolean;
+  packetSendError: string | null;
+  packetSendOk: boolean;
+  onSendPacket: () => void;
+  onReviewPacket: (p: Packet) => void;
+}
+
+function OnboardingCard({
+  packets,
+  sendingPacket,
+  packetSendError,
+  packetSendOk,
+  onSendPacket,
+  onReviewPacket,
+}: OnboardingCardProps) {
+  const latest = packets[0] ?? null;
+  const isReviewable = latest &&
+    ["submitted", "approved", "awaiting_signature", "signed"].includes(latest.status);
+
+  const [sendingAgreement, setSendingAgreement] = useState(false);
+  const [agreementError, setAgreementError] = useState<string | null>(null);
+  const [agreementSent, setAgreementSent] = useState(false);
+
+  async function handleSendAgreement() {
+    if (!latest) return;
+    setSendingAgreement(true);
+    setAgreementError(null);
+    setAgreementSent(false);
+    try {
+      const res = await fetch(`/api/packets/${latest.id}/send-agreement`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { details?: string; error?: string })?.details ??
+          (data as { error?: string })?.error ??
+          "Failed to send agreement"
+        );
+      }
+      setAgreementSent(true);
+    } catch (e) {
+      setAgreementError((e as Error).message || "Failed to send agreement.");
+    } finally {
+      setSendingAgreement(false);
+    }
+  }
+
+  return (
+    <Card
+      title="Onboarding Packet"
+      actions={
+        <Button size="sm" variant="secondary" onClick={onSendPacket} disabled={sendingPacket}>
+          {sendingPacket ? "Sending…" : "Send New Packet"}
+        </Button>
+      }
+    >
+      {packetSendOk && (
+        <p class="text--success" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-sm)" }}>
+          Packet link sent via SMS + email.
+        </p>
+      )}
+      {packetSendError && (
+        <p class="text--danger" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-sm)" }}>
+          {packetSendError}
+        </p>
+      )}
+
+      {!latest && (
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>
+          No packet sent yet. Click "Send New Packet" to email and SMS the sub a secure link.
+        </p>
+      )}
+
+      {latest && (
+        <div class="kv">
+          <div class="kv__row">
+            <span class="kv__label">Status</span>
+            <span class="kv__value">
+              <Badge tone={PACKET_STATUS_TONES[latest.status]}>
+                {PACKET_STATUS_LABELS[latest.status] ?? latest.status}
+              </Badge>
+            </span>
+          </div>
+          {latest.submitted_at && (
+            <div class="kv__row">
+              <span class="kv__label">Submitted</span>
+              <span class="kv__value">{formatDate(latest.submitted_at)}</span>
+            </div>
+          )}
+          {latest.approved_at && (
+            <div class="kv__row">
+              <span class="kv__label">Docs approved</span>
+              <span class="kv__value">{formatDate(latest.approved_at)}</span>
+            </div>
+          )}
+          {latest.signed_at && (
+            <div class="kv__row">
+              <span class="kv__label">Agreement signed</span>
+              <span class="kv__value">{formatDate(latest.signed_at)}</span>
+            </div>
+          )}
+          {isReviewable && (
+            <div style={{ marginTop: "var(--space-sm)", display: "flex", flexDirection: "column", gap: "var(--space-xs)" }}>
+              <div style={{ display: "flex", gap: "var(--space-xs)", flexWrap: "wrap", alignItems: "center" }}>
+                <Button size="sm" variant="primary" onClick={() => onReviewPacket(latest)}>
+                  {latest.status === "submitted" ? "Review & Approve" : "View Packet"}
+                </Button>
+                {latest.status === "approved" && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={sendingAgreement}
+                    onClick={handleSendAgreement}
+                  >
+                    {sendingAgreement ? "Sending…" : "Send Agreement for Signature"}
+                  </Button>
+                )}
+              </div>
+              {agreementSent && (
+                <p class="text--success" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
+                  Agreement sent — check BoldSign for the envelope.
+                </p>
+              )}
+              {agreementError && (
+                <p class="text--danger" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
+                  {agreementError}
+                </p>
+              )}
+            </div>
+          )}
+          {packets.length > 1 && (
+            <p class="text--muted" style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-sm)" }}>
+              {packets.length - 1} older packet{packets.length > 2 ? "s" : ""} on file.
+            </p>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ── Owner-only: manual compliance check trigger ───────────────────────────────
+interface ComplianceCheckResponse {
+  ok: boolean;
+  alerted: boolean;
+  sub?: string;
+  alerts?: string[];
+  sent_to?: string | null;
+  reason?: string;
+  fields?: Array<{ field: string; expiration_date: string; days_until: number }>;
+}
+
+function ComplianceCheckButton({ subId }: { subId: string }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const fire = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await api.post<ComplianceCheckResponse>(
+        `/api/subcontractors/${subId}/test-compliance-check`,
+        {},
+      );
+      if (res.alerted) {
+        toast.push("success", `Compliance reminder sent to ${res.sent_to ?? "owner"}. ${(res.alerts ?? []).join("; ")}`);
+      } else {
+        toast.push("info", `No reminder needed — ${res.sub ?? "sub"} has no expirations within 31 days.`);
+      }
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : "Compliance check failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button
+      variant="primary"
+      size="sm"
+      onClick={() => void fire()}
+      disabled={busy}
+      title="Owner only — manually runs the compliance expiration check for this sub"
+    >
+      {busy ? "Checking…" : "Check Compliance"}
+    </Button>
   );
 }

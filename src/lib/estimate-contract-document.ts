@@ -18,7 +18,9 @@ import {
   formatToday,
 } from "./document-generator.js";
 import { depositFromSchedule } from "./deposit-from-schedule.js";
-import { getBoldSignConfig, sendDocumentForSignature } from "./boldsign.js";
+import { paymentScheduleMergeFields } from "./payment-schedule-merge.js";
+import { ensureServiceAgreementTemplate } from "./service-agreement-template.js";
+import { getBoldSignConfig, getDocumentProperties, getEmbeddedSignLink, mapBoldSignDocumentStatus, sendDocumentForSignature } from "./boldsign.js";
 import { applyPmFields, resolvePmFields } from "./pm-fields.js";
 import { loadWorkingAgreementAttachment } from "./working-agreement.js";
 
@@ -26,6 +28,7 @@ export interface EstimateSignatureMeta {
   template_type?: string;
   boldsign_document_id?: string;
   signature_status?: string;
+  signature_error?: string;
   signer_email?: string;
   signer_name?: string;
   signature_sent_at?: string;
@@ -43,12 +46,7 @@ export interface EstimateContractDocRow {
   signed_date: string | null;
 }
 
-const CONTRACT_TEMPLATE_TYPES = new Set<string>(["service_agreement", "cost_plus_agreement"]);
-
-const BOLDSIGN_TEMPLATE_IDS: Record<string, string> = {
-  service_agreement: "1578f4a8-a7af-4792-b091-6dc2520397a4",
-  cost_plus_agreement: "6e28b9a4-af85-4c1b-a68d-ffb33af9b736",
-};
+const CONTRACT_TEXT_TAG_TYPES = new Set(["service_agreement", "cost_plus_agreement"]);
 
 const TEMPLATE_LABELS: Record<string, string> = {
   service_agreement: "Service Agreement",
@@ -125,7 +123,7 @@ export async function shouldSkipContractAutogen(
   jobId: string,
   templateType: string,
 ): Promise<boolean> {
-  if (!CONTRACT_TEMPLATE_TYPES.has(templateType)) return false;
+  if (!CONTRACT_TEXT_TAG_TYPES.has(templateType)) return false;
   return estimateHasSignedContractForJob(env, jobId);
 }
 
@@ -181,14 +179,17 @@ export async function resolveEstimateMergeFields(
 
   const schedule = (
     await env.DB.prepare(
-      "SELECT is_deposit, fixed_amount, percentage, amount FROM payment_schedules WHERE estimate_id = ? ORDER BY sort_order ASC",
+      `SELECT description, is_deposit, fixed_amount, percentage, amount, trigger
+         FROM payment_schedules WHERE estimate_id = ? ORDER BY sort_order ASC`,
     )
       .bind(estimateId)
       .all<{
+        description: string | null;
         is_deposit: number | null;
         fixed_amount: number | null;
         percentage: number | null;
         amount: number | null;
+        trigger: string | null;
       }>()
   ).results ?? [];
 
@@ -240,6 +241,7 @@ export async function resolveEstimateMergeFields(
     certificate_number: "",
     warranty_expiry: "",
     ...applyPmFields({}, pm),
+    ...paymentScheduleMergeFields(schedule, total),
   };
 }
 
@@ -288,7 +290,12 @@ export async function generateAndSendEstimateContract(
     return { docId: null, skipped: true, reason: "template_not_found" };
   }
 
-  const docBytes = await generateDocument(await templateObj.arrayBuffer(), mergeFields);
+  let templateBytes = await templateObj.arrayBuffer();
+  if (templateType === "service_agreement") {
+    templateBytes = ensureServiceAgreementTemplate(templateBytes);
+  }
+
+  const docBytes = await generateDocument(templateBytes, mergeFields);
   const today = new Date().toISOString().slice(0, 10);
   const slugType = templateType.replace(/_/g, "-");
   const estNum = row.estimate_number != null ? String(row.estimate_number).padStart(3, "0") : "000";
@@ -365,16 +372,6 @@ export async function generateAndSendEstimateContract(
   const templateLabel = TEMPLATE_LABELS[templateType] ?? templateType;
   const title = `${templateLabel} — ${row.title ?? "Estimate"} (EST-${estNum})`;
 
-  const settingKey = `boldsign_template_id_${templateType}`;
-  const templateIdFromSettings = await env.DB.prepare(
-    "SELECT value FROM system_settings WHERE key = ?",
-  )
-    .bind(settingKey)
-    .first<{ value: string }>()
-    .then((r) => r?.value ?? null)
-    .catch(() => null);
-  const boldSignTemplateId = templateIdFromSettings ?? BOLDSIGN_TEMPLATE_IDS[templateType];
-
   try {
     const additionalFiles: Array<{ blob: Blob; filename: string }> = [];
     if (templateType === "service_agreement") {
@@ -396,12 +393,13 @@ export async function generateAndSendEstimateContract(
       message: "Please review and sign your service agreement to proceed with your project.",
       signerEmail,
       signerName,
-      templateId: boldSignTemplateId,
+      useTextTags: true,
       additionalFiles: additionalFiles.length ? additionalFiles : undefined,
     });
 
     meta.boldsign_document_id = result.documentId;
-    meta.signature_status = "sent";
+    // BoldSign document creation is async — wait for Sent webhook before embed link works.
+    meta.signature_status = "pending";
     meta.signer_email = signerEmail;
     meta.signer_name = signerName;
     meta.signature_sent_at = new Date().toISOString();
@@ -417,6 +415,105 @@ export async function generateAndSendEstimateContract(
     console.error("[estimate-contract] BoldSign send failed:", (e as Error).message);
     return { docId, skipped: false, boldsign_sent: false };
   }
+}
+
+/** BoldSign statuses where the document exists and an embed link may work. */
+const BOLDSIGN_EMBED_READY = new Set(["sent", "viewed", "signed"]);
+
+async function persistEstimateSignatureMeta(
+  env: Env,
+  docId: string,
+  meta: EstimateSignatureMeta,
+): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE documents SET signature_data = ?, updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(serializeSignatureMeta(meta), docId)
+    .run();
+}
+
+/**
+ * Poll BoldSign when signature_status is still 'pending' — Sent webhooks can lag
+ * or never arrive for document/send, leaving the quote page stuck forever.
+ */
+export async function refreshEstimateContractSignatureStatus(
+  env: Env,
+  contractDoc: EstimateContractDocRow,
+): Promise<EstimateSignatureMeta> {
+  const meta = parseSignatureMeta(contractDoc.signature_data);
+  if (!meta.boldsign_document_id || meta.signature_status !== "pending") return meta;
+
+  const config = await getBoldSignConfig(env);
+  if (!config) return meta;
+
+  const props = await getDocumentProperties(config, meta.boldsign_document_id);
+  if (props?.status) {
+    const mapped = mapBoldSignDocumentStatus(props.status);
+    if (mapped && mapped !== "pending") {
+      meta.signature_status = mapped;
+      if (mapped === "failed" && props.errorMessage) {
+        meta.signature_error = props.errorMessage.slice(0, 500);
+      }
+      await persistEstimateSignatureMeta(env, contractDoc.id, meta);
+      return meta;
+    }
+  }
+
+  // Embed link probe: BoldSign may accept signing before status webhook lands.
+  if (meta.signer_email) {
+    try {
+      await getEmbeddedSignLink(config, meta.boldsign_document_id, meta.signer_email);
+      meta.signature_status = "sent";
+      await persistEstimateSignatureMeta(env, contractDoc.id, meta);
+    } catch {
+      /* still processing on BoldSign side */
+    }
+  }
+
+  return meta;
+}
+
+const REFRESH_POLL_MS = 1500;
+const REFRESH_POLL_ATTEMPTS = 6;
+
+/** Poll BoldSign until status leaves pending (or attempts exhausted). */
+export async function refreshEstimateContractSignatureStatusWithRetry(
+  env: Env,
+  contractDoc: EstimateContractDocRow,
+  attempts = REFRESH_POLL_ATTEMPTS,
+): Promise<EstimateSignatureMeta> {
+  let doc = contractDoc;
+  let meta = parseSignatureMeta(doc.signature_data);
+  for (let i = 0; i < attempts; i++) {
+    meta = await refreshEstimateContractSignatureStatus(env, doc);
+    if (meta.signature_status !== "pending") return meta;
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, REFRESH_POLL_MS));
+      if (doc.estimate_id) {
+        const refreshed = await loadEstimateContractDoc(env, doc.estimate_id);
+        if (refreshed) doc = refreshed;
+      }
+    }
+  }
+  return meta;
+}
+
+/** True when signature_data has a BoldSign doc that is ready for embedded signing. */
+export function estimateBoldsignEmbedReady(meta: EstimateSignatureMeta): boolean {
+  return !!meta.boldsign_document_id && BOLDSIGN_EMBED_READY.has(meta.signature_status ?? "");
+}
+
+/** Re-send the estimate contract when BoldSign async processing failed or left a stale ID. */
+export async function resendEstimateContractForSigning(
+  env: Env,
+  estimateId: string,
+  triggeredBy: string,
+): Promise<{ contractDoc: EstimateContractDocRow; meta: EstimateSignatureMeta } | null> {
+  const result = await generateAndSendEstimateContract(env, estimateId, triggeredBy);
+  if (!result.boldsign_sent || !result.docId) return null;
+  const contractDoc = await loadEstimateContractDoc(env, estimateId);
+  if (!contractDoc) return null;
+  return { contractDoc, meta: parseSignatureMeta(contractDoc.signature_data) };
 }
 
 /** Whether the estimate still needs a signature before deposit payment. */

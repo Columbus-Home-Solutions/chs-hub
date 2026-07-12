@@ -784,7 +784,10 @@ async function sendResendEmail(
  * (for punch list PDF sends). SMS stays primary everywhere; call this ALONGSIDE
  * sendSms, not instead of it.
  *
- * Uses NOTIFICATIONS_EMAIL_FROM (same from-address as client notifications).
+ * Uses NOTIFICATIONS_EMAIL_FROM with fallback to ALERT_EMAIL_FROM.
+ * Does NOT gate on NOTIFICATIONS_DISPATCH_MODE — that flag controls the batch
+ * template notification engine only. Direct transactional sends are gated
+ * solely by RESEND_DRY_RUN and credential presence.
  */
 export async function sendSubEmail(
   env: Env,
@@ -793,11 +796,12 @@ export async function sendSubEmail(
   text: string,
   attachment?: { filename: string; pdfBytes: Uint8Array },
 ): Promise<void> {
-  const live = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase() === "live";
-  const from = (env.NOTIFICATIONS_EMAIL_FROM ?? "").trim();
+  // Fall back to ALERT_EMAIL_FROM when NOTIFICATIONS_EMAIL_FROM is not yet configured
+  // (documented in env.ts: "Falls back to ALERT_EMAIL_FROM. Pre-Launch: a verified Resend sender.")
+  const from = ((env.NOTIFICATIONS_EMAIL_FROM ?? "").trim()) || ((env.ALERT_EMAIL_FROM ?? "").trim());
   const apiKey = (env.RESEND_API_KEY ?? "").trim();
 
-  if (!live || !from || !apiKey || env.RESEND_DRY_RUN === "1") {
+  if (!from || !apiKey || env.RESEND_DRY_RUN === "1") {
     const attachmentNote = attachment ? ` attachment=${attachment.filename}` : "";
     console.log(`[sub_email][SIMULATE] to=${to} subject="${subject}"${attachmentNote}`);
     return;

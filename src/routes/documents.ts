@@ -287,14 +287,41 @@ export async function handleCompanyDocuments(env: Env, url: URL): Promise<Respon
 // ─── GET /api/jobs/:id/documents (grouped by category) ──────────────────────
 
 export async function handleJobDocuments(env: Env, jobId: string): Promise<Response> {
+  const job = await env.DB.prepare("SELECT estimate_id FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ estimate_id: string | null }>();
+  const estimateId = job?.estimate_id ?? null;
+
+  // Mirror portal document linkage: job-scoped rows plus signed estimate-phase
+  // contracts/selection approvals (quote-stage docs keep estimate_id, not job_id).
   const { results } = await env.DB.prepare(
     `SELECT id, title, file_type, file_size, document_category, is_signed, signed_date,
             mirror_status, share_token, share_expiration, created_at
        FROM documents
-      WHERE job_id = ? AND COALESCE(is_active,1) = 1
+      WHERE COALESCE(is_active, 1) = 1
+        AND (
+          job_id = ?
+          OR (
+            ? IS NOT NULL
+            AND estimate_id = ?
+            AND COALESCE(is_signed, 0) = 1
+            AND document_category IN ('contract', 'selection_approval')
+          )
+          OR (
+            document_category = 'selection_approval'
+            AND COALESCE(is_signed, 0) = 1
+            AND (
+              json_extract(signature_data, '$.job_id') = ?
+              OR (
+                ? IS NOT NULL
+                AND json_extract(signature_data, '$.estimate_id') = ?
+              )
+            )
+          )
+        )
       ORDER BY datetime(created_at) DESC`,
   )
-    .bind(jobId)
+    .bind(jobId, estimateId, estimateId, jobId, estimateId, estimateId)
     .all<Record<string, unknown> & { document_category: string }>();
 
   const groups: Record<string, unknown[]> = {};

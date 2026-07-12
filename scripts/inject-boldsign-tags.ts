@@ -13,8 +13,9 @@
  *   Row: [pBdr line — date area]       | spacer | [pBdr line — CLIENT DATE ← TAG HERE]
  *   Row: "Date" label                  | spacer | "Date" label
  *
- * pBdr occurrences (0-indexed):  0=CHS sig, 1=CLIENT SIG, 2=CHS name,
- *                                  3=client name, 4=CHS date, 5=CLIENT DATE
+ * pBdr occurrences after SIGNATURES (3-column table: CHS | spacer | Client):
+ *   0=CHS sig (image — skip), 1=client sig, 2=CHS printed name (Tony — skip),
+ *   3=client printed name, 4=client date
  *
  * Run: npx tsx scripts/inject-boldsign-tags.ts
  */
@@ -35,31 +36,29 @@ const BASE_PBDR =
 const EMPTY_SIG_RUN =
   '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve"></w:t>';
 
-// BoldSign text tag format (pipe-separated): {{type|signerIndex|required|fieldId}}
-// White color hides the tag text visually while BoldSign still detects it.
-// 12pt light-gray (#CCCCCC): visually subtle but guaranteed to be in the PDF
-// content stream so BoldSign's scanner can detect the tags.
+// BoldSign text tag format (pipe-separated): {{type|signerIndex|required|placeholder|fieldId}}
+// Placeholder slot must be present (can be empty) — omitting it makes fieldId parse as
+// a TextBox placeholder and SendFailed with "Placeholder is only applicable for TextBox".
 const SIG_TAG_RUN =
   '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>' +
-  '<w:t xml:space="preserve">{{sign|1|*|sig}}</w:t>';
+  '<w:t xml:space="preserve">{{sign|1|*| |client_sig}}</w:t>';
 const DATE_TAG_RUN =
   '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>' +
-  '<w:t xml:space="preserve">{{date|1|*|date}}</w:t>';
+  '<w:t xml:space="preserve">{{date|1|*| |client_date}}</w:t>';
 
-// CHS-side cells: visible merge fields auto-filled at document generation.
-const VISIBLE_NAME_RUN =
+const LEGACY_SIG_TAG = '{{sign|1|*|sig}}';
+const LEGACY_DATE_TAG = '{{date|1|*|date}}';
+const CANONICAL_SIG_TAG = '{{sign|1|*| |client_sig}}';
+const CANONICAL_DATE_TAG = '{{date|1|*| |client_date}}';
+
+const CLIENT_NAME_RUN =
   '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +
-  '<w:t xml:space="preserve">{{contractor_name}}</w:t>';
-const VISIBLE_DATE_RUN =
-  '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +
-  '<w:t xml:space="preserve">{{contract_date}}</w:t>';
+  '<w:t xml:space="preserve">{{client_name}}</w:t>';
 
 const TWO_PARTY_TAGS: Record<number, string> = {
-  0: VISIBLE_NAME_RUN,  // CHS signature line
-  1: SIG_TAG_RUN,       // Client signature → BoldSign tag (1pt, detectable)
-  2: VISIBLE_NAME_RUN,  // CHS printed name line
-  4: VISIBLE_DATE_RUN,  // CHS date line
-  5: DATE_TAG_RUN,      // Client date → BoldSign tag (1pt, detectable)
+  1: SIG_TAG_RUN,       // Client signature line (2nd pBdr after SIGNATURES)
+  3: CLIENT_NAME_RUN,   // Client printed name (4th pBdr)
+  4: DATE_TAG_RUN,      // Client date line (5th pBdr)
 };
 
 // Templates to modify and their tag maps
@@ -120,6 +119,18 @@ for (const { file, tagMap } of TEMPLATES) {
   const zip = unzipSync(new Uint8Array(buf.buffer));
 
   let docXml = strFromU8(zip["word/document.xml"]);
+
+  // Upgrade legacy 4-part tags (SendFailed: placeholder TextBox error)
+  if (docXml.includes(LEGACY_SIG_TAG) || docXml.includes(LEGACY_DATE_TAG)) {
+    docXml = docXml
+      .replaceAll(LEGACY_SIG_TAG, CANONICAL_SIG_TAG)
+      .replaceAll(LEGACY_DATE_TAG, CANONICAL_DATE_TAG);
+    zip["word/document.xml"] = strToU8(docXml);
+    fs.writeFileSync(filePath, zipSync(zip));
+    totalModified++;
+    console.log(`UPGRADED ${file} — legacy BoldSign tags fixed to 5-part format`);
+    continue;
+  }
 
   // Verify the template doesn't already have the correct tags
   if (docXml.includes("{{sign|1|")) {

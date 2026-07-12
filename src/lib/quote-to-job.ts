@@ -111,7 +111,7 @@ interface JobRow {
 
 // An estimate counts as "reached the client" once it has been sent. sent_at is
 // the source of truth; status is a belt-and-suspenders fallback for post-send.
-const POST_SEND_ESTIMATE_STATUSES = new Set(["sent", "viewed", "approved", "revised"]);
+const POST_SEND_ESTIMATE_STATUSES = new Set(["sent", "viewed", "approved", "signed", "revised"]);
 
 export function isEstimateSent(status: string | null, sentAt: string | null): boolean {
   return !!sentAt || POST_SEND_ESTIMATE_STATUSES.has(status ?? "");
@@ -284,7 +284,7 @@ export async function convertQuoteToJob(
        job_type, lead_source, estimate_id, contract_total, deposit_amount, deposit_paid,
        portal_token, portal_type, conversion_complete, payer_id
      )
-     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?`,
+     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?`,
   ).bind(
     jobId,
     title,
@@ -370,6 +370,9 @@ export async function convertQuoteToJob(
     ...steps,
     env.DB.prepare("UPDATE jobs SET conversion_complete = 1 WHERE id = ?").bind(jobId),
   ]);
+
+  const { applyQuoteStageSelectionOverages } = await import("../routes/selections.js");
+  await applyQuoteStageSelectionOverages(env, jobId, row.e_id);
 
   // Read back the in-transaction-allocated job_number.
   const jobNumberRow = await env.DB.prepare("SELECT job_number FROM jobs WHERE id = ?")

@@ -30,6 +30,7 @@ import { guard } from "../middleware/guard.js";
 import { createOwnerInApp, sendSubEmail } from "../lib/notification-engine.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "../lib/twilio.js";
 import { getBoldSignConfig, sendDocumentForSignature } from "../lib/boldsign.js";
+import { generateDocument, formatToday } from "../lib/document-generator.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +68,8 @@ interface PacketRow {
   sent_at: string;
   submitted_at: string | null;
   approved_at: string | null;
+  signed_at: string | null;
+  agreement_document_id: string | null;
   created_at: string;
 }
 
@@ -91,12 +94,16 @@ interface SubRow {
   email: string | null;
 }
 
-async function loadPacketDocs(env: Env, packetId: string): Promise<PacketDocRow[]> {
+async function loadPacketDocs(env: Env, packetId: string): Promise<(PacketDocRow & { file_type: string | null })[]> {
   const res = await env.DB.prepare(
-    `SELECT * FROM subcontractor_packet_documents WHERE packet_id = ? ORDER BY uploaded_at ASC`,
+    `SELECT spd.*, d.file_type
+       FROM subcontractor_packet_documents spd
+       LEFT JOIN documents d ON d.id = spd.document_id
+      WHERE spd.packet_id = ?
+      ORDER BY spd.uploaded_at ASC`,
   )
     .bind(packetId)
-    .all<PacketDocRow>();
+    .all<PacketDocRow & { file_type: string | null }>();
   return res.results ?? [];
 }
 
@@ -120,11 +127,14 @@ function shapePacket(packet: PacketRow, docs: PacketDocRow[]) {
     sent_at: packet.sent_at,
     submitted_at: packet.submitted_at,
     approved_at: packet.approved_at,
+    signed_at: packet.signed_at,
+    agreement_document_id: packet.agreement_document_id,
     created_at: packet.created_at,
     documents: docs.map((d) => ({
       id: d.id,
       document_type: d.document_type,
       document_id: d.document_id,
+      file_type: (d as PacketDocRow & { file_type?: string | null }).file_type ?? null,
       expiration_date: d.expiration_date,
       captured_tax_id: d.captured_tax_id,
       captured_license_number: d.captured_license_number,
@@ -190,7 +200,7 @@ export async function handleSendPacket(
   }
 
   await env.DB.prepare(
-    `INSERT INTO audit_log (id, user_email, action, entity_type, entity_id, details, created_at)
+    `INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at)
      VALUES (?, ?, 'packet_sent', 'subcontractor_packet', ?, ?, datetime('now'))`,
   )
     .bind(crypto.randomUUID(), authed.user.email, packetId, JSON.stringify({ sub_id: subId }))
@@ -304,7 +314,7 @@ export async function handleApprovePacket(
   }
 
   await env.DB.prepare(
-    `INSERT INTO audit_log (id, user_email, action, entity_type, entity_id, details, created_at)
+    `INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at)
      VALUES (?, ?, 'packet_approved', 'subcontractor_packet', ?, ?, datetime('now'))`,
   )
     .bind(
@@ -616,8 +626,11 @@ export async function handleSubmitPacket(
 //
 // Sends the BoldSign Subcontractor Agreement template to the sub for signature.
 // Owner-triggered, deliberate action — NOT auto-fired on document approval.
-// Template ID read from system_settings.subcontractor_agreement_template_id.
-// Returns 503 if template is not configured (expected pre-launch state).
+// Loads the subcontractor agreement DOCX template from R2, merges real sub
+// data into {{field_name}} placeholders, and sends the filled document to
+// BoldSign for the sub's e-signature. No BoldSign template ID is required.
+
+const SUB_AGREEMENT_TEMPLATE_R2 = "documents/templates/subcontractor-agreement.docx";
 
 export async function handleSendAgreement(
   request: Request,
@@ -628,7 +641,9 @@ export async function handleSendAgreement(
   if (authed instanceof Response) return authed;
 
   const packet = await env.DB.prepare(
-    `SELECT sp.*, s.email, s.company_name, s.company, s.contact_name, s.primary_contact
+    `SELECT sp.*,
+            s.email, s.company_name, s.company, s.contact_name, s.primary_contact,
+            s.trade, s.license_number, s.tax_id
        FROM subcontractor_packets sp
        JOIN subcontractors s ON s.id = sp.sub_id
       WHERE sp.id = ?`,
@@ -641,6 +656,9 @@ export async function handleSendAgreement(
         company: string | null;
         contact_name: string | null;
         primary_contact: string | null;
+        trade: string | null;
+        license_number: string | null;
+        tax_id: string | null;
       }
     >();
   if (!packet) return err(404, "packet_not_found");
@@ -652,21 +670,6 @@ export async function handleSendAgreement(
   const subEmail = packet.email;
   if (!subEmail) {
     return err(422, "sub_email_missing", "This subcontractor does not have an email address on file. Add an email before sending the agreement.");
-  }
-
-  // Resolve agreement template from system_settings
-  const templateRow = await env.DB.prepare(
-    `SELECT value FROM system_settings WHERE key = 'subcontractor_agreement_template_id'`,
-  )
-    .first<{ value: string | null }>();
-  const templateId = templateRow?.value?.trim() || null;
-
-  if (!templateId) {
-    return err(
-      503,
-      "signature_template_not_configured",
-      "A BoldSign Subcontractor Agreement template must be configured in system_settings (key: subcontractor_agreement_template_id) before agreements can be sent.",
-    );
   }
 
   const config = await getBoldSignConfig(env);
@@ -682,15 +685,45 @@ export async function handleSendAgreement(
     "Subcontractor"
   ).trim();
 
+  const companyName = (packet.company_name || packet.company || name).trim();
+
+  // Load and merge the agreement DOCX template
+  const templateObj = await env.FILES.get(SUB_AGREEMENT_TEMPLATE_R2);
+  if (!templateObj) {
+    console.error(`[sub-packets] Subcontractor agreement template missing from R2: ${SUB_AGREEMENT_TEMPLATE_R2}`);
+    return err(503, "agreement_template_missing", "The Subcontractor Agreement template is not configured. Please upload it to R2 and try again.");
+  }
+
+  const mergeFields: Record<string, string> = {
+    sub_company_name: companyName,
+    sub_contact_name: name,
+    sub_trade: packet.trade ?? "",
+    sub_license_number: packet.license_number ?? "",
+    sub_tax_id: packet.tax_id ?? "",
+    today_date: formatToday(),
+  };
+
+  const docBytes = await generateDocument(await templateObj.arrayBuffer(), mergeFields);
+
+  const docBlob = new Blob([docBytes], {
+    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+  const docFilename = `Subcontractor-Agreement-${companyName.replace(/[^a-zA-Z0-9]+/g, "-")}.docx`;
+
+  // Signature and date fields are anchored by BoldSign text tags embedded directly
+  // in the DOCX template ({{sign|1|*| |sub_sig}} and {{date|1|*| |sub_date}} in
+  // white text at the signature line). UseTextTags=true tells BoldSign to convert
+  // those tags to form fields automatically — no coordinate guessing needed.
   let boldSignDocumentId: string;
   try {
     const sendResult = await sendDocumentForSignature(config, {
+      fileBlob: docBlob,
+      filename: docFilename,
       title: `CHS Subcontractor Agreement — ${name}`,
       message: "Please review and sign the Columbus Home Solutions Subcontractor Agreement to complete your onboarding.",
       signerEmail: subEmail,
       signerName: name,
-      signerRole: "Subcontractor",
-      templateId,
+      useTextTags: true,
     });
     boldSignDocumentId = sendResult.documentId;
   } catch (e) {
@@ -731,7 +764,7 @@ export async function handleSendAgreement(
     .run();
 
   await env.DB.prepare(
-    `INSERT INTO audit_log (id, user_email, action, entity_type, entity_id, details, created_at)
+    `INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at)
      VALUES (?, ?, 'agreement_sent', 'subcontractor_packet', ?, ?, datetime('now'))`,
   )
     .bind(

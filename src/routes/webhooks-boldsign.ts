@@ -23,7 +23,7 @@ import {
   serializeSignatureMeta,
   type EstimateSignatureMeta,
 } from "../lib/estimate-contract-document.js";
-import { applySelectionChoiceApproval } from "./selections.js";
+import { applySelectionChoiceApproval, applyCombinedSelectionApproval, finalizeSelectionApprovalDocument } from "./selections.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const h = new Headers(init.headers);
@@ -251,29 +251,43 @@ async function processWebhookEvent(
         try {
           const sigData = JSON.parse(selectionDoc.signature_data) as {
             boldsign_document_id: string;
-            selection_id: string;
-            choice_id: string;
-            job_id: string;
+            combined?: boolean;
+            selection_id?: string;
+            choice_id?: string;
+            estimate_id?: string;
+            job_id?: string | null;
+            selections?: Array<{ selection_id: string; choice_id: string }>;
           };
           const signedAt =
             getSignerDetails(event)?.[0]?.SignedOn ?? new Date().toISOString();
-          await applySelectionChoiceApproval(env, sigData, signedAt);
-          // Download + store the signed PDF in R2
-          try {
-            const config = await getBoldSignConfig(env);
-            if (config) {
-              const pdfBlob = await downloadSignedDocument(config, boldSignDocumentId);
-              const r2Key = `selection-approvals/${sigData.selection_id}/${sigData.choice_id}/${selectionDoc.id}.pdf`;
-              await env.FILES.put(r2Key, await pdfBlob.arrayBuffer(), {
-                httpMetadata: { contentType: "application/pdf" },
-              });
-              await env.DB.prepare(`UPDATE documents SET r2_key = ? WHERE id = ?`)
-                .bind(r2Key, selectionDoc.id)
-                .run();
-            }
-          } catch (dlErr) {
-            console.warn(`[boldsign_webhook] selection PDF download failed: ${(dlErr as Error).message}`);
+          if (sigData.combined && sigData.selections?.length && sigData.estimate_id) {
+            await applyCombinedSelectionApproval(
+              env,
+              {
+                boldsign_document_id: sigData.boldsign_document_id,
+                combined: true,
+                estimate_id: sigData.estimate_id,
+                job_id: sigData.job_id,
+                selections: sigData.selections,
+              },
+              signedAt,
+            );
+          } else if (sigData.selection_id && sigData.choice_id) {
+            await applySelectionChoiceApproval(env, sigData as {
+              boldsign_document_id: string;
+              selection_id: string;
+              choice_id: string;
+              job_id?: string | null;
+              estimate_id?: string | null;
+            }, signedAt);
           }
+          await finalizeSelectionApprovalDocument(
+            env,
+            selectionDoc.id,
+            boldSignDocumentId,
+            sigData,
+            signedAt,
+          );
         } catch (applyErr) {
           console.error(`[boldsign_webhook] applySelectionChoiceApproval failed: ${(applyErr as Error).message}`);
         }
@@ -547,6 +561,13 @@ async function handleEstimateDocumentEvent(
   if (!newStatus) return;
 
   meta.signature_status = newStatus;
+  if (newStatus === "failed") {
+    const errMsg = getEventData(event)?.errorMessage;
+    if (errMsg) meta.signature_error = errMsg.slice(0, 500);
+    console.error(
+      `[boldsign_webhook] estimate_doc SendFailed doc="${docRow.id}" error="${errMsg ?? "unknown"}"`,
+    );
+  }
   await env.DB.prepare(
     `UPDATE documents SET signature_data = ?, updated_at = datetime('now') WHERE id = ?`,
   )
@@ -612,13 +633,13 @@ async function handleEstimateCompleted(
     .bind(serializeSignatureMeta(meta), signedOn, docRow.id)
     .run();
 
-  // Unlock deposit payment on the portal and advance status to approved.
+  // Mark the estimate as signed. Advance status to 'signed' (not 'approved') —
+  // 'approved' is reserved for actual deposit receipt, which is a separate event.
   if (docRow.estimate_id && signerName) {
     await env.DB.prepare(
       `UPDATE estimates
           SET client_signature = ?, signed_date = ?,
-              status = CASE WHEN status IN ('sent','viewed') THEN 'approved' ELSE status END,
-              approved_date = CASE WHEN status IN ('sent','viewed') THEN datetime('now') ELSE approved_date END,
+              status = CASE WHEN status IN ('sent','viewed') THEN 'signed' ELSE status END,
               updated_at = datetime('now')
         WHERE id = ?`,
     )

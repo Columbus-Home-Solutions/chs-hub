@@ -9,10 +9,14 @@
  * notification_logs.dedupe_key to fire each threshold exactly once per
  * (sub × field × expiration-date) triplet — so a renewed doc generates
  * fresh alerts at the new expiration's thresholds.
+ *
+ * Each nightly run that fires at least one alert also sends a single
+ * batched email to ALERT_EMAIL_TO — additive alongside the in-app bell,
+ * not a replacement. See CHS-Task-SubCompliance-Cron-Email.
  */
 
 import type { Env } from "../env.js";
-import { createOwnerInApp } from "./notification-engine.js";
+import { createOwnerInApp, sendSubEmail } from "./notification-engine.js";
 
 interface SubRow {
   id: string;
@@ -53,6 +57,7 @@ async function alertForField(
   sub: SubRow,
   field: "coi" | "license",
   expirationDate: string,
+  collectedAlerts: string[],
 ): Promise<number> {
   const days = daysUntil(expirationDate);
   const subName = (sub.company_name ?? sub.company ?? `Sub ${sub.id.slice(0, 8)}`).trim();
@@ -65,11 +70,13 @@ async function alertForField(
     if (days <= threshold && days >= threshold - 1) {
       const dedupe = `sub_${field}_expiring:${sub.id}:${threshold}d:${expirationDate}`;
       const daysLabel = days <= 0 ? "TODAY" : `in ${days} day${days === 1 ? "" : "s"}`;
+      const msg = `Sub compliance: ${fieldLabel} for ${subName} expires ${daysLabel} (${formatDate(expirationDate)}).`;
       await createOwnerInApp(env, {
-        message: `Sub compliance: ${fieldLabel} for ${subName} expires ${daysLabel} (${formatDate(expirationDate)}).`,
+        message: msg,
         linkPath: `/app/subcontractors/${sub.id}`,
         dedupe,
       });
+      collectedAlerts.push(msg);
       alerted++;
     }
   }
@@ -79,6 +86,7 @@ async function alertForField(
 export async function checkSubComplianceAlerts(env: Env): Promise<SubComplianceResult> {
   const t0 = Date.now();
   const result: SubComplianceResult = { scanned: 0, alerted: 0, errors: 0, duration_ms: 0 };
+  const collectedAlerts: string[] = [];
 
   try {
     // Query active subs that have at least one expiration date set and within 31 days
@@ -100,14 +108,37 @@ export async function checkSubComplianceAlerts(env: Env): Promise<SubComplianceR
     for (const sub of subs) {
       try {
         if (sub.coi_expiration_date) {
-          result.alerted += await alertForField(env, sub, "coi", sub.coi_expiration_date);
+          result.alerted += await alertForField(env, sub, "coi", sub.coi_expiration_date, collectedAlerts);
         }
         if (sub.license_expiration_date) {
-          result.alerted += await alertForField(env, sub, "license", sub.license_expiration_date);
+          result.alerted += await alertForField(env, sub, "license", sub.license_expiration_date, collectedAlerts);
         }
       } catch (err) {
         result.errors++;
         console.error(`[sub_compliance] alert failed for sub ${sub.id}:`, (err as Error).message);
+      }
+    }
+
+    // Send a single batched email to the owner for every night that fires at least one alert.
+    // Additive — in-app bell notifications above are unchanged.
+    if (collectedAlerts.length > 0) {
+      const emailTo = (env.ALERT_EMAIL_TO ?? "").trim();
+      if (emailTo) {
+        const origin = (env.APP_PUBLIC_ORIGIN ?? "https://app.homesolutionsar.com").replace(/\/$/, "");
+        const subject =
+          collectedAlerts.length === 1
+            ? "Sub compliance alert"
+            : `Sub compliance alerts (${collectedAlerts.length})`;
+        const body =
+          `Nightly compliance check — ${collectedAlerts.length} alert${collectedAlerts.length === 1 ? "" : "s"}:\n\n` +
+          collectedAlerts.join("\n") +
+          `\n\nView subs: ${origin}/subcontractors`;
+        try {
+          await sendSubEmail(env, emailTo, subject, body);
+        } catch (emailErr) {
+          // Non-fatal — in-app alerts already fired; log and continue.
+          console.error("[sub_compliance] email send failed:", (emailErr as Error).message);
+        }
       }
     }
   } catch (err) {

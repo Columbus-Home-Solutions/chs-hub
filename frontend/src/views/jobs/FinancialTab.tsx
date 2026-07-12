@@ -1536,10 +1536,22 @@ function PayerField({
   );
 }
 
+interface InvoicePaymentRow {
+  id: string;
+  amount: number;
+  payment_method: string | null;
+  convenience_fee: number | null;
+  stripe_fee: number | null;
+  net_amount: number | null;
+  received_date: string | null;
+  notes: string | null;
+}
+
 interface InvoiceDetailPayload {
   invoice: InvoiceRow & { invoice_type: string | null; invoice_display?: string };
   payer: (Payer & { display_name?: string; stripe_payment_method_id?: string | null }) | null;
   line_items: { id: string; description: string; amount: number | null }[];
+  payments: InvoicePaymentRow[];
 }
 
 function InvoiceDetailModal({
@@ -1628,6 +1640,47 @@ function InvoiceDetailModal({
               </li>
             ))}
           </ul>
+        </>
+      )}
+      {data.payments.length > 0 && (
+        <>
+          <h4 style={{ margin: "var(--space-md) 0 var(--space-sm)" }}>Payments received</h4>
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Method</th>
+                <th class="num">Amount</th>
+                <th class="num">Conv. fee</th>
+                <th class="num">Client paid</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.payments.map((pay) => {
+                const clientTotal = pay.amount + (pay.convenience_fee ?? 0);
+                return (
+                  <tr key={pay.id}>
+                    <td>{pay.received_date ?? "—"}</td>
+                    <td>{formatStatus(pay.payment_method ?? "unknown")}</td>
+                    <td class="num">{formatCurrency(pay.amount)}</td>
+                    <td class="num">
+                      {pay.convenience_fee != null && pay.convenience_fee > 0
+                        ? formatCurrency(pay.convenience_fee)
+                        : <span class="text--muted">—</span>}
+                    </td>
+                    <td class="num">
+                      <strong>{formatCurrency(clientTotal)}</strong>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {data.payments.some((p) => p.convenience_fee != null && p.convenience_fee > 0) && (
+            <p class="text--muted" style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-xs)" }}>
+              Conv. fee = 3.5% processing surcharge on electronic payments (CHS revenue, not part of contract value).
+            </p>
+          )}
         </>
       )}
     </Modal>

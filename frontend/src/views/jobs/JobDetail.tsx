@@ -21,8 +21,12 @@ import { PermitsTab } from "./PermitsTab";
 import { WarrantyTab } from "./WarrantyTab";
 import { PunchListTab } from "./PunchListTab";
 import { SmartNotesPanel } from "./SmartNotesPanel";
+import { BidsTab } from "./BidsTab";
+import { SelectionsTab } from "./SelectionsTab";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
+import { useAuth } from "../../store/auth";
+import { isOwner } from "../../lib/rbac";
 import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatDateTime, formatPhone, formatStatus } from "../../lib/format";
 import {
@@ -45,11 +49,13 @@ interface DetailProps extends RoutableProps {
 type TabKey =
   | "overview"
   | "scope"
+  | "selections"
   | "tasks"
   | "punch_list"
   | "schedule"
   | "financial"
   | "change_orders"
+  | "bids"
   | "permits"
   | "warranty"
   | "photos"
@@ -61,11 +67,13 @@ type TabKey =
 const TABS: { key: TabKey; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "scope", label: "Scope of Work" },
+  { key: "selections", label: "Selections" },
   { key: "tasks", label: "Tasks" },
   { key: "punch_list", label: "Punch List" },
   { key: "schedule", label: "Schedule" },
   { key: "financial", label: "Financial" },
   { key: "change_orders", label: "Change Orders" },
+  { key: "bids", label: "Bids" },
   { key: "permits", label: "Permits" },
   { key: "warranty", label: "Warranty" },
   { key: "photos", label: "Photos" },
@@ -93,6 +101,7 @@ export function JobDetail({ id }: DetailProps) {
   const search = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
   const { data, loading, error, refetch } = useApi<JobDetailResponse>(id ? `/api/jobs/${id}` : null);
   const toast = useToast();
+  const { user } = useAuth();
   const [tab, setTab] = useState<TabKey>("overview");
 
   useEffect(() => {
@@ -150,6 +159,7 @@ export function JobDetail({ id }: DetailProps) {
           </p>
         </div>
         <div class="view-header__right">
+          {isOwner(user) && id && <WeeklyRecapButton jobId={id} />}
           <Button variant="tertiary" onClick={() => go("/jobs")}>
             ← Pipeline
           </Button>
@@ -193,6 +203,9 @@ export function JobDetail({ id }: DetailProps) {
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
       {tab === "scope" && <ScopeOfWorkTab estimateId={job.estimate_id} jobSource={job.source} />}
+      {tab === "selections" && id && (
+        <SelectionsTab jobId={id} estimateId={job.estimate_id} />
+      )}
       {tab === "tasks" && id && <TasksTab jobId={id} groups={data.task_groups} refetch={refetch} toast={toast} />}
       {tab === "punch_list" && id && (
         <PunchListTab
@@ -207,6 +220,7 @@ export function JobDetail({ id }: DetailProps) {
       {tab === "change_orders" && id && (
         <ChangeOrdersTab jobId={id} portalToken={data.job.portal_token} />
       )}
+      {tab === "bids" && id && <BidsTab jobId={id} />}
       {tab === "permits" && id && <PermitsTab jobId={id} />}
       {tab === "warranty" && id && <WarrantyTab jobId={id} />}
       {tab === "photos" && id && <PhotosTab jobId={id} />}
@@ -1058,8 +1072,11 @@ interface ScopeLineItem {
 }
 
 interface EstimateResponse {
-  estimate: { id: string; status: string };
-  line_items: ScopeLineItem[];
+  estimate: {
+    id: string;
+    status: string;
+    line_items: ScopeLineItem[];
+  };
 }
 
 function ScopeOfWorkTab({ estimateId, jobSource }: { estimateId: string | null; jobSource?: string | null }) {
@@ -1092,7 +1109,7 @@ function ScopeOfWorkTab({ estimateId, jobSource }: { estimateId: string | null; 
     );
   }
 
-  const lineItems = data?.line_items ?? [];
+  const lineItems = data?.estimate?.line_items ?? [];
   const grandTotal = lineItems.reduce((sum, li) => sum + (li.total ?? 0), 0);
 
   return (
@@ -1162,5 +1179,49 @@ function ScopeOfWorkTab({ estimateId, jobSource }: { estimateId: string | null; 
         </>
       )}
     </div>
+  );
+}
+
+// ── Owner-only: manual weekly recap trigger ───────────────────────────────────
+interface RecapResponse {
+  ok: boolean;
+  recap?: string;
+  sent_to?: string;
+  photo_count?: number;
+  week_start?: string;
+  week_end?: string;
+}
+
+function WeeklyRecapButton({ jobId }: { jobId: string }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const fire = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await api.post<RecapResponse>(`/api/jobs/${jobId}/test-weekly-recap`, {});
+      const preview = res.recap ? `"${res.recap.slice(0, 100).replace(/\n/g, " ")}…"` : "";
+      toast.push(
+        "success",
+        `Weekly recap sent to ${res.sent_to ?? "client"}. ${preview}`,
+      );
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : "Failed to send recap");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      onClick={() => void fire()}
+      disabled={busy}
+      title="Owner only — manually triggers the weekly recap email for this job"
+    >
+      {busy ? "Sending…" : "Send Weekly Recap"}
+    </Button>
   );
 }

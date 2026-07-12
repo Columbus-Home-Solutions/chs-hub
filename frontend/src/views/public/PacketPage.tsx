@@ -22,6 +22,13 @@ import { useEffect, useState } from "preact/hooks";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+/** Format digits as XX-XXXXXXX (EIN). Strips non-digits, caps at 9. */
+function formatEIN(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 9);
+  if (digits.length <= 2) return digits;
+  return digits.slice(0, 2) + "-" + digits.slice(2);
+}
+
 function packetToken(): string {
   const m = window.location.pathname.match(/\/packet\/([^/?#]+)/);
   return m ? decodeURIComponent(m[1]) : "";
@@ -171,9 +178,14 @@ function FileUploadField({
           <input
             class="form-input"
             type="text"
+            inputMode="numeric"
             placeholder="XX-XXXXXXX"
             value={extraText}
-            onInput={(e) => setExtraText((e.target as HTMLInputElement).value)}
+            onInput={(e) => {
+              const formatted = formatEIN((e.target as HTMLInputElement).value);
+              (e.target as HTMLInputElement).value = formatted;
+              setExtraText(formatted);
+            }}
           />
         </div>
       )}

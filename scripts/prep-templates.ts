@@ -91,10 +91,51 @@ function prepServiceAgreement(xml: string): string {
   out = replaceLabelDollar(out, "Total Contract Price: ", "contract_amount");
   out = replaceLabelBlank(out, "Estimated Start Date: ", "{{start_date}}");
   out = replaceLabelBlank(out, "Estimated Completion Date: ", "{{completion_date}}");
-  out = transformParas(out, "Deposit (due before work begins)", (para) =>
-    para.replace(/(<w:t[^>]*>)\$(<\/w:t>)/, "$1${{deposit_amount}}$2"),
-  );
+  for (const { anchor, amount, due } of [
+    { anchor: "Deposit (due before work begins)", amount: "payment_1_amount", due: "payment_1_due" },
+    { anchor: "Progress Payment", amount: "payment_2_amount", due: "payment_2_due" },
+    { anchor: "Final Payment (due upon completion)", amount: "payment_3_amount", due: "payment_3_due" },
+  ]) {
+    out = patchPaymentTableRow(out, anchor, amount, due);
+  }
   return out;
+}
+
+/** Inject amount + due-date merge tags into a 3-column payment schedule row. */
+function patchPaymentTableRow(
+  xml: string,
+  rowAnchor: string,
+  amountField: string,
+  dueField: string,
+): string {
+  const anchorIdx = xml.indexOf(rowAnchor);
+  if (anchorIdx === -1) return xml;
+
+  const run =
+    '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:cs="Arial" w:eastAsia="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>' +
+    '<w:t xml:space="preserve">{{FIELD}}</w:t></w:r>';
+  const amountPara =
+    `<w:p><w:pPr><w:spacing w:after="60" w:before="60"/></w:pPr>${run.replace("{{FIELD}}", `$` + "{{" + amountField + "}}")}</w:p>`;
+  const duePara =
+    `<w:p><w:pPr><w:spacing w:after="60" w:before="60"/></w:pPr>${run.replace("{{FIELD}}", "{{" + dueField + "}}")}</w:p>`;
+
+  let tail = xml.slice(anchorIdx);
+  let searchFrom = 0;
+  for (let n = 0; n < 2; n++) {
+    const tcOpen = tail.indexOf("<w:tc>", searchFrom);
+    if (tcOpen === -1) break;
+    const tcClose = tail.indexOf("</w:tc>", tcOpen);
+    if (tcClose === -1) break;
+    const cell = tail.slice(tcOpen, tcClose + "</w:tc>".length);
+    const patched = cell.replace(
+      /<w:p>[\s\S]*?<\/w:p>(?=\s*<\/w:tc>)/,
+      n === 0 ? amountPara : duePara,
+    );
+    tail = tail.slice(0, tcOpen) + patched + tail.slice(tcClose + "</w:tc>".length);
+    searchFrom = tcOpen + patched.length;
+  }
+
+  return xml.slice(0, anchorIdx) + tail;
 }
 
 function prepCostPlusAgreement(xml: string): string {

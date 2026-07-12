@@ -399,3 +399,119 @@ export async function handleSubcontractorUpdate(
   const row = await env.DB.prepare("SELECT * FROM subcontractors WHERE id = ?").bind(id).first<RawSub>();
   return json({ subcontractor: row ? shape(row) : null });
 }
+
+// ── POST /api/subcontractors/:id/test-compliance-check (owner-only) ───────────
+/**
+ * Manual compliance check for a single sub. Owner-only spot-check.
+ * Fires for any expiration within 31 days, bypassing the real cron's narrow
+ * threshold window — use this to confirm the send path works, not to verify
+ * threshold timing (that's handled by the real nightly cron).
+ *
+ * Uses test-specific dedupe keys (prefix "test:") so real cron alerts are
+ * never blocked by manual test runs.
+ *
+ * Sends both in-app bell AND a direct email to ALERT_EMAIL_TO.
+ * Note: the real nightly cron is in-app only — the email here is bonus
+ * visibility for manual testing. See CHS-Task-Manual-SubCompliance-Trigger.
+ */
+
+import { createOwnerInApp, sendSubEmail } from "../lib/notification-engine.js";
+
+function _daysUntil(isoDate: string): number {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const exp = new Date(`${isoDate}T00:00:00Z`);
+  return Math.round((exp.getTime() - today.getTime()) / 86_400_000);
+}
+
+function _fmtDate(iso: string): string {
+  try {
+    return new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", {
+      month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
+    });
+  } catch { return iso; }
+}
+
+export async function handleTestComplianceCheck(
+  request: Request,
+  env: Env,
+  subId: string,
+): Promise<Response> {
+  const authed = await guard(request, env, ["owner"]);
+  if (authed instanceof Response) return authed;
+
+  const sub = await env.DB.prepare(
+    `SELECT id, company_name, company, coi_expiration_date, license_expiration_date, is_active
+       FROM subcontractors WHERE id = ?`,
+  ).bind(subId).first<{
+    id: string;
+    company_name: string | null;
+    company: string | null;
+    coi_expiration_date: string | null;
+    license_expiration_date: string | null;
+    is_active: number;
+  }>();
+  if (!sub) return new Response(JSON.stringify({ error: "subcontractor_not_found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+
+  const subName = (sub.company_name ?? sub.company ?? `Sub ${sub.id.slice(0, 8)}`).trim();
+  const fields: Array<{ field: "coi" | "license"; date: string }> = [];
+  if (sub.coi_expiration_date) fields.push({ field: "coi", date: sub.coi_expiration_date });
+  if (sub.license_expiration_date) fields.push({ field: "license", date: sub.license_expiration_date });
+
+  const nearTerm = fields.filter(({ date }) => _daysUntil(date) <= 31);
+
+  if (nearTerm.length === 0) {
+    return new Response(JSON.stringify({
+      ok: true,
+      alerted: false,
+      reason: "no_expirations_within_31_days",
+      sub: subName,
+      fields: fields.map(({ field, date }) => ({
+        field,
+        expiration_date: date,
+        days_until: _daysUntil(date),
+      })),
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+
+  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://app.homesolutionsar.com").replace(/\/$/, "");
+  const alerts: string[] = [];
+
+  for (const { field, date } of nearTerm) {
+    const days = _daysUntil(date);
+    const fieldLabel = field === "coi" ? "COI" : "License";
+    const daysLabel = days <= 0 ? "TODAY" : `in ${days} day${days === 1 ? "" : "s"}`;
+    const msg = `Sub compliance: ${fieldLabel} for ${subName} expires ${daysLabel} (${_fmtDate(date)}).`;
+    alerts.push(msg);
+
+    // In-app alert (test-prefixed dedupe so real cron alerts are unaffected)
+    await createOwnerInApp(env, {
+      message: msg,
+      linkPath: `/subcontractors/${sub.id}`,
+      dedupe: `test:sub_${field}_expiring:${sub.id}:${date}`,
+    });
+  }
+
+  // Direct email to owner (bonus for test visibility — real cron is in-app only)
+  const emailTo = (env.ALERT_EMAIL_TO ?? "").trim();
+  if (emailTo) {
+    const emailBody =
+      `Compliance check for ${subName}:\n\n` +
+      alerts.join("\n") +
+      `\n\nView sub: ${origin}/subcontractors/${sub.id}`;
+    await sendSubEmail(env, emailTo, `Compliance Alert: ${subName}`, emailBody);
+  }
+
+  return new Response(JSON.stringify({
+    ok: true,
+    alerted: true,
+    sub: subName,
+    alerts,
+    sent_to: emailTo || null,
+    fields: nearTerm.map(({ field, date }) => ({
+      field,
+      expiration_date: date,
+      days_until: _daysUntil(date),
+    })),
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+}

@@ -242,6 +242,7 @@ interface PhotoRow {
   rp_category?: string | null;
   rp_confidence?: number | null;
   rp_expense_id?: string | null;
+  rp_extracted_items?: string | null;
 }
 
 function hydratePhoto(row: PhotoRow) {
@@ -255,6 +256,7 @@ function hydratePhoto(row: PhotoRow) {
         ai_category: row.rp_category ?? null,
         ai_confidence: row.rp_confidence ?? null,
         expense_id: row.rp_expense_id ?? null,
+        extracted_items: row.rp_extracted_items ?? null,
       }
     : null;
   return {
@@ -295,7 +297,8 @@ const PHOTO_SELECT = `
   p.tags, p.entered_via,
   rp.id AS rp_id, rp.processing_status AS rp_status, rp.ai_vendor AS rp_vendor,
   rp.ai_amount AS rp_amount, rp.ai_date AS rp_date, rp.ai_category AS rp_category,
-  rp.ai_confidence AS rp_confidence, rp.expense_id AS rp_expense_id
+  rp.ai_confidence AS rp_confidence, rp.expense_id AS rp_expense_id,
+  rp.extracted_items AS rp_extracted_items
   FROM photos p
   LEFT JOIN receipt_photos rp ON rp.photo_id = p.id`;
 
@@ -1653,6 +1656,7 @@ export async function handleReceiptQueue(
          rp.ai_confidence,
          rp.expense_id,
          rp.processing_status,
+         rp.extracted_items,
          rp.created_at,
          p.job_id,
          j.job_number,
@@ -1674,6 +1678,7 @@ export async function handleReceiptQueue(
          rp.ai_confidence,
          rp.expense_id,
          rp.processing_status,
+         rp.extracted_items,
          rp.created_at,
          p.job_id,
          j.job_number,
@@ -1705,6 +1710,7 @@ export async function handleReceiptQueue(
     ai_category: (row.ai_category as string | null) ?? null,
     ai_confidence: (row.ai_confidence as number | null) ?? null,
     expense_id: (row.expense_id as string | null) ?? null,
+    extracted_items: (row.extracted_items as string | null) ?? null,
     processing_status: row.processing_status as string,
     created_at: row.created_at as string,
   }));

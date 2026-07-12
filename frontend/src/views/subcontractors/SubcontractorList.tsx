@@ -204,6 +204,7 @@ export function SubForm({
   const [notes, setNotes] = useState(sub?.notes ?? "");
   const [coiExp, setCoiExp] = useState(sub?.coi_expiration_date ?? "");
   const [licenseExp, setLicenseExp] = useState(sub?.license_expiration_date ?? "");
+  const [rating, setRating] = useState<string>(sub?.rating != null ? String(sub.rating) : "");
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
@@ -227,6 +228,7 @@ export function SubForm({
         notes,
         coi_expiration_date: coiExp || null,
         license_expiration_date: licenseExp || null,
+        rating: rating ? parseInt(rating, 10) : null,
       };
       if (mode === "create") await api.post("/api/subcontractors", body);
       else await api.put(`/api/subcontractors/${sub!.id}`, body);
@@ -337,6 +339,20 @@ export function SubForm({
           Active
         </label>
       </div>
+      <FormField label="Internal rating" hint="1–5 — internal reference only, not shown to clients">
+        <Select
+          value={rating}
+          onChange={setRating}
+          options={[
+            { value: "", label: "— unset —" },
+            { value: "5", label: "★★★★★  5 — Excellent" },
+            { value: "4", label: "★★★★☆  4 — Good" },
+            { value: "3", label: "★★★☆☆  3 — Average" },
+            { value: "2", label: "★★☆☆☆  2 — Below average" },
+            { value: "1", label: "★☆☆☆☆  1 — Poor" },
+          ]}
+        />
+      </FormField>
       <FormField label="Notes">
         <textarea
           class="form-textarea"

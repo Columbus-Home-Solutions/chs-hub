@@ -33,6 +33,7 @@ export interface QueueItem {
   ai_category: string | null;
   ai_confidence: number | null;
   expense_id: string | null;
+  extracted_items: string | null;
   processing_status: string;
   created_at: string;
 }
@@ -56,6 +57,7 @@ function toPhotoReceipt(item: QueueItem): PhotoReceipt {
     ai_category: item.ai_category,
     ai_confidence: item.ai_confidence,
     expense_id: item.expense_id,
+    extracted_items: item.extracted_items,
   };
 }
 

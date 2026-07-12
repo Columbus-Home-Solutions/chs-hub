@@ -130,12 +130,16 @@ export function ExpenseFields({
   return (
     <>
       <FormField label="Type" required>
-        <div class="chip-row">
+        <div
+          class="chip-row"
+          style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(7.5rem, 1fr))", gap: "var(--space-xs)" }}
+        >
           {EXPENSE_TYPE_OPTIONS.map((o) => (
             <button
               key={o.value}
               type="button"
               class={`chip${draft.expense_type === o.value ? " chip--active" : ""}`}
+              style={{ width: "100%", textAlign: "center" }}
               onClick={() => set("expense_type", o.value)}
             >
               {o.label}
@@ -145,18 +149,19 @@ export function ExpenseFields({
       </FormField>
 
       <div class="form-row">
-        <FormField label="Amount" required>
+        <FormField label="Amount" required style={{ flex: "2", minWidth: 0 }}>
           <input
             class="form-input"
             type="number"
             inputMode="decimal"
             min="0"
             step="0.01"
+            style={{ minWidth: 0, width: "100%" }}
             value={draft.amount}
             onInput={(e) => set("amount", (e.target as HTMLInputElement).value)}
           />
         </FormField>
-        <FormField label="Date" required>
+        <FormField label="Date" required style={{ flex: "3", minWidth: 0 }}>
           <input
             class="form-input"
             type="date"

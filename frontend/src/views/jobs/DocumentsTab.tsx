@@ -765,7 +765,11 @@ function JobDocuments({ jobId }: { jobId: string }) {
                       ) : (
                         <a href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer">{d.title}</a>
                       )}
-                      {d.is_signed ? <Badge tone="success">Signed</Badge> : null}
+                      {d.is_signed ? (
+                        <Badge tone="success">Signed</Badge>
+                      ) : d.document_category === "working_agreement" ? (
+                        <Badge tone="neutral">Reference</Badge>
+                      ) : null}
                     </td>
                     <td style={{ width: "90px" }}>{fmtSize(d.file_size)}</td>
                     <td style={{ width: "110px" }}>

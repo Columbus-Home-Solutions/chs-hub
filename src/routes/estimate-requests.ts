@@ -823,9 +823,15 @@ export async function handleEstimateRequestWin(
   const reference = str(body.reference);
   const payerId = str(body.payer_id);
 
-  const outcome = await convertQuoteToJob(env, id, { amount, method, reference }, user.id, {
-    payerId,
-  });
+  let outcome: Awaited<ReturnType<typeof convertQuoteToJob>>;
+  try {
+    outcome = await convertQuoteToJob(env, id, { amount, method, reference }, user.id, {
+      payerId,
+    });
+  } catch (convErr) {
+    console.error("[estimate-requests win] convertQuoteToJob threw:", (convErr as Error).message, (convErr as Error).stack);
+    return err(500, "conversion_error", `Conversion failed: ${(convErr as Error).message}`);
+  }
   if (!outcome.ok) return err(outcome.status, outcome.error, outcome.details);
 
   // Stop the follow-up sequence when the request is won (Sprint 26).

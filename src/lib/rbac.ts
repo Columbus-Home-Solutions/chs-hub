@@ -192,6 +192,8 @@ const RBAC_EXEMPT_PREFIXES = [
   "/api/public/", // pay + quote token APIs
   "/api/punch/", // sub punch list token API (Sprint 33)
   "/api/portal/", // client portal token API
+  "/api/bid/", // sub bid submission token API (Sprint 38 Run 3)
+  "/api/packet/", // sub onboarding packet token API (Sprint 39 Run 1)
   "/api/share/", // shareable document links
   "/api/webhooks/", // Stripe + Twilio (signature-gated)
   "/api/ops/", // SYNC_TRIGGER_SECRET gated

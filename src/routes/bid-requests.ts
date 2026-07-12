@@ -145,6 +145,65 @@ interface SubmissionRow {
   submitted_at: string;
 }
 
+// ── GET /api/bid-requests?job_id=&estimate_id= ───────────────────────────────
+
+export async function handleListBidRequests(request: Request, env: Env): Promise<Response> {
+  const authed = await guard(request, env, ["owner", "project_manager", "office_admin"]);
+  if (authed instanceof Response) return authed;
+
+  const url = new URL(request.url);
+  const jobId = url.searchParams.get("job_id") || null;
+  const estimateId = url.searchParams.get("estimate_id") || null;
+
+  // Cross-job mode: no job_id or estimate_id → return all open bid requests across
+  // active jobs, sorted by staleness (days open desc). Used by the dashboard widget.
+  if (!jobId && !estimateId) {
+    const crossJobRows = await env.DB.prepare(
+      `SELECT br.id, br.title, br.job_id, j.title AS job_title, br.created_at,
+              CAST((julianday('now') - julianday(br.created_at)) AS INTEGER) AS days_open,
+              (SELECT COUNT(*) FROM bid_request_recipients WHERE bid_request_id = br.id) AS recipient_count,
+              (SELECT COUNT(*) FROM bid_submissions WHERE bid_request_id = br.id) AS submission_count
+         FROM bid_requests br
+         LEFT JOIN jobs j ON j.id = br.job_id
+        WHERE br.status = 'open'
+        ORDER BY days_open DESC
+        LIMIT 20`,
+    ).all<{
+      id: string;
+      title: string;
+      job_id: string | null;
+      job_title: string | null;
+      created_at: string;
+      days_open: number;
+      recipient_count: number;
+      submission_count: number;
+    }>();
+    return json({ open_bids: crossJobRows.results ?? [] });
+  }
+
+  const rows = jobId
+    ? await env.DB.prepare(
+        `SELECT br.id, br.title, br.status, br.bid_mode, br.notify_losers,
+                br.awarded_sub_id, br.awarded_bid_id, br.created_at,
+                (SELECT COUNT(*) FROM bid_request_recipients WHERE bid_request_id = br.id) AS recipient_count,
+                (SELECT COUNT(*) FROM bid_submissions WHERE bid_request_id = br.id) AS submission_count
+           FROM bid_requests br WHERE br.job_id = ? ORDER BY br.created_at DESC`,
+      )
+        .bind(jobId)
+        .all<BidRequestRow & { recipient_count: number; submission_count: number }>()
+    : await env.DB.prepare(
+        `SELECT br.id, br.title, br.status, br.bid_mode, br.notify_losers,
+                br.awarded_sub_id, br.awarded_bid_id, br.created_at,
+                (SELECT COUNT(*) FROM bid_request_recipients WHERE bid_request_id = br.id) AS recipient_count,
+                (SELECT COUNT(*) FROM bid_submissions WHERE bid_request_id = br.id) AS submission_count
+           FROM bid_requests br WHERE br.estimate_id = ? ORDER BY br.created_at DESC`,
+      )
+        .bind(estimateId)
+        .all<BidRequestRow & { recipient_count: number; submission_count: number }>();
+
+  return json({ bid_requests: rows.results ?? [] });
+}
+
 // ── POST /api/bid-requests ────────────────────────────────────────────────────
 
 export async function handleCreateBidRequest(request: Request, env: Env): Promise<Response> {
@@ -249,7 +308,7 @@ export async function handleCreateBidRequest(request: Request, env: Env): Promis
   }
 
   await env.DB.prepare(
-    `INSERT INTO audit_log (id, user_email, action, entity_type, entity_id, details, created_at)
+    `INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at)
      VALUES (?, ?, 'bid_request_created', 'bid_request', ?, ?, datetime('now'))`,
   )
     .bind(
@@ -488,7 +547,7 @@ export async function handleAwardBid(
   });
 
   await env.DB.prepare(
-    `INSERT INTO audit_log (id, user_email, action, entity_type, entity_id, details, created_at)
+    `INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at)
      VALUES (?, ?, 'bid_awarded', 'bid_request', ?, ?, datetime('now'))`,
   )
     .bind(

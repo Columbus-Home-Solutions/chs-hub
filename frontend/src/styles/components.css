@@ -43,12 +43,14 @@
   color: var(--color-text-primary);
 }
 
-/* tertiary == ghost */
-.btn--tertiary {
+/* tertiary == ghost (both class names are valid) */
+.btn--tertiary,
+.btn--ghost {
   background: transparent;
   color: var(--color-text-secondary);
 }
-.btn--tertiary:hover:not(:disabled) {
+.btn--tertiary:hover:not(:disabled),
+.btn--ghost:hover:not(:disabled) {
   background: var(--color-surface-2);
   color: var(--color-text-primary);
 }

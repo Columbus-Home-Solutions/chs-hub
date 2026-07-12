@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { formatCurrency, formatDate } from "../../lib/format";
+import { ClientSelectionsPanel } from "../../components/ClientSelectionCards";
 import logoUrl from "../../assets/chs-logo.png";
 
 /**
@@ -68,7 +69,15 @@ interface PublicQuote {
   signature_complete: boolean;
   contract_signature_mode: "none" | "typed" | "boldsign";
   signature_status: string;
+  signature_error: string | null;
   contract_document_id: string | null;
+  selections_required: boolean;
+  selections_total: number;
+  selections_chosen: number;
+  selections_all_chosen: boolean;
+  selections_approved: number;
+  selections_signature_pending: boolean;
+  selections_complete: boolean;
   convenience_fee_rate: number;
   stripe_enabled: boolean;
   stripe_publishable_key: string | null;
@@ -113,6 +122,7 @@ const WISETACK_MIN_TOTAL = 500;
 const statusLabel: Record<string, string> = {
   sent: "Awaiting Response",
   viewed: "Viewed",
+  signed: "Agreement Signed",
   approved: "Approved",
   expired: "Expired",
   revised: "Revised",
@@ -136,6 +146,7 @@ export function QuotePage() {
   const [quote, setQuote] = useState<PublicQuote | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectionsRefreshKey, setSelectionsRefreshKey] = useState(0);
 
   const reload = async () => {
     const res = await getJson<{ quote: PublicQuote }>(`/api/public/quote/${token}`);
@@ -152,12 +163,57 @@ export function QuotePage() {
     reload()
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-    if (new URLSearchParams(window.location.search).get("signed") === "1") {
-      const t = window.setTimeout(() => void reload().catch(() => undefined), 1500);
-      return () => window.clearTimeout(t);
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (!token || loading) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const afterSign = params.get("signed") === "1";
+    const afterSelectionSign = params.get("selection_signed") === "1";
+    if (!afterSign && !afterSelectionSign) return;
+
+    let stopped = false;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    const stop = (intervalId: number) => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
+
+    const tick = async (intervalId: number) => {
+      if (stopped) return;
+      attempts += 1;
+      try {
+        const q = await reload();
+        if (afterSign && q.signature_complete) {
+          stop(intervalId);
+          return;
+        }
+        if (afterSelectionSign) {
+          setSelectionsRefreshKey((k) => k + 1);
+          const selRes = await getJson<{ selections: Array<{ status: string }> }>(
+            `/api/public/quote/${token}/selections`,
+          );
+          if (!selRes.selections.some((s) => s.status === "sent")) {
+            stop(intervalId);
+            return;
+          }
+        }
+      } catch {
+        /* keep polling — webhook may not have landed yet */
+      }
+      if (attempts >= maxAttempts) stop(intervalId);
+    };
+
+    const intervalId = window.setInterval(() => void tick(intervalId), 2000);
+    void tick(intervalId);
+
+    return () => stop(intervalId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, loading]);
 
   if (loading) {
     return (
@@ -191,7 +247,7 @@ export function QuotePage() {
           ) : quote.status === "approved" ? (
             <ApprovedCard quote={quote} />
           ) : (
-            <ApprovalFlow quote={quote} reload={reload} />
+            <ApprovalFlow quote={quote} reload={reload} selectionsRefreshKey={selectionsRefreshKey} />
           )}
           {quote.reviews.length > 0 && <ReviewsCard reviews={quote.reviews} />}
         </div>
@@ -385,10 +441,22 @@ function ApprovedCard({ quote }: { quote: PublicQuote }) {
 
 // ─── Approval flow: sign → pay ────────────────────────────────────────────────
 
-function ApprovalFlow({ quote, reload }: { quote: PublicQuote; reload: () => Promise<PublicQuote> }) {
+function ApprovalFlow({
+  quote,
+  reload,
+  selectionsRefreshKey,
+}: {
+  quote: PublicQuote;
+  reload: () => Promise<PublicQuote>;
+  selectionsRefreshKey: number;
+}) {
   const [changesOpen, setChangesOpen] = useState(false);
+  const selectionsGate = quote.selections_required && !quote.selections_complete;
   const needsSign = quote.signature_required && !quote.signature_complete;
-  const stepTotal = quote.signature_required ? 2 : 1;
+  const stepTotal =
+    (quote.selections_required ? 1 : 0) + (quote.signature_required ? 1 : 0) + 1;
+  const signStep = quote.selections_required ? 2 : 1;
+  const payStep = stepTotal;
 
   return (
     <div class="quote-card quote-action">
@@ -398,10 +466,52 @@ function ApprovalFlow({ quote, reload }: { quote: PublicQuote; reload: () => Pro
         <strong>{formatCurrency(quote.deposit_amount)}</strong>
       </div>
 
-      {needsSign ? (
-        <SignSection quote={quote} reload={reload} stepTotal={stepTotal} />
+      {quote.selections_required && (
+        <div class="quote-step">
+          <div class="quote-step__label">
+            Step 1 of {stepTotal} — Select your options
+          </div>
+          <p class="quote-muted" style={{ marginBottom: "12px" }}>
+            {quote.selections_complete
+              ? "All material selections are approved."
+              : quote.selections_signature_pending
+                ? "Signature pending — check your email to confirm all selections."
+                : quote.selections_all_chosen
+                  ? "All options chosen — review and sign below."
+                  : `${quote.selections_chosen} of ${quote.selections_total} allowances chosen.`}
+          </p>
+          <ClientSelectionsPanel
+            listUrl={`/api/public/quote/${quote.token}/selections`}
+            flow="combined"
+            chooseUrl={(selectionId) =>
+              `/api/public/quote/${quote.token}/selections/${selectionId}/choose`
+            }
+            confirmAllUrl={`/api/public/quote/${quote.token}/selections/confirm-all`}
+            combinedSignLinkUrl={`/api/public/quote/${quote.token}/selections/sign-link`}
+            onUpdated={() => void reload().catch(() => undefined)}
+            pollWhilePending
+            refreshKey={selectionsRefreshKey}
+          />
+        </div>
+      )}
+
+      {selectionsGate ? (
+        <div class="quote-step quote-step--gated">
+          <p class="quote-muted">
+            Please choose and sign all material selections above before signing the service agreement and
+            paying your deposit.
+          </p>
+        </div>
+      ) : needsSign ? (
+        <SignSection quote={quote} reload={reload} stepTotal={stepTotal} stepNum={signStep} />
       ) : (
-        <PaySection quote={quote} reload={reload} stepTotal={stepTotal} showSignNote={quote.signature_required} />
+        <PaySection
+          quote={quote}
+          reload={reload}
+          stepTotal={stepTotal}
+          stepNum={payStep}
+          showSignNote={quote.signature_required}
+        />
       )}
 
       <button class="quote-link-btn" onClick={() => setChangesOpen((v) => !v)}>
@@ -416,10 +526,12 @@ function SignSection({
   quote,
   reload,
   stepTotal,
+  stepNum,
 }: {
   quote: PublicQuote;
   reload: () => Promise<PublicQuote>;
   stepTotal: number;
+  stepNum: number;
 }) {
   const [contractOpen, setContractOpen] = useState(false);
   const [name, setName] = useState(quote.client_name ?? "");
@@ -438,6 +550,17 @@ function SignSection({
     }, 12_000);
     return () => window.clearInterval(poll);
   }, [boldsign, quote.token]);
+
+  useEffect(() => {
+    if (!boldsign || quote.signature_status !== "pending") return;
+    let attempts = 0;
+    const poll = window.setInterval(() => {
+      attempts += 1;
+      void reload().catch(() => undefined);
+      if (attempts >= 10) window.clearInterval(poll);
+    }, 2000);
+    return () => window.clearInterval(poll);
+  }, [boldsign, quote.signature_status, quote.token]);
 
   const sign = async () => {
     setBusy(true);
@@ -468,7 +591,7 @@ function SignSection({
   return (
     <div class="quote-step">
       <div class="quote-step__label">
-        Step 1 of {stepTotal} — Sign the service agreement
+        Step {stepNum} of {stepTotal} — Sign the service agreement
       </div>
       {quote.include_contract && quote.contract_text && (
         <>
@@ -486,6 +609,12 @@ function SignSection({
           {quote.signature_status && quote.signature_status !== "none" && (
             <div class="quote-signed-note">
               Signature status: <strong>{quote.signature_status}</strong>
+              {quote.signature_status === "failed" && quote.signature_error && (
+                <p class="quote-muted">{quote.signature_error}</p>
+              )}
+              {quote.signature_status === "pending" && (
+                <p class="quote-muted">Your agreement is being prepared — this usually takes a few seconds.</p>
+              )}
             </div>
           )}
           {err && <div class="quote-error">{err}</div>}
@@ -527,20 +656,21 @@ function PaySection({
   quote,
   reload,
   stepTotal,
+  stepNum,
   showSignNote,
 }: {
   quote: PublicQuote;
   reload: () => Promise<PublicQuote>;
   stepTotal: number;
+  stepNum: number;
   showSignNote?: boolean;
 }) {
   const [mode, setMode] = useState<"choose" | "card" | "check">("choose");
-  const payStep = quote.signature_required ? 2 : 1;
 
   return (
     <div class="quote-step">
       <div class="quote-step__label">
-        {stepTotal > 1 ? `Step ${payStep} of ${stepTotal} — ` : ""}Pay your deposit
+        {stepTotal > 1 ? `Step ${stepNum} of ${stepTotal} — ` : ""}Pay your deposit
       </div>
       {showSignNote && quote.client_signature && (
         <div class="quote-signed-note">

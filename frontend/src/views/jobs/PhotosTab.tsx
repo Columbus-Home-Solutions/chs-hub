@@ -34,6 +34,26 @@ export interface PhotoReceipt {
   ai_category: string | null;
   ai_confidence: number | null;
   expense_id: string | null;
+  extracted_items: string | null;
+}
+
+interface ExtractedItem {
+  id?: string;
+  description: string;
+  amount: number;
+  quantity?: number;
+  unit_price?: number;
+}
+
+function parseExtractedItems(raw: string | null): ExtractedItem[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed as ExtractedItem[];
+  } catch {
+    return [];
+  }
 }
 export interface PhotoItem {
   id: string;
@@ -622,11 +642,9 @@ function PhotoDetailModal({
           <div class="flex gap-sm">
             <Button variant="secondary" size="sm" disabled={index === 0} onClick={prev}>← Prev</Button>
             <Button variant="secondary" size="sm" disabled={index === photos.length - 1} onClick={next}>Next →</Button>
+            <Button variant="danger" size="sm" disabled={busy} onClick={del} title="Remove this photo from the job (kept in storage)">Delete</Button>
           </div>
-          <div class="flex gap-sm">
-            <Button variant="danger" size="sm" disabled={busy} onClick={del}>Delete</Button>
-            <Button variant="primary" size="sm" disabled={busy} onClick={saveMeta}>Save</Button>
-          </div>
+          <Button variant="primary" size="sm" disabled={busy} onClick={saveMeta}>Save</Button>
         </div>
       }
     >
@@ -667,15 +685,19 @@ function PhotoDetailModal({
           </div>
 
           {p.receipt && (
-            <ReceiptConfirm
-              receipt={p.receipt}
-              jobId={p.job_id}
-              onConfirmed={onChanged}
-              onDone={() => { onChanged(); onClose(); }}
-              toast={toast}
-            />
+            <>
+              <hr style={{ border: "none", borderTop: "1px solid var(--color-border)", margin: "var(--space-sm) 0" }} />
+              <ReceiptConfirm
+                receipt={p.receipt}
+                jobId={p.job_id}
+                onConfirmed={onChanged}
+                onDone={() => { onChanged(); onClose(); }}
+                toast={toast}
+              />
+            </>
           )}
 
+          <hr style={{ border: "none", borderTop: "1px solid var(--color-border)", margin: "var(--space-sm) 0" }} />
           <div class="flex gap-sm" style={{ flexWrap: "wrap" }}>
             <Button variant="secondary" size="sm" onClick={() => setAnnotating(true)}>
               ✏️ {p.is_annotated ? "Edit markup" : "Annotate"}
@@ -759,6 +781,8 @@ export function ReceiptConfirm({
     sub_items: l.sub_items.map((s) => ({ id: s.id, description: s.description, category: s.category })),
   }));
 
+  const extractedItems = parseExtractedItems(receipt.extracted_items);
+
   const [draft, setDraft] = useState<ExpenseDraft>(
     emptyDraft({
       vendor: receipt.ai_vendor ?? "",
@@ -841,6 +865,36 @@ export function ReceiptConfirm({
           </Badge>
         )}
       </div>
+
+      {extractedItems.length > 0 && (
+        <div class="receipt-items">
+          <div class="receipt-items__label">AI-extracted line items</div>
+          <table class="table table--compact">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th class="num">Qty</th>
+                <th class="num">Unit</th>
+                <th class="num">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {extractedItems.map((item, i) => (
+                <tr key={item.id ?? i}>
+                  <td>{item.description}</td>
+                  <td class="num">{item.quantity ?? 1}</td>
+                  <td class="num">{item.unit_price != null ? `$${item.unit_price.toFixed(2)}` : "—"}</td>
+                  <td class="num">${item.amount.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div class="receipt-items__hint text--muted">
+            These items will be matched to estimate lines after you confirm.
+          </div>
+        </div>
+      )}
+
       <ExpenseFields draft={draft} set={set} lines={lines} />
       <Button variant="primary" size="sm" disabled={busy} onClick={confirm}>
         {busy ? "Saving…" : "Confirm → Create Expense"}

@@ -66,6 +66,7 @@ import {
   handleTaskCreate,
   handleTaskUpdate,
   handleTaskComplete,
+  handleTestWeeklyRecap,
 } from "./routes/jobs-api.js";
 import { handleKpis } from "./routes/kpis.js";
 import { handleWeather } from "./routes/weather.js";
@@ -266,6 +267,7 @@ import {
   handleSubcontractorGet,
   handleSubcontractorList,
   handleSubcontractorUpdate,
+  handleTestComplianceCheck,
 } from "./routes/subcontractors.js";
 import {
   handleEstimateRequestList,
@@ -452,6 +454,7 @@ import {
   handleCreateBidRequest,
   handleGetBidRequest,
   handleAwardBid,
+  handleListBidRequests,
   handleBidLanding,
   handleBidSubmit,
 } from "./routes/bid-requests.js";
@@ -471,6 +474,8 @@ import {
   handleCreateJobSelection,
   handleListJobSelections,
   handleAddChoice,
+  handleUpdateSelection,
+  handleUpdateChoice,
 } from "./routes/selections.js";
 import {
   handleVoiceNoteCreate,
@@ -738,6 +743,49 @@ export default {
     const pqPayCheck = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/pay\/check$/);
     if (pqPayCheck && request.method === "POST") {
       return handlePublicQuotePayCheck(request, env, decodeURIComponent(pqPayCheck[1]));
+    }
+    const pqSelectionsSignLink = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/selections\/sign-link$/);
+    if (pqSelectionsSignLink && request.method === "GET") {
+      const { handleQuoteCombinedSelectionsSignLink } = await import("./routes/selections.js");
+      return handleQuoteCombinedSelectionsSignLink(
+        request,
+        env,
+        decodeURIComponent(pqSelectionsSignLink[1]),
+      );
+    }
+    const pqSelectionsConfirmAll = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/selections\/confirm-all$/);
+    if (pqSelectionsConfirmAll && request.method === "POST") {
+      const { handleQuoteSelectionsConfirmAll } = await import("./routes/selections.js");
+      return handleQuoteSelectionsConfirmAll(
+        request,
+        env,
+        decodeURIComponent(pqSelectionsConfirmAll[1]),
+      );
+    }
+    const pqSelectionsChoose = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/selections\/([^/]+)\/choose$/);
+    if (pqSelectionsChoose && request.method === "POST") {
+      const { handleQuoteSelectionsChoose } = await import("./routes/selections.js");
+      return handleQuoteSelectionsChoose(
+        request,
+        env,
+        decodeURIComponent(pqSelectionsChoose[1]),
+        decodeURIComponent(pqSelectionsChoose[2]),
+      );
+    }
+    const pqSelectionsApprove = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/selections\/([^/]+)\/approve$/);
+    if (pqSelectionsApprove && request.method === "POST") {
+      const { handleQuoteSelectionsApprove } = await import("./routes/selections.js");
+      return handleQuoteSelectionsApprove(
+        request,
+        env,
+        decodeURIComponent(pqSelectionsApprove[1]),
+        decodeURIComponent(pqSelectionsApprove[2]),
+      );
+    }
+    const pqSelections = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/selections$/);
+    if (pqSelections && request.method === "GET") {
+      const { handleQuoteSelectionsList } = await import("./routes/selections.js");
+      return handleQuoteSelectionsList(env, decodeURIComponent(pqSelections[1]));
     }
     const pqGet = url.pathname.match(/^\/api\/public\/quote\/([^/]+)$/);
     if (pqGet && request.method === "GET") {
@@ -1131,6 +1179,11 @@ export default {
     const jobReviewReceived = url.pathname.match(/^\/api\/jobs\/([^/]+)\/review-received$/);
     if (jobReviewReceived && request.method === "PUT") {
       return handleJobReviewReceived(request, env, decodeURIComponent(jobReviewReceived[1]));
+    }
+    // Owner-only manual weekly recap test trigger (see CHS-Bundle-WeeklyRecapTrigger).
+    const jobTestRecap = url.pathname.match(/^\/api\/jobs\/([^/]+)\/test-weekly-recap$/);
+    if (jobTestRecap && request.method === "POST") {
+      return handleTestWeeklyRecap(request, env, decodeURIComponent(jobTestRecap[1]));
     }
     const jobComms = url.pathname.match(/^\/api\/jobs\/([^/]+)\/communications$/);
     if (jobComms && request.method === "GET") {
@@ -2037,6 +2090,11 @@ export default {
       if (request.method === "POST") return handleSendPacket(request, env, sid);
       if (request.method === "GET") return handleListPackets(request, env, sid);
     }
+    // Owner-only manual compliance check trigger (see CHS-Task-Manual-SubCompliance-Trigger).
+    const subComplianceTest = url.pathname.match(/^\/api\/subcontractors\/([^/]+)\/test-compliance-check$/);
+    if (subComplianceTest && request.method === "POST") {
+      return handleTestComplianceCheck(request, env, decodeURIComponent(subComplianceTest[1]));
+    }
     const packetApprove = url.pathname.match(/^\/api\/packets\/([^/]+)\/approve$/);
     if (packetApprove && request.method === "POST") {
       return handleApprovePacket(request, env, decodeURIComponent(packetApprove[1]));
@@ -2047,6 +2105,9 @@ export default {
     }
 
     // ── Bid solicitation — owner-facing (Sprint 38 Run 3) ────────────────
+    if (url.pathname === "/api/bid-requests" && request.method === "GET") {
+      return handleListBidRequests(request, env);
+    }
     if (url.pathname === "/api/bid-requests" && request.method === "POST") {
       return handleCreateBidRequest(request, env);
     }
@@ -2075,6 +2136,19 @@ export default {
     const selectionChoicesRoute = url.pathname.match(/^\/api\/selections\/([^/]+)\/choices$/);
     if (selectionChoicesRoute && request.method === "POST") {
       return handleAddChoice(request, env, decodeURIComponent(selectionChoicesRoute[1]));
+    }
+    const selectionChoiceUpdate = url.pathname.match(/^\/api\/selections\/([^/]+)\/choices\/([^/]+)$/);
+    if (selectionChoiceUpdate && request.method === "PUT") {
+      return handleUpdateChoice(
+        request,
+        env,
+        decodeURIComponent(selectionChoiceUpdate[1]),
+        decodeURIComponent(selectionChoiceUpdate[2]),
+      );
+    }
+    const selectionById = url.pathname.match(/^\/api\/selections\/([^/]+)$/);
+    if (selectionById && request.method === "PUT") {
+      return handleUpdateSelection(request, env, decodeURIComponent(selectionById[1]));
     }
 
     // ── Estimate requests (Estimating Pipeline — Sprint 3) ───────────

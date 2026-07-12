@@ -86,7 +86,7 @@ export function JobHealthWidget() {
                 style={{ background: DOT_COLORS[job.health] }}
               />
               <span class="job-health-widget__title">{job.title}</span>
-              <span class="job-health-widget__quiet text--muted">
+              <span class="job-health-widget__quiet">
                 {quietLabel(job.days_quiet)}
               </span>
             </button>

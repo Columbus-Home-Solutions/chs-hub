@@ -145,6 +145,27 @@ export async function generateDocument(
   return zipSync(unzipped);
 }
 
+/** Upgrade legacy 4-part BoldSign tags to the 5-part format BoldSign expects. */
+export function canonicalizeBoldSignTextTags(docxBytes: ArrayBuffer): Uint8Array {
+  const LEGACY_SIG = "{{sign|1|*|sig}}";
+  const LEGACY_DATE = "{{date|1|*|date}}";
+  const CANON_SIG = "{{sign|1|*| |client_sig}}";
+  const CANON_DATE = "{{date|1|*| |client_date}}";
+
+  const unzipped = unzipSync(new Uint8Array(docxBytes));
+  const xmlKey = "word/document.xml";
+  if (!unzipped[xmlKey]) return new Uint8Array(docxBytes);
+
+  let docXml = strFromU8(unzipped[xmlKey]);
+  if (!docXml.includes(LEGACY_SIG) && !docXml.includes(LEGACY_DATE)) {
+    return new Uint8Array(docxBytes);
+  }
+
+  docXml = docXml.replaceAll(LEGACY_SIG, CANON_SIG).replaceAll(LEGACY_DATE, CANON_DATE);
+  unzipped[xmlKey] = strToU8(docXml);
+  return zipSync(unzipped);
+}
+
 // ─── Formatting helpers ──────────────────────────────────────────────────────
 
 /** Format a number as "$X,XXX.XX" (business rule 3). */

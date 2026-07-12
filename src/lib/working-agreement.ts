@@ -132,6 +132,46 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+/** True when the estimate-phase service agreement is fully signed. */
+async function estimateServiceAgreementSigned(env: Env, jobId: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT d.is_signed, d.signature_data
+       FROM jobs j
+       JOIN documents d ON d.estimate_id = j.estimate_id
+      WHERE j.id = ?
+        AND d.context_type = 'estimate'
+        AND d.document_category = 'contract'
+        AND COALESCE(d.is_active, 1) = 1
+      ORDER BY datetime(d.created_at) DESC
+      LIMIT 1`,
+  )
+    .bind(jobId)
+    .first<{ is_signed: number | null; signature_data: string | null }>();
+
+  if (!row) return false;
+  if (row.is_signed) return true;
+  if (!row.signature_data) return false;
+  try {
+    const meta = JSON.parse(row.signature_data) as { signature_status?: string };
+    return meta.signature_status === "completed";
+  } catch {
+    return false;
+  }
+}
+
+function companionEmailBody(serviceAgreementSigned: boolean): string {
+  if (serviceAgreementSigned) {
+    return (
+      "Attached is an overview of how we work together — for your reference as your project gets underway.\n\n" +
+      "Columbus Home Solutions, LLC"
+    );
+  }
+  return (
+    "Attached is an overview of how we work together — please read before signing your Service Agreement.\n\n" +
+    "Columbus Home Solutions, LLC"
+  );
+}
+
 /** Send companion email when BoldSign was already dispatched before conversion. */
 export async function sendWorkingAgreementCompanionEmail(
   env: Env,
@@ -166,13 +206,12 @@ export async function sendWorkingAgreementCompanionEmail(
 
   const jobTitle = job?.title ?? "Your Project";
   const subject = `Working With Columbus Home Solutions — ${jobTitle}`;
-  const text =
-    "Attached is an overview of how we work together — please read before signing your Service Agreement.\n\n" +
-    "Columbus Home Solutions, LLC";
+  const saSigned = await estimateServiceAgreementSigned(env, jobId);
+  const text = companionEmailBody(saSigned);
 
   if (!live || !from || !apiKey || env.RESEND_DRY_RUN === "1") {
     console.log(
-      `[working-agreement][SIMULATE] companion email to=${to} subject="${subject}" attachment=${attachment.filename}`,
+      `[working-agreement][SIMULATE] companion email to=${to} subject="${subject}" saSigned=${saSigned} attachment=${attachment.filename}`,
     );
     return;
   }

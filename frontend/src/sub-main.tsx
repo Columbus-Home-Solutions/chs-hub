@@ -3,6 +3,7 @@ import "./styles/tokens.css";
 import "./styles/components.css";
 import "./styles/portal.css";
 import "./styles/punch.css";
+import "./styles/quote.css";
 import { SubPage } from "./views/public/SubPage";
 import { BidPage } from "./views/public/BidPage";
 import { PacketPage } from "./views/public/PacketPage";

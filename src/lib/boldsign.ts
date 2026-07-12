@@ -16,15 +16,20 @@
  *   `${t}.${rawBody}` with BOLDSIGN_WEBHOOK_SECRET. Mirrors the Stripe multi-v1
  *   fix (secret-roll grace: both old and new secret are valid during rollover).
  *
- * Signature field placement decision (Step 0):
- *   We use API-level coordinate-based form fields rather than template text tags.
- *   Fields are placed at the bottom of page 1 (Y≈720) — valid for the current
- *   single-page and short-form templates. When templates are revised, consider
- *   adding BoldSign text tags (e.g. {{Signature_es_:signer1:signature}}) so the
- *   field anchors to the actual signature line regardless of page count/reflow.
+ * Signature field placement:
+ *   Two mechanisms are supported:
+ *   1. Text-tag anchoring (preferred for generated DOCX documents): embed
+ *      {{sign|1|*| |field_id}} and {{date|1|*| |field_id}} tags directly in the
+ *      DOCX template (white text, invisible to signers) and set useTextTags=true
+ *      in SendDocumentArgs. BoldSign converts the tags to form fields at the exact
+ *      tag location — no coordinate guessing required.
+ *   2. Coordinate-based (legacy): provide signerFormFields with pixel coordinates.
+ *      Used for the working-agreement template which uses a BoldSign-stored template
+ *      and cannot embed text tags. Y=0 at bottom of page, units = 96dpi pixels.
  */
 
 import type { Env } from "../env.js";
+import { canonicalizeBoldSignTextTags } from "./document-generator.js";
 
 // ─── Mode gate ────────────────────────────────────────────────────────────────
 
@@ -149,6 +154,16 @@ async function boldSignRequest(
 
 // ─── Send document ────────────────────────────────────────────────────────────
 
+/** A signature or date field to place on the generated document (legacy coordinate send). */
+export interface SignerFormField {
+  fieldType: "Signature" | "DateSigned" | "Textbox";
+  pageNumber: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface SendDocumentArgs {
   fileBlob: Blob;
   filename: string;
@@ -166,6 +181,14 @@ export interface SendDocumentArgs {
   templateId?: string;
   /** Optional reference documents appended to template sends (e.g. Working Agreement). */
   additionalFiles?: Array<{ blob: Blob; filename: string }>;
+  /** Custom form field positions for coordinate-based (non-template) sends.
+   *  When omitted the legacy defaults (working-agreement page 2 positions) are used.
+   *  Ignored when useTextTags is true. */
+  signerFormFields?: SignerFormField[];
+  /** When true, sends with UseTextTags=true so BoldSign reads {{sign|...}} /
+   *  {{date|...}} text tags embedded directly in the DOCX. No FormFields are
+   *  included in the request — the tags define placement. */
+  useTextTags?: boolean;
 }
 
 export interface SendDocumentResult {
@@ -217,6 +240,35 @@ export async function sendDocumentForSignature(
       "POST",
       form,
     );
+  } else if (args.useTextTags) {
+    // ── Text-tag anchored send ────────────────────────────────────────────────
+    let fileBlob = args.fileBlob;
+    if (args.filename.toLowerCase().endsWith(".docx")) {
+      const raw = await fileBlob.arrayBuffer();
+      const fixed = canonicalizeBoldSignTextTags(raw);
+      fileBlob = new Blob([fixed], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      });
+    }
+
+    const form = new FormData();
+    form.append("Title", args.title);
+    form.append("Message", args.message);
+    form.append("Files", fileBlob, args.filename);
+    for (const extra of args.additionalFiles ?? []) {
+      form.append("Files", extra.blob, extra.filename);
+    }
+    form.append("UseTextTags", "true");
+    form.append("EnableEmbeddedSigning", "true");
+    form.append("Signers[0][Name]", args.signerName);
+    form.append("Signers[0][EmailAddress]", args.signerEmail);
+    form.append("Signers[0][SignerType]", "Signer");
+    // No FormFields needed — the text tags define all field positions.
+
+    console.log(
+      `${label} send_document (text-tags): file="${args.filename}" signer="${args.signerEmail}" additionalFiles=${args.additionalFiles?.length ?? 0}`,
+    );
+    res = await boldSignRequest(config, "/v1/document/send", "POST", form);
   } else {
     // ── Legacy coordinate-based send ─────────────────────────────────────────
     const form = new FormData();
@@ -226,22 +278,26 @@ export async function sendDocumentForSignature(
     form.append("Signers[0][Name]", args.signerName);
     form.append("Signers[0][EmailAddress]", args.signerEmail);
     form.append("Signers[0][SignerType]", "Signer");
-    form.append("Signers[0][FormFields][0][FieldType]", "Signature");
-    form.append("Signers[0][FormFields][0][PageNumber]", "2");
-    form.append("Signers[0][FormFields][0][Bounds][X]", "420");
-    form.append("Signers[0][FormFields][0][Bounds][Y]", "230");
-    form.append("Signers[0][FormFields][0][Bounds][Width]", "200");
-    form.append("Signers[0][FormFields][0][Bounds][Height]", "30");
-    form.append("Signers[0][FormFields][0][IsRequired]", "true");
-    form.append("Signers[0][FormFields][1][FieldType]", "DateSigned");
-    form.append("Signers[0][FormFields][1][PageNumber]", "2");
-    form.append("Signers[0][FormFields][1][Bounds][X]", "420");
-    form.append("Signers[0][FormFields][1][Bounds][Y]", "175");
-    form.append("Signers[0][FormFields][1][Bounds][Width]", "160");
-    form.append("Signers[0][FormFields][1][Bounds][Height]", "22");
-    form.append("Signers[0][FormFields][1][IsRequired]", "true");
 
-    console.log(`${label} send_document (coords): file="${args.filename}" signer="${args.signerEmail}"`);
+    const fields: SignerFormField[] = args.signerFormFields ?? [
+      // Default positions match the working-agreement template layout (page 2).
+      { fieldType: "Signature", pageNumber: 2, x: 420, y: 230, width: 200, height: 30 },
+      { fieldType: "DateSigned", pageNumber: 2, x: 420, y: 175, width: 160, height: 22 },
+    ];
+    for (let i = 0; i < fields.length; i++) {
+      const f = fields[i];
+      form.append(`Signers[0][FormFields][${i}][FieldType]`, f.fieldType);
+      form.append(`Signers[0][FormFields][${i}][PageNumber]`, String(f.pageNumber));
+      form.append(`Signers[0][FormFields][${i}][Bounds][X]`, String(f.x));
+      form.append(`Signers[0][FormFields][${i}][Bounds][Y]`, String(f.y));
+      form.append(`Signers[0][FormFields][${i}][Bounds][Width]`, String(f.width));
+      form.append(`Signers[0][FormFields][${i}][Bounds][Height]`, String(f.height));
+      form.append(`Signers[0][FormFields][${i}][IsRequired]`, "true");
+    }
+
+    console.log(
+      `${label} send_document (coords): file="${args.filename}" signer="${args.signerEmail}" fields=${fields.length}`,
+    );
     res = await boldSignRequest(config, "/v1/document/send", "POST", form);
   }
 
@@ -249,10 +305,15 @@ export async function sendDocumentForSignature(
     const errBody = await res.text().catch(() => `HTTP ${res.status}`);
     throw new Error(`BoldSign send failed (${res.status}): ${errBody.slice(0, 200)}`);
   }
-  const data = (await res.json()) as { documentId?: string };
-  if (!data.documentId) throw new Error("BoldSign send response missing documentId");
-  console.log(`${label} send_document: documentId="${data.documentId}"`);
-  return { documentId: data.documentId };
+  const data = (await res.json()) as {
+    documentId?: string;
+    DocumentId?: string;
+    document_id?: string;
+  };
+  const documentId = data.documentId ?? data.DocumentId ?? data.document_id;
+  if (!documentId) throw new Error("BoldSign send response missing documentId");
+  console.log(`${label} send_document: documentId="${documentId}"`);
+  return { documentId };
 }
 
 // ─── Download signed document ─────────────────────────────────────────────────
@@ -275,6 +336,52 @@ export async function downloadSignedDocument(
     throw new Error(`BoldSign download failed (${res.status}): ${errBody.slice(0, 200)}`);
   }
   return res.arrayBuffer();
+}
+
+// ─── Document properties (status sync) ────────────────────────────────────────
+
+export interface BoldSignDocumentProperties {
+  documentId?: string;
+  status?: string;
+  errorMessage?: string;
+}
+
+/** Map BoldSign API document status → our signature_status values. */
+export function mapBoldSignDocumentStatus(boldSignStatus: string): string | null {
+  const map: Record<string, string> = {
+    InProgress: "sent",
+    Sent: "sent",
+    Viewed: "viewed",
+    Signed: "signed",
+    Completed: "completed",
+    Revoked: "revoked",
+    Expired: "expired",
+    Declined: "declined",
+    Processing: "pending",
+    Draft: "pending",
+    Failed: "failed",
+    SendFailed: "failed",
+  };
+  return map[boldSignStatus.trim()] ?? null;
+}
+
+/** Fetch live document status from BoldSign (used when webhooks lag or never arrive). */
+export async function getDocumentProperties(
+  config: BoldSignConfig,
+  documentId: string,
+): Promise<BoldSignDocumentProperties | null> {
+  const res = await boldSignRequest(
+    config,
+    `/v1/document/properties?documentId=${encodeURIComponent(documentId)}`,
+    "GET",
+  );
+  if (!res.ok) return null;
+  const data = (await res.json()) as Record<string, unknown>;
+  return {
+    documentId: (data.documentId ?? data.DocumentId) as string | undefined,
+    status: (data.status ?? data.Status) as string | undefined,
+    errorMessage: (data.errorMessage ?? data.ErrorMessage) as string | undefined,
+  };
 }
 
 // ─── Reminder ─────────────────────────────────────────────────────────────────

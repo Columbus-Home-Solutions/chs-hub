@@ -23,6 +23,7 @@ interface PacketDoc {
   id: string;
   document_type: string;
   document_id: string | null;
+  file_type: string | null;
   expiration_date: string | null;
   captured_tax_id: string | null;
   captured_license_number: string | null;
@@ -346,14 +347,27 @@ function DocReviewRow({
 
 function DocDownloadLink({ doc }: { doc: PacketDoc }) {
   if (!doc.document_id) return null;
+  const fileUrl = `/api/documents/${doc.document_id}/file`;
+  const isImage = doc.file_type?.startsWith("image/") ?? false;
+  const isPdf = doc.file_type === "application/pdf";
   return (
-    <a
-      href={`/api/documents/${doc.document_id}/download`}
-      target="_blank"
-      rel="noopener noreferrer"
-      class="packet-review-download"
-    >
-      View / Download →
-    </a>
+    <div>
+      {isImage && (
+        <a href={fileUrl} target="_blank" rel="noopener noreferrer">
+          <img src={fileUrl} alt="Document preview" class="packet-review-thumb" />
+        </a>
+      )}
+      {isPdf && !isImage && (
+        <div class="packet-review-pdf-icon" aria-hidden="true">PDF</div>
+      )}
+      <a
+        href={fileUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="packet-review-download"
+      >
+        View / Download →
+      </a>
+    </div>
   );
 }

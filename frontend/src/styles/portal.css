@@ -74,6 +74,11 @@
   background: #e6f6ec;
   color: #1d8a4f;
 }
+.portal-status--reference {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  text-transform: none;
+}
 
 .portal-hold {
   background: #fff8ec;
@@ -622,6 +627,317 @@
   letter-spacing: .08em;
   color: var(--quote-muted, #5b6b7b);
   margin-bottom: var(--space-xs);
+}
+
+/* ─── Sprint 38 — Selections tab ─── */
+
+.portal-tab-loading,
+.portal-tab-error {
+  padding: var(--space-xl) var(--space-lg);
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+.portal-tab-error { color: var(--color-error); }
+
+.portal-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+.portal-section__title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.portal-empty__sub {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-xs);
+}
+
+.selections-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+/* Portal badge — small status pill used in selections */
+.portal-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-2);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.portal-badge--success {
+  background: #e6f6ec;
+  color: #1d8a4f;
+}
+.portal-badge--warning {
+  background: #fff8e1;
+  color: #b45309;
+}
+.portal-badge--info {
+  background: #e8f0fe;
+  color: #1a56db;
+}
+.portal-badge--danger {
+  background: #fdeaea;
+  color: #b3261e;
+}
+
+/* Selection card (wraps portal-card) */
+.selection-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+.selection-card__title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 2px;
+}
+.selection-card__meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.selection-card__meta {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.selection-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.selection-card__allowance {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-sm);
+}
+.selection-card__deadline {
+  color: var(--color-text-muted);
+}
+.selection-card__instructions {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--space-sm);
+  padding: var(--space-sm);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--color-brand);
+}
+.selection-card__sig-notice,
+.selection-card__sig-note {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin: var(--space-xs) 0 0;
+}
+.selection-card__approved-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: #e6f6ec;
+  border-radius: var(--radius-md);
+  margin-top: var(--space-xs);
+}
+.selection-card__price {
+  font-weight: 600;
+  margin-left: auto;
+}
+.selection-card__overage {
+  font-size: 11px;
+  color: #b45309;
+  font-weight: 600;
+}
+.selection-card__confirm {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+.selection-card__confirm > p { margin: 0 0 var(--space-xs); font-size: var(--text-sm); }
+.selection-card__confirm-overage {
+  color: #b45309;
+  font-weight: 500;
+}
+.selection-card__confirm-actions {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+.selection-card__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-border);
+}
+.selection-card__hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+.selection-card--overdue {
+  border-color: var(--color-error-border, #f5c2c7);
+}
+
+/* Choice grid */
+.selection-choices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+/* Individual choice card */
+.selection-choice-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  background: var(--color-surface-1);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.selection-choice-card:hover {
+  border-color: var(--color-brand-light);
+  background: var(--color-surface-2);
+}
+.selection-choice-card--selected {
+  border-color: var(--color-brand);
+  background: color-mix(in srgb, var(--color-brand) 8%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 20%, transparent);
+}
+.selection-choice-card--over {
+  border-color: #d97706;
+}
+.selection-choice-card--selected.selection-choice-card--over {
+  border-color: #d97706;
+  background: color-mix(in srgb, #d97706 8%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, #d97706 20%, transparent);
+}
+.selection-choice-card__title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+.selection-choice-card__desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 2px;
+}
+.selection-choice-card__vendor {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-style: italic;
+  margin-bottom: auto;
+}
+.selection-choice-card__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+.selection-choice-card__price {
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+}
+.selection-choice-card__overage {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b45309;
+  background: #fff8e1;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+}
+.selection-choice-card__badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1d8a4f;
+  background: #e6f6ec;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  margin-left: auto;
+}
+.selection-choice-card__photo {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-xs);
+  cursor: zoom-in;
+  background: var(--color-surface-2);
+}
+.selection-choice-card__photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.portal-photo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+}
+.portal-photo-lightbox__inner {
+  position: relative;
+  max-width: min(900px, 100%);
+  max-height: 90vh;
+}
+.portal-photo-lightbox__inner img {
+  display: block;
+  max-width: 100%;
+  max-height: 90vh;
+  border-radius: var(--radius-md);
+}
+.portal-photo-lightbox__close {
+  position: absolute;
+  top: -36px;
+  right: 0;
+  border: none;
+  background: none;
+  color: #fff;
+  font-size: 28px;
+  cursor: pointer;
+  line-height: 1;
 }
 
 /* Sprint 35 — Google Review card */

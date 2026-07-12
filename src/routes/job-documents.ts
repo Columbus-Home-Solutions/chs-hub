@@ -799,6 +799,9 @@ interface FullDocRow {
 /** Client-facing template types route to client email/name; sub waiver routes to the sub. */
 const SUB_TEMPLATE_TYPES = new Set(["lien_waiver_sub_unconditional"]);
 
+/** Merge-upload + BoldSign text tags (not dashboard template send). */
+const TEXT_TAG_TEMPLATE_TYPES = new Set(["service_agreement", "cost_plus_agreement"]);
+
 export async function handleSendForSignature(
   request: Request,
   env: Env,
@@ -927,6 +930,7 @@ export async function handleSendForSignature(
   const boldSignRole = isSubLienWaiver ? "Subcontractor" : "Client";
   // Client templates: Contractor=1 (pre-filled), Client=2. Sub waiver: single Subcontractor role=1.
   const boldSignRoleIndex = isSubLienWaiver ? 1 : 2;
+  const useTextTags = TEXT_TAG_TEMPLATE_TYPES.has(row.template_type);
 
   // Send to BoldSign.
   let boldSignResult: { documentId: string };
@@ -943,9 +947,13 @@ export async function handleSendForSignature(
       message,
       signerEmail,
       signerName,
-      signerRole: boldSignRole,
-      roleIndex: boldSignRoleIndex,
-      templateId: boldSignTemplateId,
+      ...(useTextTags
+        ? { useTextTags: true }
+        : {
+            signerRole: boldSignRole,
+            roleIndex: boldSignRoleIndex,
+            templateId: boldSignTemplateId,
+          }),
       additionalFiles: additionalFiles.length ? additionalFiles : undefined,
     });
   } catch (e) {

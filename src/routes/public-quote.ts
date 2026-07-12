@@ -23,6 +23,7 @@
 
 import type { Env } from "../env.js";
 import { convertQuoteToJob, reverseJobConversion } from "../lib/quote-to-job.js";
+import { assertQuoteSelectionsComplete, getQuoteSelectionProgress } from "./selections.js";
 import { recordPayment } from "./payments.js";
 import { triggerDealWon } from "../lib/wc/triggers.js";
 import { triggerJobConversionNotifications } from "../lib/notification-engine.js";
@@ -31,8 +32,12 @@ import { depositFromSchedule } from "../lib/deposit-from-schedule.js";
 import {
   estimateNeedsSignature,
   estimateSignatureComplete,
+  estimateBoldsignEmbedReady,
   loadEstimateContractDoc,
   parseSignatureMeta,
+  refreshEstimateContractSignatureStatus,
+  refreshEstimateContractSignatureStatusWithRetry,
+  resendEstimateContractForSigning,
   shouldSkipContractAutogen,
 } from "../lib/estimate-contract-document.js";
 import { scheduleWorkingAgreementGeneration } from "../lib/working-agreement.js";
@@ -261,7 +266,9 @@ async function publicPayload(env: Env, qc: QuoteContext, cfg: { publishableKey: 
 
   const includeContract = (e.include_contract ?? 1) === 1;
   const contractDoc = includeContract ? await loadEstimateContractDoc(env, e.id) : null;
-  const sigMeta = contractDoc ? parseSignatureMeta(contractDoc.signature_data) : {};
+  const sigMeta = contractDoc
+    ? await refreshEstimateContractSignatureStatus(env, contractDoc)
+    : {};
   const signatureRequired = estimateNeedsSignature(includeContract, contractDoc);
   const signatureComplete = estimateSignatureComplete(
     includeContract,
@@ -269,6 +276,7 @@ async function publicPayload(env: Env, qc: QuoteContext, cfg: { publishableKey: 
     contractDoc,
   );
   const boldsignMode = !!sigMeta.boldsign_document_id;
+  const selectionProgress = await getQuoteSelectionProgress(env, e.id);
 
   return {
     token: e.portal_token,
@@ -302,7 +310,15 @@ async function publicPayload(env: Env, qc: QuoteContext, cfg: { publishableKey: 
     signature_complete: signatureComplete,
     contract_signature_mode: !includeContract ? "none" : boldsignMode ? "boldsign" : "typed",
     signature_status: sigMeta.signature_status ?? (signatureComplete ? "completed" : "none"),
+    signature_error: sigMeta.signature_error ?? null,
     contract_document_id: contractDoc?.id ?? null,
+    selections_required: selectionProgress.required,
+    selections_total: selectionProgress.total,
+    selections_chosen: selectionProgress.chosen,
+    selections_all_chosen: selectionProgress.all_chosen,
+    selections_approved: selectionProgress.approved,
+    selections_signature_pending: selectionProgress.signature_pending,
+    selections_complete: selectionProgress.complete,
     convenience_fee_rate: 0.035,
     stripe_enabled: cfg.configured,
     stripe_publishable_key: cfg.publishableKey,
@@ -387,6 +403,8 @@ export async function handlePublicQuoteSign(
   if (!["sent", "viewed"].includes(e.status)) {
     return err(409, "invalid_state", `This quote can't be signed from status '${e.status}'.`);
   }
+  const selectionBlock = await assertQuoteSelectionsComplete(env, e.id);
+  if (selectionBlock) return selectionBlock;
 
   const includeContract = (e.include_contract ?? 1) === 1;
   const contractDoc = includeContract ? await loadEstimateContractDoc(env, e.id) : null;
@@ -408,11 +426,11 @@ export async function handlePublicQuoteSign(
   await env.DB.prepare(
     `UPDATE estimates
         SET client_signature = ?, signed_date = ?,
-            status = 'approved', approved_date = ?,
+            status = CASE WHEN status IN ('sent','viewed') THEN 'signed' ELSE status END,
             updated_at = ?
       WHERE id = ?`,
   )
-    .bind(signature, signedDate, now, now, e.id)
+    .bind(signature, signedDate, now, e.id)
     .run();
 
   await logPublicAudit(env, token, qc.client_email, "quote_signed", e.id, {
@@ -446,6 +464,8 @@ export async function handlePublicQuoteSignLink(
   if ((e.include_contract ?? 1) !== 1) {
     return err(400, "no_contract", "This quote does not include a contract to sign.");
   }
+  const selectionBlock = await assertQuoteSelectionsComplete(env, e.id);
+  if (selectionBlock) return selectionBlock;
 
   const contractDoc = await loadEstimateContractDoc(env, e.id);
   if (!contractDoc) {
@@ -466,16 +486,80 @@ export async function handlePublicQuoteSignLink(
   const origin = new URL(request.url).origin;
   const redirectUrl = `${origin}/quote/${token}?signed=1`;
 
+  let activeMeta = await refreshEstimateContractSignatureStatus(env, contractDoc);
+  let activeDoc = contractDoc;
+
+  // BoldSign document/send is async: SendFailed leaves an ID that 403s on embed link.
+  if (activeMeta.signature_status === "failed") {
+    const resent = await resendEstimateContractForSigning(env, e.id, "quote-sign-link-resend");
+    if (!resent) {
+      return err(
+        502,
+        "signature_resend_failed",
+        "Could not re-send the service agreement. Please contact us for a fresh quote link.",
+      );
+    }
+    activeDoc = resent.contractDoc;
+    activeMeta = await refreshEstimateContractSignatureStatusWithRetry(env, activeDoc);
+  }
+
+  if (activeMeta.signature_status === "pending") {
+    activeMeta = await refreshEstimateContractSignatureStatusWithRetry(env, activeDoc);
+  }
+
+  if (activeMeta.signature_status === "pending") {
+    return err(
+      409,
+      "signature_pending",
+      "Your agreement is being prepared. Please wait a few seconds and try again.",
+    );
+  }
+
+  if (activeMeta.signature_status === "failed") {
+    return err(
+      502,
+      "signature_failed",
+      activeMeta.signature_error ??
+        "Could not prepare your service agreement for signing. Please try again or contact us.",
+    );
+  }
+
+  if (!estimateBoldsignEmbedReady(activeMeta)) {
+    return err(
+      409,
+      "signature_not_ready",
+      `Agreement is not ready to sign yet (status: ${activeMeta.signature_status ?? "unknown"}).`,
+    );
+  }
+
   try {
     const link = await getEmbeddedSignLink(
       config,
-      meta.boldsign_document_id,
-      meta.signer_email,
+      activeMeta.boldsign_document_id!,
+      activeMeta.signer_email!,
       redirectUrl,
     );
-    return json({ sign_link: link.signLink, signature_status: meta.signature_status ?? "sent" });
+    return json({ sign_link: link.signLink, signature_status: activeMeta.signature_status ?? "sent" });
   } catch (signErr) {
-    return err(502, "boldsign_error", (signErr as Error).message);
+    const msg = (signErr as Error).message;
+    if (msg.includes("Invalid Document ID") || msg.includes("403")) {
+      const resent = await resendEstimateContractForSigning(env, e.id, "quote-sign-link-403-resend");
+      if (!resent || !estimateBoldsignEmbedReady(resent.meta)) {
+        return err(502, "boldsign_error", msg);
+      }
+      try {
+        const link = await getEmbeddedSignLink(
+          config,
+          resent.meta.boldsign_document_id!,
+          resent.meta.signer_email!,
+          redirectUrl,
+        );
+        return json({ sign_link: link.signLink, signature_status: resent.meta.signature_status ?? "sent" });
+      } catch (retryErr) {
+        return err(502, "boldsign_error", (retryErr as Error).message);
+      }
+    }
+    return err(502, "boldsign_error", msg);
   }
 }
 
@@ -533,6 +617,8 @@ export async function handlePublicQuotePayCheck(
   if (isExpired(e)) {
     return err(410, "expired", "This quote has expired. Please contact us for an updated quote.");
   }
+  const selectionBlock = await assertQuoteSelectionsComplete(env, e.id);
+  if (selectionBlock) return selectionBlock;
   const includeContract = (e.include_contract ?? 1) === 1;
   const contractDoc = includeContract ? await loadEstimateContractDoc(env, e.id) : null;
   if (!estimateSignatureComplete(includeContract, e.client_signature, contractDoc)) {
@@ -592,6 +678,8 @@ export async function handlePublicQuotePayIntent(
   if (isExpired(e)) {
     return err(410, "expired", "This quote has expired and can no longer be paid.");
   }
+  const selectionBlock = await assertQuoteSelectionsComplete(env, e.id);
+  if (selectionBlock) return selectionBlock;
   const includeContract = (e.include_contract ?? 1) === 1;
   const contractDoc = includeContract ? await loadEstimateContractDoc(env, e.id) : null;
   if (!estimateSignatureComplete(includeContract, e.client_signature, contractDoc)) {

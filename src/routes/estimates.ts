@@ -1006,8 +1006,10 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
       .all<PaymentRow>()
   ).results ?? [];
 
+  // per_line_item estimates use a standalone deposit field (estimates.deposit_amount),
+  // not payment_schedules milestones. Skip the milestone deposit gate for that model.
   const depositDue = depositFromSchedule(schedule, totals.total);
-  if (depositDue <= 0) {
+  if (est.billing_model !== "per_line_item" && depositDue <= 0) {
     return err(400, "send_blocked", "Add a deposit milestone to the payment schedule before sending.");
   }
   const pctRows = schedule.filter((p) => p.percentage != null && p.fixed_amount == null);
@@ -1216,8 +1218,8 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
   if (!orig) return err(404, "not_found", "Estimate not found");
 
   // Only allow revision on estimates that have been sent to a client.
-  if (!["sent", "viewed", "approved"].includes(orig.status)) {
-    return err(409, "invalid_state", `Cannot revise an estimate with status '${orig.status}'. Revise is only available for sent, viewed, or approved estimates.`);
+  if (!["sent", "viewed", "approved", "signed"].includes(orig.status)) {
+    return err(409, "invalid_state", `Cannot revise an estimate with status '${orig.status}'. Revise is only available for sent, viewed, signed, or approved estimates.`);
   }
 
   // Block revision if this estimate has already been converted to a job.

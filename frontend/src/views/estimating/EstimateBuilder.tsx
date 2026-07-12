@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -24,7 +24,9 @@ import {
   isPerLineItemBilling,
 } from "../../lib/estimate-milestones";
 import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton";
+import { MarkWonModal } from "./MarkWonModal";
 import { LineItemRow } from "./LineItemRow";
+import { SelectionFormModal, type EditChoiceValues, type EditSelectionValues } from "./SelectionFormModal";
 import {
   BILLING_MODELS,
   BILLING_MODEL_DESCRIPTIONS,
@@ -34,6 +36,7 @@ import {
   PAYMENT_TRIGGERS,
   type Estimate,
   type EstimateLineItem,
+  type EstimateRequest,
   type EstimateTemplate,
   type SavedReview,
 } from "../../types";
@@ -57,6 +60,8 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
   const [saving, setSaving] = useState(false);
   const [defaultScheduleNote, setDefaultScheduleNote] = useState(false);
   const [restorationHintDismissed, setRestorationHintDismissed] = useState(false);
+  const [wonRequest, setWonRequest] = useState<EstimateRequest | null>(null);
+  const [wonLoading, setWonLoading] = useState(false);
   const scheduleBootstrappedRef = useRef<string | null>(null);
 
   const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
@@ -108,7 +113,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
 
   // First open: apply defaults when contract/billing are set but schedule is blank.
   useEffect(() => {
-    if (!estimate || estimate.status === "sent" || estimate.status === "viewed" || estimate.status === "approved") return;
+    if (!estimate || estimate.status === "sent" || estimate.status === "viewed" || estimate.status === "approved" || estimate.status === "signed") return;
     if (scheduleBootstrappedRef.current === estimate.id) return;
     scheduleBootstrappedRef.current = estimate.id;
     if (isPerLineItemBilling(estimate.billing_model)) return;
@@ -134,7 +139,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
   };
 
   async function applyDefaultSchedule(est: Estimate, successMsg?: string) {
-    if (!est || est.status === "sent" || est.status === "viewed" || est.status === "approved") return;
+    if (!est || est.status === "sent" || est.status === "viewed" || est.status === "approved" || est.status === "signed") return;
     if (isPerLineItemBilling(est.billing_model)) return;
     if (!isScheduleUnconfigured(est.payment_schedule)) return;
     setSaving(true);
@@ -183,7 +188,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
   }
 
   const e = estimate;
-  const sent = e.status === "sent" || e.status === "viewed" || e.status === "approved";
+  const sent = e.status === "sent" || e.status === "viewed" || e.status === "approved" || e.status === "signed";
   const marginLow = e.total > 0 && e.margin_percent < LOW_MARGIN;
 
   const patchHeader = (body: Record<string, unknown>, msg?: string) =>
@@ -236,7 +241,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
               EST-{String(e.estimate_number ?? 0).padStart(3, "0")}
               {e.version > 1 ? ` · v${e.version}` : ""}
             </h1>
-            <Badge tone={e.status === "sent" || e.status === "viewed" ? "info" : e.status === "approved" ? "success" : "neutral"}>
+            <Badge tone={e.status === "sent" || e.status === "viewed" ? "info" : e.status === "approved" || e.status === "signed" ? "success" : "neutral"}>
               {formatStatus(e.status)}
             </Badge>
             {saving && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>Saving…</span>}
@@ -262,17 +267,38 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
             {e.request_id ? "← Request" : "← Estimates"}
           </Button>
           {e.linked_job_id && e.is_current_version && (
-            <Button variant="secondary" onClick={() => go(`/jobs/${e.linked_job_id}`)}>
+            <Button variant="primary" onClick={() => go(`/jobs/${e.linked_job_id}`)}>
               Go to Job {e.linked_job_number != null ? `#${e.linked_job_number}` : ""} →
             </Button>
           )}
           {sent && (
-            <Button variant="secondary" onClick={() => mutate(() => api.post(`/api/estimates/${e.id}/revise`).then((r: any) => r.estimate.request_id ? go(`/estimating/${r.estimate.request_id}/estimate`) : go(`/estimates/${r.estimate.id}`)), "Revision created")}>
+            <Button variant="danger" onClick={() => mutate(() => api.post(`/api/estimates/${e.id}/revise`).then((r: any) => r.estimate.request_id ? go(`/estimating/${r.estimate.request_id}/estimate`) : go(`/estimates/${r.estimate.id}`)), "Revision created")}>
               Revise
             </Button>
           )}
           {sent && e.status !== "approved" && (
             <MarkLostButton estimate={e} mutate={mutate} />
+          )}
+          {sent && e.request_id && !e.linked_job_id && (
+            <Button
+              variant="primary"
+              disabled={wonLoading}
+              onClick={async () => {
+                setWonLoading(true);
+                try {
+                  const res = await api.get<{ request: EstimateRequest }>(
+                    `/api/estimate-requests/${e.request_id}`,
+                  );
+                  setWonRequest(res.request);
+                } catch (err) {
+                  toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+                } finally {
+                  setWonLoading(false);
+                }
+              }}
+            >
+              {wonLoading ? "Loading…" : "Record Deposit & Convert to Job"}
+            </Button>
           )}
           {canDeleteEstimate(e) && <DeleteEstimateButton estimate={e} />}
         </div>
@@ -393,6 +419,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
         {/* ── Left: line item editor ───────────────────────────── */}
         <div class={`builder__panel builder__panel--editor${mobileView === "preview" ? " is-hidden-mobile" : ""}`}>
           <LineItemEditor estimate={e} mutate={mutate} reload={reload} />
+          <AllowancesSection estimate={e} />
 
           {isPerLineItemBilling(e.billing_model) && (
             <PerLineItemDeposit estimate={e} patchHeader={patchHeader} />
@@ -432,6 +459,24 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
           <SendButton estimate={e} mutate={mutate} toast={toast} />
         </div>
       </div>
+
+      <MarkWonModal
+        request={wonRequest}
+        onClose={() => setWonRequest(null)}
+        onWon={(_jobId) => {
+          setWonRequest(null);
+          // Refresh estimate to reflect approved status
+          if (requestId) {
+            api.post<{ estimate: Estimate }>("/api/estimates", { estimate_request_id: requestId })
+              .then((r) => setEstimate(r.estimate))
+              .catch(() => undefined);
+          } else if (estimateId) {
+            api.get<{ estimate: Estimate }>(`/api/estimates/${estimateId}`)
+              .then((r) => setEstimate(r.estimate))
+              .catch(() => undefined);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -522,6 +567,268 @@ function TemplateApplier({
   );
 }
 
+// ─── Allowances & Selections ──────────────────────────────────────────────────
+
+interface BuilderSelectionChoice {
+  id: string;
+  title: string;
+  description: string | null;
+  price: number;
+  photo_ids: string[];
+  vendor_name: string | null;
+  approved: boolean;
+}
+
+interface BuilderSelection {
+  id: string;
+  title: string;
+  category: string | null;
+  location: string | null;
+  allowance_amount: number;
+  required: boolean;
+  deadline_date: string | null;
+  public_instructions: string | null;
+  status: string;
+  choices: BuilderSelectionChoice[];
+}
+
+function selectionEditable(sel: BuilderSelection): boolean {
+  return sel.status === "pending";
+}
+
+function choiceEditable(sel: BuilderSelection, choice: BuilderSelectionChoice): boolean {
+  return sel.status === "pending" && !choice.approved;
+}
+
+function AllowancesSection({ estimate }: { estimate: Estimate }) {
+  const [selections, setSelections] = useState<BuilderSelection[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [allowanceOpen, setAllowanceOpen] = useState(false);
+  const [addChoiceForId, setAddChoiceForId] = useState<string | null>(null);
+  const [addChoiceTitle, setAddChoiceTitle] = useState("");
+  const [editSelection, setEditSelection] = useState<EditSelectionValues | null>(null);
+  const [editChoice, setEditChoice] = useState<EditChoiceValues | null>(null);
+  const [expandedPhoto, setExpandedPhoto] = useState<string | null>(null);
+
+  const estimateLocked = ["sent", "viewed", "approved", "signed", "won", "lost", "revised"].includes(
+    estimate.status,
+  );
+  const defaultTitle =
+    estimate.line_items[0]?.product_service || estimate.title || "Allowance";
+
+  const loadSelections = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await api.get<{ selections: BuilderSelection[] }>(
+        `/api/estimates/${estimate.id}/selections`,
+      );
+      setSelections(res.selections);
+    } catch (e) {
+      setLoadError((e as Error).message || "Failed to load allowances.");
+      setSelections([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [estimate.id]);
+
+  useEffect(() => {
+    void loadSelections();
+  }, [loadSelections]);
+
+  return (
+    <>
+      <Card title="Allowances & Selections">
+        <div class="allowances-section__head">
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>
+            Material and finish choices the client will pick from in their portal.
+          </p>
+          {!estimateLocked && (
+            <Button size="sm" variant="primary" onClick={() => setAllowanceOpen(true)}>
+              + Add Allowance
+            </Button>
+          )}
+        </div>
+
+        {loading ? (
+          <div class="text--muted" style={{ fontSize: "var(--text-sm)", padding: "var(--space-sm) 0" }}>
+            Loading allowances…
+          </div>
+        ) : loadError ? (
+          <div class="form-error">{loadError}</div>
+        ) : selections.length === 0 ? (
+          <div class="text--muted" style={{ fontSize: "var(--text-sm)", padding: "var(--space-sm) 0" }}>
+            No allowances yet.{estimateLocked ? "" : " Use + Add Allowance to create one."}
+          </div>
+        ) : (
+          <div class="allowances-section__list">
+            {selections.map((sel) => (
+              <div key={sel.id} class="allowances-section__card">
+                <div class="allowances-section__card-head">
+                  <button
+                    type="button"
+                    class={`allowances-section__card-main${selectionEditable(sel) ? " allowances-section__card-main--clickable" : ""}`}
+                    disabled={!selectionEditable(sel)}
+                    onClick={() => {
+                      if (!selectionEditable(sel)) return;
+                      setEditSelection({
+                        id: sel.id,
+                        title: sel.title,
+                        category: sel.category,
+                        location: sel.location,
+                        allowance_amount: sel.allowance_amount,
+                        required: sel.required,
+                        deadline_date: sel.deadline_date,
+                        public_instructions: sel.public_instructions,
+                      });
+                    }}
+                    title={selectionEditable(sel) ? "Click to edit allowance" : undefined}
+                  >
+                    <div class="allowances-section__title">{sel.title}</div>
+                    <div class="allowances-section__meta">
+                      {formatCurrency(sel.allowance_amount)} allowance
+                      {sel.category ? ` · ${sel.category}` : ""}
+                      {sel.location ? ` · ${sel.location}` : ""}
+                      {` · ${sel.choices.length} choice${sel.choices.length !== 1 ? "s" : ""}`}
+                    </div>
+                  </button>
+                  <div class="allowances-section__actions">
+                    <Badge tone={sel.status === "approved" ? "success" : sel.status === "sent" ? "warning" : "neutral"}>
+                      {formatStatus(sel.status)}
+                    </Badge>
+                    {sel.status === "pending" && (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => {
+                          setAddChoiceForId(sel.id);
+                          setAddChoiceTitle(sel.title);
+                        }}
+                      >
+                        + Add Choice
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                {sel.choices.length > 0 && (
+                  <div class="allowances-section__choices">
+                    {sel.choices.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        class={`allowances-section__choice${choiceEditable(sel, c) ? " allowances-section__choice--clickable" : ""}`}
+                        disabled={!choiceEditable(sel, c)}
+                        onClick={() => {
+                          if (!choiceEditable(sel, c)) return;
+                          setEditChoice({
+                            id: c.id,
+                            selectionId: sel.id,
+                            selectionTitle: sel.title,
+                            title: c.title,
+                            price: c.price,
+                            description: c.description,
+                            vendor_name: c.vendor_name,
+                            photo_ids: c.photo_ids,
+                          });
+                        }}
+                        title={choiceEditable(sel, c) ? "Click to edit choice" : undefined}
+                      >
+                        {c.photo_ids[0] && (
+                          <span
+                            class="allowances-section__choice-photo"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedPhoto(c.photo_ids[0]);
+                            }}
+                            role="presentation"
+                          >
+                            <img src={`/api/photos/${c.photo_ids[0]}/thumb`} alt="" loading="lazy" />
+                          </span>
+                        )}
+                        <div class="allowances-section__choice-body">
+                          <div class="allowances-section__choice-title">{c.title}</div>
+                          {c.description && (
+                            <div class="allowances-section__choice-desc">{c.description}</div>
+                          )}
+                          {c.vendor_name && (
+                            <div class="allowances-section__choice-vendor">{c.vendor_name}</div>
+                          )}
+                        </div>
+                        <div class="allowances-section__choice-price">{formatCurrency(c.price)}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <SelectionFormModal
+        open={allowanceOpen}
+        onClose={() => setAllowanceOpen(false)}
+        onCreated={() => {
+          setAllowanceOpen(false);
+          void loadSelections();
+        }}
+        estimateId={estimate.id}
+        defaultTitle={defaultTitle}
+        linkedJobId={estimate.linked_job_id}
+      />
+
+      <SelectionFormModal
+        open={!!addChoiceForId}
+        onClose={() => {
+          setAddChoiceForId(null);
+          setAddChoiceTitle("");
+        }}
+        onCreated={() => {
+          setAddChoiceForId(null);
+          setAddChoiceTitle("");
+          void loadSelections();
+        }}
+        selectionId={addChoiceForId ?? undefined}
+        selectionTitle={addChoiceTitle}
+        linkedJobId={estimate.linked_job_id}
+      />
+
+      <SelectionFormModal
+        open={!!editSelection}
+        onClose={() => setEditSelection(null)}
+        onCreated={() => {
+          setEditSelection(null);
+          void loadSelections();
+        }}
+        editSelection={editSelection ?? undefined}
+        linkedJobId={estimate.linked_job_id}
+      />
+
+      <SelectionFormModal
+        open={!!editChoice}
+        onClose={() => setEditChoice(null)}
+        onCreated={() => {
+          setEditChoice(null);
+          void loadSelections();
+        }}
+        editChoice={editChoice ?? undefined}
+        linkedJobId={estimate.linked_job_id}
+      />
+
+      {expandedPhoto && (
+        <Modal open onClose={() => setExpandedPhoto(null)} title="Choice photo">
+          <img
+            src={`/api/photos/${expandedPhoto}`}
+            alt=""
+            style={{ width: "100%", borderRadius: "var(--radius-md)" }}
+          />
+        </Modal>
+      )}
+    </>
+  );
+}
+
 // ─── Line item editor ─────────────────────────────────────────────────────────
 
 function LineItemEditor({
@@ -588,7 +895,7 @@ function LineItemEditor({
             Add a line item to start building, or apply a template above.
           </div>
           <div class="mt-md">
-            <Button variant="tertiary" disabled={adding} onClick={addLineItem}>
+            <Button variant="primary" disabled={adding} onClick={addLineItem}>
               + Add line item
             </Button>
           </div>
@@ -626,7 +933,7 @@ function LineItemEditor({
             ))}
           </div>
           <div class="li-table__footer">
-            <Button variant="tertiary" disabled={adding} onClick={addLineItem}>
+            <Button variant="primary" disabled={adding} onClick={addLineItem}>
               + Add line item
             </Button>
             <div class="li-table__stats">
@@ -1160,7 +1467,7 @@ function SentStatusCard({ estimate }: { estimate: Estimate }) {
   // Progress: Sent → Viewed → Signed → Deposit Paid (approved).
   const steps = [
     { label: "Sent", done: true, when: estimate.sent_at },
-    { label: "Viewed", done: !!estimate.viewed_date || ["viewed", "approved"].includes(estimate.status), when: estimate.viewed_date },
+    { label: "Viewed", done: !!estimate.viewed_date || ["viewed", "approved", "signed"].includes(estimate.status), when: estimate.viewed_date },
     { label: "Signed", done: estimate.signed, when: estimate.signed_date },
     { label: "Deposit Paid", done: estimate.status === "approved", when: estimate.approved_date },
   ];
@@ -1361,7 +1668,7 @@ function SendButton({
     pctRows.length === 0 ||
     Math.abs(pctRows.reduce((a, p) => a + (p.percentage ?? 0), 0) - 100) < 0.01;
   const blocked = !hasLine || !depositOk || !pctOk;
-  const sent = estimate.status === "sent" || estimate.status === "approved";
+  const sent = estimate.status === "sent" || estimate.status === "approved" || estimate.status === "signed";
 
   const confirmSend = () => {
     if (estimate.billing_model !== "per_line_item" && depositFromSchedule(estimate) <= 0) {

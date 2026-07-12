@@ -12,6 +12,8 @@ import {
   type EstimateSubItem,
   type VendorMaterial,
 } from "../../types";
+import { BidRequestModal } from "./BidRequestModal";
+import { BidComparisonView } from "./BidComparisonView";
 
 export interface LineItemRowProps {
   item: EstimateLineItem;
@@ -416,6 +418,15 @@ function SubItemList({
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
 }) {
   const [materialFor, setMaterialFor] = useState(false);
+  const [bidOpen, setBidOpen] = useState(false);
+  const [bidSubItem, setBidSubItem] = useState<EstimateSubItem | null>(null);
+  const [activeBidId, setActiveBidId] = useState<string | null>(null);
+  const [showComparison, setShowComparison] = useState(false);
+
+  const openBidModal = (sub: EstimateSubItem | null) => {
+    setBidSubItem(sub);
+    setBidOpen(true);
+  };
 
   const addSub = () =>
     mutate(
@@ -437,16 +448,60 @@ function SubItemList({
           <Button size="sm" variant="tertiary" onClick={() => setMaterialFor(true)}>
             Search Materials
           </Button>
+          <Button size="sm" variant="secondary" onClick={() => openBidModal(null)}>
+            Request Bids
+          </Button>
           <Button size="sm" variant="secondary" onClick={addSub}>
             + Add Sub-Item
           </Button>
         </div>
       </div>
+
+      {activeBidId && !showComparison && (
+        <div
+          class="callout callout--info"
+          style={{ display: "flex", alignItems: "center", gap: "var(--space-sm)", marginBottom: "var(--space-xs)" }}
+        >
+          <span style={{ flex: 1, fontSize: "var(--text-sm)" }}>
+            Bid request created — invites sent to selected subs.
+          </span>
+          <Button size="sm" variant="primary" onClick={() => setShowComparison(true)}>
+            View Comparison
+          </Button>
+          <button
+            type="button"
+            class="link-btn"
+            style={{ fontSize: "var(--text-xs)" }}
+            onClick={() => setActiveBidId(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {item.sub_items.length === 0 ? (
         <div class="subitems__empty">No sub-items. Add material, labor, or sub costs.</div>
       ) : (
-        item.sub_items.map((s) => <SubItemRow key={s.id} sub={s} mutate={mutate} />)
+        <>
+          <div class="subitems__col-head" aria-hidden="true">
+            <span>Description</span>
+            <span>Category</span>
+            <span>Vendor</span>
+            <span>Qty</span>
+            <span>Unit Cost</span>
+            <span>Total</span>
+          </div>
+          {item.sub_items.map((s) => (
+            <SubItemRow
+              key={s.id}
+              sub={s}
+              mutate={mutate}
+              onRequestBids={s.category === "subcontractor" ? () => openBidModal(s) : undefined}
+            />
+          ))}
+        </>
       )}
+
       <MaterialSearchModal
         open={materialFor}
         onClose={() => setMaterialFor(false)}
@@ -467,6 +522,38 @@ function SubItemList({
           );
         }}
       />
+
+      <BidRequestModal
+        open={bidOpen}
+        onClose={() => setBidOpen(false)}
+        onCreated={(id) => {
+          setActiveBidId(id);
+          setShowComparison(false);
+        }}
+        estimateId={item.estimate_id}
+        estimateSubItemId={bidSubItem?.id}
+        defaultTitle={bidSubItem?.description ?? item.product_service}
+        defaultScope={bidSubItem ? "" : item.description}
+      />
+
+      {/* Full-screen comparison overlay — rendered outside the normal DOM flow via fixed positioning */}
+      {showComparison && activeBidId && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 300,
+            background: "var(--color-bg)",
+            overflowY: "auto",
+            padding: "var(--space-lg)",
+          }}
+        >
+          <BidComparisonView
+            bidRequestId={activeBidId}
+            onBack={() => setShowComparison(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -474,9 +561,11 @@ function SubItemList({
 function SubItemRow({
   sub,
   mutate,
+  onRequestBids,
 }: {
   sub: EstimateSubItem;
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+  onRequestBids?: () => void;
 }) {
   const [f, setF] = useState({
     description: sub.description,
@@ -542,6 +631,17 @@ function SubItemRow({
         onBlur={() => Number(f.unit_cost) !== (sub.unit_cost ?? 0) && save({ unit_cost: Number(f.unit_cost) })}
       />
       <span class="subitem__total">{formatCurrency(sub.total_cost)}</span>
+      {onRequestBids && (
+        <button
+          type="button"
+          class="link-btn"
+          style={{ fontSize: "var(--text-xs)", whiteSpace: "nowrap" }}
+          onClick={onRequestBids}
+          title="Request competitive bids for this subcontractor scope"
+        >
+          Request Bids
+        </button>
+      )}
       <button class="li-row__del" title="Remove sub-item" onClick={() => mutate(() => api.del(`/api/sub-items/${sub.id}`))}>
         ×
       </button>

@@ -112,6 +112,7 @@ describe("isGatedApiPath", () => {
   it("never gates PUBLIC / webhook / secret routes", () => {
     expect(isGatedApiPath("/api/public/quote/abc")).toBe(false);
     expect(isGatedApiPath("/api/portal/abc")).toBe(false);
+    expect(isGatedApiPath("/api/bid/abc")).toBe(false);
     expect(isGatedApiPath("/api/share/abc")).toBe(false);
     expect(isGatedApiPath("/api/webhooks/stripe")).toBe(false);
     expect(isGatedApiPath("/api/ops/dlq")).toBe(false);
@@ -221,5 +222,7 @@ describe("enforceRbac — the §3 matrix end-to-end", () => {
     expect(await status(env, null, "GET", "/api/public/quote/tok")).toBe(200);
     expect(await status(env, null, "POST", "/api/webhooks/stripe")).toBe(200);
     expect(await status(env, null, "GET", "/api/portal/tok")).toBe(200);
+    expect(await status(env, null, "GET", "/api/bid/tok")).toBe(200);
+    expect(await status(env, null, "POST", "/api/bid/tok/submit")).toBe(200);
   });
 });

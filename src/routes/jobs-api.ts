@@ -34,6 +34,8 @@ import { shouldSkipContractAutogen } from "../lib/estimate-contract-document.js"
 import { scheduleWorkingAgreementGeneration } from "../lib/working-agreement.js";
 import { cascadeDeleteJob, DELETABLE_JOB_STATUSES } from "../lib/cascade-delete.js";
 import { formatPmPhone, resolvePmFields } from "../lib/pm-fields.js";
+import { generateWeeklyRecap } from "../lib/weekly-recap.js";
+import { sendSubEmail } from "../lib/notification-engine.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const REVERSE_ROLES = ["owner"] as const;
@@ -1372,4 +1374,101 @@ export async function handleJobQuickCreate(
   });
 
   return json({ job: { id: jobId, job_number: jobRow?.job_number ?? null } }, { status: 201 });
+}
+
+// ── POST /api/jobs/:id/test-weekly-recap (owner-only, test trigger) ───────────
+/**
+ * Manually fires the weekly recap generation + real email send for a single job.
+ * Owner-only. Does NOT affect the real Sunday cron schedule.
+ * Exists as a permanent spot-check capability — see CHS-Bundle-WeeklyRecapTrigger task.
+ */
+export async function handleTestWeeklyRecap(
+  request: Request,
+  env: Env,
+  jobId: string,
+): Promise<Response> {
+  const authed = await guard(request, env, ["owner"]);
+  if (authed instanceof Response) return authed;
+
+  const job = await env.DB.prepare(
+    `SELECT id, title, client_id, portal_token, billing_model, portal_type FROM jobs WHERE id = ?`,
+  )
+    .bind(jobId)
+    .first<{
+      id: string;
+      title: string | null;
+      client_id: string | null;
+      portal_token: string | null;
+      billing_model: string | null;
+      portal_type: string | null;
+    }>();
+  if (!job) return err(404, "job_not_found");
+
+  const client = job.client_id
+    ? await env.DB.prepare(
+        `SELECT email, first_name, last_name FROM clients WHERE id = ?`,
+      )
+        .bind(job.client_id)
+        .first<{ email: string | null; first_name: string | null; last_name: string | null }>()
+    : null;
+
+  if (!client?.email) return err(400, "client_has_no_email");
+
+  // Photo count for the last 7 days (mirrors runWeeklyPhotoSummary's query window)
+  const photoRow = await env.DB.prepare(
+    `SELECT COUNT(*) AS cnt FROM photos WHERE job_id = ? AND is_active = 1 AND created_at >= datetime('now', '-7 days')`,
+  )
+    .bind(jobId)
+    .first<{ cnt: number }>();
+  const photoCount = photoRow?.cnt ?? 0;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const weekStart = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+
+  const isCostPlus =
+    (job.billing_model ?? "").toLowerCase() === "cost_plus" ||
+    (job.portal_type ?? "").toLowerCase() === "cost_plus";
+
+  const recap = await generateWeeklyRecap(env, {
+    jobId,
+    jobTitle: job.title ?? "your project",
+    weekStart,
+    weekEnd: today,
+    photoCount,
+    isCostPlus,
+  });
+
+  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
+  const portalLink = job.portal_token ? `${origin}/portal/${job.portal_token}` : origin;
+  const clientName =
+    [client.first_name, client.last_name].filter(Boolean).join(" ") || "there";
+
+  const emailBody =
+    `Hi ${clientName},\n\nHere's your weekly project update for "${job.title ?? "your project"}":\n\n` +
+    `${recap}\n\n` +
+    `View your project portal: ${portalLink}\n\n` +
+    `— Columbus Home Solutions`;
+
+  await sendSubEmail(
+    env,
+    client.email,
+    `Weekly Update: ${job.title ?? "Your Project"}`,
+    emailBody,
+  );
+
+  await logAudit(env, authed.user.email, "test_weekly_recap_sent", "job", jobId, {
+    sent_to: client.email,
+    week_start: weekStart,
+    week_end: today,
+    photo_count: photoCount,
+  });
+
+  return json({
+    ok: true,
+    recap,
+    sent_to: client.email,
+    photo_count: photoCount,
+    week_start: weekStart,
+    week_end: today,
+  });
 }

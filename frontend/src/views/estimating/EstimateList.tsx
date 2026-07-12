@@ -35,6 +35,7 @@ const STAGE_OPTIONS = [
   { value: "won", label: "Won" },
   { value: "lost", label: "Lost" },
   { value: "revised", label: "Revised" },
+  { value: "signed", label: "Signed" },
   { value: "approved", label: "Approved" },
 ];
 

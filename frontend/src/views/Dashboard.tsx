@@ -17,6 +17,7 @@ import { WeatherForecastCard } from "./dashboard/WeatherForecastCard";
 import { QuickActionsWidget } from "./dashboard/QuickActionsWidget";
 import { DocReviewQueue } from "./dashboard/DocReviewQueue";
 import { JobHealthWidget } from "./dashboard/JobHealthWidget";
+import { OpenBidsWidget } from "./dashboard/OpenBidsWidget";
 
 export function Dashboard(_props: RoutableProps) {
   const { user } = useAuth();
@@ -107,6 +108,9 @@ export function Dashboard(_props: RoutableProps) {
           </div>
           <div class="dashboard-order-job-health">
             <JobHealthWidget />
+          </div>
+          <div class="dashboard-order-open-bids">
+            <OpenBidsWidget />
           </div>
           <div class="dashboard-order-smart-notes">
             <SmartNotes />

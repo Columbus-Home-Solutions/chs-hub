@@ -4,6 +4,8 @@ import { api, ApiError } from "../../api";
 import { useMessageCenter } from "../../store/messageCenter";
 import { Modal } from "../../components/ui/Modal";
 import { useToast } from "../../store/toast";
+import { ClientForm } from "../clients/ClientForm";
+import type { Client } from "../../types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -167,8 +169,9 @@ function NewEstimateModal({ open, onClose }: { open: boolean; onClose: () => voi
   const toast = useToast();
   const { query, setQuery, results, selected, pick, clear } = useClientSearch();
   const [submitting, setSubmitting] = useState(false);
+  const [showCreateClient, setShowCreateClient] = useState(false);
 
-  const reset = useCallback(() => { clear(); }, [clear]);
+  const reset = useCallback(() => { clear(); setShowCreateClient(false); }, [clear]);
   useEffect(() => { if (!open) reset(); }, [open, reset]);
 
   const submit = async () => {
@@ -187,34 +190,59 @@ function NewEstimateModal({ open, onClose }: { open: boolean; onClose: () => voi
     }
   };
 
+  const handleClientCreated = (client: Client) => {
+    pick({ id: client.id, name: client.name, phone: client.phone ?? "" });
+    setShowCreateClient(false);
+  };
+
   return (
-    <Modal
-      open={open}
-      title="New Estimate"
-      onClose={onClose}
-      footer={
-        <button
-          type="button"
-          class="btn btn--primary"
-          disabled={!selected || submitting}
-          onClick={() => void submit()}
-        >
-          {submitting ? "Creating…" : "Create & Open →"}
-        </button>
-      }
-    >
-      <p class="text--muted" style={{ marginBottom: "var(--space-sm)" }}>
-        Select a client to start a blank estimate for them.
-      </p>
-      <ClientPicker
-        query={query}
-        setQuery={setQuery}
-        results={results}
-        selected={selected}
-        onPick={pick}
-        onClear={clear}
+    <>
+      <Modal
+        open={open}
+        title="New Estimate"
+        onClose={onClose}
+        footer={
+          <button
+            type="button"
+            class="btn btn--primary"
+            disabled={!selected || submitting}
+            onClick={() => void submit()}
+          >
+            {submitting ? "Creating…" : "Create & Open →"}
+          </button>
+        }
+      >
+        <p class="text--muted" style={{ marginBottom: "var(--space-sm)" }}>
+          Select a client to start a blank estimate for them.
+        </p>
+        <ClientPicker
+          query={query}
+          setQuery={setQuery}
+          results={results}
+          selected={selected}
+          onPick={pick}
+          onClear={clear}
+        />
+        {!selected && (
+          <button
+            type="button"
+            class="link-btn"
+            style={{ marginTop: "var(--space-sm)", fontSize: "var(--text-sm)" }}
+            onClick={() => setShowCreateClient(true)}
+          >
+            + Add New Client
+          </button>
+        )}
+      </Modal>
+
+      {/* ClientForm opens as its own modal on top — auto-selects the new client on save */}
+      <ClientForm
+        open={showCreateClient}
+        mode="create"
+        onClose={() => setShowCreateClient(false)}
+        onSaved={handleClientCreated}
       />
-    </Modal>
+    </>
   );
 }
 

@@ -52,6 +52,7 @@ export function BidRequestModal({
 }: BidRequestModalProps) {
   const [subs, setSubs] = useState<Sub[]>([]);
   const [subsLoading, setSubsLoading] = useState(false);
+  const [subFilter, setSubFilter] = useState("");
 
   const [title, setTitle] = useState(defaultTitle);
   const [scopeDescription, setScopeDescription] = useState(defaultScope);
@@ -74,6 +75,7 @@ export function BidRequestModal({
       setBidMode("sealed");
       setNotifyLosers(true);
       setSelectedSubIds(new Set());
+      setSubFilter("");
       setError(null);
     }
   }, [open, defaultTitle, defaultScope]);
@@ -260,21 +262,48 @@ export function BidRequestModal({
           ) : subs.length === 0 ? (
             <p class="form-hint">No active subs found.</p>
           ) : (
-            <div class="sub-select-list">
-              {subs.map((s) => (
-                <label key={s.id} class="checkbox-option sub-select-row">
-                  <input
-                    type="checkbox"
-                    checked={selectedSubIds.has(s.id)}
-                    onChange={() => toggleSub(s.id)}
-                    disabled={submitting}
-                  />
-                  <span class="sub-select-row__name">{subLabel(s)}</span>
-                  {s.trade && <span class="sub-select-row__trade">{s.trade}</span>}
-                  {s.phone && <span class="sub-select-row__phone">{s.phone}</span>}
-                </label>
-              ))}
-            </div>
+            <>
+              <input
+                class="form-input"
+                type="search"
+                placeholder="Filter by name or trade…"
+                value={subFilter}
+                onInput={(e) => setSubFilter((e.target as HTMLInputElement).value)}
+                style={{ marginBottom: "8px" }}
+                disabled={submitting}
+              />
+              <div class="sub-select-list">
+                {subs
+                  .filter((s) => {
+                    if (!subFilter.trim()) return true;
+                    const q = subFilter.toLowerCase();
+                    return (
+                      subLabel(s).toLowerCase().includes(q) ||
+                      (s.trade ?? "").toLowerCase().includes(q)
+                    );
+                  })
+                  .map((s) => (
+                    <label key={s.id} class="checkbox-option sub-select-row">
+                      <input
+                        type="checkbox"
+                        checked={selectedSubIds.has(s.id)}
+                        onChange={() => toggleSub(s.id)}
+                        disabled={submitting}
+                      />
+                      <span class="sub-select-row__name">{subLabel(s)}</span>
+                      {s.trade && <span class="sub-select-row__trade badge badge--secondary" style={{ fontSize: "11px" }}>{s.trade}</span>}
+                      {s.phone && <span class="sub-select-row__phone">{s.phone}</span>}
+                    </label>
+                  ))}
+                {subs.filter((s) => {
+                  if (!subFilter.trim()) return true;
+                  const q = subFilter.toLowerCase();
+                  return subLabel(s).toLowerCase().includes(q) || (s.trade ?? "").toLowerCase().includes(q);
+                }).length === 0 && (
+                  <p class="form-hint">No subs match "{subFilter}".</p>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>

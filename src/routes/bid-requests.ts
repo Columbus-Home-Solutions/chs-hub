@@ -110,6 +110,7 @@ interface BidRequestRow {
   estimate_id: string | null;
   job_id: string | null;
   estimate_sub_item_id: string | null;
+  estimate_line_item_id: string | null;
   title: string;
   scope_description: string;
   quantities_notes: string | null;
@@ -211,7 +212,8 @@ export async function handleListBidRequests(request: Request, env: Env): Promise
   const rows = jobId
     ? await env.DB.prepare(
         `SELECT br.id, br.title, br.status, br.bid_mode, br.notify_losers,
-                br.awarded_sub_id, br.awarded_bid_id, br.created_at, br.estimate_sub_item_id,
+                br.awarded_sub_id, br.awarded_bid_id, br.created_at,
+                br.estimate_sub_item_id, br.estimate_line_item_id,
                 (SELECT COUNT(*) FROM bid_request_recipients WHERE bid_request_id = br.id) AS recipient_count,
                 (SELECT COUNT(*) FROM bid_submissions WHERE bid_request_id = br.id) AS submission_count
            FROM bid_requests br WHERE br.job_id = ? ORDER BY br.created_at DESC`,
@@ -220,7 +222,8 @@ export async function handleListBidRequests(request: Request, env: Env): Promise
         .all<BidRequestRow & { recipient_count: number; submission_count: number }>()
     : await env.DB.prepare(
         `SELECT br.id, br.title, br.status, br.bid_mode, br.notify_losers,
-                br.awarded_sub_id, br.awarded_bid_id, br.created_at, br.estimate_sub_item_id,
+                br.awarded_sub_id, br.awarded_bid_id, br.created_at,
+                br.estimate_sub_item_id, br.estimate_line_item_id,
                 (SELECT COUNT(*) FROM bid_request_recipients WHERE bid_request_id = br.id) AS recipient_count,
                 (SELECT COUNT(*) FROM bid_submissions WHERE bid_request_id = br.id) AS submission_count
            FROM bid_requests br WHERE br.estimate_id = ? ORDER BY br.created_at DESC`,
@@ -248,6 +251,7 @@ export async function handleCreateBidRequest(request: Request, env: Env): Promis
   const estimateId = str(body.estimate_id);
   const jobId = str(body.job_id);
   const estimateSubItemId = str(body.estimate_sub_item_id);
+  const estimateLineItemId = str(body.estimate_line_item_id);
   if (!estimateId && !jobId) return err(400, "estimate_id_or_job_id_required");
 
   const quantitiesNotes = str(body.quantities_notes);
@@ -283,15 +287,16 @@ export async function handleCreateBidRequest(request: Request, env: Env): Promis
   const bidRequestId = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO bid_requests
-       (id, estimate_id, job_id, estimate_sub_item_id, title, scope_description,
+       (id, estimate_id, job_id, estimate_sub_item_id, estimate_line_item_id, title, scope_description,
         quantities_notes, needed_by_date, status, bid_mode, notify_losers, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, datetime('now'))`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, datetime('now'))`,
   )
     .bind(
       bidRequestId,
       estimateId,
       jobId,
       estimateSubItemId,
+      estimateLineItemId,
       title,
       scopeDescription,
       quantitiesNotes,

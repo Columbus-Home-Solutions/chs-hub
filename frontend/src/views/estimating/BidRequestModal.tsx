@@ -35,6 +35,7 @@ interface BidRequestModalProps {
   /** Pre-fill from estimate context */
   estimateId?: string;
   estimateSubItemId?: string;
+  estimateLineItemId?: string;
   defaultTitle?: string;
   defaultScope?: string;
   defaultQuantitiesNotes?: string;
@@ -78,6 +79,7 @@ export function BidRequestModal({
   onCreated,
   estimateId,
   estimateSubItemId,
+  estimateLineItemId,
   defaultTitle = "",
   defaultScope = "",
   defaultQuantitiesNotes = "",
@@ -214,6 +216,7 @@ export function BidRequestModal({
         estimate_id: estimateId ?? null,
         job_id: jobId ?? null,
         estimate_sub_item_id: estimateSubItemId ?? null,
+        estimate_line_item_id: estimateLineItemId ?? null,
         bid_mode: bidMode,
         notify_losers: notifyLosers ? 1 : 0,
         sub_ids: Array.from(selectedSubIds),

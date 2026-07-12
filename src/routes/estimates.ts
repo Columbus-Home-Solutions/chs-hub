@@ -50,7 +50,7 @@ import { cascadeDeleteEstimateChildren } from "../lib/cascade-delete.js";
 import { triggerQuoteSent } from "../lib/wc/triggers.js";
 import { triggerNotification } from "../lib/notification-engine.js";
 import { renderContract } from "../lib/contracts.js";
-import { depositFromSchedule } from "../lib/deposit-from-schedule.js";
+import { depositFromSchedule, isPerLineItemBilling } from "../lib/deposit-from-schedule.js";
 import { generateAndSendEstimateContract } from "../lib/estimate-contract-document.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
@@ -1007,20 +1007,23 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
   ).results ?? [];
 
   // per_line_item estimates use a standalone deposit field (estimates.deposit_amount),
-  // not payment_schedules milestones. Skip the milestone deposit gate for that model.
+  // not payment_schedules milestones. Skip milestone validation for that model.
+  const perLineItem = isPerLineItemBilling(est.billing_model);
   const depositDue = depositFromSchedule(schedule, totals.total);
-  if (est.billing_model !== "per_line_item" && depositDue <= 0) {
+  if (!perLineItem && depositDue <= 0) {
     return err(400, "send_blocked", "Add a deposit milestone to the payment schedule before sending.");
   }
-  const pctRows = schedule.filter((p) => p.percentage != null && p.fixed_amount == null);
-  if (pctRows.length > 0) {
-    const sum = round2(pctRows.reduce((a, p) => a + (p.percentage ?? 0), 0));
-    if (Math.abs(sum - 100) > 0.01) {
-      return err(
-        400,
-        "send_blocked",
-        `Percentage milestones must sum to 100% (currently ${sum}%).`,
-      );
+  if (!perLineItem) {
+    const pctRows = schedule.filter((p) => p.percentage != null && p.fixed_amount == null);
+    if (pctRows.length > 0) {
+      const sum = round2(pctRows.reduce((a, p) => a + (p.percentage ?? 0), 0));
+      if (Math.abs(sum - 100) > 0.01) {
+        return err(
+          400,
+          "send_blocked",
+          `Percentage milestones must sum to 100% (currently ${sum}%).`,
+        );
+      }
     }
   }
 

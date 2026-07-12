@@ -3,11 +3,13 @@
  *
  * Owner-facing (authenticated):
  *   POST  /api/bid-requests               create + invite subs
+ *   POST  /api/bid-requests/:id/photos    owner attaches reference photos
  *   GET   /api/bid-requests/:id           comparison view (owner always sees everything)
  *   POST  /api/bid-requests/:id/award     pick winner, update vendor_materials + estimate line
  *
  * Sub-facing (unauthenticated, token-gated):
  *   GET   /api/bid/:token                 scope details (sealed mode hides other subs' prices)
+ *   GET   /api/bid/:token/photos/:photoId reference photo stream
  *   POST  /api/bid/:token/submit          sub submits price + notes + optional photo
  *
  * Sealed mode: subs can never see each other's submissions. Only the owner sees
@@ -20,6 +22,8 @@ import { guard } from "../middleware/guard.js";
 import { createOwnerInApp, sendSubEmail } from "../lib/notification-engine.js";
 import { getTwilioConfig, sendSms } from "../lib/twilio.js";
 import { applyVendorMaterialPriceUpdate } from "../lib/receipt-matching.js";
+import { putImage, streamObject } from "../lib/r2.js";
+import { assignAwardedBidToJobIfExists } from "../lib/bid-job-assignment.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -145,6 +149,29 @@ interface SubmissionRow {
   submitted_at: string;
 }
 
+interface ReferencePhotoRow {
+  id: string;
+  caption: string | null;
+  created_at: string;
+}
+
+async function listReferencePhotos(
+  env: Env,
+  bidRequestId: string,
+): Promise<ReferencePhotoRow[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, caption, created_at
+       FROM photos
+      WHERE bid_request_id = ?
+        AND photo_type = 'bid_request'
+        AND COALESCE(is_active, 1) = 1
+      ORDER BY created_at ASC`,
+  )
+    .bind(bidRequestId)
+    .all<ReferencePhotoRow>();
+  return rows.results ?? [];
+}
+
 // ── GET /api/bid-requests?job_id=&estimate_id= ───────────────────────────────
 
 export async function handleListBidRequests(request: Request, env: Env): Promise<Response> {
@@ -184,7 +211,7 @@ export async function handleListBidRequests(request: Request, env: Env): Promise
   const rows = jobId
     ? await env.DB.prepare(
         `SELECT br.id, br.title, br.status, br.bid_mode, br.notify_losers,
-                br.awarded_sub_id, br.awarded_bid_id, br.created_at,
+                br.awarded_sub_id, br.awarded_bid_id, br.created_at, br.estimate_sub_item_id,
                 (SELECT COUNT(*) FROM bid_request_recipients WHERE bid_request_id = br.id) AS recipient_count,
                 (SELECT COUNT(*) FROM bid_submissions WHERE bid_request_id = br.id) AS submission_count
            FROM bid_requests br WHERE br.job_id = ? ORDER BY br.created_at DESC`,
@@ -193,7 +220,7 @@ export async function handleListBidRequests(request: Request, env: Env): Promise
         .all<BidRequestRow & { recipient_count: number; submission_count: number }>()
     : await env.DB.prepare(
         `SELECT br.id, br.title, br.status, br.bid_mode, br.notify_losers,
-                br.awarded_sub_id, br.awarded_bid_id, br.created_at,
+                br.awarded_sub_id, br.awarded_bid_id, br.created_at, br.estimate_sub_item_id,
                 (SELECT COUNT(*) FROM bid_request_recipients WHERE bid_request_id = br.id) AS recipient_count,
                 (SELECT COUNT(*) FROM bid_submissions WHERE bid_request_id = br.id) AS submission_count
            FROM bid_requests br WHERE br.estimate_id = ? ORDER BY br.created_at DESC`,
@@ -322,6 +349,81 @@ export async function handleCreateBidRequest(request: Request, env: Env): Promis
   return json({ id: bidRequestId, status: "open", invited_count: inviteSubIds.length }, 201);
 }
 
+// ── POST /api/bid-requests/:id/photos ─────────────────────────────────────────
+
+export async function handleUploadBidRequestPhotos(
+  request: Request,
+  env: Env,
+  bidRequestId: string,
+): Promise<Response> {
+  const authed = await guard(request, env, ["owner", "project_manager", "office_admin"]);
+  if (authed instanceof Response) return authed;
+
+  const br = await env.DB.prepare(`SELECT id FROM bid_requests WHERE id = ?`)
+    .bind(bidRequestId)
+    .first<{ id: string }>();
+  if (!br) return err(404, "not_found");
+
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.includes("multipart/form-data")) return err(400, "multipart_required");
+
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch {
+    return err(400, "invalid_form_data");
+  }
+
+  const files: File[] = [];
+  for (const [key, value] of formData.entries()) {
+    if ((key === "photo" || key === "photos") && value instanceof File && value.size > 0) {
+      files.push(value);
+    }
+  }
+  if (files.length === 0) return err(400, "no_photos");
+
+  const uploaded: Array<{ id: string; thumb_url: string; original_url: string }> = [];
+  for (const file of files) {
+    if (file.size > 15 * 1024 * 1024) return err(413, "photo_too_large");
+    if (!env.FILES) return err(503, "storage_unavailable");
+
+    const photoId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const bytes = await file.arrayBuffer();
+    const r2Key = `bid-request-photos/${bidRequestId}/${photoId}.jpg`;
+    await putImage(env, r2Key, bytes, file.type || "image/jpeg");
+
+    await env.DB.prepare(
+      `INSERT INTO photos (id, created_at, taken_at, job_id, category, r2_key, thumb_key,
+          caption, photo_type, r2_url, uploaded_at, is_active, entered_via, bid_request_id,
+          uploaded_by, created_by)
+       VALUES (?, ?, ?, NULL, 'progress', ?, ?, ?, 'bid_request', ?, ?, 1, 'dashboard', ?, ?, ?)`,
+    )
+      .bind(
+        photoId,
+        now,
+        now,
+        r2Key,
+        r2Key,
+        file.name || "Bid reference photo",
+        `/api/photos/${photoId}`,
+        now,
+        bidRequestId,
+        authed.user.email,
+        authed.user.email,
+      )
+      .run();
+
+    uploaded.push({
+      id: photoId,
+      thumb_url: `/api/photos/${photoId}/thumb`,
+      original_url: `/api/photos/${photoId}`,
+    });
+  }
+
+  return json({ photos: uploaded }, 201);
+}
+
 // ── GET /api/bid-requests/:id ─────────────────────────────────────────────────
 
 export async function handleGetBidRequest(
@@ -389,9 +491,17 @@ export async function handleGetBidRequest(
     };
   });
 
+  const referencePhotos = await listReferencePhotos(env, id);
+
   return json({
     ...br,
     subs,
+    reference_photos: referencePhotos.map((p) => ({
+      id: p.id,
+      caption: p.caption,
+      thumb_url: `/api/photos/${p.id}/thumb`,
+      original_url: `/api/photos/${p.id}`,
+    })),
   });
 }
 
@@ -494,6 +604,9 @@ export async function handleAwardBid(
       }
     }
   }
+
+  // ── Job schedule assignment when job already exists (post-conversion award) ─
+  await assignAwardedBidToJobIfExists(env, br, winningSubmission.sub_id);
 
   // ── Notify losing subs (if notify_losers = 1) ─────────────────────────────
   if (br.notify_losers === 1) {
@@ -637,6 +750,8 @@ export async function handleBidLanding(
   const subName =
     recipient.contact_name || recipient.primary_contact || recipient.company_name || "there";
 
+  const referencePhotoRows = await listReferencePhotos(env, br.id);
+
   return json({
     bid_request_id: br.id,
     title: br.title,
@@ -649,6 +764,11 @@ export async function handleBidLanding(
     my_submission: mySubmission ?? null,
     // Only populated in open mode after the viewing sub has submitted
     other_submissions: otherSubmissions,
+    reference_photos: referencePhotoRows.map((p) => ({
+      id: p.id,
+      caption: p.caption,
+      image_url: `/api/bid/${token}/photos/${p.id}`,
+    })),
   });
 }
 
@@ -730,15 +850,25 @@ export async function handleBidSubmit(
   let photoId: string | null = null;
   if (photoBytes && env.FILES) {
     photoId = crypto.randomUUID();
+    const now = new Date().toISOString();
     const r2Key = `bid-attachments/${recipient.bid_request_id}/${photoId}.jpg`;
-    await env.FILES.put(r2Key, photoBytes, {
-      httpMetadata: { contentType: photoContentType ?? "image/jpeg" },
-    });
+    await putImage(env, r2Key, photoBytes, photoContentType ?? "image/jpeg");
+    // photos.thumb_key is NOT NULL — point at the full image when no separate thumb exists.
     await env.DB.prepare(
-      `INSERT INTO photos (id, job_id, r2_key, caption, is_active, created_at)
-       VALUES (?, NULL, ?, 'bid attachment', 1, datetime('now'))`,
+      `INSERT INTO photos (id, created_at, taken_at, job_id, category, r2_key, thumb_key,
+          caption, photo_type, r2_url, uploaded_at, is_active, entered_via)
+       VALUES (?, ?, ?, NULL, 'progress', ?, ?, ?, 'bid_attachment', ?, ?, 1, 'bid_link')`,
     )
-      .bind(photoId, r2Key)
+      .bind(
+        photoId,
+        now,
+        now,
+        r2Key,
+        r2Key,
+        "Bid submission attachment",
+        `/api/photos/${photoId}`,
+        now,
+      )
       .run();
   }
 
@@ -760,4 +890,33 @@ export async function handleBidSubmit(
   });
 
   return json({ ok: true, submission_id: submissionId }, 201);
+}
+
+// ── GET /api/bid/:token/photos/:photoId (sub-facing reference photo) ───────────
+
+export async function handleBidPublicPhoto(
+  env: Env,
+  token: string,
+  photoId: string,
+): Promise<Response> {
+  const recipient = await env.DB.prepare(
+    `SELECT bid_request_id FROM bid_request_recipients WHERE portal_token = ?`,
+  )
+    .bind(token)
+    .first<{ bid_request_id: string }>();
+  if (!recipient) return err(404, "invalid_token");
+
+  const photo = await env.DB.prepare(
+    `SELECT r2_key FROM photos
+      WHERE id = ?
+        AND bid_request_id = ?
+        AND photo_type = 'bid_request'
+        AND COALESCE(is_active, 1) = 1`,
+  )
+    .bind(photoId, recipient.bid_request_id)
+    .first<{ r2_key: string | null }>();
+  if (!photo?.r2_key) return err(404, "photo_not_found");
+
+  const streamed = await streamObject(env, photo.r2_key);
+  return streamed ?? err(404, "photo_missing");
 }

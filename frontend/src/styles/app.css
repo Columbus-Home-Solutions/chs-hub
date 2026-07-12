@@ -1558,6 +1558,115 @@
   color: var(--color-text-muted);
 }
 
+/* Bid request modal — sub tag/chip picker */
+.bid-sub-picker {
+  position: relative;
+}
+.bid-sub-picker__dropdown {
+  max-height: 220px;
+}
+.bid-sub-picker__option {
+  text-align: left;
+}
+.bid-sub-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.bid-sub-chip__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.bid-sub-chip__trade {
+  font-size: 10px;
+  font-weight: 600;
+}
+.bid-sub-chip__remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  font-size: 14px;
+  opacity: 0.75;
+  color: inherit;
+}
+.bid-sub-chip__remove:hover {
+  opacity: 1;
+}
+
+.bid-ref-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.bid-ref-photos__item {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-surface-2);
+}
+.bid-ref-photos__item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.bid-ref-photos__remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.subitem-bid-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  margin-bottom: var(--space-xs);
+  padding-left: 2px;
+}
+
+.bid-ref-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.bid-ref-gallery__item {
+  display: block;
+  width: 96px;
+  height: 96px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-surface-2);
+}
+.bid-ref-gallery__item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.bid-sub-chip__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 /* Line item cards (legacy — templates etc.) */
 .li-list,
 .pay-list,
@@ -2140,6 +2249,24 @@
 }
 .send-checklist .bad {
   color: var(--color-error);
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.radio-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.radio-option input[type="radio"] {
+  margin-top: 3px;
+  flex-shrink: 0;
 }
 
 .is-hidden-mobile {

@@ -1658,10 +1658,10 @@ function SendButton({
   const [open, setOpen] = useState(false);
   const perLineItem = isPerLineItemBilling(estimate.billing_model);
   const hasLine = estimate.line_items.length > 0;
-  const hasDeposit = perLineItem
-    ? (estimate.deposit_amount ?? 0) > 0
-    : depositFromSchedule(estimate) > 0;
-  const depositOk = perLineItem || hasDeposit;
+  const standaloneDepositConfigured = (estimate.deposit_amount ?? 0) > 0;
+  const scheduleDepositConfigured = depositFromSchedule(estimate) > 0;
+  // per_line_item uses optional standalone deposit — never block send on deposit absence.
+  const depositOk = perLineItem || scheduleDepositConfigured;
   const pctRows = estimate.payment_schedule.filter((p) => p.percentage != null && p.fixed_amount == null);
   const pctOk =
     perLineItem ||
@@ -1671,7 +1671,7 @@ function SendButton({
   const sent = estimate.status === "sent" || estimate.status === "approved" || estimate.status === "signed";
 
   const confirmSend = () => {
-    if (estimate.billing_model !== "per_line_item" && depositFromSchedule(estimate) <= 0) {
+    if (!perLineItem && depositFromSchedule(estimate) <= 0) {
       toast.push("error", "Add a deposit milestone to the payment schedule before sending.");
       return;
     }
@@ -1708,14 +1708,14 @@ function SendButton({
           {perLineItem ? (
             <li class="ok">
               ✓{" "}
-              {hasDeposit
+              {standaloneDepositConfigured
                 ? `Deposit configured (${formatCurrency(estimate.deposit_amount)})`
                 : "No deposit required"}
             </li>
           ) : (
             <>
-              <li class={hasDeposit ? "ok" : "bad"}>
-                {hasDeposit ? "✓" : "✕"} Deposit milestone configured
+              <li class={scheduleDepositConfigured ? "ok" : "bad"}>
+                {scheduleDepositConfigured ? "✓" : "✕"} Deposit milestone configured
               </li>
               <li class={pctOk ? "ok" : "bad"}>
                 {pctOk ? "✓" : "✕"} Percentage milestones total 100%

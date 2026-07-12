@@ -457,6 +457,8 @@ import {
   handleListBidRequests,
   handleBidLanding,
   handleBidSubmit,
+  handleUploadBidRequestPhotos,
+  handleBidPublicPhoto,
 } from "./routes/bid-requests.js";
 import {
   handleSendPacket,
@@ -803,6 +805,10 @@ export default {
     }
 
     // ── Bid solicitation — sub-facing (Sprint 38 Run 3) — token, no Access ─
+    const bidPhoto = url.pathname.match(/^\/api\/bid\/([^/]+)\/photos\/([^/]+)$/);
+    if (bidPhoto && request.method === "GET") {
+      return handleBidPublicPhoto(env, decodeURIComponent(bidPhoto[1]), decodeURIComponent(bidPhoto[2]));
+    }
     const bidSubmit = url.pathname.match(/^\/api\/bid\/([^/]+)\/submit$/);
     if (bidSubmit && request.method === "POST") {
       return handleBidSubmit(request, env, decodeURIComponent(bidSubmit[1]));
@@ -2110,6 +2116,10 @@ export default {
     }
     if (url.pathname === "/api/bid-requests" && request.method === "POST") {
       return handleCreateBidRequest(request, env);
+    }
+    const bidRequestPhotos = url.pathname.match(/^\/api\/bid-requests\/([^/]+)\/photos$/);
+    if (bidRequestPhotos && request.method === "POST") {
+      return handleUploadBidRequestPhotos(request, env, decodeURIComponent(bidRequestPhotos[1]));
     }
     const bidRequestAward = url.pathname.match(/^\/api\/bid-requests\/([^/]+)\/award$/);
     if (bidRequestAward && request.method === "POST") {

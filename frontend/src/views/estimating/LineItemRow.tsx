@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Button } from "../../components/ui/Button";
 import { Select } from "../../components/ui/Select";
 import { Modal } from "../../components/ui/Modal";
@@ -58,6 +58,33 @@ function marginPercent(unitPrice: number, unitCost: number): number | null {
 function autoGrow(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.max(el.scrollHeight, 72)}px`;
+}
+
+/** Prefill quantities_notes from sub-item qty + unit (blank when either missing). */
+function formatSubItemQuantities(sub: EstimateSubItem | null): string {
+  if (!sub) return "";
+  const qty = sub.quantity;
+  const unit = (sub.unit ?? "").trim();
+  if (qty == null || qty === 0 || !unit) return "";
+  return `${qty} ${unit}`;
+}
+
+interface BidRequestSummary {
+  id: string;
+  title: string;
+  status: string;
+  estimate_sub_item_id: string | null;
+  submission_count: number;
+  recipient_count: number;
+}
+
+function bidStatusLabel(br: BidRequestSummary): string {
+  if (br.status === "awarded") return "Awarded";
+  if (br.status === "cancelled") return "Cancelled";
+  if (br.submission_count > 0) {
+    return `Bids: ${br.submission_count} submitted`;
+  }
+  return "Awaiting responses";
 }
 
 export function LineItemRow({
@@ -420,12 +447,41 @@ function SubItemList({
   const [materialFor, setMaterialFor] = useState(false);
   const [bidOpen, setBidOpen] = useState(false);
   const [bidSubItem, setBidSubItem] = useState<EstimateSubItem | null>(null);
-  const [activeBidId, setActiveBidId] = useState<string | null>(null);
-  const [showComparison, setShowComparison] = useState(false);
+  const [freshBidId, setFreshBidId] = useState<string | null>(null);
+  const [viewingBidId, setViewingBidId] = useState<string | null>(null);
+  const [bidRequests, setBidRequests] = useState<BidRequestSummary[]>([]);
+
+  const loadBidRequests = useCallback(() => {
+    api
+      .get<{ bid_requests: BidRequestSummary[] }>(`/api/bid-requests?estimate_id=${item.estimate_id}`)
+      .then((d) => setBidRequests(d.bid_requests ?? []))
+      .catch(() => setBidRequests([]));
+  }, [item.estimate_id]);
+
+  useEffect(() => {
+    loadBidRequests();
+  }, [loadBidRequests]);
+
+  const bidsBySubItem = useMemo(() => {
+    const map = new Map<string, BidRequestSummary>();
+    for (const br of bidRequests) {
+      if (!br.estimate_sub_item_id) continue;
+      // Keep the most recent bid per sub-item (list is already DESC by created_at).
+      if (!map.has(br.estimate_sub_item_id)) {
+        map.set(br.estimate_sub_item_id, br);
+      }
+    }
+    return map;
+  }, [bidRequests]);
 
   const openBidModal = (sub: EstimateSubItem | null) => {
     setBidSubItem(sub);
     setBidOpen(true);
+  };
+
+  const openComparison = (bidId: string) => {
+    setViewingBidId(bidId);
+    setFreshBidId(null);
   };
 
   const addSub = () =>
@@ -457,7 +513,7 @@ function SubItemList({
         </div>
       </div>
 
-      {activeBidId && !showComparison && (
+      {freshBidId && !viewingBidId && (
         <div
           class="callout callout--info"
           style={{ display: "flex", alignItems: "center", gap: "var(--space-sm)", marginBottom: "var(--space-xs)" }}
@@ -465,14 +521,14 @@ function SubItemList({
           <span style={{ flex: 1, fontSize: "var(--text-sm)" }}>
             Bid request created — invites sent to selected subs.
           </span>
-          <Button size="sm" variant="primary" onClick={() => setShowComparison(true)}>
+          <Button size="sm" variant="primary" onClick={() => openComparison(freshBidId)}>
             View Comparison
           </Button>
           <button
             type="button"
             class="link-btn"
             style={{ fontSize: "var(--text-xs)" }}
-            onClick={() => setActiveBidId(null)}
+            onClick={() => setFreshBidId(null)}
           >
             Dismiss
           </button>
@@ -496,6 +552,8 @@ function SubItemList({
               key={s.id}
               sub={s}
               mutate={mutate}
+              bidSummary={bidsBySubItem.get(s.id) ?? null}
+              onViewComparison={openComparison}
               onRequestBids={s.category === "subcontractor" ? () => openBidModal(s) : undefined}
             />
           ))}
@@ -527,17 +585,17 @@ function SubItemList({
         open={bidOpen}
         onClose={() => setBidOpen(false)}
         onCreated={(id) => {
-          setActiveBidId(id);
-          setShowComparison(false);
+          setFreshBidId(id);
+          loadBidRequests();
         }}
         estimateId={item.estimate_id}
         estimateSubItemId={bidSubItem?.id}
         defaultTitle={bidSubItem?.description ?? item.product_service}
         defaultScope={bidSubItem ? "" : item.description}
+        defaultQuantitiesNotes={formatSubItemQuantities(bidSubItem)}
       />
 
-      {/* Full-screen comparison overlay — rendered outside the normal DOM flow via fixed positioning */}
-      {showComparison && activeBidId && (
+      {viewingBidId && (
         <div
           style={{
             position: "fixed",
@@ -549,8 +607,11 @@ function SubItemList({
           }}
         >
           <BidComparisonView
-            bidRequestId={activeBidId}
-            onBack={() => setShowComparison(false)}
+            bidRequestId={viewingBidId}
+            onBack={() => {
+              setViewingBidId(null);
+              loadBidRequests();
+            }}
           />
         </div>
       )}
@@ -561,10 +622,14 @@ function SubItemList({
 function SubItemRow({
   sub,
   mutate,
+  bidSummary,
+  onViewComparison,
   onRequestBids,
 }: {
   sub: EstimateSubItem;
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+  bidSummary: BidRequestSummary | null;
+  onViewComparison: (bidId: string) => void;
   onRequestBids?: () => void;
 }) {
   const [f, setF] = useState({
@@ -589,62 +654,87 @@ function SubItemRow({
   const save = (patch: Record<string, unknown>) => mutate(() => api.put(`/api/sub-items/${sub.id}`, patch));
 
   return (
-    <div class="subitem">
-      <input
-        class="form-input"
-        value={f.description}
-        placeholder="Description"
-        onInput={(ev) => setF((p) => ({ ...p, description: (ev.target as HTMLInputElement).value }))}
-        onBlur={() => f.description !== sub.description && save({ description: f.description })}
-      />
-      <Select
-        value={f.category}
-        options={SUB_ITEM_CATEGORIES.map((c) => ({ value: c, label: formatStatus(c) }))}
-        onChange={(v) => {
-          setF((p) => ({ ...p, category: v }));
-          if (v !== sub.category) save({ category: v });
-        }}
-      />
-      <input
-        class="form-input"
-        value={f.vendor}
-        placeholder="Vendor"
-        onInput={(ev) => setF((p) => ({ ...p, vendor: (ev.target as HTMLInputElement).value }))}
-        onBlur={() => (f.vendor || null) !== (sub.vendor ?? null) && save({ vendor: f.vendor })}
-      />
-      <input
-        class="form-input subitem__num"
-        type="number"
-        step="any"
-        value={f.quantity}
-        placeholder="Qty"
-        onInput={(ev) => setF((p) => ({ ...p, quantity: Number((ev.target as HTMLInputElement).value) }))}
-        onBlur={() => Number(f.quantity) !== (sub.quantity ?? 0) && save({ quantity: Number(f.quantity) })}
-      />
-      <input
-        class="form-input subitem__num"
-        type="number"
-        step="any"
-        value={f.unit_cost}
-        placeholder="Cost"
-        onInput={(ev) => setF((p) => ({ ...p, unit_cost: Number((ev.target as HTMLInputElement).value) }))}
-        onBlur={() => Number(f.unit_cost) !== (sub.unit_cost ?? 0) && save({ unit_cost: Number(f.unit_cost) })}
-      />
-      <span class="subitem__total">{formatCurrency(sub.total_cost)}</span>
-      {onRequestBids && (
-        <button
-          type="button"
-          class="link-btn"
-          style={{ fontSize: "var(--text-xs)", whiteSpace: "nowrap" }}
-          onClick={onRequestBids}
-          title="Request competitive bids for this subcontractor scope"
-        >
-          Request Bids
+    <div>
+      <div class="subitem">
+        <input
+          class="form-input"
+          value={f.description}
+          placeholder="Description"
+          onInput={(ev) => setF((p) => ({ ...p, description: (ev.target as HTMLInputElement).value }))}
+          onBlur={() => f.description !== sub.description && save({ description: f.description })}
+        />
+        <Select
+          value={f.category}
+          options={SUB_ITEM_CATEGORIES.map((c) => ({ value: c, label: formatStatus(c) }))}
+          onChange={(v) => {
+            setF((p) => ({ ...p, category: v }));
+            if (v !== sub.category) save({ category: v });
+          }}
+        />
+        <input
+          class="form-input"
+          value={f.vendor}
+          placeholder="Vendor"
+          onInput={(ev) => setF((p) => ({ ...p, vendor: (ev.target as HTMLInputElement).value }))}
+          onBlur={() => (f.vendor || null) !== (sub.vendor ?? null) && save({ vendor: f.vendor })}
+        />
+        <input
+          class="form-input subitem__num"
+          type="number"
+          step="any"
+          value={f.quantity}
+          placeholder="Qty"
+          onInput={(ev) => setF((p) => ({ ...p, quantity: Number((ev.target as HTMLInputElement).value) }))}
+          onBlur={() => Number(f.quantity) !== (sub.quantity ?? 0) && save({ quantity: Number(f.quantity) })}
+        />
+        <input
+          class="form-input subitem__num"
+          type="number"
+          step="any"
+          value={f.unit_cost}
+          placeholder="Cost"
+          onInput={(ev) => setF((p) => ({ ...p, unit_cost: Number((ev.target as HTMLInputElement).value) }))}
+          onBlur={() => Number(f.unit_cost) !== (sub.unit_cost ?? 0) && save({ unit_cost: Number(f.unit_cost) })}
+        />
+        <span class="subitem__total">{formatCurrency(sub.total_cost)}</span>
+        {onRequestBids && (
+          <button
+            type="button"
+            class="link-btn"
+            style={{ fontSize: "var(--text-xs)", whiteSpace: "nowrap" }}
+            onClick={onRequestBids}
+            title="Request competitive bids for this subcontractor scope"
+          >
+            Request Bids
+          </button>
+        )}
+        <button class="li-row__del" title="Remove sub-item" onClick={() => mutate(() => api.del(`/api/sub-items/${sub.id}`))}>
+          ×
         </button>
+      </div>
+      {bidSummary && (
+        <div class="subitem-bid-status">
+          <span
+            class={`badge badge--${
+              bidSummary.status === "awarded"
+                ? "success"
+                : bidSummary.submission_count > 0
+                  ? "info"
+                  : "neutral"
+            }`}
+          >
+            {bidStatusLabel(bidSummary)}
+          </span>
+          <button
+            type="button"
+            class="link-btn"
+            style={{ fontSize: "var(--text-xs)" }}
+            onClick={() => onViewComparison(bidSummary.id)}
+          >
+            View Comparison
+          </button>
+        </div>
       )}
-      <button class="li-row__del" title="Remove sub-item" onClick={() => mutate(() => api.del(`/api/sub-items/${sub.id}`))}>
-        ×
-      </button>
     </div>
   );
 }

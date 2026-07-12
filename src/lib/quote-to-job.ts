@@ -211,6 +211,11 @@ export async function convertQuoteToJob(
 
     await env.DB.batch(stmts);
 
+    const { syncBidRequestsOnJobConversion } = await import("./bid-job-assignment.js");
+    if (estimateId) {
+      await syncBidRequestsOnJobConversion(env, existing.id, estimateId);
+    }
+
     return {
       ok: true,
       jobId: existing.id,
@@ -373,6 +378,11 @@ export async function convertQuoteToJob(
 
   const { applyQuoteStageSelectionOverages } = await import("../routes/selections.js");
   await applyQuoteStageSelectionOverages(env, jobId, row.e_id);
+
+  const { syncBidRequestsOnJobConversion } = await import("./bid-job-assignment.js");
+  if (row.e_id) {
+    await syncBidRequestsOnJobConversion(env, jobId, row.e_id);
+  }
 
   // Read back the in-transaction-allocated job_number.
   const jobNumberRow = await env.DB.prepare("SELECT job_number FROM jobs WHERE id = ?")

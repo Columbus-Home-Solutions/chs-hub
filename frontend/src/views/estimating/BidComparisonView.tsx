@@ -53,6 +53,12 @@ interface BidRequest {
   awarded_bid_id: string | null;
   created_at: string;
   subs: BidSub[];
+  reference_photos?: Array<{
+    id: string;
+    caption: string | null;
+    thumb_url: string;
+    original_url: string;
+  }>;
 }
 
 interface BidComparisonViewProps {
@@ -182,6 +188,24 @@ export function BidComparisonView({ bidRequestId, onBack }: BidComparisonViewPro
               {data.quantities_notes}
             </p>
           )}
+          {data.reference_photos && data.reference_photos.length > 0 && (
+            <div style={{ marginTop: "16px" }}>
+              <div class="form-label" style={{ marginBottom: "8px" }}>Reference photos</div>
+              <div class="bid-ref-gallery">
+                {data.reference_photos.map((p) => (
+                  <a
+                    key={p.id}
+                    href={p.original_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="bid-ref-gallery__item"
+                  >
+                    <img src={p.thumb_url} alt={p.caption || "Reference photo"} />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -244,6 +268,18 @@ export function BidComparisonView({ bidRequestId, onBack }: BidComparisonViewPro
                         ) : (
                           <span class="table-cell--secondary">—</span>
                         )}
+                        {sub.submission?.attachment_photo_id ? (
+                          <div style={{ marginTop: "4px" }}>
+                            <a
+                              href={`/api/photos/${sub.submission.attachment_photo_id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: "var(--text-xs)" }}
+                            >
+                              View attachment
+                            </a>
+                          </div>
+                        ) : null}
                       </td>
                       <td class="table-cell--secondary">
                         {sub.submission ? formatDate(sub.submission.submitted_at) : "—"}

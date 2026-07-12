@@ -21,3 +21,7 @@ export function depositFromSchedule(rows: ScheduleDepositRow[], total: number): 
   if (dep.percentage != null) return round2((dep.percentage / 100) * total);
   return round2(dep.amount ?? 0);
 }
+
+export function isPerLineItemBilling(billingModel: string | null | undefined): boolean {
+  return billingModel === "per_line_item";
+}

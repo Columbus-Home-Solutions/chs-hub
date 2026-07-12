@@ -36,6 +36,11 @@ interface BidPayload {
   sub_name: string;
   my_submission: MySubmission | null;
   other_submissions: OtherSubmission[];
+  reference_photos: Array<{
+    id: string;
+    caption: string | null;
+    image_url: string;
+  }>;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -232,6 +237,25 @@ export function BidPage() {
             <p style={{ whiteSpace: "pre-wrap", lineHeight: "1.6", margin: 0 }}>
               {data.quantities_notes}
             </p>
+          </div>
+        )}
+
+        {data.reference_photos && data.reference_photos.length > 0 && (
+          <div style={{ marginTop: "16px" }}>
+            <div class="portal-info-label" style={{ marginBottom: "8px" }}>Reference photos</div>
+            <div class="portal-photos__grid">
+              {data.reference_photos.map((p) => (
+                <a
+                  key={p.id}
+                  href={p.image_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="portal-photo"
+                >
+                  <img src={p.image_url} alt={p.caption || "Reference photo"} loading="lazy" />
+                </a>
+              ))}
+            </div>
           </div>
         )}
       </section>

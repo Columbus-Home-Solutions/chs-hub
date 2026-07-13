@@ -1389,7 +1389,9 @@ export async function handleReceiptConfirmItems(
 
   const jobId = str(body.job_id) ?? rp.photo_job_id;
   const date = str(body.date) ?? rp.ai_date ?? new Date().toISOString().slice(0, 10);
-  const vendorName = rp.ai_vendor;
+  const vendorName = str(body.vendor) ?? rp.ai_vendor;
+  const expenseType = str(body.expense_type) ?? "material";
+  const taxCategory = str(body.tax_category);
 
   const rawItems = Array.isArray(body.items) ? (body.items as unknown[]) : [];
   if (rawItems.length === 0) return jsonErr(400, "items_required");
@@ -1432,13 +1434,13 @@ export async function handleReceiptConfirmItems(
 
     const expenseId = await insertFullExpense(env, {
       job_id: jobId,
-      expense_type: "material",
+      expense_type: expenseType,
       vendor: vendorName,
       description: eli.description,
       amount: eli.amount,
       incurred_date: date,
       estimate_line_item_id: confirmed.matched_estimate_sub_item_id,
-      tax_category: null,
+      tax_category: taxCategory,
       sub_id: null,
       is_1099_reportable: false,
       receipt_photo_id: rp.photo_id,

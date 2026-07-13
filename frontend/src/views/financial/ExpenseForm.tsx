@@ -25,6 +25,18 @@ export interface CostingLineLite {
   sub_items: CostingSubLineLite[];
 }
 
+/** Flat alignment options: parent line items + sub-items (same as ExpenseFields). */
+export function buildAlignOptions(lines: CostingLineLite[]): { value: string; label: string }[] {
+  const opts: { value: string; label: string }[] = [{ value: "", label: "— Unallocated —" }];
+  for (const l of lines) {
+    opts.push({ value: l.line_item_id, label: l.name });
+    for (const s of l.sub_items) {
+      opts.push({ value: s.id, label: `   ↳ ${s.description ?? s.category} (${s.category})` });
+    }
+  }
+  return opts;
+}
+
 export const EXPENSE_TYPE_OPTIONS = [
   { value: "material", label: "Material" },
   { value: "subcontractor", label: "Subcontractor" },
@@ -106,23 +118,15 @@ export function ExpenseFields({
   draft,
   set,
   lines,
+  hideJobAlignment,
 }: {
   draft: ExpenseDraft;
   set: <K extends keyof ExpenseDraft>(k: K, v: ExpenseDraft[K]) => void;
   lines: CostingLineLite[];
+  /** Hide the single whole-receipt alignment dropdown (per-item mode on receipts). */
+  hideJobAlignment?: boolean;
 }) {
-  // Alignment selector: flat list of parent lines + their sub-items. The stored
-  // value is the most specific id chosen (sub-item) or the parent id.
-  const alignOptions = useMemo(() => {
-    const opts: { value: string; label: string }[] = [{ value: "", label: "— Unallocated —" }];
-    for (const l of lines) {
-      opts.push({ value: l.line_item_id, label: l.name });
-      for (const s of l.sub_items) {
-        opts.push({ value: s.id, label: `   ↳ ${s.description ?? s.category} (${s.category})` });
-      }
-    }
-    return opts;
-  }, [lines]);
+  const alignOptions = useMemo(() => buildAlignOptions(lines), [lines]);
 
   const isSub = draft.expense_type === "subcontractor";
   const isMaterial = draft.expense_type === "material";
@@ -184,13 +188,15 @@ export function ExpenseFields({
         />
       </FormField>
 
-      <FormField label="Job costing alignment" hint="Pick the trade or sub-item this cost belongs to. Leave Unallocated if unknown.">
-        <Select
-          value={draft.estimate_line_item_id}
-          options={alignOptions}
-          onChange={(v) => set("estimate_line_item_id", v)}
-        />
-      </FormField>
+      {!hideJobAlignment && (
+        <FormField label="Job costing alignment" hint="Pick the trade or sub-item this cost belongs to. Leave Unallocated if unknown.">
+          <Select
+            value={draft.estimate_line_item_id}
+            options={alignOptions}
+            onChange={(v) => set("estimate_line_item_id", v)}
+          />
+        </FormField>
+      )}
 
       <FormField label="Tax category">
         <Select

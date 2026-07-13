@@ -20,10 +20,12 @@ import {
   ExpenseFields,
   emptyDraft,
   draftToBody,
+  buildAlignOptions,
   type ExpenseDraft,
   type CostingLineLite,
 } from "../financial/ExpenseForm";
-import { ReceiptMatchReview } from "../financial/ReceiptMatchReview";
+import type { ExpenseLineItem } from "../../types";
+import { formatCurrency } from "../../lib/format";
 
 export interface PhotoReceipt {
   id: string;
@@ -772,8 +774,6 @@ export function ReceiptConfirm({
   onDone?: () => void;
   toast: ReturnType<typeof useToast>;
 }) {
-  // Pull the job's costing lines so the receipt confirm lands in the SAME full
-  // expense form (estimate-line-item alignment + tax category + sub/1099).
   const costing = useApi<{ costing: { lines: CostingLineLite[] } }>(
     jobId ? `/api/jobs/${jobId}/costing` : null,
   );
@@ -782,8 +782,14 @@ export function ReceiptConfirm({
     name: l.name,
     sub_items: l.sub_items.map((s) => ({ id: s.id, description: s.description, category: s.category })),
   }));
+  const alignOptions = useMemo(() => buildAlignOptions(lines), [lines]);
 
-  const extractedItems = parseExtractedItems(receipt.extracted_items);
+  const [eliRows, setEliRows] = useState<ExpenseLineItem[]>([]);
+  const [eliLoading, setEliLoading] = useState(Boolean(jobId));
+  const [itemAllocations, setItemAllocations] = useState<Record<string, string>>({});
+  const [catalogDecisions, setCatalogDecisions] = useState<
+    Record<string, { catalog_update: boolean; add_to_catalog: boolean }>
+  >({});
 
   const [draft, setDraft] = useState<ExpenseDraft>(
     emptyDraft({
@@ -797,9 +803,48 @@ export function ReceiptConfirm({
   const [confirmed, setConfirmed] = useState(
     Boolean(receipt.expense_id || receipt.processing_status === "confirmed"),
   );
-  const [showMatchReview, setShowMatchReview] = useState(false);
   const set = <K extends keyof ExpenseDraft>(k: K, v: ExpenseDraft[K]) =>
     setDraft((d) => ({ ...d, [k]: v }));
+
+  useEffect(() => {
+    if (!jobId || confirmed) {
+      setEliLoading(false);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .get<{ line_items: ExpenseLineItem[] }>(`/api/receipt-photos/${receipt.id}/line-items`)
+      .then((res) => {
+        if (cancelled) return;
+        const rows = res.line_items ?? [];
+        setEliRows(rows);
+        const allocs: Record<string, string> = {};
+        const catalogs: Record<string, { catalog_update: boolean; add_to_catalog: boolean }> = {};
+        for (const eli of rows) {
+          allocs[eli.id] = eli.matched_estimate_sub_item_id ?? "";
+          catalogs[eli.id] = { catalog_update: false, add_to_catalog: false };
+        }
+        setItemAllocations(allocs);
+        setCatalogDecisions(catalogs);
+        if (rows.length === 1 && rows[0].matched_estimate_sub_item_id) {
+          setDraft((d) => ({
+            ...d,
+            estimate_line_item_id: rows[0].matched_estimate_sub_item_id ?? "",
+          }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setEliRows([]);
+      })
+      .finally(() => {
+        if (!cancelled) setEliLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, receipt.id, confirmed]);
+
+  const isMultiItem = eliRows.length > 1;
 
   if (confirmed) {
     return (
@@ -810,22 +855,46 @@ export function ReceiptConfirm({
             This receipt has been confirmed.
           </span>
         </div>
-        {showMatchReview && jobId && (
-          <ReceiptMatchReview
-            receiptPhotoId={receipt.id}
-            jobId={jobId}
-            toast={toast}
-            onComplete={() => {
-              setShowMatchReview(false);
-              onDone?.();
-            }}
-          />
-        )}
       </div>
     );
   }
 
-  const confirm = async () => {
+  const confirmMultiItem = async () => {
+    setBusy(true);
+    try {
+      const items = eliRows.map((eli) => {
+        const decision = catalogDecisions[eli.id] ?? { catalog_update: false, add_to_catalog: false };
+        return {
+          id: eli.id,
+          matched_estimate_sub_item_id: itemAllocations[eli.id] || null,
+          catalog_update: decision.catalog_update,
+          add_to_catalog: decision.add_to_catalog,
+        };
+      });
+      const res = await api.post<{ expense_ids: string[] }>(
+        `/api/receipt-photos/${receipt.id}/confirm-items`,
+        {
+          job_id: jobId,
+          date: draft.incurred_date,
+          vendor: draft.vendor.trim() || null,
+          expense_type: draft.expense_type,
+          tax_category: draft.tax_category || null,
+          items,
+        },
+      );
+      const count = res.expense_ids?.length ?? eliRows.length;
+      toast.push("success", `${count} expense${count === 1 ? "" : "s"} created from receipt`);
+      setConfirmed(true);
+      onConfirmed();
+      onDone?.();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmSingle = async () => {
     const amt = Number(draft.amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       toast.push("error", "Enter a valid amount");
@@ -836,23 +905,30 @@ export function ReceiptConfirm({
       const body = draftToBody(draft, jobId);
       await api.post(`/api/receipt-photos/${receipt.id}/confirm`, {
         ...body,
-        // The confirm seam keys on vendor/amount/date/category in addition to
-        // the full field set, and persists the receipt_photo linkage.
         date: draft.incurred_date,
         category: draft.tax_category,
       });
       toast.push("success", "Expense created from receipt");
       setConfirmed(true);
-      setShowMatchReview(true);
-      // If there's no job, match review won't appear — close the modal now.
-      if (!jobId) {
-        onDone?.();
-      }
+      onConfirmed();
+      onDone?.();
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const confirm = () => (isMultiItem ? confirmMultiItem() : confirmSingle());
+
+  const toggleCatalog = (eliId: string, key: "catalog_update" | "add_to_catalog") => {
+    setCatalogDecisions((prev) => ({
+      ...prev,
+      [eliId]: {
+        ...(prev[eliId] ?? { catalog_update: false, add_to_catalog: false }),
+        [key]: !(prev[eliId]?.[key] ?? false),
+      },
+    }));
   };
 
   return (
@@ -868,7 +944,87 @@ export function ReceiptConfirm({
         )}
       </div>
 
-      {extractedItems.length > 0 && (
+      {eliLoading ? (
+        <Spinner />
+      ) : isMultiItem ? (
+        <div class="receipt-items">
+          <div class="receipt-items__label">AI-extracted line items — assign each to a job cost line</div>
+          <table class="table table--compact receipt-items__table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th class="num">Qty</th>
+                <th class="num">Unit</th>
+                <th class="num">Total</th>
+                <th>Job costing alignment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {eliRows.map((eli) => (
+                <tr key={eli.id}>
+                  <td>{eli.description}</td>
+                  <td class="num">{eli.quantity ?? 1}</td>
+                  <td class="num">{eli.unit_price != null ? formatCurrency(eli.unit_price) : "—"}</td>
+                  <td class="num">{formatCurrency(eli.amount)}</td>
+                  <td class="receipt-items__alloc">
+                    <Select
+                      value={itemAllocations[eli.id] ?? ""}
+                      options={alignOptions}
+                      onChange={(v) =>
+                        setItemAllocations((prev) => ({ ...prev, [eli.id]: v }))
+                      }
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {eliRows.map((eli) => {
+            const vm = eli.vendor_material;
+            const decision = catalogDecisions[eli.id] ?? { catalog_update: false, add_to_catalog: false };
+            if (!vm && !eli.is_new_material_candidate) return null;
+            return (
+              <div key={`cat-${eli.id}`} class="receipt-items__catalog" style={{ marginTop: "var(--space-xs)" }}>
+                <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>{eli.description}:</span>
+                {vm && eli.unit_price != null && (
+                  <label class="receipt-items__catalog-label">
+                    <input
+                      type="checkbox"
+                      checked={decision.catalog_update}
+                      onChange={() => toggleCatalog(eli.id, "catalog_update")}
+                    />
+                    {" "}Update catalog — {vm.vendor_name} {vm.material_name}:{" "}
+                    {vm.last_price != null ? `${formatCurrency(vm.last_price)} → ` : ""}
+                    {formatCurrency(eli.unit_price)}/{vm.unit ?? "unit"}
+                  </label>
+                )}
+                {eli.is_new_material_candidate && !vm && eli.unit_price != null && (
+                  <label class="receipt-items__catalog-label">
+                    <input
+                      type="checkbox"
+                      checked={decision.add_to_catalog}
+                      onChange={() => toggleCatalog(eli.id, "add_to_catalog")}
+                    />
+                    {" "}Add to catalog @ {formatCurrency(eli.unit_price)}/unit
+                  </label>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : eliRows.length === 1 ? (
+        <div class="receipt-items">
+          <div class="receipt-items__label">AI-extracted line item</div>
+          <table class="table table--compact">
+            <tbody>
+              <tr>
+                <td>{eliRows[0].description}</td>
+                <td class="num">{formatCurrency(eliRows[0].amount)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : parseExtractedItems(receipt.extracted_items).length > 0 ? (
         <div class="receipt-items">
           <div class="receipt-items__label">AI-extracted line items</div>
           <table class="table table--compact">
@@ -881,7 +1037,7 @@ export function ReceiptConfirm({
               </tr>
             </thead>
             <tbody>
-              {extractedItems.map((item, i) => (
+              {parseExtractedItems(receipt.extracted_items).map((item, i) => (
                 <tr key={item.id ?? i}>
                   <td>{item.description}</td>
                   <td class="num">{item.quantity ?? 1}</td>
@@ -891,15 +1047,16 @@ export function ReceiptConfirm({
               ))}
             </tbody>
           </table>
-          <div class="receipt-items__hint text--muted">
-            These items will be matched to estimate lines after you confirm.
-          </div>
         </div>
-      )}
+      ) : null}
 
-      <ExpenseFields draft={draft} set={set} lines={lines} />
-      <Button variant="primary" size="sm" disabled={busy} onClick={confirm}>
-        {busy ? "Saving…" : "Confirm → Create Expense"}
+      <ExpenseFields draft={draft} set={set} lines={lines} hideJobAlignment={isMultiItem} />
+      <Button variant="primary" size="sm" disabled={busy || eliLoading} onClick={confirm}>
+        {busy
+          ? "Saving…"
+          : isMultiItem
+            ? `Confirm → Create ${eliRows.length} Expenses`
+            : "Confirm → Create Expense"}
       </Button>
     </div>
   );

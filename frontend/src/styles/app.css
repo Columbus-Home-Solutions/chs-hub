@@ -3005,6 +3005,27 @@
 .receipt-items .table { margin: 0; font-size: var(--text-sm); }
 .receipt-items .table th,
 .receipt-items .table td { padding: 4px var(--space-sm); }
+.receipt-items__table .receipt-items__alloc {
+  min-width: 12rem;
+}
+.receipt-items__alloc .select,
+.receipt-items__alloc select {
+  width: 100%;
+  max-width: 100%;
+}
+.receipt-items__catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--text-sm);
+}
+.receipt-items__catalog-label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  cursor: pointer;
+}
 .receipt-items__hint {
   font-size: var(--text-xs);
   padding: var(--space-xs) var(--space-sm);

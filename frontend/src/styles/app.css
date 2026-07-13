@@ -2611,6 +2611,21 @@
   grid-template-columns: minmax(0, 1.4fr) minmax(220px, 1fr);
   gap: var(--space-lg);
 }
+.modal--full .photo-detail {
+  grid-template-columns: minmax(420px, 1.1fr) minmax(440px, 1fr);
+  gap: var(--space-xl);
+  align-items: start;
+}
+.modal--full .photo-detail__img {
+  max-height: 78vh;
+}
+.modal--wide .photo-detail {
+  grid-template-columns: minmax(280px, 1.35fr) minmax(300px, 1fr);
+  gap: var(--space-xl);
+}
+.modal--wide .photo-detail__img {
+  max-height: 65vh;
+}
 .photo-detail__img {
   width: 100%;
   max-height: 60vh;
@@ -2619,8 +2634,14 @@
   background: var(--color-surface-2);
 }
 @media (max-width: 640px) {
-  .photo-detail {
+  .photo-detail,
+  .modal--full .photo-detail,
+  .modal--wide .photo-detail {
     grid-template-columns: 1fr;
+  }
+  .modal--full .photo-detail__img,
+  .modal--wide .photo-detail__img {
+    max-height: 50vh;
   }
 }
 .photo-detail__img svg {
@@ -3010,7 +3031,7 @@
 }
 .receipt-queue__body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(280px, 1.2fr) minmax(320px, 1fr);
   gap: var(--space-lg);
   align-items: start;
 }
@@ -3119,6 +3140,25 @@
 
 /* ── Sprint 10: expenses, job costing, time, mileage ─────────────────────── */
 .chip-row { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.expense-type-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-xs);
+}
+.expense-type-grid .chip {
+  width: 100%;
+  text-align: center;
+}
+@media (max-width: 520px) {
+  .expense-type-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 360px) {
+  .expense-type-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .chip {
   border: 1px solid var(--color-border);
   background: var(--color-surface-1);

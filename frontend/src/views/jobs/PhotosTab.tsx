@@ -540,6 +540,7 @@ function PhotoDetailModal({
   toast: ReturnType<typeof useToast>;
 }) {
   const p = photos[index];
+  const isReceiptPhoto = p.photo_type === "receipt";
   const [caption, setCaption] = useState(p.caption ?? "");
   const [ptype, setPtype] = useState(p.photo_type);
   const [busy, setBusy] = useState(false);
@@ -629,6 +630,7 @@ function PhotoDetailModal({
 
   return (
     <Modal
+      size={isReceiptPhoto ? "full" : "default"}
       open
       onClose={onClose}
       title={

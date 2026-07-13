@@ -25,6 +25,7 @@
  */
 
 import type { Env } from "../env.js";
+import { nativeJobSourceWhere, nativeJobSourceWhereAliased } from "../lib/native-jobs.js";
 import { guard } from "../middleware/guard.js";
 import { triggerJobStatusChanged } from "../lib/wc/triggers.js";
 import { reverseJobConversion } from "../lib/quote-to-job.js";
@@ -127,14 +128,17 @@ interface JobListRow {
   conversion_complete: number | null;
   estimate_id: string | null;
   payer_id: string | null;
+  source: string | null;
   created_at: string | null;
   updated_at: string | null;
   status_since: string | null; // last status-change timestamp (or created_at)
 }
 
+const NATIVE_JOB_WHERE = nativeJobSourceWhereAliased("j");
+
 const JOB_SELECT = `
   SELECT j.id, j.job_number, j.title, j.status, j.client_id, c.name AS client_name,
-         j.billing_model, j.job_type, j.lead_source,
+         j.billing_model, j.job_type, j.lead_source, j.source,
          j.property_address, j.property_city, j.property_state, j.property_zip,
          j.contract_total, j.deposit_amount, j.deposit_paid,
          j.start_date, j.target_end_date, j.actual_end_date,
@@ -147,7 +151,7 @@ const JOB_SELECT = `
          ), j.created_at) AS status_since
   FROM jobs j
   LEFT JOIN clients c ON c.id = j.client_id
-  WHERE j.source = 'estimate'`;
+  WHERE ${NATIVE_JOB_WHERE}`;
 
 function daysSince(iso: string | null): number {
   if (!iso) return 0;
@@ -190,6 +194,7 @@ function shapeJobCard(r: JobListRow) {
     conversion_complete: (r.conversion_complete ?? 0) === 1,
     estimate_id: r.estimate_id,
     payer_id: r.payer_id,
+    source: r.source,
     days_in_status: daysSince(r.status_since),
     photo_count: 0, // stub until Sprint 8
     overdue,
@@ -264,7 +269,7 @@ export async function handleJobPipeline(env: Env): Promise<Response> {
 
 export async function handleJobDetail(env: Env, id: string): Promise<Response> {
   const row = await env.DB.prepare(
-    `${JOB_SELECT.replace("WHERE j.source = 'estimate'", "WHERE j.id = ? AND j.source = 'estimate'")}`,
+    `${JOB_SELECT.replace(`WHERE ${NATIVE_JOB_WHERE}`, `WHERE j.id = ? AND ${NATIVE_JOB_WHERE}`)}`,
   )
     .bind(id)
     .first<JobListRow & { client_name: string | null }>();
@@ -449,7 +454,7 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
   }
 
   const job = await env.DB.prepare(
-    "SELECT id FROM jobs WHERE id = ? AND source = 'estimate'",
+    `SELECT id FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
   )
     .bind(id)
     .first<{ id: string }>();
@@ -657,7 +662,7 @@ export async function handleJobCloseEligibility(request: Request, env: Env, id: 
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
 
-  const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ? AND source = 'estimate'")
+  const job = await env.DB.prepare(`SELECT id FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`)
     .bind(id)
     .first<{ id: string }>();
   if (!job) return err(404, "not_found", "Job not found.");
@@ -681,7 +686,7 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   }
 
   const job = await env.DB.prepare(
-    "SELECT id, status FROM jobs WHERE id = ? AND source = 'estimate'",
+    `SELECT id, status FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
   )
     .bind(id)
     .first<{ id: string; status: string }>();
@@ -1232,7 +1237,7 @@ export async function handleJobDelete(request: Request, env: Env, id: string): P
 
   const job = await env.DB.prepare(
     `SELECT id, job_number, title, status, client_id, estimate_id
-     FROM jobs WHERE id = ? AND source = 'estimate'`,
+     FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
   )
     .bind(id)
     .first<{

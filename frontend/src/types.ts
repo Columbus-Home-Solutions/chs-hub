@@ -635,6 +635,7 @@ export interface JobCard {
   conversion_complete: boolean;
   estimate_id: string | null;
   payer_id: string | null;
+  source?: string | null;
   days_in_status: number;
   photo_count: number;
   overdue: boolean;

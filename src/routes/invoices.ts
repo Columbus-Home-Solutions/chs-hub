@@ -15,6 +15,7 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
+import { nativeJobSourceWhere } from "../lib/native-jobs.js";
 import { triggerInvoiceSent } from "../lib/notification-engine.js";
 import {
   INVOICE_COLUMNS,
@@ -189,7 +190,7 @@ export async function handleInvoiceCreate(request: Request, env: Env): Promise<R
   }
 
   const job = await env.DB.prepare(
-    "SELECT id, client_id, billing_model, conversion_reversed FROM jobs WHERE id = ? AND source = 'estimate'",
+    `SELECT id, client_id, billing_model, conversion_reversed FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
   )
     .bind(jobId)
     .first<JobCtx>();
@@ -416,7 +417,7 @@ export async function handleInvoiceVoid(request: Request, env: Env, id: string):
 
 export async function handleJobInvoices(env: Env, jobId: string): Promise<Response> {
   const job = await env.DB.prepare(
-    "SELECT id, billing_model, contract_total FROM jobs WHERE id = ? AND source = 'estimate'",
+    `SELECT id, billing_model, contract_total FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
   )
     .bind(jobId)
     .first<{ id: string; billing_model: string | null; contract_total: number | null }>();

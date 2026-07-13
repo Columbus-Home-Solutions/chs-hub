@@ -130,16 +130,12 @@ export function ExpenseFields({
   return (
     <>
       <FormField label="Type" required>
-        <div
-          class="chip-row"
-          style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(7.5rem, 1fr))", gap: "var(--space-xs)" }}
-        >
+        <div class="expense-type-grid">
           {EXPENSE_TYPE_OPTIONS.map((o) => (
             <button
               key={o.value}
               type="button"
               class={`chip${draft.expense_type === o.value ? " chip--active" : ""}`}
-              style={{ width: "100%", textAlign: "center" }}
               onClick={() => set("expense_type", o.value)}
             >
               {o.label}

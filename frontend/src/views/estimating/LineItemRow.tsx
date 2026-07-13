@@ -63,21 +63,24 @@ function autoGrow(el: HTMLTextAreaElement) {
 
 /** Prefill quantities_notes from sub-item qty/unit, falling back to parent line item. */
 function formatSubItemQuantities(sub: EstimateSubItem | null, lineItem: EstimateLineItem): string {
-  if (!sub) return "";
-  const subQty = sub.quantity;
-  const subUnit = (sub.unit ?? "").trim();
   const lineQty = lineItem.quantity;
   const lineUnit = (lineItem.unit ?? "").trim();
-  const hasSubQty = subQty != null && subQty !== 0;
 
-  // 1. Sub-item has both quantity and unit
-  if (hasSubQty && subUnit) return `${subQty} ${subUnit}`;
-  // 2. Sub-item has quantity but no unit → parent line unit
-  if (hasSubQty) {
-    if (lineUnit) return `${subQty} ${lineUnit}`;
-    return String(subQty);
+  if (sub) {
+    const subQty = sub.quantity;
+    const subUnit = (sub.unit ?? "").trim();
+    const hasSubQty = subQty != null && subQty !== 0;
+
+    // 1. Sub-item has both quantity and unit
+    if (hasSubQty && subUnit) return `${subQty} ${subUnit}`;
+    // 2. Sub-item has quantity but no unit → parent line unit
+    if (hasSubQty) {
+      if (lineUnit) return `${subQty} ${lineUnit}`;
+      return String(subQty);
+    }
   }
-  // 3. Sub-item has neither → parent line quantity + unit together
+
+  // 3. No sub-item, or sub-item has neither → parent line quantity + unit together
   const hasLineQty = lineQty != null && lineQty !== 0;
   if (hasLineQty) {
     if (lineUnit) return `${lineQty} ${lineUnit}`;

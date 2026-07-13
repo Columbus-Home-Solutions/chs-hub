@@ -21,9 +21,9 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { createOwnerInApp, sendSubEmail } from "../lib/notification-engine.js";
 import { getTwilioConfig, sendSms } from "../lib/twilio.js";
-import { applyVendorMaterialPriceUpdate } from "../lib/receipt-matching.js";
 import { putImage, streamObject } from "../lib/r2.js";
 import { assignAwardedBidToJobIfExists } from "../lib/bid-job-assignment.js";
+import { applyBidAwardSubItemCost } from "../lib/bid-award-sub-item.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -577,37 +577,25 @@ export async function handleAwardBid(
     .bind(id, winningSubmissionId)
     .run();
 
-  // ── Update vendor_materials if tied to a sub item with a material_id ──────
-  if (br.estimate_sub_item_id) {
-    const subItem = await env.DB.prepare(
-      `SELECT id, material_id, quantity FROM estimate_sub_items WHERE id = ?`,
+  // ── Apply winning price to estimate internal cost breakdown ───────────────
+  const vendorName =
+    winningSub?.company_name ||
+    winningSub?.contact_name ||
+    winningSub?.primary_contact ||
+    null;
+  const linkedSubItemId = await applyBidAwardSubItemCost(
+    env,
+    br,
+    winningSubmission.price,
+    vendorName,
+  );
+  if (linkedSubItemId && !br.estimate_sub_item_id) {
+    await env.DB.prepare(
+      `UPDATE bid_requests SET estimate_sub_item_id = ? WHERE id = ?`,
     )
-      .bind(br.estimate_sub_item_id)
-      .first<{ id: string; material_id: string | null; quantity: number | null }>();
-
-    if (subItem) {
-      const qty = subItem.quantity ?? 1;
-      const unitCost = Math.round((winningSubmission.price / qty) * 100) / 100;
-      const totalCost = Math.round(winningSubmission.price * 100) / 100;
-
-      // Update the estimate sub-item cost
-      await env.DB.prepare(
-        `UPDATE estimate_sub_items SET unit_cost = ?, total_cost = ? WHERE id = ?`,
-      )
-        .bind(unitCost, totalCost, br.estimate_sub_item_id)
-        .run();
-
-      // Update vendor_materials catalog if the item references a material
-      if (subItem.material_id) {
-        const today = new Date().toISOString().slice(0, 10);
-        await applyVendorMaterialPriceUpdate(
-          env.DB,
-          subItem.material_id,
-          winningSubmission.price,
-          today,
-        );
-      }
-    }
+      .bind(linkedSubItemId, id)
+      .run();
+    br.estimate_sub_item_id = linkedSubItemId;
   }
 
   // ── Job schedule assignment when job already exists (post-conversion award) ─

@@ -64,6 +64,7 @@ interface BidRequest {
 interface BidComparisonViewProps {
   bidRequestId: string;
   onBack?: () => void;
+  onAwarded?: () => void;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ function statusBadge(sub: BidSub, awardedBidId: string | null): { label: string;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function BidComparisonView({ bidRequestId, onBack }: BidComparisonViewProps) {
+export function BidComparisonView({ bidRequestId, onBack, onAwarded }: BidComparisonViewProps) {
   const [data, setData] = useState<BidRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +125,7 @@ export function BidComparisonView({ bidRequestId, onBack }: BidComparisonViewPro
       });
       setConfirmAward(null);
       await load();
+      onAwarded?.();
     } catch (e) {
       setAwardError((e as Error).message || "Award failed.");
     } finally {

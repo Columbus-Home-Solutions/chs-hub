@@ -928,6 +928,7 @@ function LineItemEditor({
                 onDragOver={() => setOverId(li.id)}
                 onDrop={() => onDrop(li.id)}
                 mutate={mutate}
+                reload={reload}
                 onNewConsumed={() => setNewItemId(null)}
               />
             ))}

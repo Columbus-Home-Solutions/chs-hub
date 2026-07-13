@@ -25,6 +25,7 @@ export interface LineItemRowProps {
   onDragOver: () => void;
   onDrop: () => void;
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+  reload?: () => Promise<void>;
   onNewConsumed?: () => void;
 }
 
@@ -60,14 +61,30 @@ function autoGrow(el: HTMLTextAreaElement) {
   el.style.height = `${Math.max(el.scrollHeight, 72)}px`;
 }
 
-/** Prefill quantities_notes from sub-item qty + unit (falls back to parent line item unit). */
+/** Prefill quantities_notes from sub-item qty/unit, falling back to parent line item. */
 function formatSubItemQuantities(sub: EstimateSubItem | null, lineItem: EstimateLineItem): string {
   if (!sub) return "";
-  const qty = sub.quantity;
-  if (qty == null || qty === 0) return "";
-  const unit = (sub.unit ?? lineItem.unit ?? "").trim();
-  if (!unit) return String(qty);
-  return `${qty} ${unit}`;
+  const subQty = sub.quantity;
+  const subUnit = (sub.unit ?? "").trim();
+  const lineQty = lineItem.quantity;
+  const lineUnit = (lineItem.unit ?? "").trim();
+  const hasSubQty = subQty != null && subQty !== 0;
+
+  // 1. Sub-item has both quantity and unit
+  if (hasSubQty && subUnit) return `${subQty} ${subUnit}`;
+  // 2. Sub-item has quantity but no unit → parent line unit
+  if (hasSubQty) {
+    if (lineUnit) return `${subQty} ${lineUnit}`;
+    return String(subQty);
+  }
+  // 3. Sub-item has neither → parent line quantity + unit together
+  const hasLineQty = lineQty != null && lineQty !== 0;
+  if (hasLineQty) {
+    if (lineUnit) return `${lineQty} ${lineUnit}`;
+    return String(lineQty);
+  }
+  // 4. Nothing to prefill
+  return "";
 }
 
 interface BidRequestSummary {
@@ -144,6 +161,7 @@ export function LineItemRow({
   onDragOver,
   onDrop,
   mutate,
+  reload,
   onNewConsumed,
 }: LineItemRowProps) {
   const [expanded, setExpanded] = useState(!!isNew);
@@ -194,6 +212,20 @@ export function LineItemRow({
     }
     return map;
   }, [lineItemBids]);
+
+  const hasOpenBids = lineItemBids.some((br) => br.status === "open");
+
+  // Poll for new submissions while open bids exist (same 20s interval as estimate-request polling).
+  useEffect(() => {
+    if (!hasOpenBids) return;
+    const poll = window.setInterval(() => loadBidRequests(), 20_000);
+    return () => window.clearInterval(poll);
+  }, [hasOpenBids, loadBidRequests]);
+
+  const refreshAfterAward = useCallback(() => {
+    loadBidRequests();
+    void reload?.();
+  }, [loadBidRequests, reload]);
 
   const openBidModal = (sub: EstimateSubItem | null) => {
     setBidSubItem(sub);
@@ -580,6 +612,7 @@ export function LineItemRow({
               setViewingBidId(null);
               loadBidRequests();
             }}
+            onAwarded={refreshAfterAward}
           />
         </div>
       )}

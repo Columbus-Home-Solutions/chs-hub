@@ -52,6 +52,7 @@ import { triggerNotification } from "../lib/notification-engine.js";
 import { renderContract } from "../lib/contracts.js";
 import { depositFromSchedule, isPerLineItemBilling } from "../lib/deposit-from-schedule.js";
 import { generateAndSendEstimateContract } from "../lib/estimate-contract-document.js";
+import { createEstimateSubItem } from "../lib/estimate-sub-items.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -215,7 +216,7 @@ interface Totals {
  * sub-items, persist the per-row totals + the estimate rollup, and return the
  * rollup. Called after any line-item / sub-item / header mutation and on read.
  */
-async function recomputeEstimate(env: Env, estimateId: string): Promise<Totals> {
+export async function recomputeEstimate(env: Env, estimateId: string): Promise<Totals> {
   const lineItems = (
     await env.DB.prepare("SELECT * FROM estimate_line_items WHERE estimate_id = ?")
       .bind(estimateId)
@@ -1676,63 +1677,27 @@ export async function handleSubItemCreate(
   if (!description) return err(400, "bad_request", "description is required");
   if (!category) return err(400, "bad_request", "category is required");
 
-  const maxSort = await env.DB.prepare(
-    "SELECT COALESCE(MAX(sort_order), -1) AS n FROM estimate_sub_items WHERE parent_line_item_id = ?",
-  )
-    .bind(lineItemId)
-    .first<{ n: number }>();
-  const sortOrder = num(body.sort_order) ?? (maxSort?.n ?? -1) + 1;
-
-  const id = crypto.randomUUID();
-  const quantity = num(body.quantity);
-  const unitCost = num(body.unit_cost) ?? 0;
-
-  // Snapshot the material price if a material_id was supplied (business rule 5).
-  let materialId = str(body.material_id);
-  let resolvedUnitCost = unitCost;
-  let resolvedVendor = str(body.vendor);
-  if (materialId) {
-    const mat = await env.DB.prepare(
-      "SELECT id, vendor_name, last_price FROM vendor_materials WHERE id = ?",
-    )
-      .bind(materialId)
-      .first<{ id: string; vendor_name: string; last_price: number }>();
-    if (mat) {
-      if (!("unit_cost" in body)) resolvedUnitCost = mat.last_price;
-      if (!resolvedVendor) resolvedVendor = mat.vendor_name;
-    } else {
-      materialId = null; // reference only; don't store a dangling id
-    }
-  }
-
-  await env.DB.prepare(
-    `INSERT INTO estimate_sub_items
-      (id, parent_line_item_id, sort_order, description, category, vendor, quantity, unit, unit_cost, total_cost, material_id, notes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-  )
-    .bind(
-      id,
-      lineItemId,
-      sortOrder,
+  const created = await createEstimateSubItem(
+    env,
+    lineItemId,
+    {
       description,
       category,
-      resolvedVendor,
-      quantity,
-      str(body.unit),
-      resolvedUnitCost,
-      round2((quantity ?? 0) * resolvedUnitCost),
-      materialId,
-      str(body.notes),
-    )
-    .run();
+      vendor: str(body.vendor),
+      quantity: num(body.quantity),
+      unit: str(body.unit),
+      unit_cost: num(body.unit_cost) ?? 0,
+      material_id: str(body.material_id),
+      notes: str(body.notes),
+      sort_order: num(body.sort_order),
+    },
+    { auditUserEmail: user.email },
+  );
+  if (!created) return err(404, "not_found", "Parent line item not found");
 
-  await recomputeEstimate(env, parent.estimate_id);
-  await logAudit(env, user.email, "estimate_sub_item_created", "estimate_sub_item", id, {
-    parent_line_item_id: lineItemId,
-    category,
-  });
-
-  const row = await env.DB.prepare("SELECT * FROM estimate_sub_items WHERE id = ?").bind(id).first<SubItemRow>();
+  const row = await env.DB.prepare("SELECT * FROM estimate_sub_items WHERE id = ?")
+    .bind(created.id)
+    .first<SubItemRow>();
   return json({ sub_item: row ? shapeSubItem(row) : null }, { status: 201 });
 }
 

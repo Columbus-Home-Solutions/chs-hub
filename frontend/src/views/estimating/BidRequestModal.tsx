@@ -344,19 +344,19 @@ export function BidRequestModal({
             </div>
           )}
 
-          <div class="punch-done-photo-pick">
+          <div class="bid-ref-photo-pick">
             <button
               type="button"
-              class="punch-done-photo-pick__btn"
+              class="bid-ref-photo-pick__btn"
               disabled={submitting}
               onClick={() => cameraRef.current?.click()}
             >
               Take photo
             </button>
-            <span class="punch-done-photo-pick__or">or</span>
+            <span class="bid-ref-photo-pick__or">or</span>
             <button
               type="button"
-              class="punch-done-photo-pick__btn"
+              class="bid-ref-photo-pick__btn"
               disabled={submitting}
               onClick={() => libraryRef.current?.click()}
             >

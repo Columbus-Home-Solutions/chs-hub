@@ -27,6 +27,9 @@ interface ScopeLineItem {
   line_item_id: string;
   name: string;
   budget: number;
+  materials?: number;
+  labor?: number;
+  subs?: number;
   sub_items: { id: string; category: string; budget: number }[];
 }
 interface ScopeContext {
@@ -203,7 +206,41 @@ function trackerTone(budget: number, actual: number): "success" | "warning" | "e
   return "success";
 }
 
-export function CycleManager({ jobId }: { jobId: string }) {
+/** Full (100%) category rollup for one line item — mirrors categoryCostsForLineItem. */
+function categoryCostsForLineItem(line: ScopeLineItem): { materials: number; labor: number; subs: number } {
+  return projectedCostsFromScope([line], [{ line_item_id: line.line_item_id, percentage: 100 }]);
+}
+
+function ScopeCategoryBreakdown({ line }: { line: ScopeLineItem }) {
+  const cats =
+    line.materials != null && line.labor != null && line.subs != null
+      ? { materials: line.materials, labor: line.labor, subs: line.subs }
+      : categoryCostsForLineItem(line);
+  return (
+    <span class="cycle-scope__breakdown">
+      <span class="cycle-scope__breakdown-item">
+        <span class="cycle-scope__breakdown-label">Materials</span>
+        {formatCurrency(cats.materials)}
+      </span>
+      <span class="cycle-scope__breakdown-item">
+        <span class="cycle-scope__breakdown-label">Labor</span>
+        {formatCurrency(cats.labor)}
+      </span>
+      <span class="cycle-scope__breakdown-item">
+        <span class="cycle-scope__breakdown-label">Subs</span>
+        {formatCurrency(cats.subs)}
+      </span>
+    </span>
+  );
+}
+
+export function CycleManager({
+  jobId,
+  onInvoicesChanged,
+}: {
+  jobId: string;
+  onInvoicesChanged?: () => void;
+}) {
   const { data, loading, error, refetch } = useApi<CycleListResponse>(
     `/api/jobs/${jobId}/billing-cycles`,
   );
@@ -287,7 +324,10 @@ export function CycleManager({ jobId }: { jobId: string }) {
               cycle={c}
               expanded={expanded === c.id}
               onToggle={() => setExpanded(expanded === c.id ? null : c.id)}
-              onChanged={refetch}
+              onChanged={() => {
+                refetch();
+                onInvoicesChanged?.();
+              }}
               toast={toast}
             />
           ))}
@@ -302,6 +342,7 @@ export function CycleManager({ jobId }: { jobId: string }) {
           onCreated={() => {
             setBuilderOpen(false);
             refetch();
+            onInvoicesChanged?.();
           }}
           toast={toast}
         />
@@ -796,7 +837,7 @@ function ScopeChecklist({
                   }
                 />
                 <span class="cycle-scope__name">{li.name}</span>
-                <span class="cycle-scope__budget text--muted">{formatCurrency(li.budget)}</span>
+                <ScopeCategoryBreakdown line={li} />
               </label>
               {checked && (
                 <div class="cycle-scope__pct">
@@ -864,12 +905,28 @@ function NewCycleModal({
   const [busy, setBusy] = useState(false);
 
   const scopeContext: ScopeContext = {
-    line_items: (costing.data?.costing.lines ?? []).map((l) => ({
-      line_item_id: l.line_item_id,
-      name: l.name,
-      budget: l.budget,
-      sub_items: l.sub_items,
-    })),
+    line_items: (costing.data?.costing.lines ?? []).map((l) => {
+      const sub_items = l.sub_items.map((s) => ({
+        id: s.id,
+        category: s.category,
+        budget: s.budget,
+      }));
+      const cats = categoryCostsForLineItem({
+        line_item_id: l.line_item_id,
+        name: l.name,
+        budget: l.budget,
+        sub_items,
+      });
+      return {
+        line_item_id: l.line_item_id,
+        name: l.name,
+        budget: l.budget,
+        materials: cats.materials,
+        labor: cats.labor,
+        subs: cats.subs,
+        sub_items,
+      };
+    }),
     cumulative_allocations: (() => {
       const map: Record<string, number> = {};
       for (const cycle of cyclesList.data?.cycles ?? []) {

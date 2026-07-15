@@ -903,8 +903,25 @@
   cursor: pointer;
   font-size: var(--text-sm);
 }
-.cycle-scope__name { flex: 1; }
-.cycle-scope__budget { font-family: var(--font-mono); font-size: var(--text-xs); }
+.cycle-scope__name { flex: 0 1 auto; min-width: 6rem; }
+.cycle-scope__breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-sm);
+  margin-left: auto;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+}
+.cycle-scope__breakdown-item {
+  display: inline-flex;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+.cycle-scope__breakdown-label {
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
 .cycle-scope__pct {
   display: flex;
   align-items: center;

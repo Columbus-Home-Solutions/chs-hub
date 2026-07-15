@@ -488,7 +488,9 @@ export function FinancialTab({ jobId }: { jobId: string }) {
         )}
       </Card>
 
-      {canSeeCosting && data.billing_model === "cost_plus" && <CycleManager jobId={jobId} />}
+      {canSeeCosting && data.billing_model === "cost_plus" && (
+        <CycleManager jobId={jobId} onInvoicesChanged={refetch} />
+      )}
 
       {canSeeCosting && (
         <BudgetVsActual costing={costing.data?.costing ?? null} loading={costing.loading} />

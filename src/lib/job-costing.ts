@@ -122,6 +122,24 @@ export function projectedCostsFromScope(
   return { materials, labor, subs };
 }
 
+/** Full (100%) category rollup for one parent line item — scope checklist display. */
+export function categoryCostsForLineItem(
+  line: { line_item_id: string; sub_items: { category: string; budget: number }[] },
+): CategoryProjection {
+  // Same bucket rules as projectedCostsFromScope at 100%.
+  let materials = 0;
+  let labor = 0;
+  let subs = 0;
+  for (const sub of line.sub_items) {
+    const budget = round2(sub.budget);
+    const cat = (sub.category ?? "").toLowerCase();
+    if (cat === "labor") labor = round2(labor + budget);
+    else if (cat === "subcontractor") subs = round2(subs + budget);
+    else materials = round2(materials + budget);
+  }
+  return { materials, labor, subs };
+}
+
 export interface CostingActuals {
   /** parent line_item id → actual $ from aligned (non-void) expenses */
   byParent: Map<string, number>;

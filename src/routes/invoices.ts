@@ -417,17 +417,22 @@ export async function handleInvoiceVoid(request: Request, env: Env, id: string):
 
 export async function handleJobInvoices(env: Env, jobId: string): Promise<Response> {
   const job = await env.DB.prepare(
-    `SELECT id, billing_model, contract_total FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
+    "SELECT id, billing_model, contract_total FROM jobs WHERE id = ?",
   )
     .bind(jobId)
     .first<{ id: string; billing_model: string | null; contract_total: number | null }>();
   if (!job) return err(404, "not_found", "Job not found.");
 
+  // All invoice types for this job — including cost_plus_cycle. The OR branch
+  // catches any cycle-linked invoice whose job_id was not set at creation time.
   const rows = (
     await env.DB.prepare(
-      `SELECT ${INVOICE_COLUMNS} FROM invoices WHERE job_id = ? ORDER BY COALESCE(invoice_number, 0) DESC, created_at DESC`,
+      `SELECT ${INVOICE_COLUMNS} FROM invoices
+       WHERE job_id = ?
+          OR cost_plus_cycle_id IN (SELECT id FROM billing_cycles WHERE job_id = ?)
+       ORDER BY COALESCE(invoice_number, 0) DESC, created_at DESC`,
     )
-      .bind(jobId)
+      .bind(jobId, jobId)
       .all<InvoiceRow>()
   ).results ?? [];
   const invoices = rows.map(shapeInvoice);

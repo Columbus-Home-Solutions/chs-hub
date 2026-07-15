@@ -34,6 +34,7 @@ import {
 } from "../lib/cost-plus.js";
 import {
   buildJobCosting,
+  categoryCostsForLineItem,
   cumulativeScopeAllocations,
   parseScopeAllocations,
   type ScopeAllocation,
@@ -141,16 +142,26 @@ async function loadScopeContext(env: Env, jobId: string, excludeCycleId: string)
     ).results ?? [];
   const cumulative = cumulativeScopeAllocations(cycleRows, excludeCycleId);
   return {
-    line_items: costing.lines.map((l) => ({
-      line_item_id: l.line_item_id,
-      name: l.name,
-      budget: l.budget,
-      sub_items: l.sub_items.map((s) => ({
+    line_items: costing.lines.map((l) => {
+      const sub_items = l.sub_items.map((s) => ({
         id: s.id,
         category: s.category,
         budget: s.budget,
-      })),
-    })),
+      }));
+      const categories = categoryCostsForLineItem({
+        line_item_id: l.line_item_id,
+        sub_items,
+      });
+      return {
+        line_item_id: l.line_item_id,
+        name: l.name,
+        budget: l.budget,
+        materials: categories.materials,
+        labor: categories.labor,
+        subs: categories.subs,
+        sub_items,
+      };
+    }),
     cumulative_allocations: Object.fromEntries(cumulative),
   };
 }

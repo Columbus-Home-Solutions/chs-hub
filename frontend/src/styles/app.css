@@ -869,6 +869,57 @@
   border-top: 1px solid var(--color-border);
   background: var(--color-surface-2);
 }
+.recon-itemized__label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
+.recon-itemized__toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: var(--text-xs);
+  color: var(--color-primary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.recon-itemized__toggle:hover {
+  color: var(--color-primary-hover);
+}
+.recon-itemized__detail-row td {
+  padding-top: 0;
+  padding-bottom: var(--space-sm);
+  background: var(--color-surface);
+}
+.recon-itemized__list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-xs) 0 var(--space-xs) var(--space-md);
+  border-left: 2px solid var(--color-border);
+}
+.recon-itemized__line {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-sm);
+  padding: 2px 0;
+  font-size: var(--text-sm);
+}
+.recon-itemized__desc {
+  min-width: 0;
+}
+.recon-itemized__date {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.recon-itemized__amount {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.recon-itemized__receipt {
+  font-size: var(--text-xs);
+}
 .cycle-preview {
   border-top: 1px solid var(--color-border);
   padding-top: var(--space-sm);

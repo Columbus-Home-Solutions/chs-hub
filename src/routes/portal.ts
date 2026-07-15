@@ -12,6 +12,7 @@
  *   GET  /api/portal/:token/invoices              invoices + payments + schedule
  *   POST /api/portal/:token/pay/:invoiceId        Stripe intent (REUSES Sprint 9)
  *   GET  /api/portal/:token/budget                cost-plus Budget & Costs (S11)
+ *   GET  /api/portal/:token/expenses/:id/receipt  expense receipt image (token-gated)
  *   GET  /api/portal/:token/messages              portal_message thread
  *   POST /api/portal/:token/messages              client → contractor message
  *   GET  /api/portal/:token/schedule              S13 SEAM (empty state)
@@ -304,6 +305,42 @@ async function handlePhotoImage(
     .first<{ id: string }>();
   if (!owns) return err(404, "not_found");
   return handlePhotoStream(env, photoId, variant);
+}
+
+/** Token-gated receipt stream for an expense on the portal job (R2 key or linked photo). */
+async function handlePortalExpenseReceipt(
+  env: Env,
+  token: string,
+  expenseId: string,
+): Promise<Response> {
+  const job = await resolveJob(env, token);
+  if (!job) return err(404, "invalid_token");
+
+  const row = await env.DB.prepare(
+    `SELECT job_id, receipt_r2_key, receipt_photo_id
+       FROM expenses
+      WHERE id = ? AND COALESCE(is_active, 1) = 1`,
+  )
+    .bind(expenseId)
+    .first<{
+      job_id: string | null;
+      receipt_r2_key: string | null;
+      receipt_photo_id: string | null;
+    }>();
+
+  if (!row || row.job_id !== job.id) return err(404, "not_found");
+  if (row.receipt_r2_key) {
+    const obj = await env.FILES.get(row.receipt_r2_key);
+    if (!obj) return err(404, "receipt_missing");
+    const headers = new Headers();
+    obj.writeHttpMetadata(headers);
+    headers.set("cache-control", "private, max-age=300");
+    return new Response(obj.body, { headers });
+  }
+  if (row.receipt_photo_id) {
+    return handlePhotoStream(env, row.receipt_photo_id, "original");
+  }
+  return err(404, "no_receipt_attached");
 }
 
 // ─── GET /api/portal/:token/invoices ───────────────────────────────────────────
@@ -1226,6 +1263,15 @@ export async function handlePortalApi(
 
   const budget = p.match(/^\/api\/portal\/([^/]+)\/budget$/);
   if (budget && method === "GET") return handleBudget(env, decodeURIComponent(budget[1]));
+
+  const expenseReceipt = p.match(/^\/api\/portal\/([^/]+)\/expenses\/([^/]+)\/receipt$/);
+  if (expenseReceipt && method === "GET") {
+    return handlePortalExpenseReceipt(
+      env,
+      decodeURIComponent(expenseReceipt[1]),
+      decodeURIComponent(expenseReceipt[2]),
+    );
+  }
 
   const messages = p.match(/^\/api\/portal\/([^/]+)\/messages$/);
   if (messages) {

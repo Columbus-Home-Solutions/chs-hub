@@ -284,6 +284,138 @@ export async function computeJobActuals(
   return { byParent, bySubItem, unallocated, laborFromTime, totalExpenses, subExpenses };
 }
 
+/** One expense row in a billing-cycle window — parallel to {@link computeJobActuals} filters. */
+export interface PeriodExpenseDetail {
+  id: string;
+  date: string | null;
+  vendor: string | null;
+  description: string | null;
+  expense_type: string | null;
+  amount: number;
+  receipt_photo_id: string | null;
+  receipt_r2_key: string | null;
+  sub_id: string | null;
+  sub_name: string | null;
+}
+
+/** One closed time entry in a billing-cycle window. */
+export interface PeriodTimeEntryDetail {
+  id: string;
+  date: string | null;
+  worker: string;
+  role: string;
+  hours: number | null;
+  hourly_rate: number | null;
+  labor_cost: number;
+}
+
+/**
+ * Itemized expenses for a date window — same filters as {@link computeJobActuals}
+ * (active rows only, incurred_date/incurred_at bounds). Does not alter aggregation.
+ */
+export async function fetchPeriodExpenseDetails(
+  env: Env,
+  jobId: string,
+  window: ActualsWindow = {},
+): Promise<PeriodExpenseDetail[]> {
+  const where: string[] = ["e.job_id = ?", "COALESCE(e.is_active, 1) = 1"];
+  const binds: unknown[] = [jobId];
+  if (window.from) {
+    where.push("COALESCE(e.incurred_date, e.incurred_at) >= ?");
+    binds.push(window.from);
+  }
+  if (window.to) {
+    where.push("COALESCE(e.incurred_date, e.incurred_at) <= ?");
+    binds.push(window.to);
+  }
+  const rows = (
+    await env.DB.prepare(
+      `SELECT e.id,
+              COALESCE(e.incurred_date, e.incurred_at) AS date,
+              e.vendor, e.description, e.expense_type, e.amount,
+              e.receipt_photo_id, e.receipt_r2_key, e.sub_id,
+              s.company AS sub_name
+         FROM expenses e
+         LEFT JOIN subcontractors s ON s.id = e.sub_id
+        WHERE ${where.join(" AND ")}
+        ORDER BY COALESCE(e.incurred_date, e.incurred_at) ASC, e.id ASC`,
+    )
+      .bind(...binds)
+      .all<{
+        id: string;
+        date: string | null;
+        vendor: string | null;
+        description: string | null;
+        expense_type: string | null;
+        amount: number | null;
+        receipt_photo_id: string | null;
+        receipt_r2_key: string | null;
+        sub_id: string | null;
+        sub_name: string | null;
+      }>()
+  ).results ?? [];
+  return rows.map((e) => ({
+    id: e.id,
+    date: e.date,
+    vendor: e.vendor,
+    description: e.description,
+    expense_type: e.expense_type,
+    amount: round2(e.amount ?? 0),
+    receipt_photo_id: e.receipt_photo_id,
+    receipt_r2_key: e.receipt_r2_key,
+    sub_id: e.sub_id,
+    sub_name: e.sub_name,
+  }));
+}
+
+/**
+ * Itemized closed time entries for a date window — same filters as
+ * {@link computeJobActuals} (clock_out required, clock_in bounds).
+ */
+export async function fetchPeriodTimeEntryDetails(
+  env: Env,
+  jobId: string,
+  window: ActualsWindow = {},
+): Promise<PeriodTimeEntryDetail[]> {
+  const where: string[] = ["job_id = ?", "clock_out IS NOT NULL"];
+  const binds: unknown[] = [jobId];
+  if (window.from) {
+    where.push("clock_in >= ?");
+    binds.push(window.from);
+  }
+  if (window.to) {
+    where.push("clock_in <= ?");
+    binds.push(`${window.to}T23:59:59Z`);
+  }
+  const rows = (
+    await env.DB.prepare(
+      `SELECT id, date(clock_in) AS date, worker, role, hours, hourly_rate, labor_cost
+         FROM time_entries
+        WHERE ${where.join(" AND ")}
+        ORDER BY clock_in ASC, id ASC`,
+    )
+      .bind(...binds)
+      .all<{
+        id: string;
+        date: string | null;
+        worker: string;
+        role: string;
+        hours: number | null;
+        hourly_rate: number | null;
+        labor_cost: number | null;
+      }>()
+  ).results ?? [];
+  return rows.map((t) => ({
+    id: t.id,
+    date: t.date,
+    worker: t.worker,
+    role: t.role,
+    hours: t.hours,
+    hourly_rate: t.hourly_rate,
+    labor_cost: round2(t.labor_cost ?? 0),
+  }));
+}
+
 export type VarianceStatus = "under" | "within" | "over";
 
 /** Color/status logic: over budget = red; within ~10% of budget = yellow; else green. */

@@ -498,6 +498,41 @@
 .portal-budget__expenses {
   margin-top: 12px;
 }
+.portal-recon-itemized__toggle {
+  display: block;
+  margin-top: 2px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--color-primary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.portal-recon-itemized__panel {
+  grid-column: 1 / -1;
+  padding: 4px 0 8px 12px;
+  border-left: 2px solid var(--color-border);
+  margin-bottom: 4px;
+}
+.portal-recon-itemized__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.portal-recon-itemized__line {
+  display: grid;
+  grid-template-columns: 1.4fr auto auto;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.portal-recon-itemized__line > span:last-child {
+  text-align: right;
+}
+.portal-recon-itemized__receipt {
+  font-size: 11px;
+}
 .portal-budget__explain {
   margin-top: 12px;
   border-radius: var(--radius-md);

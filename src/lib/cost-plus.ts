@@ -39,7 +39,13 @@
  */
 
 import type { Env } from "../env.js";
-import { computeJobActuals } from "./job-costing.js";
+import {
+  computeJobActuals,
+  fetchPeriodExpenseDetails,
+  fetchPeriodTimeEntryDetails,
+  type PeriodExpenseDetail,
+  type PeriodTimeEntryDetail,
+} from "./job-costing.js";
 import { getNumericSetting } from "./rates.js";
 
 export function round2(n: number): number {
@@ -273,6 +279,38 @@ export interface ReconReportExpenseLine {
   amount: number;
 }
 
+/** Expense line in the itemized reconciliation backup (materials or subs bucket). */
+export interface ReconItemizedExpense {
+  id: string;
+  kind: "expense";
+  date: string | null;
+  vendor: string | null;
+  description: string | null;
+  expense_type: string | null;
+  amount: number;
+  sub_name: string | null;
+  /** Owner-facing relative URL; null when no receipt is attached. */
+  receipt_url: string | null;
+}
+
+/** Time-entry line in the labor bucket. */
+export interface ReconItemizedTimeEntry {
+  id: string;
+  kind: "time_entry";
+  date: string | null;
+  worker: string;
+  role: string;
+  hours: number | null;
+  hourly_rate: number | null;
+  amount: number;
+}
+
+export interface ReconItemized {
+  materials: ReconItemizedExpense[];
+  labor: ReconItemizedTimeEntry[];
+  subs: ReconItemizedExpense[];
+}
+
 export interface ReconciliationReport {
   cycle_id: string;
   cycle_number: number;
@@ -283,6 +321,7 @@ export interface ReconciliationReport {
   contractor_fee_rate: number;
   categories: ReconReportCategory[];
   expenses: ReconReportExpenseLine[];
+  itemized: ReconItemized;
   labor_from_time: number;
   credit_from_prior: number;
   delta: number;
@@ -368,6 +407,38 @@ function explain(delta: number, isFinal: boolean): { outcome: Reconciliation["ou
   return { outcome: "on_budget", text: "This cycle's actual costs matched the budget." };
 }
 
+function toItemizedExpense(e: PeriodExpenseDetail): ReconItemizedExpense {
+  const receiptUrl = e.receipt_r2_key
+    ? `/api/expenses/${e.id}/receipt`
+    : e.receipt_photo_id
+      ? `/api/photos/${e.receipt_photo_id}`
+      : null;
+  return {
+    id: e.id,
+    kind: "expense",
+    date: e.date,
+    vendor: e.vendor,
+    description: e.description,
+    expense_type: e.expense_type,
+    amount: e.amount,
+    sub_name: e.sub_name,
+    receipt_url: receiptUrl,
+  };
+}
+
+function toItemizedTimeEntry(t: PeriodTimeEntryDetail): ReconItemizedTimeEntry {
+  return {
+    id: t.id,
+    kind: "time_entry",
+    date: t.date,
+    worker: t.worker,
+    role: t.role,
+    hours: t.hours,
+    hourly_rate: t.hourly_rate,
+    amount: t.labor_cost,
+  };
+}
+
 /**
  * Build the reconciliation report payload from a (reconciled) cycle row + the
  * period's expense line-items. Pure shaping over already-stored actuals, so it's
@@ -379,26 +450,38 @@ export async function buildReconciliationReport(
   env: Env,
   cycle: CycleForReport,
 ): Promise<ReconciliationReport> {
-  const expenses = (
-    await env.DB.prepare(
-      `SELECT id, COALESCE(incurred_date, incurred_at) AS date, vendor, description, expense_type, amount
-         FROM expenses
-        WHERE job_id = (SELECT job_id FROM billing_cycles WHERE id = ?)
-          AND COALESCE(is_active, 1) = 1
-          AND COALESCE(incurred_date, incurred_at) >= ?
-          AND COALESCE(incurred_date, incurred_at) <= ?
-        ORDER BY COALESCE(incurred_date, incurred_at) ASC`,
-    )
-      .bind(cycle.id, cycle.period_start, cycle.period_end)
-      .all<{
-        id: string;
-        date: string | null;
-        vendor: string | null;
-        description: string | null;
-        expense_type: string | null;
-        amount: number | null;
-      }>()
-  ).results ?? [];
+  const jobRow = await env.DB.prepare("SELECT job_id FROM billing_cycles WHERE id = ?")
+    .bind(cycle.id)
+    .first<{ job_id: string }>();
+  const jobId = jobRow?.job_id;
+  const window = { from: cycle.period_start, to: cycle.period_end };
+
+  const [expenseDetails, timeDetails] = jobId
+    ? await Promise.all([
+        fetchPeriodExpenseDetails(env, jobId, window),
+        fetchPeriodTimeEntryDetails(env, jobId, window),
+      ])
+    : [[], []];
+
+  const materials: ReconItemizedExpense[] = [];
+  const subs: ReconItemizedExpense[] = [];
+  const flatExpenses: ReconReportExpenseLine[] = [];
+
+  for (const e of expenseDetails) {
+    flatExpenses.push({
+      id: e.id,
+      date: e.date,
+      vendor: e.vendor,
+      description: e.description,
+      expense_type: e.expense_type,
+      amount: e.amount,
+    });
+    const line = toItemizedExpense(e);
+    if (e.expense_type === "subcontractor") subs.push(line);
+    else materials.push(line);
+  }
+
+  const labor = timeDetails.map(toItemizedTimeEntry);
 
   const delta = round2(cycle.delta ?? 0);
   const { outcome, text } = explain(delta, (cycle.is_final_cycle ?? 0) === 1);
@@ -420,14 +503,8 @@ export async function buildReconciliationReport(
       cat("contractor_fee", cycle.projected_contractor_fee ?? 0, cycle.actual_contractor_fee ?? 0),
       cat("total", cycle.projected_total ?? 0, cycle.actual_total ?? 0),
     ],
-    expenses: expenses.map((e) => ({
-      id: e.id,
-      date: e.date,
-      vendor: e.vendor,
-      description: e.description,
-      expense_type: e.expense_type,
-      amount: round2(e.amount ?? 0),
-    })),
+    expenses: flatExpenses,
+    itemized: { materials, labor, subs },
     labor_from_time: round2(cycle.actual_labor ?? 0),
     credit_from_prior: round2(cycle.credit_from_prior ?? 0),
     delta,

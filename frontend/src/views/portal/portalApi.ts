@@ -149,6 +149,32 @@ export interface ReconCategory {
   actual: number;
   variance: number;
 }
+export interface ReconItemizedExpense {
+  id: string;
+  kind: "expense";
+  date: string | null;
+  vendor: string | null;
+  description: string | null;
+  expense_type: string | null;
+  amount: number;
+  sub_name: string | null;
+  receipt_url: string | null;
+}
+export interface ReconItemizedTimeEntry {
+  id: string;
+  kind: "time_entry";
+  date: string | null;
+  worker: string;
+  role: string;
+  hours: number | null;
+  hourly_rate: number | null;
+  amount: number;
+}
+export interface ReconItemized {
+  materials: ReconItemizedExpense[];
+  labor: ReconItemizedTimeEntry[];
+  subs: ReconItemizedExpense[];
+}
 export interface ReconReport {
   cycle_id: string;
   cycle_number: number;
@@ -157,6 +183,7 @@ export interface ReconReport {
   is_final_cycle: boolean;
   categories: ReconCategory[];
   expenses: { id: string; date: string | null; vendor: string | null; description: string | null; expense_type: string | null; amount: number }[];
+  itemized: ReconItemized;
   credit_from_prior: number;
   delta: number;
   credit_to_next: number;

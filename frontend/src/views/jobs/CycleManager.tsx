@@ -1,3 +1,4 @@
+import { Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
@@ -81,9 +82,36 @@ interface ReconExpense {
   expense_type: string | null;
   amount: number;
 }
+interface ReconItemizedExpense {
+  id: string;
+  kind: "expense";
+  date: string | null;
+  vendor: string | null;
+  description: string | null;
+  expense_type: string | null;
+  amount: number;
+  sub_name: string | null;
+  receipt_url: string | null;
+}
+interface ReconItemizedTimeEntry {
+  id: string;
+  kind: "time_entry";
+  date: string | null;
+  worker: string;
+  role: string;
+  hours: number | null;
+  hourly_rate: number | null;
+  amount: number;
+}
+interface ReconItemized {
+  materials: ReconItemizedExpense[];
+  labor: ReconItemizedTimeEntry[];
+  subs: ReconItemizedExpense[];
+}
 interface ReconReport {
   categories: ReconCategory[];
   expenses: ReconExpense[];
+  itemized: ReconItemized;
   credit_from_prior: number;
   delta: number;
   credit_to_next: number;
@@ -125,6 +153,134 @@ const STATUS_TONE: Record<string, "neutral" | "success" | "warning" | "info"> = 
 };
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+const ITEMIZED_CATEGORIES = new Set(["materials", "labor", "subs"]);
+
+function formatTimeRole(role: string): string {
+  if (role === "pm_skilled") return "PM/Skilled";
+  if (role === "general") return "General";
+  return role;
+}
+
+function expenseLabel(e: ReconItemizedExpense): string {
+  const parts = [e.vendor ?? e.sub_name, e.description].filter(Boolean);
+  return parts.length ? parts.join(" — ") : e.expense_type ?? "Expense";
+}
+
+function ReconItemizedList({
+  category,
+  itemized,
+}: {
+  category: string;
+  itemized: ReconItemized;
+}) {
+  if (category === "labor") {
+    const items = itemized.labor;
+    if (!items.length) return null;
+    return (
+      <ul class="recon-itemized__list">
+        {items.map((t) => (
+          <li class="recon-itemized__line" key={t.id}>
+            <span class="recon-itemized__desc">
+              {t.worker}
+              {t.role ? ` (${formatTimeRole(t.role)})` : ""}
+              {t.hours != null ? ` · ${t.hours}h` : ""}
+              {t.hourly_rate != null ? ` @ ${formatCurrency(t.hourly_rate)}/hr` : ""}
+            </span>
+            <span class="recon-itemized__date">{t.date ? formatDate(t.date) : "—"}</span>
+            <span class="recon-itemized__amount">{formatCurrency(t.amount)}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  const items = category === "subs" ? itemized.subs : itemized.materials;
+  if (!items.length) return null;
+  return (
+    <ul class="recon-itemized__list">
+      {items.map((e) => (
+        <li class="recon-itemized__line" key={e.id}>
+          <span class="recon-itemized__desc">{expenseLabel(e)}</span>
+          <span class="recon-itemized__date">{e.date ? formatDate(e.date) : "—"}</span>
+          <span class="recon-itemized__amount">
+            {formatCurrency(e.amount)}
+            {e.receipt_url && (
+              <>
+                {" "}
+                <a class="recon-itemized__receipt" href={e.receipt_url} target="_blank" rel="noopener noreferrer">
+                  view receipt
+                </a>
+              </>
+            )}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ReconCategoryRows({ report }: { report: ReconReport }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggle = (category: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  };
+
+  const itemCount = (category: string) => {
+    const itemized = report.itemized ?? { materials: [], labor: [], subs: [] };
+    if (category === "materials") return itemized.materials.length;
+    if (category === "labor") return itemized.labor.length;
+    if (category === "subs") return itemized.subs.length;
+    return 0;
+  };
+
+  return (
+    <>
+      {report.categories.map((cat) => {
+        const count = ITEMIZED_CATEGORIES.has(cat.category) ? itemCount(cat.category) : 0;
+        const isOpen = expanded.has(cat.category);
+        return (
+          <Fragment key={cat.category}>
+            <tr class={cat.category === "total" ? "costing-row--total" : ""}>
+              <td>
+                <div class="recon-itemized__label">
+                  <span>{cat.label}</span>
+                  {count > 0 && (
+                    <button
+                      type="button"
+                      class="recon-itemized__toggle"
+                      onClick={() => toggle(cat.category)}
+                    >
+                      {isOpen ? "Hide" : `Show ${count} item${count === 1 ? "" : "s"}`}
+                    </button>
+                  )}
+                </div>
+              </td>
+              <td class="num">{formatCurrency(cat.projected)}</td>
+              <td class="num">{formatCurrency(cat.actual)}</td>
+            </tr>
+            {isOpen && count > 0 && (
+              <tr class="recon-itemized__detail-row">
+                <td colSpan={3}>
+                  <ReconItemizedList
+                    category={cat.category}
+                    itemized={report.itemized ?? { materials: [], labor: [], subs: [] }}
+                  />
+                </td>
+              </tr>
+            )}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
 
 function parseScopeAllocations(raw: string | null | undefined): ScopeAllocation[] {
   if (!raw) return [];
@@ -580,21 +736,17 @@ function CycleDetail({
           </tr>
         </thead>
         <tbody>
-          {data.report
-            ? data.report.categories.map((cat) => (
-                <tr key={cat.category} class={cat.category === "total" ? "costing-row--total" : ""}>
-                  <td>{cat.label}</td>
-                  <td class="num">{formatCurrency(cat.projected)}</td>
-                  <td class="num">{formatCurrency(cat.actual)}</td>
-                </tr>
-              ))
-            : rows.map((r) => (
-                <tr key={r.label} class={r.label === "Total" ? "costing-row--total" : ""}>
-                  <td>{r.label}</td>
-                  <td class="num">{formatCurrency(r.projected)}</td>
-                  <td class="num">{r.actual == null ? "—" : formatCurrency(r.actual)}</td>
-                </tr>
-              ))}
+          {data.report ? (
+            <ReconCategoryRows report={data.report} />
+          ) : (
+            rows.map((r) => (
+              <tr key={r.label} class={r.label === "Total" ? "costing-row--total" : ""}>
+                <td>{r.label}</td>
+                <td class="num">{formatCurrency(r.projected)}</td>
+                <td class="num">{r.actual == null ? "—" : formatCurrency(r.actual)}</td>
+              </tr>
+            ))
+          )}
         </tbody>
       </table>
 

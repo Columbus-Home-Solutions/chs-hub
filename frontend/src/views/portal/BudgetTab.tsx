@@ -1,6 +1,14 @@
+import { Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { formatCurrency, formatDate } from "../../lib/format";
-import { getJson, type PortalBudget, type BudgetCycle, type ReconReport } from "./portalApi";
+import {
+  getJson,
+  type PortalBudget,
+  type BudgetCycle,
+  type ReconReport,
+  type ReconItemized,
+  type ReconItemizedExpense,
+} from "./portalApi";
 
 /**
  * Cost-plus Budget & Costs — read-only client view. Renders Sprint 11's cycle
@@ -49,14 +57,161 @@ export function BudgetTab({ token }: { token: string }) {
         </div>
       ) : (
         data.cycles.map((c) => (
-          <CycleCard key={c.id} cycle={c} report={reconById.get(c.id) ?? null} />
+          <CycleCard key={c.id} token={token} cycle={c} report={reconById.get(c.id) ?? null} />
         ))
       )}
     </div>
   );
 }
 
-function CycleCard({ cycle, report }: { cycle: BudgetCycle; report: ReconReport | null }) {
+const ITEMIZED_CATEGORIES = new Set(["materials", "labor", "subs"]);
+
+function formatTimeRole(role: string): string {
+  if (role === "pm_skilled") return "PM/Skilled";
+  if (role === "general") return "General";
+  return role;
+}
+
+function expenseLabel(e: ReconItemizedExpense): string {
+  const parts = [e.vendor ?? e.sub_name, e.description].filter(Boolean);
+  return parts.length ? parts.join(" — ") : e.expense_type ?? "Cost";
+}
+
+function portalReceiptUrl(token: string, expenseId: string): string {
+  return `/api/portal/${encodeURIComponent(token)}/expenses/${encodeURIComponent(expenseId)}/receipt`;
+}
+
+function ReconItemizedList({
+  token,
+  category,
+  itemized,
+}: {
+  token: string;
+  category: string;
+  itemized: ReconItemized;
+}) {
+  if (category === "labor") {
+    const items = itemized.labor;
+    if (!items.length) return null;
+    return (
+      <ul class="portal-recon-itemized__list">
+        {items.map((t) => (
+          <li class="portal-recon-itemized__line" key={t.id}>
+            <span>
+              {t.worker}
+              {t.role ? ` (${formatTimeRole(t.role)})` : ""}
+              {t.hours != null ? ` · ${t.hours}h` : ""}
+              {t.hourly_rate != null ? ` @ ${formatCurrency(t.hourly_rate)}/hr` : ""}
+            </span>
+            <span class="quote-muted">{t.date ? formatDate(t.date) : "—"}</span>
+            <span>{formatCurrency(t.amount)}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  const items = category === "subs" ? itemized.subs : itemized.materials;
+  if (!items.length) return null;
+  return (
+    <ul class="portal-recon-itemized__list">
+      {items.map((e) => (
+        <li class="portal-recon-itemized__line" key={e.id}>
+          <span>{expenseLabel(e)}</span>
+          <span class="quote-muted">{e.date ? formatDate(e.date) : "—"}</span>
+          <span>
+            {formatCurrency(e.amount)}
+            {e.receipt_url && (
+              <>
+                {" "}
+                <a
+                  class="portal-recon-itemized__receipt"
+                  href={portalReceiptUrl(token, e.id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  view receipt
+                </a>
+              </>
+            )}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ReconCategoryRows({ token, report }: { token: string; report: ReconReport }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggle = (category: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  };
+
+  const itemCount = (category: string) => {
+    const itemized = report.itemized ?? { materials: [], labor: [], subs: [] };
+    if (category === "materials") return itemized.materials.length;
+    if (category === "labor") return itemized.labor.length;
+    if (category === "subs") return itemized.subs.length;
+    return 0;
+  };
+
+  return (
+    <>
+      {report.categories.map((cat) => {
+        const count = ITEMIZED_CATEGORIES.has(cat.category) ? itemCount(cat.category) : 0;
+        const isOpen = expanded.has(cat.category);
+        return (
+          <Fragment key={cat.category}>
+            <div class="portal-recon__row">
+              <span>
+                {cat.label}
+                {count > 0 && (
+                  <button
+                    type="button"
+                    class="portal-recon-itemized__toggle"
+                    onClick={() => toggle(cat.category)}
+                  >
+                    {isOpen ? "Hide" : `Show ${count} item${count === 1 ? "" : "s"}`}
+                  </button>
+                )}
+              </span>
+              <span>{formatCurrency(cat.projected)}</span>
+              <span>{formatCurrency(cat.actual)}</span>
+              <span class={cat.variance >= 0 ? "portal-var--good" : "portal-var--warn"}>
+                {formatCurrency(cat.variance)}
+              </span>
+            </div>
+            {isOpen && count > 0 && (
+              <div class="portal-recon-itemized__panel">
+                <ReconItemizedList
+                  token={token}
+                  category={cat.category}
+                  itemized={report.itemized ?? { materials: [], labor: [], subs: [] }}
+                />
+              </div>
+            )}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+function CycleCard({
+  token,
+  cycle,
+  report,
+}: {
+  token: string;
+  cycle: BudgetCycle;
+  report: ReconReport | null;
+}) {
   const isActive = cycle.status === "active";
   return (
     <div class="portal-card">
@@ -110,31 +265,8 @@ function CycleCard({ cycle, report }: { cycle: BudgetCycle; report: ReconReport 
               <span>Actual</span>
               <span>Variance</span>
             </div>
-            {report.categories.map((cat) => (
-              <div class="portal-recon__row" key={cat.category}>
-                <span>{cat.label}</span>
-                <span>{formatCurrency(cat.projected)}</span>
-                <span>{formatCurrency(cat.actual)}</span>
-                <span class={cat.variance >= 0 ? "portal-var--good" : "portal-var--warn"}>
-                  {formatCurrency(cat.variance)}
-                </span>
-              </div>
-            ))}
+            <ReconCategoryRows token={token} report={report} />
           </div>
-
-          {report.expenses.length > 0 && (
-            <div class="portal-budget__expenses">
-              <div class="portal-budget__section-label">Itemized Costs</div>
-              {report.expenses.map((e) => (
-                <div class="portal-invoice__history-row" key={e.id}>
-                  <span>
-                    {e.date ? formatDate(e.date) : "—"} · {e.vendor ?? e.description ?? e.expense_type ?? "Cost"}
-                  </span>
-                  <span>{formatCurrency(e.amount)}</span>
-                </div>
-              ))}
-            </div>
-          )}
 
           <div class={`portal-budget__explain portal-budget__explain--${report.outcome}`}>
             {report.explanation}

@@ -32,6 +32,12 @@ import {
   upfrontInvoiceMath,
   type CycleForReport,
 } from "../lib/cost-plus.js";
+import {
+  buildJobCosting,
+  cumulativeScopeAllocations,
+  parseScopeAllocations,
+  type ScopeAllocation,
+} from "../lib/job-costing.js";
 import { handleInvoiceCreate, handleInvoiceSend } from "./invoices.js";
 import { addDays } from "../lib/invoicing.js";
 
@@ -63,6 +69,28 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function parseScopeAllocationsBody(body: Record<string, unknown>): ScopeAllocation[] | null {
+  if (!("scope_allocations" in body)) return null;
+  const raw = body.scope_allocations;
+  if (raw === null) return [];
+  if (typeof raw === "string") return parseScopeAllocations(raw);
+  if (!Array.isArray(raw)) return [];
+  const out: ScopeAllocation[] = [];
+  for (const x of raw) {
+    if (typeof x !== "object" || x === null) continue;
+    const lineItemId = (x as { line_item_id?: unknown }).line_item_id;
+    const pct = Number((x as { percentage?: unknown }).percentage);
+    if (typeof lineItemId !== "string" || !Number.isFinite(pct)) continue;
+    out.push({ line_item_id: lineItemId, percentage: pct });
+  }
+  return out;
+}
+
+function serializeScopeAllocations(allocations: ScopeAllocation[]): string | null {
+  if (!allocations.length) return null;
+  return JSON.stringify(allocations);
+}
+
 // ─── cycle row shape ──────────────────────────────────────────────────────────
 
 interface CycleRow extends CycleForReport {
@@ -71,6 +99,7 @@ interface CycleRow extends CycleForReport {
   invoice_id: string | null;
   reconciliation_invoice_id: string | null;
   reconciliation_date: string | null;
+  scope_allocations: string | null;
   notes: string | null;
   created_at: string;
 }
@@ -80,7 +109,7 @@ const CYCLE_COLUMNS = `id, job_id, cycle_number, period_start, period_end, is_fi
   pm_fee_rate, contractor_fee_rate, projected_pm_fee, projected_contractor_fee, projected_total,
   actual_materials, actual_labor, actual_subs, actual_subtotal, actual_pm_fee, actual_contractor_fee,
   actual_total, delta, credit_from_prior, credit_to_next, invoice_id, reconciliation_invoice_id,
-  reconciliation_date, notes, created_at`;
+  reconciliation_date, scope_allocations, notes, created_at`;
 
 async function loadCycle(env: Env, id: string): Promise<CycleRow | null> {
   return env.DB.prepare(`SELECT ${CYCLE_COLUMNS} FROM billing_cycles WHERE id = ?`)
@@ -100,6 +129,30 @@ async function loadJob(env: Env, jobId: string): Promise<JobCtx | null> {
   )
     .bind(jobId)
     .first<JobCtx>();
+}
+
+async function loadScopeContext(env: Env, jobId: string, excludeCycleId: string) {
+  const costing = await buildJobCosting(env, jobId);
+  const cycleRows =
+    (
+      await env.DB.prepare("SELECT id, scope_allocations FROM billing_cycles WHERE job_id = ?")
+        .bind(jobId)
+        .all<{ id: string; scope_allocations: string | null }>()
+    ).results ?? [];
+  const cumulative = cumulativeScopeAllocations(cycleRows, excludeCycleId);
+  return {
+    line_items: costing.lines.map((l) => ({
+      line_item_id: l.line_item_id,
+      name: l.name,
+      budget: l.budget,
+      sub_items: l.sub_items.map((s) => ({
+        id: s.id,
+        category: s.category,
+        budget: s.budget,
+      })),
+    })),
+    cumulative_allocations: Object.fromEntries(cumulative),
+  };
 }
 
 async function logAudit(
@@ -189,6 +242,8 @@ export async function handleCycleGet(env: Env, id: string): Promise<Response> {
       ? await buildReconciliationReport(env, cycle)
       : null;
 
+  const scope_context = await loadScopeContext(env, cycle.job_id, cycle.id);
+
   const invoices = (
     await env.DB.prepare(
       `SELECT id, invoice_number, invoice_type, title, amount, credits_applied, total_due, status,
@@ -199,7 +254,7 @@ export async function handleCycleGet(env: Env, id: string): Promise<Response> {
       .all<Record<string, unknown>>()
   ).results ?? [];
 
-  return json({ cycle, live_actuals: live, live_breakdown: liveBreakdown, report, invoices });
+  return json({ cycle, live_actuals: live, live_breakdown: liveBreakdown, report, invoices, scope_context });
 }
 
 // ─── POST /api/jobs/:id/billing-cycles (create mini-budget) ────────────────────
@@ -264,14 +319,17 @@ export async function handleCycleCreate(request: Request, env: Env, jobId: strin
     rates,
   );
 
+  const scopeAllocations = parseScopeAllocationsBody(body);
+  const scopeAllocationsJson = scopeAllocations ? serializeScopeAllocations(scopeAllocations) : null;
+
   const id = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO billing_cycles (
        id, job_id, cycle_number, period_start, period_end, is_final_cycle, status,
        projected_materials, projected_labor, projected_subs, projected_subtotal,
        pm_fee_rate, contractor_fee_rate, projected_pm_fee, projected_contractor_fee, projected_total,
-       credit_from_prior, credit_to_next, notes, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'))`,
+       credit_from_prior, credit_to_next, scope_allocations, notes, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, datetime('now'))`,
   )
     .bind(
       id,
@@ -290,6 +348,7 @@ export async function handleCycleCreate(request: Request, env: Env, jobId: strin
       breakdown.contractor_fee,
       breakdown.total,
       creditFromPrior,
+      scopeAllocationsJson,
       (body.notes as string) ?? null,
     )
     .run();
@@ -348,12 +407,16 @@ export async function handleCycleUpdate(request: Request, env: Env, id: string):
         : 0
       : cycle.is_final_cycle ?? 0;
 
+  const scopeAllocations = parseScopeAllocationsBody(body);
+  const scopeAllocationsJson =
+    scopeAllocations !== null ? serializeScopeAllocations(scopeAllocations) : cycle.scope_allocations ?? null;
+
   await env.DB.prepare(
     `UPDATE billing_cycles SET
        period_start = ?, period_end = ?, is_final_cycle = ?,
        projected_materials = ?, projected_labor = ?, projected_subs = ?, projected_subtotal = ?,
        pm_fee_rate = ?, contractor_fee_rate = ?, projected_pm_fee = ?, projected_contractor_fee = ?, projected_total = ?,
-       notes = COALESCE(?, notes)
+       scope_allocations = ?, notes = COALESCE(?, notes)
      WHERE id = ?`,
   )
     .bind(
@@ -369,6 +432,7 @@ export async function handleCycleUpdate(request: Request, env: Env, id: string):
       breakdown.pm_fee,
       breakdown.contractor_fee,
       breakdown.total,
+      scopeAllocationsJson,
       "notes" in body ? (body.notes as string) ?? null : null,
       id,
     )

@@ -391,6 +391,23 @@ function buildVisibleNameRun(): string {
   );
 }
 
+// BoldSign text tags — indices 1/3/4 within the SIGNATURES pBdr block (see inject-boldsign-tags.ts).
+const BOLDSIGN_SIG_TAG_RUN =
+  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>' +
+  '<w:t xml:space="preserve">{{sign|1|*| |client_sig}}</w:t>';
+const BOLDSIGN_DATE_TAG_RUN =
+  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>' +
+  '<w:t xml:space="preserve">{{date|1|*| |client_date}}</w:t>';
+const BOLDSIGN_CLIENT_NAME_RUN =
+  '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +
+  '<w:t xml:space="preserve">{{client_name}}</w:t>';
+
+const TWO_PARTY_CLIENT_TAGS: Record<number, string> = {
+  1: BOLDSIGN_SIG_TAG_RUN,
+  3: BOLDSIGN_CLIENT_NAME_RUN,
+  4: BOLDSIGN_DATE_TAG_RUN,
+};
+
 /** Bake contractor name only. */
 function bakeStaticContractorName(xml: string): string {
   return xml.replace(/\{\{contractor_name\}\}/g, CONTRACTOR_NAME);
@@ -403,11 +420,10 @@ function bakeStaticContractorName(xml: string): string {
  * Anchors to the "SIGNATURES" heading so indices are relative to the signature
  * table only:
  *   0 = Contractor signature line  → image drawing (or text fallback)
- *   1 = Client signature line      → (not injected — BoldSign template handles it)
+ *   1 = Client signature line      → BoldSign {{sign|1|*| |client_sig}}
  *   2 = Contractor printed name    → Tony Columbus (static)
- *   3 = Client printed name        → (not injected)
- *   4 = Client date underline      → (not injected — BoldSign template handles it)
- *   5 = Client Date label          → (not injected)
+ *   3 = Client printed name        → {{client_name}}
+ *   4 = Client date underline      → BoldSign {{date|1|*| |client_date}}
  */
 function injectSignatureFields(xml: string, tagMap: Record<number, string>): string {
   const sigHeadingIdx = xml.indexOf("SIGNATURES");
@@ -519,13 +535,14 @@ function main() {
     // Build injection map:
     //   0 → contractor handwritten signature image (blank if no valid scan)
     //   2 → contractor printed name (two-party templates only)
-    //   Client sig/date fields are omitted — BoldSign template controls placement.
+    //   1/3/4 → client BoldSign tags (two-party templates only)
     const tagMap: Record<number, string> = {};
     if (sigDrawingXml) {
       tagMap[0] = sigDrawingXml;
     }
     if (t.twoPartySig) {
       tagMap[2] = buildVisibleNameRun();
+      Object.assign(tagMap, TWO_PARTY_CLIENT_TAGS);
     }
 
     xml = injectSignatureFields(xml, tagMap);

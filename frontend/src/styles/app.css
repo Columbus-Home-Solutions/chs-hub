@@ -875,6 +875,50 @@
 }
 .cycle-preview .invoice-builder__total { margin-top: var(--space-xs); padding-top: var(--space-xs); border-top: none; }
 
+.cycle-mini-budget {
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+.cycle-scope__title {
+  margin: 0 0 var(--space-xs);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.cycle-scope__hint { margin: 0 0 var(--space-sm); }
+.cycle-scope__list { display: flex; flex-direction: column; gap: var(--space-xs); }
+.cycle-scope__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+  border-bottom: 1px solid var(--color-border-subtle, var(--color-border));
+}
+.cycle-scope__row:last-child { border-bottom: none; }
+.cycle-scope__check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1 1 200px;
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+.cycle-scope__name { flex: 1; }
+.cycle-scope__budget { font-family: var(--font-mono); font-size: var(--text-xs); }
+.cycle-scope__pct {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  width: 5.5rem;
+}
+.cycle-scope__pct .form-input { width: 4rem; }
+.cycle-scope__warn { flex: 1 1 100%; }
+.cycle-scope-readonly ul {
+  margin: var(--space-xs) 0 0;
+  padding-left: var(--space-md);
+  font-size: var(--text-sm);
+}
+
 .form-row { display: flex; gap: var(--space-sm); align-items: flex-end; }
 .form-row > * { flex: 1; }
 /* FormField carries margin-bottom for standalone use; strip it in rows so

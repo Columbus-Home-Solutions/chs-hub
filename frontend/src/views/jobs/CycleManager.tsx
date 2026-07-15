@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -19,6 +19,20 @@ import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
  */
 
 // ── shapes (mirror src/routes/billing-cycles.ts + src/lib/cost-plus.ts) ───────
+interface ScopeAllocation {
+  line_item_id: string;
+  percentage: number;
+}
+interface ScopeLineItem {
+  line_item_id: string;
+  name: string;
+  budget: number;
+  sub_items: { id: string; category: string; budget: number }[];
+}
+interface ScopeContext {
+  line_items: ScopeLineItem[];
+  cumulative_allocations: Record<string, number>;
+}
 interface Cycle {
   id: string;
   cycle_number: number;
@@ -41,6 +55,7 @@ interface Cycle {
   delta: number | null;
   invoice_id: string | null;
   reconciliation_invoice_id: string | null;
+  scope_allocations: string | null;
   live_actuals: { materials: number; labor: number; subs: number; subtotal: number; total: number } | null;
 }
 interface CycleListResponse {
@@ -84,6 +99,7 @@ interface CycleDetailResponse {
     total: number;
   } | null;
   report: ReconReport | null;
+  scope_context: ScopeContext;
   invoices: {
     id: string;
     invoice_number: number | null;
@@ -96,6 +112,7 @@ interface CycleDetailResponse {
 }
 
 type ToastApi = ReturnType<typeof useToast>;
+type ScopeState = Record<string, { checked: boolean; percentage: string }>;
 
 const STATUS_TONE: Record<string, "neutral" | "success" | "warning" | "info"> = {
   planning: "neutral",
@@ -106,11 +123,84 @@ const STATUS_TONE: Record<string, "neutral" | "success" | "warning" | "info"> = 
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+function parseScopeAllocations(raw: string | null | undefined): ScopeAllocation[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter(
+        (x): x is ScopeAllocation =>
+          typeof x === "object" &&
+          x !== null &&
+          typeof (x as ScopeAllocation).line_item_id === "string" &&
+          Number.isFinite(Number((x as ScopeAllocation).percentage)),
+      )
+      .map((x) => ({ line_item_id: x.line_item_id, percentage: Number(x.percentage) }));
+  } catch {
+    return [];
+  }
+}
+
+function scopeStateFromAllocations(allocations: ScopeAllocation[]): ScopeState {
+  const state: ScopeState = {};
+  for (const a of allocations) {
+    state[a.line_item_id] = { checked: true, percentage: String(a.percentage) };
+  }
+  return state;
+}
+
+function allocationsFromScopeState(scopeState: ScopeState): ScopeAllocation[] {
+  return Object.entries(scopeState)
+    .filter(([, v]) => v.checked)
+    .map(([line_item_id, v]) => ({
+      line_item_id,
+      percentage: Math.max(0, Number(v.percentage) || 0),
+    }));
+}
+
+/** Client mirror of src/lib/job-costing.ts projectedCostsFromScope. */
+function projectedCostsFromScope(
+  lines: ScopeLineItem[],
+  allocations: ScopeAllocation[],
+): { materials: number; labor: number; subs: number } {
+  const pctByLine = new Map(allocations.map((a) => [a.line_item_id, Math.max(0, a.percentage) / 100]));
+  let materials = 0;
+  let labor = 0;
+  let subs = 0;
+  for (const line of lines) {
+    const factor = pctByLine.get(line.line_item_id);
+    if (!factor) continue;
+    for (const sub of line.sub_items) {
+      const scaled = round2(sub.budget * factor);
+      const cat = (sub.category ?? "").toLowerCase();
+      if (cat === "labor") labor = round2(labor + scaled);
+      else if (cat === "subcontractor") subs = round2(subs + scaled);
+      else materials = round2(materials + scaled);
+    }
+  }
+  return { materials, labor, subs };
+}
+
+function computePreview(
+  materials: number,
+  labor: number,
+  subs: number,
+  pmRate: number,
+  contractorRate: number,
+) {
+  const subtotal = round2(materials + labor + subs);
+  const pmFee = round2(subtotal * pmRate);
+  const contractorFee = round2(subtotal * contractorRate);
+  const total = round2(subtotal + pmFee + contractorFee);
+  return { subtotal, pmFee, contractorFee, total };
+}
+
 /** Budget-tracker color logic, matching the Sprint 10 Budget-vs-Actual tones. */
 function trackerTone(budget: number, actual: number): "success" | "warning" | "error" {
-  if (actual > budget) return "error"; // over
-  if (budget > 0 && actual >= budget * 0.9) return "warning"; // within ~10%
-  return "success"; // under
+  if (actual > budget) return "error";
+  if (budget > 0 && actual >= budget * 0.9) return "warning";
+  return "success";
 }
 
 export function CycleManager({ jobId }: { jobId: string }) {
@@ -141,7 +231,6 @@ export function CycleManager({ jobId }: { jobId: string }) {
   const cycles = data.cycles;
   const openCycle = cycles.find((c) => c.status !== "closed");
   const finalClosed = cycles.some((c) => (c.is_final_cycle ?? 0) === 1 && c.status === "closed");
-  // New cycle is gated on the prior cycle being closed (rule #2 / no overlap).
   const canCreate = !openCycle && !finalClosed;
   const createDisabledReason = openCycle
     ? `Cycle ${openCycle.cycle_number} is ${openCycle.status} — reconcile it before starting a new cycle.`
@@ -194,6 +283,7 @@ export function CycleManager({ jobId }: { jobId: string }) {
           {cycles.map((c) => (
             <CycleRow
               key={c.id}
+              jobId={jobId}
               cycle={c}
               expanded={expanded === c.id}
               onToggle={() => setExpanded(expanded === c.id ? null : c.id)}
@@ -223,12 +313,14 @@ export function CycleManager({ jobId }: { jobId: string }) {
 // ── one cycle (summary + expandable detail) ───────────────────────────────────
 
 function CycleRow({
+  jobId,
   cycle,
   expanded,
   onToggle,
   onChanged,
   toast,
 }: {
+  jobId: string;
   cycle: Cycle;
   expanded: boolean;
   onToggle: () => void;
@@ -269,22 +361,45 @@ function CycleRow({
         </div>
       </div>
 
-      {expanded && <CycleDetail cycleId={cycle.id} onChanged={onChanged} toast={toast} />}
+      {expanded && (
+        <CycleDetail jobId={jobId} cycleId={cycle.id} onChanged={onChanged} toast={toast} />
+      )}
     </div>
   );
 }
 
 function CycleDetail({
+  jobId: _jobId,
   cycleId,
   onChanged,
   toast,
 }: {
+  jobId: string;
   cycleId: string;
   onChanged: () => void;
   toast: ToastApi;
 }) {
   const { data, loading, refetch } = useApi<CycleDetailResponse>(`/api/billing-cycles/${cycleId}`);
   const [busy, setBusy] = useState(false);
+  const [materials, setMaterials] = useState("");
+  const [labor, setLabor] = useState("");
+  const [subs, setSubs] = useState("");
+  const [scopeState, setScopeState] = useState<ScopeState>({});
+  const [manualOverride, setManualOverride] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  const editable = data?.cycle.status === "planning" || data?.cycle.status === "active";
+
+  useEffect(() => {
+    if (!data) return;
+    const c = data.cycle;
+    setMaterials(String(c.projected_materials ?? 0));
+    setLabor(String(c.projected_labor ?? 0));
+    setSubs(String(c.projected_subs ?? 0));
+    setScopeState(scopeStateFromAllocations(parseScopeAllocations(c.scope_allocations)));
+    setManualOverride(false);
+    setDirty(false);
+  }, [data?.cycle.id, data?.cycle.projected_materials, data?.cycle.projected_labor, data?.cycle.projected_subs, data?.cycle.scope_allocations]);
 
   if (loading || !data) {
     return (
@@ -295,6 +410,60 @@ function CycleDetail({
   }
   const c = data.cycle;
   const isFinal = (c.is_final_cycle ?? 0) === 1;
+  const scopeContext = data.scope_context ?? { line_items: [], cumulative_allocations: {} };
+
+  const m = Number(materials) || 0;
+  const l = Number(labor) || 0;
+  const s = Number(subs) || 0;
+  const preview = computePreview(m, l, s, c.pm_fee_rate, c.contractor_fee_rate);
+
+  const applyScopeToFields = (nextScope: ScopeState) => {
+    const allocations = allocationsFromScopeState(nextScope);
+    if (!allocations.length) return;
+    const projected = projectedCostsFromScope(scopeContext.line_items, allocations);
+    setMaterials(String(projected.materials));
+    setLabor(String(projected.labor));
+    setSubs(String(projected.subs));
+  };
+
+  const updateScope = (lineItemId: string, patch: Partial<{ checked: boolean; percentage: string }>) => {
+    setDirty(true);
+    const next: ScopeState = {
+      ...scopeState,
+      [lineItemId]: { checked: false, percentage: "100", ...scopeState[lineItemId], ...patch },
+    };
+    if (patch.checked === false) delete next[lineItemId];
+    setScopeState(next);
+    if (!manualOverride) applyScopeToFields(next);
+  };
+
+  const onFieldInput = (field: "materials" | "labor" | "subs", value: string) => {
+    setDirty(true);
+    setManualOverride(true);
+    if (field === "materials") setMaterials(value);
+    else if (field === "labor") setLabor(value);
+    else setSubs(value);
+  };
+
+  const saveMiniBudget = async () => {
+    setBusy(true);
+    try {
+      await api.put(`/api/billing-cycles/${c.id}`, {
+        projected_materials: m,
+        projected_labor: l,
+        projected_subs: s,
+        scope_allocations: allocationsFromScopeState(scopeState),
+      });
+      toast.push("success", "Mini-budget saved");
+      setDirty(false);
+      refetch();
+      onChanged();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const act = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -319,26 +488,49 @@ function CycleDetail({
   const billFinal = () =>
     act("Final 50% billed", () => api.post(`/api/billing-cycles/${c.id}/bill-final`, {}));
 
-  // Projected vs. actual side-by-side. For an active cycle the "actual" is the
-  // live breakdown; for a closed cycle it's the stored reconciliation.
   const live = data.live_breakdown;
   const rows: { label: string; projected: number; actual: number | null }[] = [
-    { label: "Materials", projected: c.projected_materials ?? 0, actual: live ? live.materials : null },
-    { label: "Labor", projected: c.projected_labor ?? 0, actual: live ? live.labor : null },
-    { label: "Subs", projected: c.projected_subs ?? 0, actual: live ? live.subs : null },
-    { label: "Subtotal", projected: c.projected_subtotal ?? 0, actual: live ? live.subtotal : null },
-    { label: `PM fee (${Math.round(c.pm_fee_rate * 100)}%)`, projected: c.projected_pm_fee ?? 0, actual: live ? live.pm_fee : null },
+    { label: "Materials", projected: m, actual: live ? live.materials : null },
+    { label: "Labor", projected: l, actual: live ? live.labor : null },
+    { label: "Subs", projected: s, actual: live ? live.subs : null },
+    { label: "Subtotal", projected: preview.subtotal, actual: live ? live.subtotal : null },
+    {
+      label: `PM fee (${Math.round(c.pm_fee_rate * 100)}%)`,
+      projected: preview.pmFee,
+      actual: live ? live.pm_fee : null,
+    },
     {
       label: `Contractor fee (${Math.round(c.contractor_fee_rate * 100)}%)`,
-      projected: c.projected_contractor_fee ?? 0,
+      projected: preview.contractorFee,
       actual: live ? live.contractor_fee : null,
     },
-    { label: "Total", projected: c.projected_total ?? 0, actual: live ? live.total : null },
+    { label: "Total", projected: preview.total, actual: live ? live.total : null },
   ];
 
   return (
     <div class="cycle-detail">
-      <table class="table">
+      {editable ? (
+        <MiniBudgetEditor
+          materials={materials}
+          labor={labor}
+          subs={subs}
+          preview={preview}
+          pmRate={c.pm_fee_rate}
+          contractorRate={c.contractor_fee_rate}
+          scopeContext={scopeContext}
+          scopeState={scopeState}
+          manualOverride={manualOverride}
+          dirty={dirty}
+          busy={busy}
+          onFieldInput={onFieldInput}
+          onScopeChange={updateScope}
+          onSave={saveMiniBudget}
+        />
+      ) : (
+        <ScopeReadOnly scopeContext={scopeContext} scopeState={scopeState} />
+      )}
+
+      <table class="table" style={{ marginTop: "var(--space-sm)" }}>
         <thead>
           <tr>
             <th>Category</th>
@@ -376,7 +568,11 @@ function CycleDetail({
               {" "}
               <strong>
                 Carry to next: {formatCurrency(data.report.credit_to_next)}
-                {data.report.credit_to_next < 0 ? " (overage)" : data.report.credit_to_next > 0 ? " (credit)" : ""}
+                {data.report.credit_to_next < 0
+                  ? " (overage)"
+                  : data.report.credit_to_next > 0
+                    ? " (credit)"
+                    : ""}
               </strong>
             </>
           )}
@@ -405,7 +601,7 @@ function CycleDetail({
 
       <div class="flex gap-sm" style={{ marginTop: "var(--space-sm)", flexWrap: "wrap" }}>
         {c.status === "planning" && (
-          <Button variant="primary" size="sm" disabled={busy} onClick={generateInvoice}>
+          <Button variant="primary" size="sm" disabled={busy || preview.subtotal <= 0} onClick={generateInvoice}>
             {isFinal ? "Generate 50% Upfront Invoice" : "Generate Invoice"}
           </Button>
         )}
@@ -429,6 +625,215 @@ function CycleDetail({
   );
 }
 
+// ── shared mini-budget + scope UI ─────────────────────────────────────────────
+
+function MiniBudgetEditor({
+  materials,
+  labor,
+  subs,
+  preview,
+  pmRate,
+  contractorRate,
+  scopeContext,
+  scopeState,
+  manualOverride,
+  dirty,
+  busy,
+  onFieldInput,
+  onScopeChange,
+  onSave,
+}: {
+  materials: string;
+  labor: string;
+  subs: string;
+  preview: ReturnType<typeof computePreview>;
+  pmRate: number;
+  contractorRate: number;
+  scopeContext: ScopeContext;
+  scopeState: ScopeState;
+  manualOverride: boolean;
+  dirty: boolean;
+  busy: boolean;
+  onFieldInput: (field: "materials" | "labor" | "subs", value: string) => void;
+  onScopeChange: (lineItemId: string, patch: Partial<{ checked: boolean; percentage: string }>) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div class="cycle-mini-budget">
+      <ScopeChecklist
+        scopeContext={scopeContext}
+        scopeState={scopeState}
+        readOnly={false}
+        onScopeChange={onScopeChange}
+      />
+
+      {manualOverride && (
+        <p class="text--muted cycle-scope-hint" style={{ fontSize: "var(--text-xs)" }}>
+          Projected amounts were hand-edited — scope changes won't overwrite them until you clear and re-select.
+        </p>
+      )}
+
+      <div class="form-row" style={{ marginTop: "var(--space-sm)" }}>
+        <FormField label="Projected materials">
+          <input
+            class="form-input"
+            type="number"
+            min="0"
+            step="0.01"
+            value={materials}
+            onInput={(e) => onFieldInput("materials", (e.target as HTMLInputElement).value)}
+          />
+        </FormField>
+        <FormField label="Projected labor">
+          <input
+            class="form-input"
+            type="number"
+            min="0"
+            step="0.01"
+            value={labor}
+            onInput={(e) => onFieldInput("labor", (e.target as HTMLInputElement).value)}
+          />
+        </FormField>
+        <FormField label="Projected subs">
+          <input
+            class="form-input"
+            type="number"
+            min="0"
+            step="0.01"
+            value={subs}
+            onInput={(e) => onFieldInput("subs", (e.target as HTMLInputElement).value)}
+          />
+        </FormField>
+      </div>
+
+      <div class="cycle-preview">
+        <PreviewLine label="Subtotal" value={preview.subtotal} />
+        <PreviewLine label={`PM fee (${Math.round(pmRate * 100)}%)`} value={preview.pmFee} />
+        <PreviewLine label={`Contractor fee (${Math.round(contractorRate * 100)}%)`} value={preview.contractorFee} />
+        <PreviewLine label="Cycle total" value={preview.total} strong />
+      </div>
+
+      <div style={{ marginTop: "var(--space-sm)" }}>
+        <Button variant="primary" size="sm" disabled={busy || !dirty || preview.subtotal <= 0} onClick={onSave}>
+          {busy ? "Saving…" : "Save mini-budget"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ScopeReadOnly({
+  scopeContext,
+  scopeState,
+}: {
+  scopeContext: ScopeContext;
+  scopeState: ScopeState;
+}) {
+  const selected = scopeContext.line_items.filter((li) => scopeState[li.line_item_id]?.checked);
+  if (!selected.length) return null;
+  return (
+    <div class="cycle-scope-readonly">
+      <h4 class="cycle-scope__title">Scope for this cycle</h4>
+      <ul class="cycle-scope__list">
+        {selected.map((li) => (
+          <li key={li.line_item_id}>
+            {li.name} — {scopeState[li.line_item_id]?.percentage ?? "100"}%
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ScopeChecklist({
+  scopeContext,
+  scopeState,
+  readOnly,
+  onScopeChange,
+}: {
+  scopeContext: ScopeContext;
+  scopeState: ScopeState;
+  readOnly: boolean;
+  onScopeChange?: (lineItemId: string, patch: Partial<{ checked: boolean; percentage: string }>) => void;
+}) {
+  if (!scopeContext.line_items.length) {
+    return (
+      <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+        No estimate line items found — enter projected amounts manually.
+      </p>
+    );
+  }
+
+  return (
+    <div class="cycle-scope">
+      <h4 class="cycle-scope__title">Scope for this cycle</h4>
+      <p class="text--muted cycle-scope__hint" style={{ fontSize: "var(--text-xs)" }}>
+        Optional — select trades and what percentage of each applies to this cycle. Amounts auto-fill the
+        projected fields below; you can still adjust them by hand.
+      </p>
+      <div class="cycle-scope__list">
+        {scopeContext.line_items.map((li) => {
+          const row = scopeState[li.line_item_id];
+          const checked = row?.checked ?? false;
+          const pct = row?.percentage ?? "100";
+          const prior = scopeContext.cumulative_allocations[li.line_item_id] ?? 0;
+          const current = checked ? Number(pct) || 0 : 0;
+          const cumulative = round2(prior + current);
+          const overAllocated = checked && cumulative > 100;
+
+          return (
+            <div class="cycle-scope__row" key={li.line_item_id}>
+              <label class="cycle-scope__check">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={readOnly}
+                  onChange={(e) =>
+                    onScopeChange?.(li.line_item_id, {
+                      checked: (e.target as HTMLInputElement).checked,
+                      percentage: "100",
+                    })
+                  }
+                />
+                <span class="cycle-scope__name">{li.name}</span>
+                <span class="cycle-scope__budget text--muted">{formatCurrency(li.budget)}</span>
+              </label>
+              {checked && (
+                <div class="cycle-scope__pct">
+                  <input
+                    class="form-input form-input--sm"
+                    type="number"
+                    min="1"
+                    max="100"
+                    step="1"
+                    value={pct}
+                    disabled={readOnly}
+                    onInput={(e) =>
+                      onScopeChange?.(li.line_item_id, { percentage: (e.target as HTMLInputElement).value })
+                    }
+                  />
+                  <span class="text--muted">%</span>
+                </div>
+              )}
+              {prior > 0 && (
+                <Badge tone="neutral" class="cycle-scope__badge">
+                  {Math.round(prior)}% allocated in prior cycles
+                </Badge>
+              )}
+              {overAllocated && (
+                <span class="cycle-scope__warn text--warning" style={{ fontSize: "var(--text-xs)" }}>
+                  This puts {li.name} at {Math.round(cumulative)}% across cycles — confirm if expected (cost
+                  increase or underscoped estimate).
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── new mini-budget modal ─────────────────────────────────────────────────────
 
 function NewCycleModal({
@@ -444,6 +849,8 @@ function NewCycleModal({
   onCreated: () => void;
   toast: ToastApi;
 }) {
+  const costing = useApi<{ costing: { lines: ScopeLineItem[] } }>(`/api/jobs/${jobId}/costing`);
+  const cyclesList = useApi<CycleListResponse>(`/api/jobs/${jobId}/billing-cycles`);
   const today = new Date().toISOString().slice(0, 10);
   const twoWeeks = new Date(Date.now() + 13 * 86_400_000).toISOString().slice(0, 10);
   const [periodStart, setPeriodStart] = useState(today);
@@ -451,20 +858,55 @@ function NewCycleModal({
   const [materials, setMaterials] = useState("");
   const [labor, setLabor] = useState("");
   const [subs, setSubs] = useState("");
+  const [scopeState, setScopeState] = useState<ScopeState>({});
+  const [manualOverride, setManualOverride] = useState(false);
   const [isFinal, setIsFinal] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const scopeContext: ScopeContext = {
+    line_items: (costing.data?.costing.lines ?? []).map((l) => ({
+      line_item_id: l.line_item_id,
+      name: l.name,
+      budget: l.budget,
+      sub_items: l.sub_items,
+    })),
+    cumulative_allocations: (() => {
+      const map: Record<string, number> = {};
+      for (const cycle of cyclesList.data?.cycles ?? []) {
+        for (const a of parseScopeAllocations(cycle.scope_allocations)) {
+          map[a.line_item_id] = round2((map[a.line_item_id] ?? 0) + a.percentage);
+        }
+      }
+      return map;
+    })(),
+  };
 
   const m = Number(materials) || 0;
   const l = Number(labor) || 0;
   const s = Number(subs) || 0;
-  const subtotal = round2(m + l + s);
-  // Default preview rates (10% / 20%); the server snapshots the effective rates.
-  const pmFee = round2(subtotal * 0.1);
-  const contractorFee = round2(subtotal * 0.2);
-  const total = round2(subtotal + pmFee + contractorFee);
-  const upfrontBase = isFinal ? round2(total * 0.5) : total;
+  const preview = computePreview(m, l, s, 0.1, 0.2);
+  const upfrontBase = isFinal ? round2(preview.total * 0.5) : preview.total;
   const invoiceAmount = round2(upfrontBase - priorCredit);
-  const valid = subtotal > 0;
+  const valid = preview.subtotal > 0;
+
+  const applyScopeToFields = (nextScope: ScopeState) => {
+    const allocations = allocationsFromScopeState(nextScope);
+    if (!allocations.length) return;
+    const projected = projectedCostsFromScope(scopeContext.line_items, allocations);
+    setMaterials(String(projected.materials));
+    setLabor(String(projected.labor));
+    setSubs(String(projected.subs));
+  };
+
+  const updateScope = (lineItemId: string, patch: Partial<{ checked: boolean; percentage: string }>) => {
+    const next: ScopeState = {
+      ...scopeState,
+      [lineItemId]: { checked: false, percentage: "100", ...scopeState[lineItemId], ...patch },
+    };
+    if (patch.checked === false) delete next[lineItemId];
+    setScopeState(next);
+    if (!manualOverride) applyScopeToFields(next);
+  };
 
   const submit = async () => {
     if (!valid) return;
@@ -476,6 +918,7 @@ function NewCycleModal({
         projected_materials: m,
         projected_labor: l,
         projected_subs: s,
+        scope_allocations: allocationsFromScopeState(scopeState),
         is_final_cycle: isFinal,
       });
       toast.push("success", "Billing cycle created");
@@ -520,46 +963,70 @@ function NewCycleModal({
           />
         </FormField>
       </div>
-      <FormField label="Projected materials">
-        <input
-          class="form-input"
-          type="number"
-          min="0"
-          step="0.01"
-          value={materials}
-          onInput={(e) => setMaterials((e.target as HTMLInputElement).value)}
+
+      {costing.loading ? (
+        <Spinner />
+      ) : (
+        <ScopeChecklist
+          scopeContext={scopeContext}
+          scopeState={scopeState}
+          readOnly={false}
+          onScopeChange={updateScope}
         />
-      </FormField>
-      <FormField label="Projected labor">
-        <input
-          class="form-input"
-          type="number"
-          min="0"
-          step="0.01"
-          value={labor}
-          onInput={(e) => setLabor((e.target as HTMLInputElement).value)}
-        />
-      </FormField>
-      <FormField label="Projected subs">
-        <input
-          class="form-input"
-          type="number"
-          min="0"
-          step="0.01"
-          value={subs}
-          onInput={(e) => setSubs((e.target as HTMLInputElement).value)}
-        />
-      </FormField>
+      )}
+
+      <div class="form-row" style={{ marginTop: "var(--space-sm)" }}>
+        <FormField label="Projected materials">
+          <input
+            class="form-input"
+            type="number"
+            min="0"
+            step="0.01"
+            value={materials}
+            onInput={(e) => {
+              setManualOverride(true);
+              setMaterials((e.target as HTMLInputElement).value);
+            }}
+          />
+        </FormField>
+        <FormField label="Projected labor">
+          <input
+            class="form-input"
+            type="number"
+            min="0"
+            step="0.01"
+            value={labor}
+            onInput={(e) => {
+              setManualOverride(true);
+              setLabor((e.target as HTMLInputElement).value);
+            }}
+          />
+        </FormField>
+        <FormField label="Projected subs">
+          <input
+            class="form-input"
+            type="number"
+            min="0"
+            step="0.01"
+            value={subs}
+            onInput={(e) => {
+              setManualOverride(true);
+              setSubs((e.target as HTMLInputElement).value);
+            }}
+          />
+        </FormField>
+      </div>
+
       <label class="flex gap-sm items-center" style={{ fontSize: "var(--text-sm)" }}>
         <input type="checkbox" checked={isFinal} onChange={(e) => setIsFinal((e.target as HTMLInputElement).checked)} />
         Final cycle (50% upfront / 50% at completion)
       </label>
 
       <div class="cycle-preview" style={{ marginTop: "var(--space-md)" }}>
-        <PreviewLine label="Subtotal" value={subtotal} />
-        <PreviewLine label="PM fee (10%)" value={pmFee} />
-        <PreviewLine label="Contractor fee (20%)" value={contractorFee} />
-        <PreviewLine label="Cycle total" value={total} strong />
+        <PreviewLine label="Subtotal" value={preview.subtotal} />
+        <PreviewLine label="PM fee (10%)" value={preview.pmFee} />
+        <PreviewLine label="Contractor fee (20%)" value={preview.contractorFee} />
+        <PreviewLine label="Cycle total" value={preview.total} strong />
         {isFinal && <PreviewLine label="50% upfront" value={upfrontBase} />}
         {priorCredit !== 0 && (
           <PreviewLine label={priorCredit > 0 ? "Less prior credit" : "Plus prior overage"} value={-priorCredit} />

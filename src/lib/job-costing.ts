@@ -41,6 +41,87 @@ export function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+/** One estimate parent line item allocated to a billing cycle at a percentage. */
+export interface ScopeAllocation {
+  line_item_id: string;
+  percentage: number;
+}
+
+export function parseScopeAllocations(raw: string | null | undefined): ScopeAllocation[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return [];
+    const out: ScopeAllocation[] = [];
+    for (const x of arr) {
+      if (typeof x !== "object" || x === null) continue;
+      const lineItemId = (x as { line_item_id?: unknown }).line_item_id;
+      const pct = Number((x as { percentage?: unknown }).percentage);
+      if (typeof lineItemId !== "string" || !Number.isFinite(pct)) continue;
+      out.push({ line_item_id: lineItemId, percentage: pct });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Sum percentages per line item across cycles (optionally excluding one cycle). */
+export function cumulativeScopeAllocations(
+  cycles: { id: string; scope_allocations: string | null | undefined }[],
+  excludeCycleId?: string,
+): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const c of cycles) {
+    if (excludeCycleId && c.id === excludeCycleId) continue;
+    for (const a of parseScopeAllocations(c.scope_allocations)) {
+      map.set(a.line_item_id, round2((map.get(a.line_item_id) ?? 0) + a.percentage));
+    }
+  }
+  return map;
+}
+
+export interface CategoryProjection {
+  materials: number;
+  labor: number;
+  subs: number;
+}
+
+/**
+ * Roll up estimate sub-item budgets into Materials / Labor / Subs, scaled by
+ * each parent line item's cycle percentage. Reuses the same sub-item budgets
+ * computed in {@link buildJobCosting}.
+ *
+ * Bucket rules:
+ *   material → materials
+ *   labor → labor
+ *   subcontractor → subs
+ *   permit, equipment, other → materials (simplest default bucket)
+ */
+export function projectedCostsFromScope(
+  lines: Pick<CostingLine, "line_item_id" | "sub_items">[],
+  allocations: ScopeAllocation[],
+): CategoryProjection {
+  const pctByLine = new Map(
+    allocations.map((a) => [a.line_item_id, Math.max(0, a.percentage) / 100]),
+  );
+  let materials = 0;
+  let labor = 0;
+  let subs = 0;
+  for (const line of lines) {
+    const factor = pctByLine.get(line.line_item_id);
+    if (!factor) continue;
+    for (const sub of line.sub_items) {
+      const scaled = round2(sub.budget * factor);
+      const cat = (sub.category ?? "").toLowerCase();
+      if (cat === "labor") labor = round2(labor + scaled);
+      else if (cat === "subcontractor") subs = round2(subs + scaled);
+      else materials = round2(materials + scaled);
+    }
+  }
+  return { materials, labor, subs };
+}
+
 export interface CostingActuals {
   /** parent line_item id → actual $ from aligned (non-void) expenses */
   byParent: Map<string, number>;

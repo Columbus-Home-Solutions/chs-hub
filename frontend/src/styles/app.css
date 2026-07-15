@@ -928,7 +928,85 @@
 
 .cycle-mini-budget {
   padding-bottom: var(--space-sm);
-  border-bottom: 1px solid var(--color-border);
+}
+.job-budget-overview {
+  margin-bottom: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.job-budget-overview--compact {
+  margin-bottom: var(--space-lg);
+}
+.job-budget-overview__title {
+  margin: 0 0 var(--space-sm);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+.job-budget-overview__table {
+  margin: 0;
+  width: 100%;
+}
+.job-budget-overview__table th,
+.job-budget-overview__table td {
+  font-size: var(--text-sm);
+}
+.job-budget-overview__total-row td {
+  font-weight: 600;
+  border-top: 1px solid var(--color-border);
+}
+.job-budget-overview__negative {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+.cycle-modal-section {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-border);
+}
+.cycle-modal-section:first-child,
+.job-budget-overview + .cycle-modal-section,
+.job-budget-overview + .cycle-mini-budget > .cycle-modal-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.cycle-modal-section__title {
+  margin: 0 0 var(--space-sm);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+.cycle-scope--spacious .cycle-scope__row {
+  padding: var(--space-sm) 0;
+  gap: var(--space-md);
+}
+.cycle-scope--spacious .cycle-scope__check {
+  flex: 1 1 280px;
+  align-items: flex-start;
+}
+.cycle-scope--spacious .cycle-scope__name {
+  min-width: 8rem;
+  font-weight: 500;
+}
+.cycle-scope--spacious .cycle-scope__breakdown {
+  flex: 1 1 auto;
+  margin-left: 0;
+  margin-top: var(--space-xs);
+  gap: var(--space-sm) var(--space-md);
+}
+.cycle-scope--spacious .cycle-scope__pct {
+  width: 6rem;
+  flex-shrink: 0;
+}
+.cycle-scope--spacious .cycle-scope__badge {
+  flex-shrink: 0;
 }
 .cycle-scope__title {
   margin: 0 0 var(--space-xs);

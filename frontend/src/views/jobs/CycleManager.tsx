@@ -1,4 +1,5 @@
 import { Fragment } from "preact";
+import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
@@ -390,6 +391,138 @@ function ScopeCategoryBreakdown({ line }: { line: ScopeLineItem }) {
   );
 }
 
+interface CategoryTriple {
+  materials: number;
+  labor: number;
+  subs: number;
+  total: number;
+}
+
+interface JobBudgetOverviewData {
+  estimated: CategoryTriple;
+  billed: CategoryTriple;
+  remaining: CategoryTriple;
+}
+
+/** Sum estimate sub-item budgets by category (100% of every line item). */
+function sumEstimatedCategories(lineItems: ScopeLineItem[]): CategoryTriple {
+  let materials = 0;
+  let labor = 0;
+  let subs = 0;
+  for (const li of lineItems) {
+    const cats =
+      li.materials != null && li.labor != null && li.subs != null
+        ? { materials: li.materials, labor: li.labor, subs: li.subs }
+        : categoryCostsForLineItem(li);
+    materials = round2(materials + cats.materials);
+    labor = round2(labor + cats.labor);
+    subs = round2(subs + cats.subs);
+  }
+  return { materials, labor, subs, total: round2(materials + labor + subs) };
+}
+
+/**
+ * Job-level budget context: estimated (full estimate) vs. billed mini-budget
+ * components from prior cycles. Uses projected_materials/labor/subs — what the
+ * client has been invoiced against, not reconciliation actuals.
+ */
+function computeJobBudgetOverview(
+  lineItems: ScopeLineItem[],
+  cycles: Cycle[],
+  excludeCycleNumber?: number,
+): JobBudgetOverviewData {
+  const estimated = sumEstimatedCategories(lineItems);
+  const priorCycles =
+    excludeCycleNumber != null
+      ? cycles.filter((c) => c.cycle_number < excludeCycleNumber)
+      : cycles;
+  let materials = 0;
+  let labor = 0;
+  let subs = 0;
+  for (const c of priorCycles) {
+    materials = round2(materials + (c.projected_materials ?? 0));
+    labor = round2(labor + (c.projected_labor ?? 0));
+    subs = round2(subs + (c.projected_subs ?? 0));
+  }
+  const billed = {
+    materials,
+    labor,
+    subs,
+    total: round2(materials + labor + subs),
+  };
+  return {
+    estimated,
+    billed,
+    remaining: {
+      materials: round2(estimated.materials - billed.materials),
+      labor: round2(estimated.labor - billed.labor),
+      subs: round2(estimated.subs - billed.subs),
+      total: round2(estimated.total - billed.total),
+    },
+  };
+}
+
+function CycleModalSection({
+  title,
+  children,
+  class: className,
+}: {
+  title: string;
+  children: ComponentChildren;
+  class?: string;
+}) {
+  return (
+    <section class={`cycle-modal-section${className ? ` ${className}` : ""}`}>
+      <h4 class="cycle-modal-section__title">{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+function JobBudgetOverview({
+  overview,
+  compact,
+}: {
+  overview: JobBudgetOverviewData;
+  compact?: boolean;
+}) {
+  const rows: { label: string; key: keyof CategoryTriple; total?: boolean }[] = [
+    { label: "Materials", key: "materials" },
+    { label: "Labor", key: "labor" },
+    { label: "Subs", key: "subs" },
+    { label: "Total", key: "total", total: true },
+  ];
+  return (
+    <div class={`job-budget-overview${compact ? " job-budget-overview--compact" : ""}`}>
+      <h4 class="job-budget-overview__title">Job Budget Overview</h4>
+      <table class="job-budget-overview__table table table--compact">
+        <thead>
+          <tr>
+            <th />
+            <th class="num">Estimated</th>
+            <th class="num">Billed to Date</th>
+            <th class="num">Remaining</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key} class={row.total ? "job-budget-overview__total-row" : ""}>
+              <td>{row.label}</td>
+              <td class="num">{formatCurrency(overview.estimated[row.key])}</td>
+              <td class="num">{formatCurrency(overview.billed[row.key])}</td>
+              <td
+                class={`num${overview.remaining[row.key] < -0.005 ? " job-budget-overview__negative" : ""}`}
+              >
+                {formatCurrency(overview.remaining[row.key])}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function CycleManager({
   jobId,
   onInvoicesChanged,
@@ -478,6 +611,7 @@ export function CycleManager({
               key={c.id}
               jobId={jobId}
               cycle={c}
+              allCycles={cycles}
               expanded={expanded === c.id}
               onToggle={() => setExpanded(expanded === c.id ? null : c.id)}
               onChanged={() => {
@@ -512,6 +646,7 @@ export function CycleManager({
 function CycleRow({
   jobId,
   cycle,
+  allCycles,
   expanded,
   onToggle,
   onChanged,
@@ -519,6 +654,7 @@ function CycleRow({
 }: {
   jobId: string;
   cycle: Cycle;
+  allCycles: Cycle[];
   expanded: boolean;
   onToggle: () => void;
   onChanged: () => void;
@@ -559,7 +695,13 @@ function CycleRow({
       </div>
 
       {expanded && (
-        <CycleDetail jobId={jobId} cycleId={cycle.id} onChanged={onChanged} toast={toast} />
+        <CycleDetail
+          jobId={jobId}
+          cycleId={cycle.id}
+          allCycles={allCycles}
+          onChanged={onChanged}
+          toast={toast}
+        />
       )}
     </div>
   );
@@ -568,11 +710,13 @@ function CycleRow({
 function CycleDetail({
   jobId: _jobId,
   cycleId,
+  allCycles,
   onChanged,
   toast,
 }: {
   jobId: string;
   cycleId: string;
+  allCycles: Cycle[];
   onChanged: () => void;
   toast: ToastApi;
 }) {
@@ -608,6 +752,11 @@ function CycleDetail({
   const c = data.cycle;
   const isFinal = (c.is_final_cycle ?? 0) === 1;
   const scopeContext = data.scope_context ?? { line_items: [], cumulative_allocations: {} };
+  const budgetOverview = computeJobBudgetOverview(
+    scopeContext.line_items,
+    allCycles,
+    c.cycle_number,
+  );
 
   const m = Number(materials) || 0;
   const l = Number(labor) || 0;
@@ -706,6 +855,8 @@ function CycleDetail({
 
   return (
     <div class="cycle-detail">
+      <JobBudgetOverview overview={budgetOverview} />
+
       {editable ? (
         <MiniBudgetEditor
           materials={materials}
@@ -853,64 +1004,69 @@ function MiniBudgetEditor({
 }) {
   return (
     <div class="cycle-mini-budget">
-      <ScopeChecklist
-        scopeContext={scopeContext}
-        scopeState={scopeState}
-        readOnly={false}
-        onScopeChange={onScopeChange}
-      />
+      <CycleModalSection title="Scope for This Cycle">
+        <ScopeChecklist
+          scopeContext={scopeContext}
+          scopeState={scopeState}
+          readOnly={false}
+          spacious
+          onScopeChange={onScopeChange}
+        />
+      </CycleModalSection>
 
-      {manualOverride && (
-        <p class="text--muted cycle-scope-hint" style={{ fontSize: "var(--text-xs)" }}>
-          Projected amounts were hand-edited — scope changes won't overwrite them until you clear and re-select.
-        </p>
-      )}
+      <CycleModalSection title="Mini-Budget">
+        {manualOverride && (
+          <p class="text--muted cycle-scope-hint" style={{ fontSize: "var(--text-xs)" }}>
+            Projected amounts were hand-edited — scope changes won't overwrite them until you clear and re-select.
+          </p>
+        )}
 
-      <div class="form-row" style={{ marginTop: "var(--space-sm)" }}>
-        <FormField label="Projected materials">
-          <input
-            class="form-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={materials}
-            onInput={(e) => onFieldInput("materials", (e.target as HTMLInputElement).value)}
-          />
-        </FormField>
-        <FormField label="Projected labor">
-          <input
-            class="form-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={labor}
-            onInput={(e) => onFieldInput("labor", (e.target as HTMLInputElement).value)}
-          />
-        </FormField>
-        <FormField label="Projected subs">
-          <input
-            class="form-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={subs}
-            onInput={(e) => onFieldInput("subs", (e.target as HTMLInputElement).value)}
-          />
-        </FormField>
-      </div>
+        <div class="form-row">
+          <FormField label="Projected materials">
+            <input
+              class="form-input"
+              type="number"
+              min="0"
+              step="0.01"
+              value={materials}
+              onInput={(e) => onFieldInput("materials", (e.target as HTMLInputElement).value)}
+            />
+          </FormField>
+          <FormField label="Projected labor">
+            <input
+              class="form-input"
+              type="number"
+              min="0"
+              step="0.01"
+              value={labor}
+              onInput={(e) => onFieldInput("labor", (e.target as HTMLInputElement).value)}
+            />
+          </FormField>
+          <FormField label="Projected subs">
+            <input
+              class="form-input"
+              type="number"
+              min="0"
+              step="0.01"
+              value={subs}
+              onInput={(e) => onFieldInput("subs", (e.target as HTMLInputElement).value)}
+            />
+          </FormField>
+        </div>
 
-      <div class="cycle-preview">
-        <PreviewLine label="Subtotal" value={preview.subtotal} />
-        <PreviewLine label={`PM fee (${Math.round(pmRate * 100)}%)`} value={preview.pmFee} />
-        <PreviewLine label={`Contractor fee (${Math.round(contractorRate * 100)}%)`} value={preview.contractorFee} />
-        <PreviewLine label="Cycle total" value={preview.total} strong />
-      </div>
+        <div class="cycle-preview">
+          <PreviewLine label="Subtotal" value={preview.subtotal} />
+          <PreviewLine label={`PM fee (${Math.round(pmRate * 100)}%)`} value={preview.pmFee} />
+          <PreviewLine label={`Contractor fee (${Math.round(contractorRate * 100)}%)`} value={preview.contractorFee} />
+          <PreviewLine label="Cycle total" value={preview.total} strong />
+        </div>
 
-      <div style={{ marginTop: "var(--space-sm)" }}>
-        <Button variant="primary" size="sm" disabled={busy || !dirty || preview.subtotal <= 0} onClick={onSave}>
-          {busy ? "Saving…" : "Save mini-budget"}
-        </Button>
-      </div>
+        <div style={{ marginTop: "var(--space-sm)" }}>
+          <Button variant="primary" size="sm" disabled={busy || !dirty || preview.subtotal <= 0} onClick={onSave}>
+            {busy ? "Saving…" : "Save mini-budget"}
+          </Button>
+        </div>
+      </CycleModalSection>
     </div>
   );
 }
@@ -942,11 +1098,13 @@ function ScopeChecklist({
   scopeContext,
   scopeState,
   readOnly,
+  spacious,
   onScopeChange,
 }: {
   scopeContext: ScopeContext;
   scopeState: ScopeState;
   readOnly: boolean;
+  spacious?: boolean;
   onScopeChange?: (lineItemId: string, patch: Partial<{ checked: boolean; percentage: string }>) => void;
 }) {
   if (!scopeContext.line_items.length) {
@@ -958,8 +1116,8 @@ function ScopeChecklist({
   }
 
   return (
-    <div class="cycle-scope">
-      <h4 class="cycle-scope__title">Scope for this cycle</h4>
+    <div class={`cycle-scope${spacious ? " cycle-scope--spacious" : ""}`}>
+      {!spacious && <h4 class="cycle-scope__title">Scope for this cycle</h4>}
       <p class="text--muted cycle-scope__hint" style={{ fontSize: "var(--text-xs)" }}>
         Optional — select trades and what percentage of each applies to this cycle. Amounts auto-fill the
         projected fields below; you can still adjust them by hand.
@@ -1097,6 +1255,7 @@ function NewCycleModal({
   const upfrontBase = isFinal ? round2(preview.total * 0.5) : preview.total;
   const invoiceAmount = round2(upfrontBase - priorCredit);
   const valid = preview.subtotal > 0;
+  const budgetOverview = computeJobBudgetOverview(scopeContext.line_items, cyclesList.data?.cycles ?? []);
 
   const applyScopeToFields = (nextScope: ScopeState) => {
     const allocations = allocationsFromScopeState(nextScope);
@@ -1141,6 +1300,7 @@ function NewCycleModal({
   return (
     <Modal
       open
+      size="wide"
       title="New Billing Cycle"
       onClose={onClose}
       footer={
@@ -1154,94 +1314,103 @@ function NewCycleModal({
         </>
       }
     >
-      <div class="form-row">
-        <FormField label="Period start" required>
-          <input
-            class="form-input"
-            type="date"
-            value={periodStart}
-            onInput={(e) => setPeriodStart((e.target as HTMLInputElement).value)}
-          />
-        </FormField>
-        <FormField label="Period end" required>
-          <input
-            class="form-input"
-            type="date"
-            value={periodEnd}
-            onInput={(e) => setPeriodEnd((e.target as HTMLInputElement).value)}
-          />
-        </FormField>
-      </div>
+      <JobBudgetOverview overview={budgetOverview} compact />
 
-      {costing.loading ? (
-        <Spinner />
-      ) : (
-        <ScopeChecklist
-          scopeContext={scopeContext}
-          scopeState={scopeState}
-          readOnly={false}
-          onScopeChange={updateScope}
-        />
-      )}
+      <CycleModalSection title="Period">
+        <div class="form-row">
+          <FormField label="Period start" required>
+            <input
+              class="form-input"
+              type="date"
+              value={periodStart}
+              onInput={(e) => setPeriodStart((e.target as HTMLInputElement).value)}
+            />
+          </FormField>
+          <FormField label="Period end" required>
+            <input
+              class="form-input"
+              type="date"
+              value={periodEnd}
+              onInput={(e) => setPeriodEnd((e.target as HTMLInputElement).value)}
+            />
+          </FormField>
+        </div>
+      </CycleModalSection>
 
-      <div class="form-row" style={{ marginTop: "var(--space-sm)" }}>
-        <FormField label="Projected materials">
-          <input
-            class="form-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={materials}
-            onInput={(e) => {
-              setManualOverride(true);
-              setMaterials((e.target as HTMLInputElement).value);
-            }}
+      <CycleModalSection title="Scope for This Cycle">
+        {costing.loading ? (
+          <Spinner />
+        ) : (
+          <ScopeChecklist
+            scopeContext={scopeContext}
+            scopeState={scopeState}
+            readOnly={false}
+            spacious
+            onScopeChange={updateScope}
           />
-        </FormField>
-        <FormField label="Projected labor">
-          <input
-            class="form-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={labor}
-            onInput={(e) => {
-              setManualOverride(true);
-              setLabor((e.target as HTMLInputElement).value);
-            }}
-          />
-        </FormField>
-        <FormField label="Projected subs">
-          <input
-            class="form-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={subs}
-            onInput={(e) => {
-              setManualOverride(true);
-              setSubs((e.target as HTMLInputElement).value);
-            }}
-          />
-        </FormField>
-      </div>
+        )}
+      </CycleModalSection>
 
-      <label class="flex gap-sm items-center" style={{ fontSize: "var(--text-sm)" }}>
+      <CycleModalSection title="Mini-Budget">
+        <div class="form-row">
+          <FormField label="Projected materials">
+            <input
+              class="form-input"
+              type="number"
+              min="0"
+              step="0.01"
+              value={materials}
+              onInput={(e) => {
+                setManualOverride(true);
+                setMaterials((e.target as HTMLInputElement).value);
+              }}
+            />
+          </FormField>
+          <FormField label="Projected labor">
+            <input
+              class="form-input"
+              type="number"
+              min="0"
+              step="0.01"
+              value={labor}
+              onInput={(e) => {
+                setManualOverride(true);
+                setLabor((e.target as HTMLInputElement).value);
+              }}
+            />
+          </FormField>
+          <FormField label="Projected subs">
+            <input
+              class="form-input"
+              type="number"
+              min="0"
+              step="0.01"
+              value={subs}
+              onInput={(e) => {
+                setManualOverride(true);
+                setSubs((e.target as HTMLInputElement).value);
+              }}
+            />
+          </FormField>
+        </div>
+
+        <div class="cycle-preview">
+          <PreviewLine label="Subtotal" value={preview.subtotal} />
+          <PreviewLine label="PM fee (10%)" value={preview.pmFee} />
+          <PreviewLine label="Contractor fee (20%)" value={preview.contractorFee} />
+          <PreviewLine label="Cycle total" value={preview.total} strong />
+          {isFinal && <PreviewLine label="50% upfront" value={upfrontBase} />}
+          {priorCredit !== 0 && (
+            <PreviewLine label={priorCredit > 0 ? "Less prior credit" : "Plus prior overage"} value={-priorCredit} />
+          )}
+          <PreviewLine label="Invoice amount" value={invoiceAmount} strong />
+        </div>
+      </CycleModalSection>
+
+      <label class="flex gap-sm items-center" style={{ fontSize: "var(--text-sm)", marginTop: "var(--space-sm)" }}>
         <input type="checkbox" checked={isFinal} onChange={(e) => setIsFinal((e.target as HTMLInputElement).checked)} />
         Final cycle (50% upfront / 50% at completion)
       </label>
-
-      <div class="cycle-preview" style={{ marginTop: "var(--space-md)" }}>
-        <PreviewLine label="Subtotal" value={preview.subtotal} />
-        <PreviewLine label="PM fee (10%)" value={preview.pmFee} />
-        <PreviewLine label="Contractor fee (20%)" value={preview.contractorFee} />
-        <PreviewLine label="Cycle total" value={preview.total} strong />
-        {isFinal && <PreviewLine label="50% upfront" value={upfrontBase} />}
-        {priorCredit !== 0 && (
-          <PreviewLine label={priorCredit > 0 ? "Less prior credit" : "Plus prior overage"} value={-priorCredit} />
-        )}
-        <PreviewLine label="Invoice amount" value={invoiceAmount} strong />
-      </div>
     </Modal>
   );
 }

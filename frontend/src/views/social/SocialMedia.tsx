@@ -1,5 +1,6 @@
 import type { RoutableProps } from "preact-router";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -24,7 +25,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 export function SocialMedia(_props: RoutableProps) {
   const toast = useToast();
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const [tab, setTab] = useUrlTab(TABS.map((t) => t.id), "dashboard");
   const [editId, setEditId] = useState<string | null>(null);
   const [editIntent, setEditIntent] = useState<"default" | "approve">("default");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -38,13 +39,6 @@ export function SocialMedia(_props: RoutableProps) {
       .get<{ publish_mode: "live" | "simulate" }>("/api/social/status")
       .then((r) => setPublishMode(r.publish_mode))
       .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get("tab");
-    if (t === "queue" || t === "approval") setTab("queue");
-    else if (t === "calendar") setTab("calendar");
-    else if (t === "history") setTab("history");
   }, []);
 
   const openEditor = (id: string, intent: "default" | "approve" = "default") => {

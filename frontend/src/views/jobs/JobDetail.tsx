@@ -1,7 +1,7 @@
 import type { RoutableProps } from "preact-router";
-import { useRouter } from "preact-router";
-import { useEffect, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -97,18 +97,10 @@ function statusTargets(status: JobStatus): JobStatus[] {
 const TAB_KEYS = new Set<TabKey>(TABS.map((t) => t.key));
 
 export function JobDetail({ id }: DetailProps) {
-  const [{ url }] = useRouter();
-  const search = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
   const { data, loading, error, refetch } = useApi<JobDetailResponse>(id ? `/api/jobs/${id}` : null);
   const toast = useToast();
   const { user } = useAuth();
-  const [tab, setTab] = useState<TabKey>("overview");
-
-  useEffect(() => {
-    const params = new URLSearchParams(search);
-    const t = params.get("tab");
-    if (t && TAB_KEYS.has(t as TabKey)) setTab(t as TabKey);
-  }, [id, search]);
+  const [tab, setTab] = useUrlTab([...TAB_KEYS], "overview");
 
   if (loading) return <Spinner center />;
   if (error || !data) {

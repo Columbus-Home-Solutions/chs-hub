@@ -1,5 +1,6 @@
 import type { RoutableProps } from "preact-router";
-import { useEffect, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -67,7 +68,7 @@ function jobLabel(j: JobOption): string {
 
 export function WarrantyCalls(_props: RoutableProps) {
   const toast = useToast();
-  const [tab, setTab] = useState<Tab>("open");
+  const [tab, setTab] = useUrlTab(TABS.map((t) => t.key), "open");
   const [creating, setCreating] = useState(false);
   const [scheduling, setScheduling] = useState<WarrantyCall | null>(null);
 

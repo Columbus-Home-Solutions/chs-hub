@@ -9,6 +9,7 @@
 import type { RoutableProps } from "preact-router";
 import { useRouter } from "preact-router";
 import { useEffect, useMemo, useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { useApi } from "../../hooks/useApi";
@@ -108,18 +109,13 @@ export function FinancialDashboard(_props: RoutableProps) {
       ? `/api/payments?from=${weekRange.start}&to=${weekRange.lastDay}`
       : null,
   );
-  const [tab, setTab] = useState<FinTab>("invoices");
+  const [tab, setTab] = useUrlTab(["invoices", "reports", "pricing", "receipts"] as const, "invoices");
 
   // Re-run whenever the search string changes so sidebar sub-items (same path,
-  // different ?tab=) update the active tab each time without a full remount.
+  // different ?filter=) update invoice filters. Tab state is handled by useUrlTab.
   useEffect(() => {
     const params = new URLSearchParams(currentSearch);
     const urlTab = params.get("tab");
-    if (urlTab === "reports") setTab("reports");
-    else if (urlTab === "pricing") setTab("pricing");
-    else if (urlTab === "receipts") setTab("receipts");
-    else if (urlTab === "invoices" || urlTab === "payments") setTab("invoices");
-    else setTab("invoices"); // default / no ?tab= param
 
     const filter = params.get("filter") ?? params.get("status");
     if (filter === "unpaid") setStatusFilter("__unpaid__");

@@ -3,6 +3,7 @@
  * Both lists follow the same add/archive pattern (no renames in v1).
  */
 import { useState, useEffect } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { useApi } from "../../hooks/useApi";
 import { api, ApiError } from "../../api";
 import { Card } from "../../components/ui/Card";
@@ -382,7 +383,11 @@ function PunchListNamesPanel() {
 // ─── Exported tab ─────────────────────────────────────────────────────────────
 
 export function ManageListsTab() {
-  const [tab, setTab] = useState<ListTab>("tags");
+  const [tab, setTab] = useUrlTab(
+    ["tags", "referral_sources", "punch_list_names"] as const,
+    "tags",
+    "list",
+  );
 
   return (
     <Card title="Manage Lists">

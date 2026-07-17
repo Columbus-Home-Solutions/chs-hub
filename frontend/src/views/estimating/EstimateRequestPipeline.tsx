@@ -10,6 +10,7 @@
 import type { RoutableProps } from "preact-router";
 import { useRouter } from "preact-router";
 import { useEffect, useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { LeadPipeline } from "../dashboard/LeadPipeline";
 import { CHSLeadsKanban } from "./CHSLeadsKanban";
 import { useApi } from "../../hooks/useApi";
@@ -36,7 +37,7 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
   const [{ url }] = useRouter();
   const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
 
-  const [activeTab, setActiveTab] = useState<PipelineTab>(storedTab);
+  const [activeTab, setActiveTab] = useUrlTab(["hl", "chs"] as const, "hl");
   const [newRequestCount, setNewRequestCount] = useState(0);
   const [highlightStage, setHighlightStage] = useState<string | null>(null);
 
@@ -49,29 +50,21 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
     }
   }, [pipelineData]);
 
-  // Re-run whenever the search string changes so clicking different sidebar
-  // sub-items (same path, different ?tab=) updates the active tab each time.
+  // Keep ?stage= in sync when sidebar deep-links into CHS Leads.
   useEffect(() => {
     const params = new URLSearchParams(currentSearch);
-    const tabParam = params.get("tab");
     const stageParam = params.get("stage");
-    if (tabParam === "chs" || tabParam === "hl") {
-      setActiveTab(tabParam);
-      try { localStorage.setItem(TAB_STORAGE_KEY, tabParam); } catch { /* ignore */ }
-    }
-    if (stageParam) {
-      setHighlightStage(stageParam);
-    }
+    if (stageParam) setHighlightStage(stageParam);
   }, [currentSearch]);
 
-  function switchTab(tab: PipelineTab) {
+  const switchTab = (tab: PipelineTab) => {
     setActiveTab(tab);
     try {
       localStorage.setItem(TAB_STORAGE_KEY, tab);
     } catch {
       // ignore
     }
-  }
+  };
 
   return (
     <div>

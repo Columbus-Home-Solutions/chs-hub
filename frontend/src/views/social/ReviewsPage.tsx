@@ -1,5 +1,6 @@
 import type { RoutableProps } from "preact-router";
 import { useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { useApi } from "../../hooks/useApi";
 import { api, ApiError } from "../../api";
 import { Card } from "../../components/ui/Card";
@@ -467,7 +468,7 @@ export function GoogleGMark({ size = 22 }: { size?: number } = {}) {
 type Filter = "all" | "unanswered";
 
 export function ReviewsPage(_props: RoutableProps) {
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useUrlTab(["all", "unanswered"] as const, "all", "filter");
   const [addOpen, setAddOpen] = useState(false);
 
   const { data: statsData, refetch: refetchStats } = useApi<ReviewStats>("/api/google-reviews/stats");

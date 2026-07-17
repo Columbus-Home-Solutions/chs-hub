@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
+import { usePortalUrlTab } from "../../hooks/useUrlTab";
 import logoUrl from "../../assets/chs-logo.png";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
 import { getJson, portalToken, type PortalLanding } from "./portalApi";
@@ -35,12 +36,47 @@ const TAB_LABELS: Record<TabKey, string> = {
   messages: "Messages",
 };
 
+const ALL_TABS: TabKey[] = [
+  "photos",
+  "schedule",
+  "invoices",
+  "budget",
+  "change_orders",
+  "selections",
+  "documents",
+  "completion",
+  "warranty",
+  "messages",
+];
+
+function portalTabsFor(landing: PortalLanding): TabKey[] {
+  return [
+    "photos",
+    "schedule",
+    "invoices",
+    ...(landing.is_cost_plus ? (["budget"] as TabKey[]) : []),
+    "change_orders",
+    "selections",
+    "documents",
+    ...(landing.completion_package_available ? (["completion"] as TabKey[]) : []),
+    ...(landing.within_warranty ? (["warranty"] as TabKey[]) : []),
+    "messages",
+  ];
+}
+
 export function PortalApp() {
   const token = useMemo(portalToken, []);
   const [landing, setLanding] = useState<PortalLanding | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>("photos");
+  const [tab, setTab] = usePortalUrlTab(ALL_TABS, "photos");
+
+  const availableTabs = useMemo(() => (landing ? portalTabsFor(landing) : null), [landing]);
+
+  useEffect(() => {
+    if (!availableTabs) return;
+    if (!availableTabs.includes(tab)) setTab(availableTabs[0] ?? "photos");
+  }, [availableTabs, tab, setTab]);
 
   const reload = async () => {
     const res = await getJson<PortalLanding>(`/api/portal/${token}`);
@@ -81,18 +117,8 @@ export function PortalApp() {
     );
   }
 
-  const tabs: TabKey[] = [
-    "photos",
-    "schedule",
-    "invoices",
-    ...(landing.is_cost_plus ? (["budget"] as TabKey[]) : []),
-    "change_orders",
-    "selections",
-    "documents",
-    ...(landing.completion_package_available ? (["completion"] as TabKey[]) : []),
-    ...(landing.within_warranty ? (["warranty"] as TabKey[]) : []),
-    "messages",
-  ];
+  const tabs = portalTabsFor(landing);
+  const activeTab = tabs.includes(tab) ? tab : (tabs[0] ?? "photos");
 
   const h = landing.header;
   const qs = landing.quick_stats;
@@ -171,7 +197,7 @@ export function PortalApp() {
         {tabs.map((t) => (
           <button
             key={t}
-            class={`portal-tab${tab === t ? " portal-tab--active" : ""}`}
+            class={`portal-tab${activeTab === t ? " portal-tab--active" : ""}`}
             onClick={() => setTab(t)}
           >
             {TAB_LABELS[t]}
@@ -180,18 +206,18 @@ export function PortalApp() {
       </nav>
 
       <main class="portal-content">
-        {tab === "photos" && <PhotosTab token={token} />}
-        {tab === "schedule" && <ScheduleTab token={token} />}
-        {tab === "invoices" && (
+        {activeTab === "photos" && <PhotosTab token={token} />}
+        {activeTab === "schedule" && <ScheduleTab token={token} />}
+        {activeTab === "invoices" && (
           <InvoicesTab token={token} onHold={landing.on_hold} onPaid={reload} />
         )}
-        {tab === "budget" && <BudgetTab token={token} />}
-        {tab === "change_orders" && <ChangeOrdersTab token={token} />}
-        {tab === "selections" && <SelectionsTab />}
-        {tab === "documents" && <DocumentsTab token={token} />}
-        {tab === "completion" && <CompletionPackageTab token={token} />}
-        {tab === "warranty" && <WarrantyClaimsTab />}
-        {tab === "messages" && <MessagesTab token={token} />}
+        {activeTab === "budget" && <BudgetTab token={token} />}
+        {activeTab === "change_orders" && <ChangeOrdersTab token={token} />}
+        {activeTab === "selections" && <SelectionsTab />}
+        {activeTab === "documents" && <DocumentsTab token={token} />}
+        {activeTab === "completion" && <CompletionPackageTab token={token} />}
+        {activeTab === "warranty" && <WarrantyClaimsTab />}
+        {activeTab === "messages" && <MessagesTab token={token} />}
       </main>
 
       <footer class="quote-footer">

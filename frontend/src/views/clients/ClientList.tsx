@@ -1,6 +1,7 @@
 import type { RoutableProps } from "preact-router";
 import { useRouter } from "preact-router";
 import { useEffect, useMemo, useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { useApi } from "../../hooks/useApi";
 import { Table, type Column } from "../../components/ui/Table";
 import { Button } from "../../components/ui/Button";
@@ -29,7 +30,11 @@ export function ClientList(_props: RoutableProps) {
   const [{ url }] = useRouter();
   const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
   const { open: openMessageCenter } = useMessageCenter();
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useUrlTab(
+    FILTERS.map((f) => f.key),
+    "all",
+    "filter",
+  );
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
 

@@ -1,5 +1,6 @@
 import type { RoutableProps } from "preact-router";
 import { useMemo, useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -45,7 +46,7 @@ function assigneeLabel(e: CalendarEvent): string | null {
 }
 
 export function ScheduleCalendar(_props: RoutableProps) {
-  const [mode, setMode] = useState<Mode>("month");
+  const [mode, setMode] = useUrlTab(["day", "week", "month"] as const, "month", "view");
   const [anchor, setAnchor] = useState<Date>(new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [activeEvent, setActiveEvent] = useState<CalendarEvent | null>(null);

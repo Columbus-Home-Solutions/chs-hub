@@ -1,5 +1,6 @@
 import type { RoutableProps } from "preact-router";
 import { useEffect, useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
@@ -55,7 +56,7 @@ const TABS: { key: TabKey; label: string }[] = [
 
 export function Settings(_props: RoutableProps) {
   const { user, loading } = useAuth();
-  const [tab, setTab] = useState<TabKey>("company");
+  const [tab, setTab] = useUrlTab(TABS.map((t) => t.key), "company");
 
   if (loading) return <Spinner center />;
 

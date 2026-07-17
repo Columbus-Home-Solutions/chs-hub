@@ -191,6 +191,7 @@ const ROUTE_RULES: RouteRule[] = [
 const RBAC_EXEMPT_PREFIXES = [
   "/api/public/", // pay + quote token APIs
   "/api/punch/", // sub punch list token API (Sprint 33)
+  "/api/sub/", // persistent sub access token API (Sprint 34)
   "/api/portal/", // client portal token API
   "/api/bid/", // sub bid submission token API (Sprint 38 Run 3)
   "/api/packet/", // sub onboarding packet token API (Sprint 39 Run 1)

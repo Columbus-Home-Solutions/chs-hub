@@ -26,9 +26,14 @@ export interface PunchListPdfInput {
 
 const PUNCH_LIST_ORIGIN = "https://dashboard.homesolutionsar.com";
 
-/** Escape text for PDF string literals. */
+/** Escape text for PDF string literals (Type1 Helvetica = ASCII / WinAnsi only). */
 function pdfEscape(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  const ascii = s
+    .replace(/\u2014/g, "-") // em dash
+    .replace(/\u2013/g, "-") // en dash
+    .replace(/[\u2500-\u257F]/g, "-") // box-drawing → plain dash
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
+  return ascii.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 }
 
 /** Wrap long lines for PDF text output (~72 chars). */
@@ -61,14 +66,14 @@ export function buildPunchListPdf(input: PunchListPdfInput): Uint8Array {
     "COLUMBUS HOME SOLUTIONS LLC",
     input.job_address,
     "",
-    `PUNCH LIST — ${input.job_title}`,
+    `PUNCH LIST - ${input.job_title}`,
     `Prepared for: ${input.sub_company_name}`,
     `Date: ${today}`,
     `Scheduled Completion: ${sched}`,
     "",
-    "─────────────────────────────────────────────",
+    "---------------------------------------------",
     "ITEMS ASSIGNED TO YOU",
-    "─────────────────────────────────────────────",
+    "---------------------------------------------",
     "",
   ];
 
@@ -81,10 +86,10 @@ export function buildPunchListPdf(input: PunchListPdfInput): Uint8Array {
   });
 
   bodyLines.push(
-    "─────────────────────────────────────────────",
+    "---------------------------------------------",
     "Questions? Contact Tony Columbus",
     "(501) 551-1814 | tony@homesolutionsar.com",
-    "─────────────────────────────────────────────",
+    "---------------------------------------------",
   );
 
   const flatLines = bodyLines.flatMap((l) => (l === "" ? [""] : wrapLines(l)));

@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { useUrlTab } from "../../hooks/useUrlTab";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";

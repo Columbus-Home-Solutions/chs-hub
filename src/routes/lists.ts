@@ -147,3 +147,83 @@ export async function handleReferralSourceArchive(
   const row = await env.DB.prepare("SELECT * FROM referral_sources WHERE id = ?").bind(id).first();
   return json({ referral_source: row });
 }
+
+// ─── Punch list name presets ─────────────────────────────────────────────────
+
+const PRESET_OWNER_ROLES = ["owner"] as const;
+
+export async function handlePunchListNamePresetList(env: Env): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM punch_list_name_presets ORDER BY sort_order ASC, name ASC",
+  ).all();
+  return json({ presets: results ?? [] });
+}
+
+export async function handlePunchListNamePresetCreate(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, [...PRESET_OWNER_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  const name = str(body.name);
+  if (!name) return err(422, "validation_error", "name is required");
+
+  const existing = await env.DB.prepare(
+    "SELECT id FROM punch_list_name_presets WHERE LOWER(name) = LOWER(?)",
+  )
+    .bind(name)
+    .first<{ id: string }>();
+  if (existing) return err(409, "conflict", "A preset with that name already exists");
+
+  const maxOrder = await env.DB.prepare(
+    "SELECT COALESCE(MAX(sort_order), 0) AS n FROM punch_list_name_presets",
+  ).first<{ n: number }>();
+
+  const id = crypto.randomUUID().replace(/-/g, "");
+  await env.DB.prepare(
+    "INSERT INTO punch_list_name_presets (id, name, sort_order) VALUES (?, ?, ?)",
+  )
+    .bind(id, name, (maxOrder?.n ?? 0) + 1)
+    .run();
+
+  const row = await env.DB.prepare("SELECT * FROM punch_list_name_presets WHERE id = ?").bind(id).first();
+  return json({ preset: row }, { status: 201 });
+}
+
+export async function handlePunchListNamePresetDelete(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...PRESET_OWNER_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const existing = await env.DB.prepare("SELECT id FROM punch_list_name_presets WHERE id = ?")
+    .bind(id)
+    .first<{ id: string }>();
+  if (!existing) return err(404, "not_found", "Preset not found");
+
+  await env.DB.prepare("DELETE FROM punch_list_name_presets WHERE id = ?").bind(id).run();
+  return json({ ok: true });
+}
+
+export async function handlePunchListNamePresetReorder(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, [...PRESET_OWNER_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+  if (!Array.isArray(body.ordered_ids) || body.ordered_ids.length === 0) {
+    return err(422, "validation_error", "ordered_ids must be a non-empty array");
+  }
+
+  const orderedIds = body.ordered_ids.map(String);
+  for (let i = 0; i < orderedIds.length; i++) {
+    await env.DB.prepare("UPDATE punch_list_name_presets SET sort_order = ? WHERE id = ?")
+      .bind(i + 1, orderedIds[i])
+      .run();
+  }
+
+  return handlePunchListNamePresetList(env);
+}

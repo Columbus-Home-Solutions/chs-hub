@@ -1,8 +1,10 @@
 /**
- * Punch list API (Sprint 33).
+ * Punch list API (Sprint 33, multi-list Sprint 40).
  *
- *   GET    /api/jobs/:id/punch-list
- *   POST   /api/jobs/:id/punch-list/items
+ *   GET    /api/jobs/:id/punch-lists
+ *   POST   /api/jobs/:id/punch-lists
+ *   GET    /api/punch-lists/:id
+ *   POST   /api/punch-lists/:id/items
  *   PUT    /api/punch-list-items/:id
  *   DELETE /api/punch-list-items/:id
  *   PUT    /api/punch-lists/:id/schedule
@@ -112,6 +114,7 @@ async function storePunchCompletionPhoto(
 interface PunchListRow {
   id: string;
   job_id: string;
+  name: string;
   status: string;
   scheduled_date: string | null;
   sent_at: string | null;
@@ -156,24 +159,70 @@ function hydrateItem(row: ItemRow) {
   };
 }
 
-async function getOrCreatePunchList(env: Env, jobId: string): Promise<PunchListRow> {
-  const existing = await env.DB.prepare("SELECT * FROM punch_lists WHERE job_id = ?")
-    .bind(jobId)
-    .first<PunchListRow>();
-  if (existing) return existing;
+function punchListMeta(row: PunchListRow) {
+  return {
+    id: row.id,
+    job_id: row.job_id,
+    name: row.name,
+    status: row.status,
+    scheduled_date: row.scheduled_date,
+    sent_at: row.sent_at,
+    closed_at: row.closed_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
 
+async function getPunchList(env: Env, punchListId: string): Promise<PunchListRow | null> {
+  return env.DB.prepare("SELECT * FROM punch_lists WHERE id = ?")
+    .bind(punchListId)
+    .first<PunchListRow>();
+}
+
+async function buildPunchListPayload(env: Env, punchList: PunchListRow) {
+  const rawItems = await loadItems(env, punchList.id);
+  const items = rawItems.map(hydrateItem);
+  const bySub = await buildBySub(env, punchList.id, items);
+  const unassigned = items.filter((i) => !i.sub_id);
+  return {
+    punch_list: punchListMeta(punchList),
+    items,
+    by_sub: bySub,
+    unassigned_items: unassigned,
+  };
+}
+
+async function createPunchList(env: Env, jobId: string, name: string): Promise<PunchListRow> {
   const id = crypto.randomUUID().replace(/-/g, "");
   await env.DB.prepare(
-    `INSERT INTO punch_lists (id, job_id, status, created_at, updated_at)
-     VALUES (?, ?, 'open', datetime('now'), datetime('now'))`,
+    `INSERT INTO punch_lists (id, job_id, name, status, created_at, updated_at)
+     VALUES (?, ?, ?, 'open', datetime('now'), datetime('now'))`,
   )
-    .bind(id, jobId)
+    .bind(id, jobId, name)
     .run();
-
-  const row = await env.DB.prepare("SELECT * FROM punch_lists WHERE id = ?")
-    .bind(id)
-    .first<PunchListRow>();
+  const row = await getPunchList(env, id);
   return row!;
+}
+
+async function maybeCompleteJobAfterPunchListsClosed(env: Env, jobId: string): Promise<boolean> {
+  const openLists = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM punch_lists WHERE job_id = ? AND status != 'closed'`,
+  )
+    .bind(jobId)
+    .first<{ n: number }>();
+  if (openLists && openLists.n > 0) return false;
+
+  const job = await env.DB.prepare("SELECT status FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ status: string }>();
+  if (job?.status !== "punch_list") return false;
+
+  await env.DB.prepare(
+    `UPDATE jobs SET status = 'complete', updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(jobId)
+    .run();
+  return true;
 }
 
 async function loadItems(env: Env, punchListId: string): Promise<ItemRow[]> {
@@ -281,33 +330,95 @@ async function getOrCreateSubToken(
   return token;
 }
 
+export async function handleJobPunchListsGet(env: Env, jobId: string): Promise<Response> {
+  const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ id: string }>();
+  if (!job) return err(404, "job_not_found");
+
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM punch_lists WHERE job_id = ? ORDER BY created_at ASC`,
+  )
+    .bind(jobId)
+    .all<PunchListRow>();
+
+  const lists = results ?? [];
+  const payloads = [];
+  for (const pl of lists) {
+    payloads.push(await buildPunchListPayload(env, pl));
+  }
+
+  return json({ punch_lists: payloads });
+}
+
+export async function handleJobPunchListsGetGuarded(
+  env: Env,
+  request: Request,
+  jobId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...READ_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  return handleJobPunchListsGet(env, jobId);
+}
+
+export async function handleJobPunchListCreate(
+  env: Env,
+  request: Request,
+  jobId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "invalid_json");
+  const name = str(body.name);
+  if (!name) return err(400, "name_required");
+
+  const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ id: string }>();
+  if (!job) return err(404, "job_not_found");
+
+  const punchList = await createPunchList(env, jobId, name);
+  const payload = await buildPunchListPayload(env, punchList);
+  return json(payload, { status: 201 });
+}
+
+export async function handlePunchListGet(env: Env, punchListId: string): Promise<Response> {
+  const punchList = await getPunchList(env, punchListId);
+  if (!punchList) return err(404, "not_found");
+  return json(await buildPunchListPayload(env, punchList));
+}
+
+export async function handlePunchListGetGuarded(
+  env: Env,
+  request: Request,
+  punchListId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...READ_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  return handlePunchListGet(env, punchListId);
+}
+
+/** @deprecated Use handleJobPunchListsGet — kept for backward compatibility during rollout. */
 export async function handleJobPunchListGet(env: Env, jobId: string): Promise<Response> {
   const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ?")
     .bind(jobId)
     .first<{ id: string }>();
   if (!job) return err(404, "job_not_found");
 
-  const punchList = await getOrCreatePunchList(env, jobId);
-  const rawItems = await loadItems(env, punchList.id);
-  const items = rawItems.map(hydrateItem);
-  const bySub = await buildBySub(env, punchList.id, items);
-  const unassigned = items.filter((i) => !i.sub_id);
-
-  return json({
-    punch_list: {
-      id: punchList.id,
-      job_id: punchList.job_id,
-      status: punchList.status,
-      scheduled_date: punchList.scheduled_date,
-      sent_at: punchList.sent_at,
-      closed_at: punchList.closed_at,
-    },
-    items,
-    by_sub: bySub,
-    unassigned_items: unassigned,
-  });
+  let punchList = await env.DB.prepare(
+    `SELECT * FROM punch_lists WHERE job_id = ? ORDER BY created_at ASC LIMIT 1`,
+  )
+    .bind(jobId)
+    .first<PunchListRow>();
+  if (!punchList) {
+    punchList = await createPunchList(env, jobId, "Punch List");
+  }
+  return json(await buildPunchListPayload(env, punchList));
 }
 
+/** @deprecated */
 export async function handleJobPunchListGetGuarded(
   env: Env,
   request: Request,
@@ -321,7 +432,7 @@ export async function handleJobPunchListGetGuarded(
 export async function handlePunchListItemCreate(
   env: Env,
   request: Request,
-  jobId: string,
+  punchListId: string,
 ): Promise<Response> {
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
@@ -331,12 +442,10 @@ export async function handlePunchListItemCreate(
   const description = str(body.description);
   if (!description) return err(400, "description_required");
 
-  const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ?")
-    .bind(jobId)
-    .first<{ id: string }>();
-  if (!job) return err(404, "job_not_found");
+  const punchList = await getPunchList(env, punchListId);
+  if (!punchList) return err(404, "not_found");
+  if (punchList.status === "closed") return err(400, "punch_list_closed");
 
-  const punchList = await getOrCreatePunchList(env, jobId);
   const subId = str(body.sub_id);
   const scheduledDate = str(body.scheduled_date);
   const photoIds = Array.isArray(body.photo_ids)
@@ -350,13 +459,38 @@ export async function handlePunchListItemCreate(
        (id, punch_list_id, job_id, description, sub_id, photo_ids, scheduled_date, sort_order, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
   )
-    .bind(id, punchList.id, jobId, description, subId, photoIds, scheduledDate, sortOrder)
+    .bind(id, punchList.id, punchList.job_id, description, subId, photoIds, scheduledDate, sortOrder)
     .run();
 
   const row = await env.DB.prepare("SELECT * FROM punch_list_items WHERE id = ?")
     .bind(id)
     .first<ItemRow>();
   return json({ item: row ? hydrateItem(row) : null }, { status: 201 });
+}
+
+/** @deprecated POST /api/punch-lists/:id/items instead */
+export async function handleJobPunchListItemCreate(
+  env: Env,
+  request: Request,
+  jobId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "invalid_json");
+  const punchListId = str(body.punch_list_id);
+  if (!punchListId) return err(400, "punch_list_id_required");
+
+  const punchList = await getPunchList(env, punchListId);
+  if (!punchList || punchList.job_id !== jobId) return err(404, "not_found");
+
+  const req = new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: JSON.stringify(body),
+  });
+  return handlePunchListItemCreate(env, req, punchListId);
 }
 
 export async function handlePunchListItemUpdate(
@@ -472,6 +606,7 @@ export async function handlePunchListSend(
   const subIds = [...new Set(assigned.map((i) => i.sub_id).filter(Boolean))] as string[];
   const jobTitle = punchList.job_title ?? "Project";
   const jobAddress = punchList.property_address ?? "";
+  const listLabel = punchList.name || "Punch List";
 
   for (const subId of subIds) {
     const sub = await env.DB.prepare(
@@ -504,7 +639,7 @@ export async function handlePunchListSend(
     const pdfBytes = buildPunchListPdf({
       punch_list_id: punchListId,
       sub_id: subId,
-      job_title: jobTitle,
+      job_title: `${listLabel} — ${jobTitle}`,
       job_address: jobAddress,
       sub_company_name: sub.company_name ?? "Subcontractor",
       scheduled_date: punchList.scheduled_date,
@@ -513,9 +648,9 @@ export async function handlePunchListSend(
     await storePunchListPdf(env, punchListId, subId, pdfBytes);
 
     const subName = sub.contact_name || sub.company_name || "there";
-    const smsBody = `Hi ${subName}, Tony from Columbus Home Solutions has a punch list for you on ${jobTitle} at ${jobAddress}. View your items and mark them complete here: ${link}`;
+    const smsBody = `Hi ${subName}, Tony from Columbus Home Solutions has a ${listLabel} punch list for you on ${jobTitle} at ${jobAddress}. View your items and mark them complete here: ${link}`;
 
-    await notifySub(env, sub, smsBody, `Punch List — ${jobTitle}`, pdfBytes, jobTitle);
+    await notifySub(env, sub, smsBody, `${listLabel} Punch List — ${jobTitle}`, pdfBytes, jobTitle);
 
     await env.DB.prepare(
       `UPDATE punch_list_sub_tokens SET notified_at = datetime('now') WHERE punch_list_id = ? AND sub_id = ? AND token = ?`,
@@ -648,12 +783,15 @@ export async function handlePunchListClose(
     .bind(punchListId)
     .run();
 
-  return json({ ok: true });
+  const jobComplete = await maybeCompleteJobAfterPunchListsClosed(env, punchList.job_id);
+
+  return json({ ok: true, job_complete: jobComplete });
 }
 
 async function resolveToken(env: Env, token: string) {
   return env.DB.prepare(
-    `SELECT pst.*, pl.scheduled_date AS list_scheduled_date, pl.job_id, pl.status AS list_status,
+    `SELECT pst.*, pl.name AS punch_list_name, pl.scheduled_date AS list_scheduled_date,
+            pl.job_id, pl.status AS list_status,
             j.title AS job_title, j.property_address,
             COALESCE(s.company_name, s.company) AS sub_company,
             COALESCE(s.contact_name, s.primary_contact) AS sub_contact
@@ -669,6 +807,7 @@ async function resolveToken(env: Env, token: string) {
       punch_list_id: string;
       sub_id: string;
       token: string;
+      punch_list_name: string;
       list_scheduled_date: string | null;
       job_id: string;
       list_status: string;
@@ -715,6 +854,7 @@ export async function handlePunchPublicGet(env: Env, token: string): Promise<Res
   });
 
   return json({
+    punch_list_name: row.punch_list_name,
     job_title: row.job_title ?? "",
     job_address: row.property_address ?? "",
     sub_name: row.sub_contact || row.sub_company || "",

@@ -225,6 +225,10 @@ import {
   handleReferralSourceList,
   handleReferralSourceCreate,
   handleReferralSourceArchive,
+  handlePunchListNamePresetList,
+  handlePunchListNamePresetCreate,
+  handlePunchListNamePresetDelete,
+  handlePunchListNamePresetReorder,
 } from "./routes/lists.js";
 import {
   handleGoogleReviewList,
@@ -436,8 +440,12 @@ import {
   handleLienWaiverRetry,
 } from "./routes/completion-package.js";
 import {
+  handleJobPunchListsGetGuarded,
   handleJobPunchListGetGuarded,
+  handleJobPunchListCreate,
+  handlePunchListGetGuarded,
   handlePunchListItemCreate,
+  handleJobPunchListItemCreate,
   handlePunchListItemUpdate,
   handlePunchListItemDelete,
   handlePunchListSchedule,
@@ -1347,7 +1355,13 @@ export default {
     }
     const jobPunchListItems = url.pathname.match(/^\/api\/jobs\/([^/]+)\/punch-list\/items$/);
     if (jobPunchListItems && request.method === "POST") {
-      return handlePunchListItemCreate(env, request, decodeURIComponent(jobPunchListItems[1]));
+      return handleJobPunchListItemCreate(env, request, decodeURIComponent(jobPunchListItems[1]));
+    }
+    const jobPunchLists = url.pathname.match(/^\/api\/jobs\/([^/]+)\/punch-lists$/);
+    if (jobPunchLists) {
+      const jid = decodeURIComponent(jobPunchLists[1]);
+      if (request.method === "GET") return handleJobPunchListsGetGuarded(env, request, jid);
+      if (request.method === "POST") return handleJobPunchListCreate(env, request, jid);
     }
     const jobPunchList = url.pathname.match(/^\/api\/jobs\/([^/]+)\/punch-list$/);
     if (jobPunchList && request.method === "GET") {
@@ -1396,6 +1410,14 @@ export default {
     }
 
     // ── Punch lists (Sprint 33) ──────────────────────────────────────
+    const punchListItemsCreate = url.pathname.match(/^\/api\/punch-lists\/([^/]+)\/items$/);
+    if (punchListItemsCreate && request.method === "POST") {
+      return handlePunchListItemCreate(env, request, decodeURIComponent(punchListItemsCreate[1]));
+    }
+    const punchListById = url.pathname.match(/^\/api\/punch-lists\/([^/]+)$/);
+    if (punchListById && request.method === "GET") {
+      return handlePunchListGetGuarded(env, request, decodeURIComponent(punchListById[1]));
+    }
     const punchListItem = url.pathname.match(/^\/api\/punch-list-items\/([^/]+)$/);
     if (punchListItem) {
       const iid = decodeURIComponent(punchListItem[1]);
@@ -1969,6 +1991,17 @@ export default {
     const referralArchive = url.pathname.match(/^\/api\/referral-sources\/([^/]+)\/archive$/);
     if (referralArchive && request.method === "PUT") {
       return handleReferralSourceArchive(request, env, decodeURIComponent(referralArchive[1]));
+    }
+    if (url.pathname === "/api/punch-list-name-presets/reorder" && request.method === "PUT") {
+      return handlePunchListNamePresetReorder(request, env);
+    }
+    if (url.pathname === "/api/punch-list-name-presets") {
+      if (request.method === "GET") return handlePunchListNamePresetList(env);
+      if (request.method === "POST") return handlePunchListNamePresetCreate(request, env);
+    }
+    const punchListPresetDelete = url.pathname.match(/^\/api\/punch-list-name-presets\/([^/]+)$/);
+    if (punchListPresetDelete && request.method === "DELETE") {
+      return handlePunchListNamePresetDelete(request, env, decodeURIComponent(punchListPresetDelete[1]));
     }
 
     // ── Google Reviews — Sprint 36 ────────────────────────────────────

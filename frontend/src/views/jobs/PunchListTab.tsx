@@ -16,7 +16,7 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { uploadPhoto } from "../../lib/capture";
 import { formatDate } from "../../lib/format";
-import type { JobStatus, PunchListItem, PunchListResponse } from "../../types";
+import type { JobStatus, JobPunchListsResponse, PunchListItem, PunchListNamePreset, PunchListResponse } from "../../types";
 
 interface Sub {
   id: string;
@@ -54,20 +54,13 @@ export function PunchListTab({
   jobStatus: JobStatus;
   refetchJob?: () => void;
 }) {
-  const toast = useToast();
   const active = ACTIVE_STATUSES.includes(jobStatus);
-  const { data, loading, error, refetch } = useApi<PunchListResponse>(
-    active ? `/api/jobs/${jobId}/punch-list` : null,
-  );
-  const subsApi = useApi<{ subcontractors: Sub[] }>("/api/subcontractors?active=1");
-  const subs = subsApi.data?.subcontractors ?? [];
-  const subsById = useMemo(() => new Map(subs.map((s) => [s.id, s])), [subs]);
+  const [selectedListId, setSelectedListId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
-  const [addOpen, setAddOpen] = useState(false);
-  const [editItem, setEditItem] = useState<PunchListItem | null>(null);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [sendOpen, setSendOpen] = useState(false);
-  const [sendBusy, setSendBusy] = useState(false);
+  const { data, loading, error, refetch } = useApi<JobPunchListsResponse>(
+    active ? `/api/jobs/${jobId}/punch-lists` : null,
+  );
 
   if (!active) {
     return (
@@ -83,11 +76,124 @@ export function PunchListTab({
   if (error || !data) {
     return (
       <div class="empty-state">
-        <div class="empty-state__title">Could not load punch list</div>
+        <div class="empty-state__title">Could not load punch lists</div>
         <div>{error ?? "Unknown error"}</div>
       </div>
     );
   }
+
+  const selected = selectedListId
+    ? data.punch_lists.find((p) => p.punch_list.id === selectedListId) ?? null
+    : null;
+
+  if (selectedListId && selected) {
+    return (
+      <PunchListDetail
+        jobId={jobId}
+        jobTitle={jobTitle}
+        jobStatus={jobStatus}
+        data={selected}
+        onBack={() => setSelectedListId(null)}
+        refetch={() => {
+          void refetch();
+        }}
+        refetchJob={refetchJob}
+      />
+    );
+  }
+
+  return (
+    <div class="stack">
+      <div class="punch-tab-header">
+        <div class="punch-tab-status">
+          <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            PUNCH LISTS — {jobTitle}
+          </span>
+        </div>
+        <div class="punch-tab-actions">
+          <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
+            + New Punch List
+          </Button>
+        </div>
+      </div>
+
+      {data.punch_lists.length === 0 ? (
+        <div class="empty-state">
+          <div class="empty-state__icon">📋</div>
+          <div class="empty-state__title">No punch lists yet</div>
+          <div>Create a named punch list for each trade or scope (Electrical, HVAC, General, etc.).</div>
+        </div>
+      ) : (
+        <div class="stack" style={{ gap: "var(--space-sm)" }}>
+          {data.punch_lists.map((entry) => {
+            const pl = entry.punch_list;
+            const openCount = entry.items.filter((i) => i.status === "open").length;
+            return (
+              <Card key={pl.id} title="">
+                <button
+                  type="button"
+                  class="punch-list-card"
+                  onClick={() => setSelectedListId(pl.id)}
+                >
+                  <div class="punch-list-card__main">
+                    <div class="punch-list-card__name">{pl.name}</div>
+                    <div class="punch-list-card__meta">
+                      {entry.items.length} item{entry.items.length === 1 ? "" : "s"}
+                      {openCount > 0 ? ` · ${openCount} open` : " · all done"}
+                      {pl.sent_at ? ` · Sent ${formatDate(pl.sent_at)}` : ""}
+                    </div>
+                  </div>
+                  <Badge tone={STATUS_TONE[pl.status] ?? "neutral"}>
+                    {STATUS_LABEL[pl.status] ?? pl.status}
+                  </Badge>
+                </button>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {createOpen && (
+        <NewPunchListModal
+          jobId={jobId}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(listId) => {
+            setCreateOpen(false);
+            void refetch().then(() => setSelectedListId(listId));
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function PunchListDetail({
+  jobId,
+  jobTitle,
+  jobStatus,
+  data,
+  onBack,
+  refetch,
+  refetchJob,
+}: {
+  jobId: string;
+  jobTitle: string;
+  jobStatus: JobStatus;
+  data: PunchListResponse;
+  onBack: () => void;
+  refetch: () => void;
+  refetchJob?: () => void;
+}) {
+  const toast = useToast();
+  const subsApi = useApi<{ subcontractors: Sub[] }>("/api/subcontractors?active=1");
+  const subs = subsApi.data?.subcontractors ?? [];
+  const subsById = useMemo(() => new Map(subs.map((s) => [s.id, s])), [subs]);
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [editItem, setEditItem] = useState<PunchListItem | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendBusy, setSendBusy] = useState(false);
 
   const { punch_list: pl } = data;
 
@@ -103,8 +209,11 @@ export function PunchListTab({
     <div class="stack">
       <div class="punch-tab-header">
         <div class="punch-tab-status">
+          <Button variant="tertiary" size="sm" onClick={onBack}>
+            ← All lists
+          </Button>
           <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-            PUNCH LIST — {jobTitle}
+            {pl.name.toUpperCase()} — {jobTitle}
           </span>
           <Badge tone={STATUS_TONE[pl.status] ?? "neutral"}>{STATUS_LABEL[pl.status] ?? pl.status}</Badge>
           {pl.sent_at && (
@@ -157,15 +266,24 @@ export function PunchListTab({
               variant="primary"
               size="sm"
               onClick={async () => {
-                if (!confirm("Close punch list and mark job complete?")) return;
+                if (
+                  !confirm(
+                    "Close this punch list? The job moves to Complete only after every punch list on this job is closed.",
+                  )
+                )
+                  return;
                 try {
-                  await api.put(`/api/punch-lists/${pl.id}/close`, {});
-                  if (jobStatus === "punch_list") {
-                    await api.put(`/api/jobs/${jobId}/status`, { status: "complete" });
-                  }
-                  toast.push("success", "Punch list closed");
+                  const res = await api.put<{ ok: boolean; job_complete?: boolean }>(
+                    `/api/punch-lists/${pl.id}/close`,
+                    {},
+                  );
+                  toast.push(
+                    "success",
+                    res.job_complete ? "Punch list closed — job marked complete" : "Punch list closed",
+                  );
                   refetch();
-                  refetchJob?.();
+                  if (res.job_complete) refetchJob?.();
+                  if (res.job_complete) onBack();
                 } catch (e) {
                   toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
                 }
@@ -230,6 +348,7 @@ export function PunchListTab({
 
       {addOpen && (
         <ItemModal
+          punchListId={pl.id}
           jobId={jobId}
           subs={subs}
           listScheduledDate={pl.scheduled_date}
@@ -244,6 +363,7 @@ export function PunchListTab({
 
       {editItem && (
         <ItemModal
+          punchListId={pl.id}
           jobId={jobId}
           subs={subs}
           item={editItem}
@@ -292,6 +412,89 @@ export function PunchListTab({
         />
       )}
     </div>
+  );
+}
+
+function NewPunchListModal({
+  jobId,
+  onClose,
+  onCreated,
+}: {
+  jobId: string;
+  onClose: () => void;
+  onCreated: (listId: string) => void;
+}) {
+  const toast = useToast();
+  const { data: presetData } = useApi<{ presets: PunchListNamePreset[] }>(
+    "/api/punch-list-name-presets",
+  );
+  const presets = presetData?.presets ?? [];
+  const [presetId, setPresetId] = useState("");
+  const [customName, setCustomName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const useCustom = presetId === "__custom__";
+  const selectedPreset = presets.find((p) => p.id === presetId);
+  const name = useCustom ? customName.trim() : selectedPreset?.name ?? "";
+
+  const create = async () => {
+    if (!name) {
+      toast.push("error", "Choose or enter a punch list name");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.post<PunchListResponse>(`/api/jobs/${jobId}/punch-lists`, { name });
+      toast.push("success", `Created "${name}" punch list`);
+      onCreated(res.punch_list.id);
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      title="New punch list"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" disabled={busy || !name} onClick={create}>
+            {busy ? "Creating…" : "Create"}
+          </Button>
+        </>
+      }
+    >
+      <FormField label="Name" required>
+        <select
+          class="form-input"
+          value={presetId}
+          onChange={(e) => setPresetId((e.target as HTMLSelectElement).value)}
+        >
+          <option value="">Select a preset…</option>
+          {presets.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+          <option value="__custom__">Custom…</option>
+        </select>
+      </FormField>
+      {useCustom && (
+        <FormField label="Custom name" required>
+          <input
+            class="form-input"
+            value={customName}
+            placeholder="e.g. Tile / Flooring"
+            onInput={(e) => setCustomName((e.target as HTMLInputElement).value)}
+          />
+        </FormField>
+      )}
+    </Modal>
   );
 }
 
@@ -368,6 +571,7 @@ function subLabel(s: Sub): string {
 }
 
 function ItemModal({
+  punchListId,
   jobId,
   subs,
   item,
@@ -376,6 +580,7 @@ function ItemModal({
   onSaved,
   toast,
 }: {
+  punchListId: string;
   jobId: string;
   subs: Sub[];
   item?: PunchListItem;
@@ -453,7 +658,7 @@ function ItemModal({
         await api.put(`/api/punch-list-items/${item.id}`, body);
         toast.push("success", "Item updated");
       } else {
-        await api.post(`/api/jobs/${jobId}/punch-list/items`, body);
+        await api.post(`/api/punch-lists/${punchListId}/items`, body);
         toast.push("success", "Item added");
       }
       onSaved();

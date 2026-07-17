@@ -11,9 +11,9 @@ import { Badge } from "../../components/ui/Badge";
 import { FormField } from "../../components/ui/FormField";
 import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../store/toast";
-import type { TagDefinition, ReferralSource } from "../../types";
+import type { TagDefinition, ReferralSource, PunchListNamePreset } from "../../types";
 
-type ListTab = "tags" | "referral_sources";
+type ListTab = "tags" | "referral_sources" | "punch_list_names";
 
 // ─── Tags sub-panel ──────────────────────────────────────────────────────────
 
@@ -251,6 +251,134 @@ function ReferralSourcesPanel() {
   );
 }
 
+// ─── Punch list name presets ─────────────────────────────────────────────────
+
+function PunchListNamesPanel() {
+  const toast = useToast();
+  const { data, loading, refetch } = useApi<{ presets: PunchListNamePreset[] }>(
+    "/api/punch-list-name-presets",
+  );
+  const [newName, setNewName] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const create = async () => {
+    if (!newName.trim()) return;
+    setBusy("create");
+    try {
+      await api.post("/api/punch-list-name-presets", { name: newName.trim() });
+      setNewName("");
+      setAdding(false);
+      refetch();
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const remove = async (preset: PunchListNamePreset) => {
+    if (!confirm(`Remove "${preset.name}" from presets? Existing punch lists keep that name.`)) return;
+    setBusy(preset.id);
+    try {
+      await api.del(`/api/punch-list-name-presets/${preset.id}`);
+      refetch();
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const move = async (index: number, direction: -1 | 1) => {
+    const presets = data?.presets ?? [];
+    const target = index + direction;
+    if (target < 0 || target >= presets.length) return;
+    const ordered = [...presets];
+    const [item] = ordered.splice(index, 1);
+    ordered.splice(target, 0, item);
+    setBusy("reorder");
+    try {
+      await api.put("/api/punch-list-name-presets/reorder", {
+        ordered_ids: ordered.map((p) => p.id),
+      });
+      refetch();
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (loading) return <Spinner />;
+
+  const presets = data?.presets ?? [];
+
+  return (
+    <div>
+      <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-md)" }}>
+        Preset names appear when creating a new punch list on a job. Removing a preset does not
+        rename punch lists already using that name.
+      </p>
+
+      <div class="stack" style={{ gap: "var(--space-xs)", marginBottom: "var(--space-md)" }}>
+        {presets.length === 0 && (
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>No presets yet.</p>
+        )}
+        {presets.map((preset, index) => (
+          <div
+            key={preset.id}
+            class="flex items-center justify-between gap-sm"
+            style={{ padding: "8px 12px", border: "1px solid var(--color-border)", borderRadius: "var(--radius-md)" }}
+          >
+            <span style={{ fontWeight: 500 }}>{preset.name}</span>
+            <div class="flex gap-xs">
+              <Button size="sm" variant="tertiary" disabled={busy != null || index === 0} onClick={() => void move(index, -1)}>
+                ↑
+              </Button>
+              <Button
+                size="sm"
+                variant="tertiary"
+                disabled={busy != null || index === presets.length - 1}
+                onClick={() => void move(index, 1)}
+              >
+                ↓
+              </Button>
+              <Button size="sm" variant="tertiary" disabled={busy === preset.id} onClick={() => void remove(preset)}>
+                Remove
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {adding ? (
+        <div class="flex gap-xs items-end" style={{ marginBottom: "var(--space-md)" }}>
+          <FormField label="New preset name" style={{ flex: 1 }}>
+            <input
+              class="form-input"
+              value={newName}
+              placeholder="e.g. Tile / Flooring"
+              onInput={(e) => setNewName((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void create(); }}
+            />
+          </FormField>
+          <Button variant="primary" disabled={busy === "create" || !newName.trim()} onClick={() => void create()}>
+            Add
+          </Button>
+          <Button variant="tertiary" onClick={() => { setAdding(false); setNewName(""); }}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <Button variant="secondary" onClick={() => setAdding(true)}>
+          + Add preset
+        </Button>
+      )}
+    </div>
+  );
+}
+
 // ─── Exported tab ─────────────────────────────────────────────────────────────
 
 export function ManageListsTab() {
@@ -273,9 +401,22 @@ export function ManageListsTab() {
         >
           Referral Sources
         </button>
+        <button
+          type="button"
+          class={`tab-bar__tab${tab === "punch_list_names" ? " tab-bar__tab--active" : ""}`}
+          onClick={() => setTab("punch_list_names")}
+        >
+          Punch List Names
+        </button>
       </div>
 
-      {tab === "tags" ? <TagsPanel /> : <ReferralSourcesPanel />}
+      {tab === "tags" ? (
+        <TagsPanel />
+      ) : tab === "referral_sources" ? (
+        <ReferralSourcesPanel />
+      ) : (
+        <PunchListNamesPanel />
+      )}
     </Card>
   );
 }

@@ -25,6 +25,7 @@ interface PunchPublicItem {
 }
 
 interface PunchPublicPayload {
+  punch_list_name: string;
   job_title: string;
   job_address: string;
   sub_name: string;
@@ -209,7 +210,10 @@ export function PunchPage() {
 
   return (
     <div class="portal">
-      <PunchPublicHeader title={`Punch List — ${data.job_title}`} address={data.job_address} />
+      <PunchPublicHeader
+        title={`${data.punch_list_name} Punch List — ${data.job_title}`}
+        address={data.job_address}
+      />
 
       <section class="portal-card">
         <div class="punch-page__greeting">

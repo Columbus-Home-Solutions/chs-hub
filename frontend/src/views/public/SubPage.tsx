@@ -25,11 +25,17 @@ interface SubPublicItem {
   completed_at: string | null;
 }
 
+interface SubJobPunchList {
+  punch_list_id: string;
+  punch_list_name: string;
+  items: SubPublicItem[];
+}
+
 interface SubJobGroup {
   job_id: string;
   job_title: string;
   property_address: string | null;
-  items: SubPublicItem[];
+  punch_lists: SubJobPunchList[];
 }
 
 interface SubPublicPayload {
@@ -194,7 +200,12 @@ export function SubPage() {
 
   const subName = data.sub.contact_name || data.sub.company_name || "there";
   const totalOpen = data.jobs.reduce(
-    (acc, g) => acc + g.items.filter((i) => i.status !== "done").length,
+    (acc, g) =>
+      acc +
+      g.punch_lists.reduce(
+        (listAcc, pl) => listAcc + pl.items.filter((i) => i.status !== "done").length,
+        0,
+      ),
     0,
   );
 
@@ -231,54 +242,59 @@ export function SubPage() {
         </div>
       </section>
 
-      {data.jobs.map((group) => {
-        const openItems = group.items.filter((i) => i.status !== "done");
-        const doneItems = group.items.filter((i) => i.status === "done");
-        if (openItems.length === 0 && doneItems.length === 0) return null;
-        return (
-          <section key={group.job_id} class="portal-card sub-job-group">
-            <h2 class="portal-card__title">{group.job_title}</h2>
-            {group.property_address && (
-              <div class="sub-job-group__addr">{group.property_address}</div>
-            )}
-            <div class="punch-items">
-              {[...openItems, ...doneItems].map((item, idx) => {
-                const done = item.status === "done";
-                return (
-                  <div class={`punch-item${done ? " punch-item--done" : ""}`} key={item.id}>
-                    <span class="punch-item__num">{idx + 1}.</span>
-                    <div class="punch-item__body">
-                      <div class="punch-item__desc">{item.description}</div>
-                      {done && item.completed_at && (
-                        <div class="punch-item__meta">
-                          Completed {formatDate(item.completed_at)}
+      {data.jobs.map((group) => (
+        <section key={group.job_id} class="portal-card sub-job-group">
+          <h2 class="portal-card__title">{group.job_title}</h2>
+          {group.property_address && (
+            <div class="sub-job-group__addr">{group.property_address}</div>
+          )}
+          {group.punch_lists.map((list) => {
+            const openItems = list.items.filter((i) => i.status !== "done");
+            const doneItems = list.items.filter((i) => i.status === "done");
+            if (openItems.length === 0 && doneItems.length === 0) return null;
+            return (
+              <div key={list.punch_list_id} class="sub-job-list">
+                <h3 class="sub-job-list__title">{list.punch_list_name} Punch List</h3>
+                <div class="punch-items">
+                  {[...openItems, ...doneItems].map((item, idx) => {
+                    const done = item.status === "done";
+                    return (
+                      <div class={`punch-item${done ? " punch-item--done" : ""}`} key={item.id}>
+                        <span class="punch-item__num">{idx + 1}.</span>
+                        <div class="punch-item__body">
+                          <div class="punch-item__desc">{item.description}</div>
+                          {done && item.completed_at && (
+                            <div class="punch-item__meta">
+                              Completed {formatDate(item.completed_at)}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div class="punch-item__actions">
-                      {!done ? (
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={() => {
-                            setConfirmItem(item);
-                            setNote("");
-                            clearPhoto();
-                          }}
-                        >
-                          Done ✓
-                        </Button>
-                      ) : (
-                        <span class="badge badge--success">Done</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        );
-      })}
+                        <div class="punch-item__actions">
+                          {!done ? (
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              onClick={() => {
+                                setConfirmItem(item);
+                                setNote("");
+                                clearPhoto();
+                              }}
+                            >
+                              Done ✓
+                            </Button>
+                          ) : (
+                            <span class="badge badge--success">Done</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      ))}
 
       <PunchPublicFooter />
 

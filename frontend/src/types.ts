@@ -706,6 +706,7 @@ export interface PunchListResponse {
   punch_list: {
     id: string;
     job_id: string;
+    name: string;
     status: "open" | "sent" | "closed";
     scheduled_date: string | null;
     sent_at: string | null;
@@ -714,6 +715,17 @@ export interface PunchListResponse {
   items: PunchListItem[];
   by_sub: PunchListBySub[];
   unassigned_items: PunchListItem[];
+}
+
+export interface JobPunchListsResponse {
+  punch_lists: PunchListResponse[];
+}
+
+export interface PunchListNamePreset {
+  id: string;
+  name: string;
+  sort_order: number;
+  created_at: string;
 }
 
 export interface BillingScheduleRow {

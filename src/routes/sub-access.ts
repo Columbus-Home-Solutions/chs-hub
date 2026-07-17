@@ -52,6 +52,7 @@ interface PunchItemRow {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  punch_list_name: string;
 }
 
 async function resolveSubToken(env: Env, token: string): Promise<(SubTokenRow & SubRow) | null> {
@@ -74,6 +75,7 @@ function hydrateItem(row: PunchItemRow) {
   return {
     id: row.id,
     punch_list_id: row.punch_list_id,
+    punch_list_name: row.punch_list_name,
     job_id: row.job_id,
     description: row.description,
     sub_id: row.sub_id,
@@ -94,7 +96,7 @@ export async function handleSubPublicGet(env: Env, token: string): Promise<Respo
 
   // Fetch all open items assigned to this sub across all sent punch lists.
   const { results: rawItems } = await env.DB.prepare(
-    `SELECT pli.*
+    `SELECT pli.*, pl.name AS punch_list_name
        FROM punch_list_items pli
        JOIN punch_lists pl ON pl.id = pli.punch_list_id
       WHERE pli.sub_id = ?
@@ -107,13 +109,16 @@ export async function handleSubPublicGet(env: Env, token: string): Promise<Respo
 
   const items = (rawItems ?? []).map(hydrateItem);
 
-  // Group by job.
   const jobIds = [...new Set(items.map((i) => i.job_id))];
   const jobGroups: {
     job_id: string;
     job_title: string;
     property_address: string | null;
-    items: ReturnType<typeof hydrateItem>[];
+    punch_lists: {
+      punch_list_id: string;
+      punch_list_name: string;
+      items: ReturnType<typeof hydrateItem>[];
+    }[];
   }[] = [];
 
   for (const jobId of jobIds) {
@@ -123,11 +128,23 @@ export async function handleSubPublicGet(env: Env, token: string): Promise<Respo
       .bind(jobId)
       .first<{ id: string; title: string; property_address: string | null }>();
     if (!job) continue;
+
+    const jobItems = items.filter((i) => i.job_id === jobId);
+    const listIds = [...new Set(jobItems.map((i) => i.punch_list_id))];
+    const punchLists = listIds.map((punchListId) => {
+      const listItems = jobItems.filter((i) => i.punch_list_id === punchListId);
+      return {
+        punch_list_id: punchListId,
+        punch_list_name: listItems[0]?.punch_list_name ?? "Punch List",
+        items: listItems,
+      };
+    });
+
     jobGroups.push({
       job_id: jobId,
       job_title: job.title,
       property_address: job.property_address,
-      items: items.filter((i) => i.job_id === jobId),
+      punch_lists: punchLists,
     });
   }
 

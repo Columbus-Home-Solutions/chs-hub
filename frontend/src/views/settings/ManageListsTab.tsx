@@ -391,24 +391,24 @@ export function ManageListsTab() {
 
   return (
     <Card title="Manage Lists">
-      <div class="tab-bar" style={{ marginBottom: "var(--space-lg)" }}>
+      <div class="segmented" style={{ marginBottom: "var(--space-lg)" }}>
         <button
           type="button"
-          class={`tab-bar__tab${tab === "tags" ? " tab-bar__tab--active" : ""}`}
+          class={`segmented__btn${tab === "tags" ? " segmented__btn--active" : ""}`}
           onClick={() => setTab("tags")}
         >
           Tags
         </button>
         <button
           type="button"
-          class={`tab-bar__tab${tab === "referral_sources" ? " tab-bar__tab--active" : ""}`}
+          class={`segmented__btn${tab === "referral_sources" ? " segmented__btn--active" : ""}`}
           onClick={() => setTab("referral_sources")}
         >
           Referral Sources
         </button>
         <button
           type="button"
-          class={`tab-bar__tab${tab === "punch_list_names" ? " tab-bar__tab--active" : ""}`}
+          class={`segmented__btn${tab === "punch_list_names" ? " segmented__btn--active" : ""}`}
           onClick={() => setTab("punch_list_names")}
         >
           Punch List Names

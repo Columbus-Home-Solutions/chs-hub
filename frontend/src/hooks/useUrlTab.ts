@@ -35,9 +35,10 @@ export function replaceQueryParams(update: (params: URLSearchParams) => void): v
   update(params);
   const qs = params.toString();
   const next = qs ? `${pathname}?${qs}` : pathname;
-  if (!route(next, true)) {
-    window.history.replaceState(null, "", next);
-  }
+  route(next, true);
+  // Always sync the address bar — preact-router can return true without updating
+  // ?tab= on same-path navigations, which breaks refresh persistence.
+  window.history.replaceState(null, "", next);
 }
 
 export function setQueryParam(name: string, value: string | null | undefined): void {

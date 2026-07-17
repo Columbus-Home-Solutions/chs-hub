@@ -193,17 +193,19 @@ export function PortalApp() {
         />
       </section>
 
-      <nav class="portal-tabs" aria-label="Project sections">
-        {tabs.map((t) => (
-          <button
-            key={t}
-            class={`portal-tab${activeTab === t ? " portal-tab--active" : ""}`}
-            onClick={() => setTab(t)}
-          >
-            {TAB_LABELS[t]}
-          </button>
-        ))}
-      </nav>
+      <div class="portal-tabs-outer">
+        <nav class="portal-tabs" aria-label="Project sections">
+          {tabs.map((t) => (
+            <button
+              key={t}
+              class={`portal-tab${activeTab === t ? " portal-tab--active" : ""}`}
+              onClick={() => setTab(t)}
+            >
+              {TAB_LABELS[t]}
+            </button>
+          ))}
+        </nav>
+      </div>
 
       <main class="portal-content">
         {activeTab === "photos" && <PhotosTab token={token} />}

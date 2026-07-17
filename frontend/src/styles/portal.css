@@ -5,11 +5,13 @@
 .portal {
   min-height: 100vh;
   max-width: 760px;
+  width: 100%;
   margin: 0 auto;
   padding: var(--space-md) var(--space-md) var(--space-3xl);
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
+  overflow-x: clip;
 }
 
 /* ─── Header ─── */
@@ -125,16 +127,26 @@
   margin-top: 2px;
 }
 
-/* ─── Tab nav (sticky top; horizontal scroll on mobile) ─── */
+/* ─── Tab nav (sticky top; horizontal scroll when tabs overflow) ─── */
 .portal-tabs {
   position: sticky;
   top: 0;
   z-index: var(--z-dropdown);
   display: flex;
+  flex-wrap: nowrap;
   gap: 4px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
   background: var(--color-bg);
-  padding: 8px 0;
+  margin-left: calc(-1 * var(--space-md));
+  margin-right: calc(-1 * var(--space-md));
+  padding: 8px var(--space-md);
   border-bottom: 1px solid var(--color-border);
   scrollbar-width: none;
 }
@@ -143,6 +155,7 @@
 }
 .portal-tab {
   flex: 0 0 auto;
+  flex-shrink: 0;
   border: none;
   background: none;
   padding: 8px 14px;

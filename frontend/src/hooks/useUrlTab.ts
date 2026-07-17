@@ -7,15 +7,21 @@ import { getCurrentUrl, route, useRouter } from "preact-router";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 
 export function currentSearchString(): string {
+  if (typeof window !== "undefined" && window.location.search) {
+    return window.location.search.replace(/^\?/, "");
+  }
   const url = getCurrentUrl();
   if (url) return url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
-  return window.location.search.replace(/^\?/, "");
+  return "";
 }
 
 export function currentPathname(): string {
+  if (typeof window !== "undefined" && window.location.pathname) {
+    return window.location.pathname;
+  }
   const url = getCurrentUrl();
   if (url) return url.split("?")[0].split("#")[0];
-  return window.location.pathname;
+  return "";
 }
 
 export function parseQueryParam<T extends string>(
@@ -35,10 +41,9 @@ export function replaceQueryParams(update: (params: URLSearchParams) => void): v
   update(params);
   const qs = params.toString();
   const next = qs ? `${pathname}?${qs}` : pathname;
-  route(next, true);
-  // Always sync the address bar — preact-router can return true without updating
-  // ?tab= on same-path navigations, which breaks refresh persistence.
+  // Write the address bar first — this is what refresh reads.
   window.history.replaceState(null, "", next);
+  route(next, true);
 }
 
 export function setQueryParam(name: string, value: string | null | undefined): void {
@@ -55,7 +60,7 @@ export function useUrlTab<T extends string>(
   param = "tab",
 ): [T, (next: T) => void] {
   const [{ url }] = useRouter();
-  const search = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const search = currentSearchString() || (url.includes("?") ? url.slice(url.indexOf("?") + 1) : "");
   const valid = useMemo(() => new Set(validValues) as ReadonlySet<T>, [validValues]);
 
   const read = useCallback(
@@ -63,7 +68,7 @@ export function useUrlTab<T extends string>(
     [search, param, valid, defaultTab],
   );
 
-  const [tab, setTabState] = useState<T>(read);
+  const [tab, setTabState] = useState<T>(() => read());
 
   useEffect(() => {
     setTabState(read());
@@ -92,7 +97,7 @@ export function usePortalUrlTab<T extends string>(
     return parseQueryParam(currentSearchString(), param, valid, defaultTab);
   }, [param, valid, defaultTab]);
 
-  const [tab, setTabState] = useState<T>(read);
+  const [tab, setTabState] = useState<T>(() => read());
 
   useEffect(() => {
     const sync = () => setTabState(read());

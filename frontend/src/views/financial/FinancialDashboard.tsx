@@ -8,8 +8,8 @@
 
 import type { RoutableProps } from "preact-router";
 import { useRouter } from "preact-router";
-import { useEffect, useMemo, useState, useCallback } from "preact/hooks";
-import { setQueryParam } from "../../hooks/useUrlTab";
+import { useEffect, useMemo, useState } from "preact/hooks";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { useApi } from "../../hooks/useApi";
@@ -23,17 +23,7 @@ import { ReceiptQueueView } from "./ReceiptQueueView";
 
 type FinTab = "invoices" | "reports" | "pricing" | "receipts";
 
-function resolveFinTab(search: string): FinTab {
-  const urlTab = new URLSearchParams(search).get("tab");
-  if (urlTab === "reports" || urlTab === "pricing" || urlTab === "receipts") return urlTab;
-  return "invoices";
-}
-
-function financialSearchString(routerUrl: string): string {
-  if (routerUrl.includes("?")) return routerUrl.slice(routerUrl.indexOf("?") + 1);
-  if (typeof window !== "undefined") return window.location.search.replace(/^\?/, "");
-  return "";
-}
+const FIN_TABS = ["invoices", "reports", "pricing", "receipts"] as const;
 
 interface InvoiceRow {
   id: string;
@@ -107,7 +97,7 @@ const YEAR_OPTIONS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_
 
 export function FinancialDashboard(_props: RoutableProps) {
   const [{ url }] = useRouter();
-  const currentSearch = financialSearchString(url);
+  const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
 
   const [statusFilter, setStatusFilter] = useState("");
   const [cpaModalOpen, setCpaModalOpen] = useState(false);
@@ -121,23 +111,13 @@ export function FinancialDashboard(_props: RoutableProps) {
       ? `/api/payments?from=${weekRange.start}&to=${weekRange.lastDay}`
       : null,
   );
-  const [tab, setTabState] = useState<FinTab>(() => resolveFinTab(currentSearch));
-
-  const setTab = useCallback((next: FinTab) => {
-    setTabState(next);
-    setQueryParam("tab", next === "invoices" ? null : next);
-  }, []);
+  const [tab, setTab] = useUrlTab(FIN_TABS, "invoices");
 
   // Re-run whenever the search string changes so sidebar sub-items (same path,
-  // different ?filter=) update invoice filters, and ?tab= survives refresh.
+  // different ?filter=) update invoice filters.
   useEffect(() => {
     const params = new URLSearchParams(currentSearch);
     const urlTab = params.get("tab");
-    if (urlTab === "reports" || urlTab === "pricing" || urlTab === "receipts") {
-      setTabState(urlTab);
-    } else if (urlTab === "invoices" || urlTab === "payments" || !urlTab) {
-      setTabState("invoices");
-    }
 
     const filter = params.get("filter") ?? params.get("status");
     if (filter === "unpaid") setStatusFilter("__unpaid__");

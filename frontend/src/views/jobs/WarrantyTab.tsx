@@ -110,7 +110,7 @@ export function WarrantyTab({ jobId }: Props) {
           )}
         </span>
         <Button
-          variant="secondary"
+          variant="primary"
           size="sm"
           onClick={async () => {
             try {
@@ -172,7 +172,7 @@ export function WarrantyTab({ jobId }: Props) {
                 </div>
                 {c.status !== "resolved" && c.status !== "closed" && resolvingId !== c.id && (
                   <Button
-                    variant="tertiary"
+                    variant="secondary"
                     size="sm"
                     onClick={() => {
                       setResolvingId(c.id);

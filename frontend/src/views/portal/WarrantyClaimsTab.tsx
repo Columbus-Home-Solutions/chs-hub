@@ -128,59 +128,71 @@ export function WarrantyClaimsTab() {
       </p>
 
       {submitted && (
-        <div class="portal-success" role="alert">
+        <div class="portal-success-banner" role="alert">
           <strong>Claim submitted!</strong> We'll review it and follow up with you soon.
         </div>
       )}
 
-      <div class="portal-form">
-        <label class="portal-label" for="warranty-desc">
-          Describe the issue <span style={{ color: "var(--color-danger)" }}>*</span>
+      <div class="portal-warranty-form">
+        <label class="quote-field" for="warranty-desc">
+          <span>
+            Describe the issue <span style={{ color: "var(--color-danger)" }}>*</span>
+          </span>
+          <textarea
+            id="warranty-desc"
+            class="quote-textarea"
+            rows={5}
+            placeholder="Describe what you're seeing — where the issue is, when it started, etc."
+            value={description}
+            onInput={(e) => {
+              setDescription((e.target as HTMLTextAreaElement).value);
+              setSubmitError(null);
+            }}
+            disabled={submitting}
+          />
         </label>
-        <textarea
-          id="warranty-desc"
-          class="portal-textarea"
-          rows={5}
-          placeholder="Describe what you're seeing — where the issue is, when it started, etc."
-          value={description}
-          onInput={(e) => {
-            setDescription((e.target as HTMLTextAreaElement).value);
-            setSubmitError(null);
-          }}
-          disabled={submitting}
-        />
 
-        <label class="portal-label" for="warranty-photo" style={{ marginTop: "var(--space-md)" }}>
-          Attach a photo (optional)
+        <label class="quote-field" for="warranty-photo">
+          <span>Attach a photo (optional)</span>
+          <div class="portal-file-picker">
+            <input
+              id="warranty-photo"
+              ref={fileRef}
+              class="portal-file-picker__input"
+              type="file"
+              accept="image/*"
+              capture="environment"
+              disabled={submitting}
+              onChange={(e) => {
+                const f = (e.target as HTMLInputElement).files?.[0] ?? null;
+                setPhotoFile(f);
+              }}
+            />
+            <button
+              type="button"
+              class="quote-btn quote-btn--secondary portal-file-picker__btn"
+              disabled={submitting}
+              onClick={() => fileRef.current?.click()}
+            >
+              {photoFile ? "Change Photo" : "Attach Photo"}
+            </button>
+          </div>
         </label>
-        <input
-          id="warranty-photo"
-          ref={fileRef}
-          class="portal-file-input"
-          type="file"
-          accept="image/*"
-          capture="environment"
-          disabled={submitting}
-          onChange={(e) => {
-            const f = (e.target as HTMLInputElement).files?.[0] ?? null;
-            setPhotoFile(f);
-          }}
-        />
         {photoFile && (
-          <p style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", margin: "var(--space-xs) 0 0" }}>
+          <p class="quote-muted" style={{ margin: "var(--space-xs) 0 0" }}>
             {photoFile.name} ({Math.round(photoFile.size / 1024)} KB)
           </p>
         )}
 
         {submitError && (
-          <p class="portal-error" role="alert">
+          <p class="quote-error" role="alert">
             {submitError}
           </p>
         )}
 
         <button
-          class="portal-btn portal-btn--primary"
-          style={{ marginTop: "var(--space-md)" }}
+          type="button"
+          class="quote-btn quote-btn--primary portal-warranty-form__submit"
           onClick={() => void handleSubmit()}
           disabled={submitting || !description.trim()}
         >
@@ -200,13 +212,19 @@ export function WarrantyClaimsTab() {
   );
 }
 
+function claimStatusTone(status: string): "success" | "warning" | "info" | "danger" {
+  if (status === "resolved" || status === "closed") return "success";
+  if (status === "in_progress") return "info";
+  return "warning";
+}
+
 function ClaimsList({ claims }: { claims: WarrantyClaim[] }) {
   return (
     <div class="portal-message-list" style={{ marginTop: "var(--space-md)" }}>
       {claims.map((c) => (
         <div key={c.id} class="portal-message portal-message--inbound" style={{ marginBottom: "var(--space-md)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-sm)", marginBottom: "var(--space-xs)" }}>
-            <span class={`portal-warranty-status portal-warranty-status--${c.status}`}>
+            <span class={`portal-badge portal-badge--${claimStatusTone(c.status)}`}>
               {STATUS_LABELS[c.status] ?? c.status}
             </span>
             <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>

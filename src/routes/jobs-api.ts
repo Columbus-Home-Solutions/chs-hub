@@ -37,6 +37,12 @@ import { cascadeDeleteJob, DELETABLE_JOB_STATUSES } from "../lib/cascade-delete.
 import { formatPmPhone, resolvePmFields } from "../lib/pm-fields.js";
 import { generateWeeklyRecap } from "../lib/weekly-recap.js";
 import { sendSubEmail } from "../lib/notification-engine.js";
+import { invoiceLabel, warrantyExpirationDate } from "../lib/invoicing.js";
+import {
+  buildCostPlusFinalCycleCheck,
+  buildFixedPriceFinalInvoiceCheck,
+  type EligibilityCheck,
+} from "../lib/close-eligibility.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const REVERSE_ROLES = ["owner"] as const;
@@ -552,13 +558,6 @@ export async function handleJobReviewReceived(request: Request, env: Env, id: st
 
 // ─── Close-eligibility check (shared by GET and gate inside PUT /status) ─────
 
-interface EligibilityCheck {
-  id: string;
-  label: string;
-  passed: boolean;
-  detail: string | null;
-}
-
 interface EligibilityResult {
   eligible: boolean;
   checks: EligibilityCheck[];
@@ -567,20 +566,31 @@ interface EligibilityResult {
 async function computeCloseEligibility(env: Env, jobId: string): Promise<EligibilityResult> {
   const checks: EligibilityCheck[] = [];
 
-  // 1. invoices_paid — every non-void, non-draft invoice must be paid.
-  const unpaidRow = await env.DB.prepare(
-    `SELECT COUNT(*) AS n, GROUP_CONCAT(invoice_display, ', ') AS nums
-       FROM invoices
-      WHERE job_id = ?
-        AND status NOT IN ('void', 'draft', 'paid')`,
-  )
+  const jobRow = await env.DB.prepare(`SELECT billing_model FROM jobs WHERE id = ?`)
     .bind(jobId)
-    .first<{ n: number; nums: string | null }>();
+    .first<{ billing_model: string | null }>();
+  const billingModel = (jobRow?.billing_model ?? "fixed_price").toLowerCase();
+
+  // 1. invoices_paid — every non-void, non-draft invoice must be paid.
+  const unpaidRows = (
+    await env.DB.prepare(
+      `SELECT invoice_number
+         FROM invoices
+        WHERE job_id = ?
+          AND status NOT IN ('void', 'draft', 'paid')`,
+    )
+      .bind(jobId)
+      .all<{ invoice_number: number | null }>()
+  ).results ?? [];
+  const unpaidLabels = unpaidRows.map((r) => invoiceLabel(r.invoice_number));
   checks.push({
     id: "invoices_paid",
     label: "All invoices paid",
-    passed: (unpaidRow?.n ?? 0) === 0,
-    detail: (unpaidRow?.n ?? 0) > 0 ? `${unpaidRow!.n} invoice(s) unpaid: ${unpaidRow?.nums ?? ""}` : null,
+    passed: unpaidRows.length === 0,
+    detail:
+      unpaidRows.length > 0
+        ? `${unpaidRows.length} invoice(s) unpaid: ${unpaidLabels.join(", ")}`
+        : null,
   });
 
   // 2. no_draft_invoices — no draft or sent (unresolved) invoices.
@@ -635,23 +645,48 @@ async function computeCloseEligibility(env: Env, jobId: string): Promise<Eligibi
     detail: (plRow?.n ?? 0) > 0 ? `${plRow!.n} open punch list item(s) remaining` : null,
   });
 
-  // 6. final_invoice_paid — at least one final invoice exists and is paid.
-  const finalRow = await env.DB.prepare(
-    `SELECT invoice_display, status FROM invoices WHERE job_id = ? AND invoice_type = 'final' ORDER BY created_at DESC LIMIT 1`,
-  )
-    .bind(jobId)
-    .first<{ invoice_display: string; status: string }>();
-  const finalPassed = finalRow?.status === "paid";
-  checks.push({
-    id: "final_invoice_paid",
-    label: "Final invoice paid",
-    passed: finalPassed,
-    detail: !finalRow
-      ? "No final invoice found"
-      : !finalPassed
-        ? `Final invoice ${finalRow.invoice_display} is ${finalRow.status} (not paid)`
-        : null,
-  });
+  // 6. Completion signal — billing-model specific.
+  if (billingModel === "cost_plus") {
+    const finalCycle = await env.DB.prepare(
+      `SELECT id, status, invoice_id, reconciliation_invoice_id, reconciliation_date, cycle_number
+         FROM billing_cycles
+        WHERE job_id = ? AND is_final_cycle = 1
+        ORDER BY cycle_number DESC
+        LIMIT 1`,
+    )
+      .bind(jobId)
+      .first<{
+        id: string;
+        status: string;
+        invoice_id: string | null;
+        reconciliation_invoice_id: string | null;
+        reconciliation_date: string | null;
+        cycle_number: number;
+      }>();
+
+    const invoiceIds = [finalCycle?.invoice_id, finalCycle?.reconciliation_invoice_id].filter(
+      (id): id is string => !!id,
+    );
+    const cycleInvoices =
+      invoiceIds.length > 0
+        ? ((
+            await env.DB.prepare(
+              `SELECT id, invoice_number, status FROM invoices WHERE id IN (${invoiceIds.map(() => "?").join(", ")})`,
+            )
+              .bind(...invoiceIds)
+              .all<{ id: string; invoice_number: number | null; status: string }>()
+          ).results ?? [])
+        : [];
+
+    checks.push(buildCostPlusFinalCycleCheck(finalCycle ?? null, cycleInvoices));
+  } else {
+    const finalRow = await env.DB.prepare(
+      `SELECT invoice_number, status FROM invoices WHERE job_id = ? AND invoice_type = 'final' ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(jobId)
+      .first<{ invoice_number: number | null; status: string }>();
+    checks.push(buildFixedPriceFinalInvoiceCheck(finalRow ?? null));
+  }
 
   return { eligible: checks.every((c) => c.passed), checks };
 }
@@ -736,11 +771,27 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   const nowIso = new Date().toISOString();
   // actual_end_date is stamped when the job first reaches complete.
   const setActualEnd = target === "complete";
-  await env.DB.prepare(
-    `UPDATE jobs SET status = ?, updated_at = ?${setActualEnd ? ", actual_end_date = COALESCE(actual_end_date, ?)" : ""} WHERE id = ?`,
-  )
-    .bind(...(setActualEnd ? [target, nowIso, nowIso.slice(0, 10), id] : [target, nowIso, id]))
-    .run();
+  if (target === "closed") {
+    const dates = await env.DB.prepare("SELECT actual_end_date FROM jobs WHERE id = ?")
+      .bind(id)
+      .first<{ actual_end_date: string | null }>();
+    const completionDate = dates?.actual_end_date?.slice(0, 10) ?? nowIso.slice(0, 10);
+    const warrantyExp = warrantyExpirationDate(completionDate);
+    await env.DB.prepare(
+      `UPDATE jobs
+          SET status = ?, updated_at = ?, warranty_expiration = ?,
+              actual_end_date = COALESCE(actual_end_date, ?)
+        WHERE id = ?`,
+    )
+      .bind(target, nowIso, warrantyExp, completionDate, id)
+      .run();
+  } else {
+    await env.DB.prepare(
+      `UPDATE jobs SET status = ?, updated_at = ?${setActualEnd ? ", actual_end_date = COALESCE(actual_end_date, ?)" : ""} WHERE id = ?`,
+    )
+      .bind(...(setActualEnd ? [target, nowIso, nowIso.slice(0, 10), id] : [target, nowIso, id]))
+      .run();
+  }
 
   await logAudit(env, user.email, "job_status_changed", "job", id, { from, to: target });
   triggerJobStatusChanged(env, id, from, target);

@@ -104,6 +104,16 @@ export function invoiceLabel(n: number | null | undefined): string {
   return `INV-${String(n ?? 0).padStart(3, "0")}`;
 }
 
+/** Five-year warranty end date (YYYY-MM-DD) from job completion. */
+export const WARRANTY_DAYS = 1825;
+
+export function warrantyExpirationDate(completionDate: string | null | undefined): string {
+  const base = completionDate?.slice(0, 10) ?? new Date().toISOString().slice(0, 10);
+  const d = new Date(`${base}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + WARRANTY_DAYS);
+  return d.toISOString().slice(0, 10);
+}
+
 // ─── invoice row + shaping ────────────────────────────────────────────────────
 
 export interface InvoiceRow {

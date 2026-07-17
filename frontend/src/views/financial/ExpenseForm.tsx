@@ -1,8 +1,9 @@
-import { useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
+import { Spinner } from "../../components/ui/Spinner";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../store/toast";
 
@@ -11,7 +12,7 @@ import { useToast } from "../../store/toast";
  *
  * Used by the Financial tab "+ Add Expense" modal AND the receipt-confirm seam
  * so a receipt-sourced expense lands in the SAME full form (estimate-line-item
- * alignment, tax category, sub/1099) rather than a minimal stub.
+ * alignment, tax category, sub picker) rather than a minimal stub.
  */
 
 export interface CostingSubLineLite {
@@ -81,7 +82,6 @@ export interface ExpenseDraft {
   estimate_line_item_id: string; // parent or sub-item id, "" = unallocated
   tax_category: string;
   sub_id: string;
-  is_1099_reportable: boolean;
   save_to_price_book: boolean;
   material_name: string;
   material_unit: string;
@@ -97,7 +97,6 @@ export function emptyDraft(over: Partial<ExpenseDraft> = {}): ExpenseDraft {
     estimate_line_item_id: "",
     tax_category: "materials",
     sub_id: "",
-    is_1099_reportable: false,
     save_to_price_book: false,
     material_name: "",
     material_unit: "ea",
@@ -117,11 +116,172 @@ export function draftToBody(d: ExpenseDraft, jobId: string | null) {
     estimate_line_item_id: d.estimate_line_item_id || null,
     tax_category: d.tax_category || null,
     sub_id: d.expense_type === "subcontractor" ? d.sub_id.trim() || null : null,
-    is_1099_reportable: d.expense_type === "subcontractor" && d.is_1099_reportable,
     save_to_price_book: d.expense_type === "material" && d.save_to_price_book,
     material_name: d.material_name.trim() || null,
     material_unit: d.material_unit.trim() || null,
   };
+}
+
+interface SubOption {
+  id: string;
+  company_name: string | null;
+  contact_name: string | null;
+  primary_contact: string | null;
+  trade: string | null;
+  phone: string | null;
+}
+
+function subLabel(s: SubOption): string {
+  return [s.company_name, s.contact_name || s.primary_contact].filter(Boolean).join(" — ");
+}
+
+function subMatchesQuery(s: SubOption, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    subLabel(s).toLowerCase().includes(q) ||
+    (s.trade ?? "").toLowerCase().includes(q) ||
+    (s.phone ?? "").toLowerCase().includes(q)
+  );
+}
+
+/** Single-select sub search — same interaction as BidRequestModal, scoped to one sub. */
+function ExpenseSubPicker({
+  subId,
+  onChange,
+}: {
+  subId: string;
+  onChange: (id: string) => void;
+}) {
+  const [subs, setSubs] = useState<SubOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void (async () => {
+      try {
+        const d = await api.get<{ subcontractors: SubOption[] }>(
+          "/api/subcontractors?active=1&limit=200",
+        );
+        let list = d.subcontractors ?? [];
+        if (subId && !list.some((s) => s.id === subId)) {
+          try {
+            const one = await api.get<{ subcontractor: SubOption }>(`/api/subcontractors/${subId}`);
+            if (one.subcontractor) list = [one.subcontractor, ...list];
+          } catch {
+            /* inactive or missing — still show id-less state below */
+          }
+        }
+        if (!cancelled) setSubs(list);
+      } catch {
+        if (!cancelled) setSubs([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [subId]);
+
+  useEffect(() => {
+    const onDocMouseDown = (ev: MouseEvent) => {
+      if (!pickerRef.current?.contains(ev.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, []);
+
+  const selected = subs.find((s) => s.id === subId) ?? null;
+  const suggestions = subs.filter((s) => subMatchesQuery(s, search));
+
+  const pick = (id: string) => {
+    onChange(id);
+    setSearch("");
+    setOpen(false);
+  };
+
+  const clear = () => {
+    onChange("");
+    setSearch("");
+    setOpen(true);
+  };
+
+  if (loading) return <Spinner />;
+
+  return (
+    <FormField label="Subcontractor">
+      <div class="bid-sub-picker" ref={pickerRef}>
+        {selected ? (
+          <span class="badge badge--brand bid-sub-chip">
+            <span class="bid-sub-chip__label">
+              {subLabel(selected)}
+              {selected.trade ? (
+                <span class="bid-sub-chip__trade badge badge--secondary">{selected.trade}</span>
+              ) : null}
+            </span>
+            <button
+              type="button"
+              class="bid-sub-chip__remove"
+              onClick={clear}
+              title="Change subcontractor"
+              aria-label="Change subcontractor"
+            >
+              ×
+            </button>
+          </span>
+        ) : (
+          <>
+            <input
+              class="form-input"
+              type="text"
+              placeholder="Type a sub's name or trade…"
+              value={search}
+              autoComplete="off"
+              onFocus={() => setOpen(true)}
+              onInput={(e) => {
+                setSearch((e.target as HTMLInputElement).value);
+                setOpen(true);
+              }}
+            />
+            {open ? (
+              <div class="catalog-ac bid-sub-picker__dropdown" role="listbox">
+                {suggestions.length === 0 ? (
+                  <div class="catalog-ac__empty">
+                    {search.trim() ? "No subs match" : "No active subs found"}
+                  </div>
+                ) : (
+                  suggestions.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      class="catalog-ac__item bid-sub-picker__option"
+                      onMouseDown={(ev) => ev.preventDefault()}
+                      onClick={() => pick(s.id)}
+                    >
+                      <div class="catalog-ac__item-top">
+                        <span class="catalog-ac__item-name">{subLabel(s)}</span>
+                        {s.trade ? (
+                          <span class="badge badge--secondary" style={{ fontSize: "11px", flexShrink: 0 }}>
+                            {s.trade}
+                          </span>
+                        ) : null}
+                      </div>
+                      {s.phone ? <div class="catalog-ac__item-desc">{s.phone}</div> : null}
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+    </FormField>
+  );
 }
 
 /** The reusable field set. Controlled by a draft + setter from the caller. */
@@ -221,28 +381,7 @@ export function ExpenseFields({
         />
       </FormField>
 
-      {isSub && (
-        <div class="form-row">
-          <FormField label="Subcontractor ID">
-            <input
-              class="form-input"
-              value={draft.sub_id}
-              placeholder="sub id"
-              onInput={(e) => set("sub_id", (e.target as HTMLInputElement).value)}
-            />
-          </FormField>
-          <FormField label="1099">
-            <label class="quote-check" style={{ marginTop: "8px" }}>
-              <input
-                type="checkbox"
-                checked={draft.is_1099_reportable}
-                onChange={(e) => set("is_1099_reportable", (e.target as HTMLInputElement).checked)}
-              />
-              <span>1099-reportable</span>
-            </label>
-          </FormField>
-        </div>
-      )}
+      {isSub && <ExpenseSubPicker subId={draft.sub_id} onChange={(id) => set("sub_id", id)} />}
 
       {isMaterial && (
         <div class="stack" style={{ gap: "var(--space-xs)" }}>

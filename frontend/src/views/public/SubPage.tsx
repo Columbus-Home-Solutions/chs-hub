@@ -8,7 +8,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
-import { Spinner } from "../../components/ui/Spinner";
+import { formatDate } from "../../lib/format";
+import {
+  PunchPublicError,
+  PunchPublicFooter,
+  PunchPublicHeader,
+  PunchPublicLoading,
+} from "./punchPublicUi";
 
 interface SubPublicItem {
   id: string;
@@ -178,30 +184,12 @@ export function SubPage() {
   };
 
   if (loading) {
-    return (
-      <div class="punch-page">
-        <Spinner center />
-      </div>
-    );
+    return <PunchPublicLoading label="Loading your items…" />;
   }
 
   if (error || !data) {
     const inactive = errorStatus === 404 || error === "invalid_token";
-    return (
-      <div class="punch-page">
-        <div class="punch-page__error">
-          <div class="portal-empty__icon">🔗</div>
-          <h1 class="punch-page__title">
-            {inactive ? "Link no longer active" : "Something went wrong"}
-          </h1>
-          <p>
-            {inactive
-              ? "This link is no longer active. Contact Tony at (501) 551-1814."
-              : error ?? "Could not load your items."}
-          </p>
-        </div>
-      </div>
-    );
+    return <PunchPublicError inactive={inactive} message={error} />;
   }
 
   const subName = data.sub.contact_name || data.sub.company_name || "there";
@@ -213,86 +201,86 @@ export function SubPage() {
   // Empty state: no open items across any job.
   if (data.jobs.length === 0 || totalOpen === 0) {
     return (
-      <div class="punch-page">
-        <header class="punch-page__brand">
-          <div class="punch-page__company">Columbus Home Solutions LLC</div>
-          <h1 class="punch-page__title">My Items</h1>
-        </header>
-        <div class="punch-page__greeting">
-          <p>
-            Hi {subName},<br />
-            You're all caught up — no open items right now.
-          </p>
-        </div>
-        <footer class="punch-page__footer">
-          Questions? Call Tony: <a href="tel:+15015511814">(501) 551-1814</a>
-        </footer>
+      <div class="portal">
+        <PunchPublicHeader title="My Items" />
+        <section class="portal-card">
+          <div class="portal-empty">
+            <div class="portal-empty__icon">✓</div>
+            <div class="portal-empty__title">You're all caught up</div>
+            <p class="portal-empty__sub">
+              Hi {subName} — no open punch items right now. Tony will reach out when
+              something new is assigned.
+            </p>
+          </div>
+        </section>
+        <PunchPublicFooter />
       </div>
     );
   }
 
   return (
-    <div class="punch-page">
-      <header class="punch-page__brand">
-        <div class="punch-page__company">Columbus Home Solutions LLC</div>
-        <h1 class="punch-page__title">My Items</h1>
-      </header>
+    <div class="portal">
+      <PunchPublicHeader title="My Items" />
 
-      <div class="punch-page__greeting">
-        <p>
-          Hi {subName},<br />
-          You have <strong>{totalOpen}</strong> open item{totalOpen !== 1 ? "s" : ""} to complete.
-        </p>
-      </div>
+      <section class="portal-card">
+        <div class="punch-page__greeting">
+          <p>
+            Hi {subName},<br />
+            You have <strong>{totalOpen}</strong> open item{totalOpen !== 1 ? "s" : ""} to complete.
+          </p>
+        </div>
+      </section>
 
       {data.jobs.map((group) => {
         const openItems = group.items.filter((i) => i.status !== "done");
         const doneItems = group.items.filter((i) => i.status === "done");
         if (openItems.length === 0 && doneItems.length === 0) return null;
         return (
-          <section key={group.job_id} class="sub-job-group">
-            <h2 class="sub-job-group__title">{group.job_title}</h2>
+          <section key={group.job_id} class="portal-card sub-job-group">
+            <h2 class="portal-card__title">{group.job_title}</h2>
             {group.property_address && (
-              <div class="punch-page__addr">{group.property_address}</div>
+              <div class="sub-job-group__addr">{group.property_address}</div>
             )}
-            {[...openItems, ...doneItems].map((item, idx) => {
-              const done = item.status === "done";
-              return (
-                <div class={`punch-item${done ? " punch-item--done" : ""}`} key={item.id}>
-                  <span class="punch-item__num">{idx + 1}.</span>
-                  <div class="punch-item__body">
-                    <div class="punch-item__desc">{item.description}</div>
-                    {done && item.completed_at && (
-                      <div class="punch-item__meta">
-                        Completed {new Date(item.completed_at).toLocaleDateString()}
-                      </div>
-                    )}
+            <div class="punch-items">
+              {[...openItems, ...doneItems].map((item, idx) => {
+                const done = item.status === "done";
+                return (
+                  <div class={`punch-item${done ? " punch-item--done" : ""}`} key={item.id}>
+                    <span class="punch-item__num">{idx + 1}.</span>
+                    <div class="punch-item__body">
+                      <div class="punch-item__desc">{item.description}</div>
+                      {done && item.completed_at && (
+                        <div class="punch-item__meta">
+                          Completed {formatDate(item.completed_at)}
+                        </div>
+                      )}
+                    </div>
+                    <div class="punch-item__actions">
+                      {!done ? (
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => {
+                            setConfirmItem(item);
+                            setNote("");
+                            clearPhoto();
+                          }}
+                        >
+                          Done ✓
+                        </Button>
+                      ) : (
+                        <span class="badge badge--success">Done</span>
+                      )}
+                    </div>
                   </div>
-                  {!done ? (
-                    <button
-                      type="button"
-                      class="punch-item__done-btn"
-                      onClick={() => {
-                        setConfirmItem(item);
-                        setNote("");
-                        clearPhoto();
-                      }}
-                    >
-                      Done ✓
-                    </button>
-                  ) : (
-                    <span class="punch-item__done-badge">DONE</span>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </section>
         );
       })}
 
-      <footer class="punch-page__footer">
-        Questions? Call Tony: <a href="tel:+15015511814">(501) 551-1814</a>
-      </footer>
+      <PunchPublicFooter />
 
       {confirmItem && (
         <Modal

@@ -6165,20 +6165,6 @@
   color: var(--color-text-secondary);
 }
 
-/* ─── SubPage job group header (Sprint 34) ─── */
-.sub-job-group {
-  margin-bottom: var(--space-lg);
-}
-.sub-job-group__title {
-  font-family: var(--font-display);
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  color: var(--color-text-primary);
-  margin: 0 0 var(--space-xs);
-  padding-bottom: var(--space-xs);
-  border-bottom: 1px solid var(--color-border);
-}
-
 /* ─── Quick Action modals (New Estimate / New Invoice / Quick Job) ─── */
 .quick-action-modal__selected-client {
   display: flex;

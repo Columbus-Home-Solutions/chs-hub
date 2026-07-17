@@ -7,8 +7,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
-import { Spinner } from "../../components/ui/Spinner";
 import { formatDate } from "../../lib/format";
+import {
+  PunchPublicError,
+  PunchPublicFooter,
+  PunchPublicHeader,
+  PunchPublicLoading,
+} from "../public/punchPublicUi";
 
 interface PunchPublicItem {
   id: string;
@@ -189,30 +194,12 @@ export function PunchPage() {
   };
 
   if (loading) {
-    return (
-      <div class="punch-page">
-        <Spinner center />
-      </div>
-    );
+    return <PunchPublicLoading label="Loading your punch list…" />;
   }
 
   if (error || !data) {
     const inactive = errorStatus === 404 || errorStatus === 410 || error === "invalid_token";
-    return (
-      <div class="punch-page">
-        <div class="punch-page__error">
-          <div class="portal-empty__icon">🔗</div>
-          <h1 class="punch-page__title">
-            {inactive ? "Link no longer active" : "Something went wrong"}
-          </h1>
-          <p>
-            {inactive
-              ? "This link is no longer active. Contact Tony at (501) 551-1814."
-              : error ?? "Could not load your punch list."}
-          </p>
-        </div>
-      </div>
-    );
+    return <PunchPublicError inactive={inactive} message={error} />;
   }
 
   const due =
@@ -221,21 +208,19 @@ export function PunchPage() {
       : "No date set";
 
   return (
-    <div class="punch-page">
-      <header class="punch-page__brand">
-        <div class="punch-page__company">Columbus Home Solutions LLC</div>
-        <h1 class="punch-page__title">Punch List — {data.job_title}</h1>
-        {data.job_address && <div class="punch-page__addr">{data.job_address}</div>}
-      </header>
+    <div class="portal">
+      <PunchPublicHeader title={`Punch List — ${data.job_title}`} address={data.job_address} />
 
-      <div class="punch-page__greeting">
-        <p>
-          Hi {data.sub_name || "there"},
-          <br />
-          You have <strong>{openItems.length}</strong> item(s) to complete.
-        </p>
-        <p class="punch-page__due">Due: {due}</p>
-      </div>
+      <section class="portal-card">
+        <div class="punch-page__greeting">
+          <p>
+            Hi {data.sub_name || "there"},
+            <br />
+            You have <strong>{openItems.length}</strong> item(s) to complete.
+          </p>
+          <p class="punch-page__due">Due: {due}</p>
+        </div>
+      </section>
 
       {allDoneBanner && (
         <div class="punch-page__banner" role="status">
@@ -243,58 +228,63 @@ export function PunchPage() {
         </div>
       )}
 
-      <section>
-        {[...openItems, ...doneItems].map((item, idx) => {
-          const done = item.status === "done";
-          return (
-            <div class={`punch-item${done ? " punch-item--done" : ""}`} key={item.id}>
-              <span class="punch-item__num">{idx + 1}.</span>
-              <div class="punch-item__body">
-                <div class="punch-item__desc">{item.description}</div>
-                {item.scheduled_date && (
-                  <div class="punch-item__meta">Scheduled: {formatDate(item.scheduled_date)}</div>
-                )}
-                {item.photo_urls.length > 0 && (
-                  <div class="punch-item__photos">
-                    {item.photo_urls.map((url) => (
-                      <img
-                        key={url}
-                        class="punch-item__photo"
-                        src={url}
-                        alt=""
-                        loading="lazy"
-                        onClick={() => setLightbox(url)}
-                      />
-                    ))}
-                  </div>
-                )}
-                {done && item.completed_at && (
-                  <div class="punch-item__meta">Completed {formatDate(item.completed_at)}</div>
-                )}
+      <section class="portal-card">
+        <h2 class="portal-card__title">Items</h2>
+        <div class="punch-items">
+          {[...openItems, ...doneItems].map((item, idx) => {
+            const done = item.status === "done";
+            return (
+              <div class={`punch-item${done ? " punch-item--done" : ""}`} key={item.id}>
+                <span class="punch-item__num">{idx + 1}.</span>
+                <div class="punch-item__body">
+                  <div class="punch-item__desc">{item.description}</div>
+                  {item.scheduled_date && (
+                    <div class="punch-item__meta">Scheduled: {formatDate(item.scheduled_date)}</div>
+                  )}
+                  {item.photo_urls.length > 0 && (
+                    <div class="punch-item__photos">
+                      <div class="portal-photos__grid">
+                        {item.photo_urls.map((url) => (
+                          <button
+                            type="button"
+                            key={url}
+                            class="portal-photo"
+                            onClick={() => setLightbox(url)}
+                          >
+                            <img src={url} alt="" loading="lazy" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {done && item.completed_at && (
+                    <div class="punch-item__meta">Completed {formatDate(item.completed_at)}</div>
+                  )}
+                </div>
+                <div class="punch-item__actions">
+                  {!done ? (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => {
+                        setConfirmItem(item);
+                        setNote("");
+                        clearPhoto();
+                      }}
+                    >
+                      Done ✓
+                    </Button>
+                  ) : (
+                    <span class="badge badge--success">Done</span>
+                  )}
+                </div>
               </div>
-              {!done ? (
-                <button
-                  type="button"
-                  class="punch-item__done-btn"
-                  onClick={() => {
-                    setConfirmItem(item);
-                    setNote("");
-                    clearPhoto();
-                  }}
-                >
-                  Done ✓
-                </button>
-              ) : (
-                <span class="punch-item__done-badge">DONE</span>
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </section>
 
-      <footer class="punch-page__footer">
-        Questions? Call Tony: <a href="tel:+15015511814">(501) 551-1814</a>
-      </footer>
+      <PunchPublicFooter />
 
       {confirmItem && (
         <Modal
@@ -389,16 +379,18 @@ export function PunchPage() {
       )}
 
       {lightbox && (
-        <div class="punch-lightbox" onClick={() => setLightbox(null)}>
-          <button
-            type="button"
-            class="punch-lightbox__close"
-            aria-label="Close"
-            onClick={() => setLightbox(null)}
-          >
-            ✕
-          </button>
-          <img src={lightbox} alt="Punch list photo" onClick={(e) => e.stopPropagation()} />
+        <div class="portal-photo-lightbox" onClick={() => setLightbox(null)}>
+          <div class="portal-photo-lightbox__inner" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              class="portal-photo-lightbox__close"
+              aria-label="Close"
+              onClick={() => setLightbox(null)}
+            >
+              ×
+            </button>
+            <img src={lightbox} alt="Punch list photo" />
+          </div>
         </div>
       )}
     </div>

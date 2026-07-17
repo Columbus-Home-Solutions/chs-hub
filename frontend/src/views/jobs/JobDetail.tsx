@@ -3,6 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { useUrlTab } from "../../hooks/useUrlTab";
 import { Card } from "../../components/ui/Card";
+import { WarrantyExpirationCallout } from "../../components/WarrantyExpirationCallout";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
@@ -214,7 +215,9 @@ export function JobDetail({ id }: DetailProps) {
       )}
       {tab === "bids" && id && <BidsTab jobId={id} />}
       {tab === "permits" && id && <PermitsTab jobId={id} />}
-      {tab === "warranty" && id && <WarrantyTab jobId={id} />}
+      {tab === "warranty" && id && (
+        <WarrantyTab jobId={id} warrantyExpiration={data.job.warranty_expiration} />
+      )}
       {tab === "photos" && id && <PhotosTab jobId={id} />}
       {tab === "documents" && id && <DocumentsTab jobId={id} />}
       {tab === "daily_logs" && id && <DailyLogsTab jobId={id} />}
@@ -358,6 +361,7 @@ function OverviewTab({
             <div class="flex items-center gap-sm">
               <span class={`er-status job-status--${job.status}`}>{formatStatus(job.status)}</span>
             </div>
+            <WarrantyExpirationCallout expiration={job.warranty_expiration} compact />
             {dropdownTargets.length > 0 && (
               <FormField label="Move to">
                 <Select

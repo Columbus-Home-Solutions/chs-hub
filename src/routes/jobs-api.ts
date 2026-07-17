@@ -129,6 +129,7 @@ interface JobListRow {
   start_date: string | null;
   target_end_date: string | null;
   actual_end_date: string | null;
+  warranty_expiration: string | null;
   portal_token: string | null;
   portal_type: string | null;
   conversion_complete: number | null;
@@ -147,7 +148,7 @@ const JOB_SELECT = `
          j.billing_model, j.job_type, j.lead_source, j.source,
          j.property_address, j.property_city, j.property_state, j.property_zip,
          j.contract_total, j.deposit_amount, j.deposit_paid,
-         j.start_date, j.target_end_date, j.actual_end_date,
+         j.start_date, j.target_end_date, j.actual_end_date, j.warranty_expiration,
          j.portal_token, j.portal_type, j.conversion_complete, j.estimate_id, j.payer_id,
          j.created_at, j.updated_at,
          COALESCE((
@@ -191,6 +192,7 @@ function shapeJobCard(r: JobListRow) {
     start_date: r.start_date,
     target_end_date: r.target_end_date,
     actual_end_date: r.actual_end_date,
+    warranty_expiration: r.warranty_expiration,
     portal_token: r.portal_token,
     portal_type: r.portal_type,
     // The post-sale client portal view (/portal/:token) is later-sprint work and

@@ -629,6 +629,7 @@ export interface JobCard {
   start_date: string | null;
   target_end_date: string | null;
   actual_end_date: string | null;
+  warranty_expiration: string | null;
   portal_token: string | null;
   portal_type: string | null;
   portal_path: string | null;

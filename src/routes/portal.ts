@@ -36,6 +36,7 @@ import { buildReconciliationReport, type CycleForReport } from "../lib/cost-plus
 import { handlePhotoStream } from "./photos.js";
 import { createOwnerInApp } from "../lib/notification-engine.js";
 import { applyChangeOrder } from "./change-orders.js";
+import { isWithinWarrantyExpiration } from "../lib/warranty.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -223,10 +224,7 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
     }
   }
 
-  const withinWarranty =
-    job.warranty_expiration != null &&
-    new Date(`${job.warranty_expiration}T00:00:00Z`) >=
-      new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+  const withinWarranty = isWithinWarrantyExpiration(job.warranty_expiration);
 
   return json({
     ok: true,
@@ -1065,15 +1063,10 @@ const WARRANTY_CLAIM_RATE_WINDOW_SECONDS = 300; // 5 min
 const WARRANTY_CLAIM_RATE_MAX = 3;
 
 async function isWithinWarranty(env: Env, jobId: string): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT warranty_expiration FROM jobs WHERE id = ?`,
-  )
+  const row = await env.DB.prepare(`SELECT warranty_expiration FROM jobs WHERE id = ?`)
     .bind(jobId)
     .first<{ warranty_expiration: string | null }>();
-  if (!row?.warranty_expiration) return false;
-  // SQLite date comparison: warranty_expiration >= date('now')
-  const exp = new Date(`${row.warranty_expiration}T00:00:00Z`);
-  return exp >= new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+  return isWithinWarrantyExpiration(row?.warranty_expiration);
 }
 
 async function handleWarrantyClaimsPost(

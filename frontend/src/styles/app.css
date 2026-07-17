@@ -858,6 +858,7 @@
 }
 .callout--warning { background: var(--color-warning-subtle); border-color: var(--color-warning-border); }
 .callout--success { background: var(--color-success-subtle); border-color: var(--color-success-border); }
+.callout--error { background: var(--color-error-subtle); border-color: var(--color-error-border); color: var(--color-error); }
 .cycle-card {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);

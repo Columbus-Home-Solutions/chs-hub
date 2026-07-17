@@ -8,6 +8,7 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatDate, formatDateTime, formatStatus } from "../../lib/format";
+import { WarrantyExpirationCallout } from "../../components/WarrantyExpirationCallout";
 import { WarrantyFormModal } from "../warranty/WarrantyCalls";
 
 interface WarrantyCall {
@@ -33,11 +34,12 @@ interface WarrantyClaim {
 
 interface Props {
   jobId: string;
+  warrantyExpiration?: string | null;
 }
 
 const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
 
-export function WarrantyTab({ jobId }: Props) {
+export function WarrantyTab({ jobId, warrantyExpiration = null }: Props) {
   const toast = useToast();
   const { data, loading, error, refetch } = useApi<{ warranty_calls: WarrantyCall[] }>(
     `/api/jobs/${jobId}/warranty-calls`,
@@ -99,6 +101,8 @@ export function WarrantyTab({ jobId }: Props) {
 
   return (
     <div class="stack">
+      <WarrantyExpirationCallout expiration={warrantyExpiration} />
+
       {/* ── Warranty Claims (from warranties table) ───────────────────── */}
       <div class="flex items-center justify-between gap-sm">
         <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>

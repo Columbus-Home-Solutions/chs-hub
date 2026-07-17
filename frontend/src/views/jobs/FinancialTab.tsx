@@ -666,6 +666,17 @@ const EXPENSE_TYPE_LABEL: Record<string, string> = {
   other: "Other",
 };
 
+/** Full category name for expense list meta (matches cost-plus bucket language). */
+const EXPENSE_TYPE_META_LABEL: Record<string, string> = {
+  material: "Materials",
+  subcontractor: "Subcontractors",
+  labor: "Labor",
+  permit: "Permits",
+  equipment: "Equipment",
+  vehicle: "Vehicle",
+  other: "Other",
+};
+
 function ExpensesSection({
   jobId,
   data,
@@ -775,7 +786,8 @@ function ExpensesSection({
                   )}
                 </div>
                 <div class="invoice-row__meta">
-                  {e.tax_category ? formatStatus(e.tax_category) : "Uncategorized"}
+                  {EXPENSE_TYPE_META_LABEL[e.expense_type ?? "other"] ??
+                    formatStatus(e.expense_type ?? "other")}
                   {e.estimate_line_item_id ? " · aligned" : " · unallocated"}
                   {e.incurred_date ? ` · ${formatDate(e.incurred_date)}` : ""}
                 </div>
@@ -806,6 +818,7 @@ function ExpensesSection({
       {reviewReceiptId && (
         <Modal
           open
+          size="wide"
           title="Receipt item matching"
           onClose={() => setReviewReceiptId(null)}
           footer={

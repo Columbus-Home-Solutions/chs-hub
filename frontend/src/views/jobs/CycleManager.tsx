@@ -1,6 +1,6 @@
 import { Fragment } from "preact";
 import type { ComponentChildren } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -354,6 +354,27 @@ function computePreview(
   const contractorFee = round2(subtotal * contractorRate);
   const total = round2(subtotal + pmFee + contractorFee);
   return { subtotal, pmFee, contractorFee, total };
+}
+
+/** Add calendar days to an ISO date (YYYY-MM-DD), UTC-safe. */
+function addDays(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Default bi-weekly cycle window: day after latest period_end, or today if first cycle. */
+function defaultCyclePeriod(cycles: Cycle[]): { start: string; end: string } {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!cycles.length) {
+    return { start: today, end: addDays(today, 13) };
+  }
+  const latestEnd = cycles.reduce(
+    (max, c) => (c.period_end > max ? c.period_end : max),
+    cycles[0]!.period_end,
+  );
+  const start = addDays(latestEnd, 1);
+  return { start, end: addDays(start, 13) };
 }
 
 /** Budget-tracker color logic, matching the Sprint 10 Budget-vs-Actual tones. */
@@ -1202,10 +1223,19 @@ function NewCycleModal({
 }) {
   const costing = useApi<{ costing: { lines: ScopeLineItem[] } }>(`/api/jobs/${jobId}/costing`);
   const cyclesList = useApi<CycleListResponse>(`/api/jobs/${jobId}/billing-cycles`);
-  const today = new Date().toISOString().slice(0, 10);
-  const twoWeeks = new Date(Date.now() + 13 * 86_400_000).toISOString().slice(0, 10);
-  const [periodStart, setPeriodStart] = useState(today);
-  const [periodEnd, setPeriodEnd] = useState(twoWeeks);
+  const initialPeriod = defaultCyclePeriod([]);
+  const [periodStart, setPeriodStart] = useState(initialPeriod.start);
+  const [periodEnd, setPeriodEnd] = useState(initialPeriod.end);
+  const datesInitialized = useRef(false);
+
+  useEffect(() => {
+    if (cyclesList.loading || datesInitialized.current) return;
+    datesInitialized.current = true;
+    const { start, end } = defaultCyclePeriod(cyclesList.data?.cycles ?? []);
+    setPeriodStart(start);
+    setPeriodEnd(end);
+  }, [cyclesList.loading, cyclesList.data?.cycles]);
+
   const [materials, setMaterials] = useState("");
   const [labor, setLabor] = useState("");
   const [subs, setSubs] = useState("");

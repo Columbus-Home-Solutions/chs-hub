@@ -61,6 +61,17 @@ export const TAX_CATEGORY_OPTIONS = [
   { value: "other", label: "Other" },
 ];
 
+/** Default tax category when the expense type chip changes (keeps badge + meta in sync). */
+export const TAX_CATEGORY_BY_EXPENSE_TYPE: Record<string, string> = {
+  material: "materials",
+  subcontractor: "subcontractors",
+  labor: "labor",
+  permit: "permits_fees",
+  equipment: "equipment_rental",
+  vehicle: "vehicle",
+  other: "other",
+};
+
 export interface ExpenseDraft {
   expense_type: string;
   vendor: string;
@@ -140,7 +151,11 @@ export function ExpenseFields({
               key={o.value}
               type="button"
               class={`chip${draft.expense_type === o.value ? " chip--active" : ""}`}
-              onClick={() => set("expense_type", o.value)}
+              onClick={() => {
+                set("expense_type", o.value);
+                const tax = TAX_CATEGORY_BY_EXPENSE_TYPE[o.value];
+                if (tax) set("tax_category", tax);
+              }}
             >
               {o.label}
             </button>

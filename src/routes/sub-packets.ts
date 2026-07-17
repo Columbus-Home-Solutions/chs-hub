@@ -802,8 +802,13 @@ export async function applyAgreementSigned(
     .bind(signedAt, packetId)
     .run();
 
-  // Update the documents row with the real signed PDF r2_key
-  await env.DB.prepare(`UPDATE documents SET r2_key = ?, r2_url = ?, is_signed = 1, signed_date = ? WHERE id = ?`)
+  // Update the documents row with the real signed PDF r2_key and queue for Drive mirror.
+  await env.DB.prepare(
+    `UPDATE documents
+        SET r2_key = ?, r2_url = ?, is_signed = 1, signed_date = ?,
+            mirror_status = 'pending', google_drive_id = NULL, google_drive_url = NULL
+      WHERE id = ?`,
+  )
     .bind(signedPdfKey, signedPdfKey, signedAt, docId)
     .run();
 

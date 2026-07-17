@@ -1590,6 +1590,7 @@ export async function finalizeSelectionApprovalDocument(
           SET r2_key = ?, file_type = 'application/pdf', file_size = ?,
               is_signed = 1, signed_date = ?, job_id = COALESCE(job_id, ?),
               estimate_id = COALESCE(estimate_id, ?), signature_data = ?,
+              mirror_status = 'pending', google_drive_id = NULL, google_drive_url = NULL,
               updated_at = datetime('now')
         WHERE id = ?`,
     )

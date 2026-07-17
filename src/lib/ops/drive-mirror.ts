@@ -26,7 +26,8 @@
  *
  * Year anchor:   MIN(estimate_requests.created_at) WHERE client_id = ?
  * Folder cache:  drive_mirror_folders (path_key → drive_folder_id), v2_ prefix.
- * On failure:    mirror_status='failed' on documents; retried next cycle.
+ * On failure:    mirror_status='failed' on documents; retried after pending queue.
+ *                Missing R2 → mirror_status='skipped' (does not block the queue).
  *                photos/expenses/job_files retain NULL drive_mirrored_at; retried.
  * Canonical:     R2 + D1 stay canonical regardless of mirror state.
  */
@@ -49,6 +50,7 @@ const COMPANY_TEMPLATES = "1gPB3IYv-MK0sZ7ILYOYj7tdZdUCPh1Ta";
 // ─── document_category → job subfolder label ──────────────────────────────
 const JOB_CATEGORY_SUBFOLDER: Record<string, string> = {
   contract: "Contracts & Signed Docs",
+  working_agreement: "Contracts & Signed Docs",
   change_order: "Change Orders",
   permit: "Permits",
   photo_report: "Photos",
@@ -141,7 +143,7 @@ export async function getDriveMirrorStatus(env: Env): Promise<DriveMirrorStatus>
     env.DB.prepare("SELECT COUNT(*) as n FROM company_documents WHERE drive_mirrored_at IS NULL")
       .first<{ n: number }>(),
     env.DB.prepare(
-      "SELECT COUNT(*) as n FROM documents WHERE COALESCE(is_active,1)=1 AND COALESCE(mirror_status,'pending') IN ('pending','failed')",
+      "SELECT COUNT(*) as n FROM documents WHERE COALESCE(is_active,1)=1 AND mirror_status IN ('pending','failed')",
     ).first<{ n: number }>(),
   ]);
 
@@ -507,8 +509,9 @@ async function mirrorDocumentsBatch(
        LEFT JOIN jobs j ON j.id = d.job_id
        LEFT JOIN clients c ON c.id = COALESCE(d.client_id, j.client_id)
       WHERE COALESCE(d.is_active,1) = 1
-        AND COALESCE(d.mirror_status,'pending') IN ('pending','failed')
-      ORDER BY datetime(d.created_at) ASC
+        AND d.mirror_status IN ('pending','failed')
+      ORDER BY CASE d.mirror_status WHEN 'pending' THEN 0 ELSE 1 END,
+               datetime(d.created_at) ASC
       LIMIT ?`,
   )
     .bind(BATCH)
@@ -534,10 +537,12 @@ async function mirrorDocumentsBatch(
     try {
       const obj = await env.FILES.get(r.r2_key);
       if (!obj) {
-        await env.DB.prepare("UPDATE documents SET mirror_status='failed' WHERE id = ?")
+        // Permanent skip — placeholder r2_key rows (e.g. BoldSign sent before PDF lands)
+        // must not block the queue via infinite 'failed' retries.
+        await env.DB.prepare("UPDATE documents SET mirror_status='skipped' WHERE id = ?")
           .bind(r.id)
           .run();
-        out.errors.push(`document ${r.id}: missing R2 ${r.r2_key}`);
+        out.errors.push(`document ${r.id}: missing R2 ${r.r2_key} (skipped)`);
         continue;
       }
       const buf = await obj.arrayBuffer();

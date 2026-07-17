@@ -491,6 +491,10 @@ async function handleCompleted(
   };
   const category = categoryMap[docRow.template_type] ?? "contract";
 
+  const jobRow = await env.DB.prepare("SELECT client_id FROM jobs WHERE id = ?")
+    .bind(docRow.job_id)
+    .first<{ client_id: string | null }>();
+
   // Create a documents row so the signed PDF joins the portal/Drive pipeline.
   // Sub lien waivers (lien_waiver_sub_unconditional) get is_active=0 so they
   // don't appear in the client portal (portal query filters COALESCE(is_active,1)=1).
@@ -498,12 +502,14 @@ async function handleCompleted(
   const isClientFacing = docRow.template_type !== "lien_waiver_sub_unconditional" ? 1 : 0;
   await env.DB.prepare(
     `INSERT INTO documents
-       (id, job_id, title, file_type, file_size, r2_key, document_category, is_signed, signed_date, created_at, is_active)
-     VALUES (?, ?, ?, 'pdf', ?, ?, ?, 1, ?, datetime('now'), ?)`,
+       (id, job_id, client_id, title, file_type, file_size, r2_key, context_type,
+        document_category, mirror_status, is_signed, signed_date, created_at, is_active)
+     VALUES (?, ?, ?, ?, 'pdf', ?, ?, 'job', ?, 'pending', 1, ?, datetime('now'), ?)`,
   )
     .bind(
       documentsId,
       docRow.job_id,
+      jobRow?.client_id ?? null,
       pdfFilename,
       pdfBytes.byteLength,
       r2Key,
@@ -625,13 +631,26 @@ async function handleEstimateCompleted(
   meta.signature_completed_at = new Date().toISOString();
   if (signedR2Key) meta.signed_r2_key = signedR2Key;
 
-  await env.DB.prepare(
-    `UPDATE documents
-        SET signature_data = ?, is_signed = 1, signed_date = ?, updated_at = datetime('now')
-      WHERE id = ?`,
-  )
-    .bind(serializeSignatureMeta(meta), signedOn, docRow.id)
-    .run();
+  if (signedR2Key) {
+    await env.DB.prepare(
+      `UPDATE documents
+          SET signature_data = ?, is_signed = 1, signed_date = ?,
+              r2_key = ?, file_type = 'application/pdf',
+              mirror_status = 'pending', google_drive_id = NULL, google_drive_url = NULL,
+              updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+      .bind(serializeSignatureMeta(meta), signedOn, signedR2Key, docRow.id)
+      .run();
+  } else {
+    await env.DB.prepare(
+      `UPDATE documents
+          SET signature_data = ?, is_signed = 1, signed_date = ?, updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+      .bind(serializeSignatureMeta(meta), signedOn, docRow.id)
+      .run();
+  }
 
   // Mark the estimate as signed. Advance status to 'signed' (not 'approved') —
   // 'approved' is reserved for actual deposit receipt, which is a separate event.
@@ -760,10 +779,11 @@ async function handleClientLienWaiverCompleted(
   const pdfTitle = `Conditional Lien Waiver (Signed)`;
   await env.DB.prepare(
     `INSERT INTO documents
-       (id, job_id, title, file_type, file_size, r2_key, document_category, is_signed, signed_date, created_at, is_active)
-     VALUES (?, ?, ?, 'pdf', ?, ?, 'lien_waiver', 1, ?, datetime('now'), 1)`,
+       (id, job_id, client_id, title, file_type, file_size, r2_key, context_type,
+        document_category, mirror_status, is_signed, signed_date, created_at, is_active)
+     VALUES (?, ?, ?, ?, 'pdf', ?, ?, 'job', 'lien_waiver', 'pending', 1, ?, datetime('now'), 1)`,
   )
-    .bind(documentsId, waiver.job_id, pdfTitle, pdfBytes.byteLength, r2Key, signedOn)
+    .bind(documentsId, waiver.job_id, waiver.client_id, pdfTitle, pdfBytes.byteLength, r2Key, signedOn)
     .run();
 
   await env.DB.prepare(

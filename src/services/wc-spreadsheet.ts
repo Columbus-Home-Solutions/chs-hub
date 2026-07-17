@@ -21,7 +21,8 @@ import {
   ctToday,
   ctWeekBounds,
   kpiRowMatches,
-  leadSourceColumn,
+  leadSourceBucket,
+  type LeadSourceBucket,
   monthLabelMatches,
   parseShortDate,
   sundayOf,
@@ -60,6 +61,10 @@ interface WcSettings {
   kpiFirstRow: number;
   marketingTab: string;
   marketingWeekCol: string;
+  marketingWeekEndCol: string;
+  marketingFinancialCols: string;
+  marketingLeadCols: Record<LeadSourceBucket, string>;
+  marketingConvertedCol: string;
   marketingFirstRow: number;
   monthlyTab: string;
   monthlyMonthCol: string;
@@ -90,6 +95,18 @@ async function loadSettings(env: Env): Promise<WcSettings> {
     kpiFirstRow: n("wc_kpi_first_data_row", 3),
     marketingTab: s("wc_marketing_tab_name", "Weekly Marketing Tallies"),
     marketingWeekCol: s("wc_marketing_week_column", "A"),
+    marketingWeekEndCol: s("wc_marketing_week_end_column", "B"),
+    marketingFinancialCols: s("wc_marketing_financial_columns", "C:E"),
+    marketingLeadCols: {
+      organic: s("wc_marketing_lead_organic_column", "G"),
+      adwords: s("wc_marketing_lead_adwords_column", "H"),
+      lsa: s("wc_marketing_lead_lsa_column", "J"),
+      facebook: s("wc_marketing_lead_facebook_column", "L"),
+      referral: s("wc_marketing_lead_referral_column", "N"),
+      repeat: s("wc_marketing_lead_repeat_column", "O"),
+      other: s("wc_marketing_lead_other_column", "P"),
+    },
+    marketingConvertedCol: s("wc_marketing_converted_column", "R"),
     marketingFirstRow: n("wc_marketing_first_data_row", 4),
     monthlyTab: s("wc_monthly_tab_name", "Monthly Net Profits"),
     monthlyMonthCol: s("wc_monthly_month_column", "A"),
@@ -121,7 +138,7 @@ export interface WeeklyData {
   appointments: number;
   closed: number;
   converted: number;
-  lead_by_column: Record<string, number>; // marketing columns F/G/I/K/M/N/O
+  lead_by_source: Record<LeadSourceBucket, number>;
 }
 
 export interface MonthlyData {
@@ -163,7 +180,7 @@ export async function computeWeekly(env: Env, now: Date = new Date()): Promise<W
     appointments: 0,
     closed: 0,
     converted: 0,
-    lead_by_column: { F: 0, G: 0, I: 0, K: 0, M: 0, N: 0, O: 0 },
+    lead_by_source: { organic: 0, adwords: 0, lsa: 0, facebook: 0, referral: 0, repeat: 0, other: 0 },
   };
 
   // Leads + source breakdown
@@ -177,8 +194,8 @@ export async function computeWeekly(env: Env, now: Date = new Date()): Promise<W
   for (const r of leads) {
     if (!inWeek(toCtDate(r.created_at as string))) continue;
     data.leads_total++;
-    const col = leadSourceColumn(r.lead_source as string | null);
-    data.lead_by_column[col]++;
+    const bucket = leadSourceBucket(r.lead_source as string | null);
+    data.lead_by_source[bucket]++;
   }
 
   // Appointments set this week
@@ -319,18 +336,21 @@ async function findKpiRow(client: SheetsClient, s: WcSettings, today = ctToday()
 
 async function findMarketingRow(client: SheetsClient, s: WcSettings, weekStart: string): Promise<number | null> {
   const last = s.marketingFirstRow + 80;
+  const endCol = s.marketingWeekEndCol || s.marketingWeekCol;
   const grid = await client.readRange(
-    `${q(s.marketingTab)}!${s.marketingWeekCol}${s.marketingFirstRow}:${s.marketingWeekCol}${last}`,
+    `${q(s.marketingTab)}!${s.marketingWeekCol}${s.marketingFirstRow}:${endCol}${last}`,
     "FORMATTED_VALUE",
   );
   for (let i = 0; i < grid.length; i++) {
-    const cell = grid[i]?.[0] ?? null;
-    const parsed = parseShortDate(cell);
-    if (!parsed) continue;
-    // Align the parsed M/D to a year near today, then take its Sunday.
-    for (const baseYear of [today().year - 1, today().year, today().year + 1]) {
-      const iso = `${baseYear}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
-      if (sundayOf(iso) === weekStart) return s.marketingFirstRow + i;
+    const rowCells = grid[i] ?? [];
+    for (const cell of rowCells) {
+      const parsed = parseShortDate(cell);
+      if (!parsed) continue;
+      // Align the parsed M/D to a year near today, then take its Sunday.
+      for (const baseYear of [today().year - 1, today().year, today().year + 1]) {
+        const iso = `${baseYear}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
+        if (sundayOf(iso) === weekStart) return s.marketingFirstRow + i;
+      }
     }
   }
   return null;
@@ -433,7 +453,7 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     console.warn(`[wc] kpi discovery failed: ${(err as Error).message}`);
   }
 
-  // Marketing Tallies — non-contiguous spec columns (B,C,D | F,G | I | K | M,N,O | Q)
+  // Marketing Tallies — column letters from system_settings (§7; non-contiguous ranges).
   try {
     const row = await findMarketingRow(client, settings, wk.start);
     result.rows_matched[settings.marketingTab] = row;
@@ -442,14 +462,20 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
       result.rows_matched[settings.marketingTab] = null;
       console.warn(`[wc] ROW_MISSING marketing week=${wk.start} — skipping Marketing tab (row not yet added to sheet)`);
     } else {
-      const lc = weekly.lead_by_column;
+      const tab = q(settings.marketingTab);
+      const fin = colRange(settings.marketingFinancialCols);
+      const lc = settings.marketingLeadCols;
+      const ls = weekly.lead_by_source;
       updates.push(
-        { range: `${q(settings.marketingTab)}!B${row}:D${row}`, values: [[weekly.new_sales, weekly.bank_deposits, weekly.ar_balance]] },
-        { range: `${q(settings.marketingTab)}!F${row}:G${row}`, values: [[lc.F, lc.G]] },
-        { range: `${q(settings.marketingTab)}!I${row}`, values: [[lc.I]] },
-        { range: `${q(settings.marketingTab)}!K${row}`, values: [[lc.K]] },
-        { range: `${q(settings.marketingTab)}!M${row}:O${row}`, values: [[lc.M, lc.N, lc.O]] },
-        { range: `${q(settings.marketingTab)}!Q${row}`, values: [[weekly.converted]] },
+        {
+          range: `${tab}!${fin.start}${row}:${fin.end}${row}`,
+          values: [[weekly.new_sales, weekly.bank_deposits, weekly.ar_balance]],
+        },
+        { range: `${tab}!${lc.organic}${row}:${lc.adwords}${row}`, values: [[ls.organic, ls.adwords]] },
+        { range: `${tab}!${lc.lsa}${row}`, values: [[ls.lsa]] },
+        { range: `${tab}!${lc.facebook}${row}`, values: [[ls.facebook]] },
+        { range: `${tab}!${lc.referral}${row}:${lc.other}${row}`, values: [[ls.referral, ls.repeat, ls.other]] },
+        { range: `${tab}!${settings.marketingConvertedCol}${row}`, values: [[weekly.converted]] },
       );
     }
   } catch (err) {

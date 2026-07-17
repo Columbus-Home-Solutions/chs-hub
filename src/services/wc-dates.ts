@@ -177,24 +177,42 @@ export function monthLabelMatches(cell: string | number | null, monthIndex: numb
   return s.startsWith(target) || s === String(monthIndex);
 }
 
-/** Map a CHS lead_source value → Marketing Tallies column letter (§4.2). */
-export function leadSourceColumn(leadSource: string | null | undefined): "F" | "G" | "I" | "K" | "M" | "N" | "O" {
+/** Semantic lead-source bucket for Marketing Tallies (column letter comes from settings). */
+export type LeadSourceBucket = "organic" | "adwords" | "lsa" | "facebook" | "referral" | "repeat" | "other";
+
+/** Map a CHS lead_source value → Marketing Tallies bucket (§4.2). */
+export function leadSourceBucket(leadSource: string | null | undefined): LeadSourceBucket {
   switch ((leadSource ?? "").toLowerCase()) {
     case "organic_google":
-      return "F";
+      return "organic";
     case "google_adwords":
-      return "G";
+      return "adwords";
     case "google_lsa":
-      return "I";
+      return "lsa";
     case "facebook":
-      return "K";
+      return "facebook";
     case "referral":
-      return "M";
+      return "referral";
     case "repeat_client":
-      return "N";
+      return "repeat";
     default:
-      return "O"; // thumbtack, website, website_form, direct_call, other, null
+      return "other"; // thumbtack, website, website_form, direct_call, other, null
   }
+}
+
+/** @deprecated Use leadSourceBucket — column letters are configured in system_settings. */
+export function leadSourceColumn(leadSource: string | null | undefined): "F" | "G" | "I" | "K" | "M" | "N" | "O" {
+  const bucket = leadSourceBucket(leadSource);
+  const legacy: Record<LeadSourceBucket, "F" | "G" | "I" | "K" | "M" | "N" | "O"> = {
+    organic: "F",
+    adwords: "G",
+    lsa: "I",
+    facebook: "K",
+    referral: "M",
+    repeat: "N",
+    other: "O",
+  };
+  return legacy[bucket];
 }
 
 export { MONTHS };

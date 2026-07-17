@@ -3,6 +3,7 @@ import {
   ctMonthBounds,
   ctWeekBounds,
   kpiRowMatches,
+  leadSourceBucket,
   leadSourceColumn,
   monthLabelMatches,
   parseShortDate,
@@ -58,7 +59,25 @@ describe("monthLabelMatches", () => {
   });
 });
 
-describe("leadSourceColumn", () => {
+describe("leadSourceBucket", () => {
+  it("maps each known lead source to its Marketing bucket", () => {
+    expect(leadSourceBucket("organic_google")).toBe("organic");
+    expect(leadSourceBucket("google_adwords")).toBe("adwords");
+    expect(leadSourceBucket("google_lsa")).toBe("lsa");
+    expect(leadSourceBucket("facebook")).toBe("facebook");
+    expect(leadSourceBucket("referral")).toBe("referral");
+    expect(leadSourceBucket("repeat_client")).toBe("repeat");
+  });
+  it("buckets thumbtack/website/unknown/null into other", () => {
+    expect(leadSourceBucket("thumbtack")).toBe("other");
+    expect(leadSourceBucket("website")).toBe("other");
+    expect(leadSourceBucket("direct_call")).toBe("other");
+    expect(leadSourceBucket(null)).toBe("other");
+    expect(leadSourceBucket(undefined)).toBe("other");
+  });
+});
+
+describe("leadSourceColumn (legacy spec columns)", () => {
   it("maps each known lead source to its Marketing column", () => {
     expect(leadSourceColumn("organic_google")).toBe("F");
     expect(leadSourceColumn("google_adwords")).toBe("G");

@@ -145,7 +145,13 @@ export async function generateDocument(
   return zipSync(unzipped);
 }
 
-/** Upgrade legacy 4-part BoldSign tags to the 5-part format BoldSign expects. */
+/**
+ * Normalize BoldSign text tags before send.
+ *
+ * BoldSign converts tags to form fields but does NOT remove the underlying tag
+ * text from the finished PDF — tags must be white-on-white or they ghost behind
+ * the signed values (see BoldSign text-tags docs).
+ */
 export function canonicalizeBoldSignTextTags(docxBytes: ArrayBuffer): Uint8Array {
   const LEGACY_SIG = "{{sign|1|*|sig}}";
   const LEGACY_DATE = "{{date|1|*|date}}";
@@ -157,11 +163,30 @@ export function canonicalizeBoldSignTextTags(docxBytes: ArrayBuffer): Uint8Array
   if (!unzipped[xmlKey]) return new Uint8Array(docxBytes);
 
   let docXml = strFromU8(unzipped[xmlKey]);
-  if (!docXml.includes(LEGACY_SIG) && !docXml.includes(LEGACY_DATE)) {
+  const hadLegacy = docXml.includes(LEGACY_SIG) || docXml.includes(LEGACY_DATE);
+  const hadTextTag = /\{\{(?:sign|date|text|checkbox)\|/.test(docXml);
+  if (!hadLegacy && !hadTextTag) {
     return new Uint8Array(docxBytes);
   }
 
-  docXml = docXml.replaceAll(LEGACY_SIG, CANON_SIG).replaceAll(LEGACY_DATE, CANON_DATE);
+  if (hadLegacy) {
+    docXml = docXml.replaceAll(LEGACY_SIG, CANON_SIG).replaceAll(LEGACY_DATE, CANON_DATE);
+  }
+
+  // Force every run that contains a BoldSign text tag to white (#FFFFFF).
+  docXml = docXml.replace(
+    /<w:rPr>((?:(?!<\/w:rPr>)[\s\S])*)<\/w:rPr>(\s*<w:t[^>]*>\{\{(?:sign|date|text|checkbox)\|)/g,
+    (_m, rPrInner: string, rest: string) => {
+      let next = rPrInner;
+      if (/<w:color\b/.test(next)) {
+        next = next.replace(/<w:color\b[^/]*\/>/g, '<w:color w:val="FFFFFF"/>');
+      } else {
+        next += '<w:color w:val="FFFFFF"/>';
+      }
+      return `<w:rPr>${next}</w:rPr>${rest}`;
+    },
+  );
+
   unzipped[xmlKey] = strToU8(docXml);
   return zipSync(unzipped);
 }

@@ -800,7 +800,11 @@ interface FullDocRow {
 const SUB_TEMPLATE_TYPES = new Set(["lien_waiver_sub_unconditional"]);
 
 /** Merge-upload + BoldSign text tags (not dashboard template send). */
-const TEXT_TAG_TEMPLATE_TYPES = new Set(["service_agreement", "cost_plus_agreement"]);
+const TEXT_TAG_TEMPLATE_TYPES = new Set([
+  "service_agreement",
+  "cost_plus_agreement",
+  "change_order",
+]);
 
 export async function handleSendForSignature(
   request: Request,

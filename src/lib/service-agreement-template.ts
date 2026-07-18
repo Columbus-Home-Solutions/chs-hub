@@ -25,12 +25,13 @@ const CONTRACTOR_NAME_RUN =
   '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +
   `<w:t xml:space="preserve">${CONTRACTOR_NAME}</w:t>`;
 
+// White-on-white: BoldSign leaves tag text in the finished PDF (does not strip it).
 const SIG_TAG_RUN =
-  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>' +
+  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="FFFFFF"/></w:rPr>' +
   '<w:t xml:space="preserve">{{sign|1|*| |client_sig}}</w:t>';
 
 const DATE_TAG_RUN =
-  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>' +
+  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="FFFFFF"/></w:rPr>' +
   '<w:t xml:space="preserve">{{date|1|*| |client_date}}</w:t>';
 
 const CLIENT_NAME_RUN =

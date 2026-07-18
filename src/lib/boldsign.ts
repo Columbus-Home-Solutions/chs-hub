@@ -20,9 +20,11 @@
  *   Two mechanisms are supported:
  *   1. Text-tag anchoring (preferred for generated DOCX documents): embed
  *      {{sign|1|*| |field_id}} and {{date|1|*| |field_id}} tags directly in the
- *      DOCX template (white text, invisible to signers) and set useTextTags=true
- *      in SendDocumentArgs. BoldSign converts the tags to form fields at the exact
- *      tag location — no coordinate guessing required.
+ *      DOCX template as white (#FFFFFF) text and set useTextTags=true in
+ *      SendDocumentArgs. BoldSign converts tags to form fields but does NOT
+ *      remove the tag text from the finished PDF — gray tags ghost behind
+ *      filled values. canonicalizeBoldSignTextTags() enforces white-on-white
+ *      at send time.
  *   2. Coordinate-based (legacy): provide signerFormFields with pixel coordinates.
  *      Used for the working-agreement template which uses a BoldSign-stored template
  *      and cannot embed text tags. Y=0 at bottom of page, units = 96dpi pixels.

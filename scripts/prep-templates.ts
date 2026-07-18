@@ -392,11 +392,12 @@ function buildVisibleNameRun(): string {
 }
 
 // BoldSign text tags — indices 1/3/4 within the SIGNATURES pBdr block (see inject-boldsign-tags.ts).
+// White-on-white: BoldSign leaves tag text in the finished PDF (does not strip it).
 const BOLDSIGN_SIG_TAG_RUN =
-  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>' +
+  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="FFFFFF"/></w:rPr>' +
   '<w:t xml:space="preserve">{{sign|1|*| |client_sig}}</w:t>';
 const BOLDSIGN_DATE_TAG_RUN =
-  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>' +
+  '<w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="FFFFFF"/></w:rPr>' +
   '<w:t xml:space="preserve">{{date|1|*| |client_date}}</w:t>';
 const BOLDSIGN_CLIENT_NAME_RUN =
   '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +

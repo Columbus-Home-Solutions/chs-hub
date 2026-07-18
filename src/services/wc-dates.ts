@@ -144,6 +144,33 @@ export function parseShortDate(cell: string | number | null): { month: number; d
   return { month, day };
 }
 
+/** Parse a merged "Weekly Period" label like "7/12 - 7/18" or "7/12/2026 - 7/18/2026". */
+export function parseWeekRange(cell: string | number | null): { start: string | number; end: string | number } | null {
+  if (cell == null || typeof cell === "number") return null;
+  const m = String(cell).match(
+    /(\d{1,2}\s*[/\-]\s*\d{1,2}(?:\s*[/\-]\s*\d{2,4})?)\s*[-–—]\s*(\d{1,2}\s*[/\-]\s*\d{1,2}(?:\s*[/\-]\s*\d{2,4})?)/,
+  );
+  if (!m) return null;
+  return { start: m[1].trim(), end: m[2].trim() };
+}
+
+/** Marketing Tallies row matcher — handles merged A:B period labels. */
+export function marketingRowMatches(
+  startCell: string | number | null,
+  endCell: string | number | null,
+  today: DateParts,
+): boolean {
+  if (kpiRowMatches(startCell, endCell, today)) return true;
+  const merged = parseWeekRange(startCell);
+  if (merged && kpiRowMatches(merged.start, merged.end, today)) return true;
+  if (endCell == null || endCell === "") {
+    // Merged Weekly Period: only col A populated — infer Sat as start+6 serial days.
+    if (typeof startCell === "number" && kpiRowMatches(startCell, startCell + 6, today)) return true;
+    if (kpiRowMatches(startCell, startCell, today)) return true;
+  }
+  return false;
+}
+
 /**
  * KPI row matcher (§5.2): does `today` fall between the row's start (col A) and
  * end (col B) short dates, inclusive? Years are absent in the sheet, so we test

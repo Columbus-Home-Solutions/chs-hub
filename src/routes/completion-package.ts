@@ -149,6 +149,7 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
     `SELECT id, filename, generated_at
        FROM job_documents
       WHERE job_id = ? AND template_type = 'lien_waiver_conditional'
+        AND review_status IN ('pending_review', 'approved', 'manual')
       ORDER BY datetime(generated_at) DESC
       LIMIT 1`,
   )

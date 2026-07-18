@@ -87,6 +87,7 @@ import {
   handleDriveMirrorRun,
   handleDriveMirrorStatus,
   handleHeartbeatCheck,
+  handleOpsAutogenDocument,
   handleSummarySend,
 } from "./routes/ops.js";
 import { runDriveMirror } from "./lib/ops/drive-mirror.js";
@@ -1126,6 +1127,9 @@ export default {
     if (url.pathname === "/api/ops/drive-mirror" && request.method === "POST") {
       return handleDriveMirrorRun(request, env);
     }
+    if (url.pathname === "/api/ops/autogen-document" && request.method === "POST") {
+      return handleOpsAutogenDocument(request, env);
+    }
 
     // ── Legacy Jobber jobs view (old dashboard at dashboard.* host) ──
     // The native Job Management API (Sprint 6) owns /api/jobs; the legacy
@@ -1438,7 +1442,7 @@ export default {
     }
     const punchListClose = url.pathname.match(/^\/api\/punch-lists\/([^/]+)\/close$/);
     if (punchListClose && request.method === "PUT") {
-      return handlePunchListClose(env, request, decodeURIComponent(punchListClose[1]));
+      return handlePunchListClose(env, request, decodeURIComponent(punchListClose[1]), ctx);
     }
 
     // ── Invoices (Sprint 9) ──────────────────────────────────────────

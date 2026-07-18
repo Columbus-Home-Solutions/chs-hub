@@ -5,8 +5,10 @@ import {
   kpiRowMatches,
   leadSourceBucket,
   leadSourceColumn,
+  marketingRowMatches,
   monthLabelMatches,
   parseShortDate,
+  parseWeekRange,
   sundayOf,
   toCtDate,
 } from "../src/services/wc-dates.js";
@@ -56,6 +58,31 @@ describe("kpiRowMatches — ⭐ row discovery", () => {
 
   it("does not match an unrelated week", () => {
     expect(kpiRowMatches("12/28", "1/3", { year: 2026, month: 6, day: 1 })).toBe(false);
+  });
+});
+
+describe("parseWeekRange", () => {
+  it("parses merged weekly period labels", () => {
+    expect(parseWeekRange("7/12 - 7/18")).toEqual({ start: "7/12", end: "7/18" });
+    expect(parseWeekRange("7/12/2026 - 7/18/2026")).toEqual({ start: "7/12/2026", end: "7/18/2026" });
+  });
+});
+
+describe("marketingRowMatches", () => {
+  it("matches serial start/end columns", () => {
+    const startSerial = (Date.UTC(2026, 6, 12) - Date.UTC(1899, 11, 30)) / 86400000;
+    const endSerial = (Date.UTC(2026, 6, 18) - Date.UTC(1899, 11, 30)) / 86400000;
+    expect(marketingRowMatches(startSerial, endSerial, { year: 2026, month: 7, day: 18 })).toBe(true);
+  });
+
+  it("matches merged A-only labels with empty B", () => {
+    expect(marketingRowMatches("7/12 - 7/18", "", { year: 2026, month: 7, day: 18 })).toBe(true);
+    expect(marketingRowMatches("7/12 - 7/18", null, { year: 2026, month: 7, day: 18 })).toBe(true);
+  });
+
+  it("matches serial start-only rows by inferring end as start+6 days", () => {
+    const startSerial = (Date.UTC(2026, 6, 12) - Date.UTC(1899, 11, 30)) / 86400000;
+    expect(marketingRowMatches(startSerial, "", { year: 2026, month: 7, day: 18 })).toBe(true);
   });
 });
 

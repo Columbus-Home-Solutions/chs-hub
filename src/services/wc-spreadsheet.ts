@@ -23,8 +23,10 @@ import {
   kpiRowMatches,
   leadSourceBucket,
   type LeadSourceBucket,
+  marketingRowMatches,
   monthLabelMatches,
   parseShortDate,
+  parseWeekRange,
   sundayOf,
   toCtDate,
 } from "./wc-dates.js";
@@ -360,8 +362,8 @@ async function findMarketingRow(client: SheetsClient, s: WcSettings, weekStart: 
     const startCell = grid[i]?.[0] ?? null;
     const endCell = grid[i]?.[1] ?? null;
 
-    // Primary: same inclusive A..B range match as the KPI tab (current CT week).
-    if (kpiRowMatches(startCell, endCell, today)) return s.marketingFirstRow + i;
+    // Primary: inclusive A..B range match (handles merged period labels).
+    if (marketingRowMatches(startCell, endCell, today)) return s.marketingFirstRow + i;
 
     // Fallback: week-start label in col A (or any cell) resolves to this Sunday.
     for (const cell of [startCell, endCell]) {

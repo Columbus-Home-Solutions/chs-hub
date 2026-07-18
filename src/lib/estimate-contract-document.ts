@@ -303,7 +303,10 @@ export async function generateAndSendEstimateContract(
 
   // Supersede any prior estimate-phase contract docs on re-send.
   await env.DB.prepare(
-    `UPDATE documents SET is_active = 0, updated_at = datetime('now')
+    `UPDATE documents
+        SET is_active = 0,
+            mirror_status = CASE WHEN mirror_status = 'pending' THEN 'skipped' ELSE mirror_status END,
+            updated_at = datetime('now')
       WHERE estimate_id = ? AND context_type = 'estimate' AND document_category = 'contract'`,
   )
     .bind(estimateId)

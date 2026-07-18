@@ -631,24 +631,46 @@ async function handleEstimateCompleted(
   meta.signature_completed_at = new Date().toISOString();
   if (signedR2Key) meta.signed_r2_key = signedR2Key;
 
+  // If the estimate already converted, attach the signed contract to the job so
+  // Drive Mirror routes it to Contracts & Signed Docs (not client/Estimates/).
+  let linkedJobId: string | null = null;
+  if (docRow.estimate_id) {
+    const job = await env.DB.prepare("SELECT id FROM jobs WHERE estimate_id = ? LIMIT 1")
+      .bind(docRow.estimate_id)
+      .first<{ id: string }>();
+    linkedJobId = job?.id ?? null;
+  }
+  const pdfTitle = signedR2Key ? (signedR2Key.split("/").pop() ?? null) : null;
+
   if (signedR2Key) {
     await env.DB.prepare(
       `UPDATE documents
           SET signature_data = ?, is_signed = 1, signed_date = ?,
               r2_key = ?, file_type = 'application/pdf',
+              title = COALESCE(?, title),
+              job_id = COALESCE(job_id, ?),
               mirror_status = 'pending', google_drive_id = NULL, google_drive_url = NULL,
               updated_at = datetime('now')
         WHERE id = ?`,
     )
-      .bind(serializeSignatureMeta(meta), signedOn, signedR2Key, docRow.id)
+      .bind(
+        serializeSignatureMeta(meta),
+        signedOn,
+        signedR2Key,
+        pdfTitle,
+        linkedJobId,
+        docRow.id,
+      )
       .run();
   } else {
     await env.DB.prepare(
       `UPDATE documents
-          SET signature_data = ?, is_signed = 1, signed_date = ?, updated_at = datetime('now')
+          SET signature_data = ?, is_signed = 1, signed_date = ?,
+              job_id = COALESCE(job_id, ?),
+              updated_at = datetime('now')
         WHERE id = ?`,
     )
-      .bind(serializeSignatureMeta(meta), signedOn, docRow.id)
+      .bind(serializeSignatureMeta(meta), signedOn, linkedJobId, docRow.id)
       .run();
   }
 

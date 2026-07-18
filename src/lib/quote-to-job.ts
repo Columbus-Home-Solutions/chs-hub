@@ -214,6 +214,8 @@ export async function convertQuoteToJob(
     const { syncBidRequestsOnJobConversion } = await import("./bid-job-assignment.js");
     if (estimateId) {
       await syncBidRequestsOnJobConversion(env, existing.id, estimateId);
+      const { linkEstimateContractsToJob } = await import("./estimate-contract-document.js");
+      await linkEstimateContractsToJob(env, existing.id, estimateId);
     }
 
     return {
@@ -382,6 +384,8 @@ export async function convertQuoteToJob(
   const { syncBidRequestsOnJobConversion } = await import("./bid-job-assignment.js");
   if (row.e_id) {
     await syncBidRequestsOnJobConversion(env, jobId, row.e_id);
+    const { linkEstimateContractsToJob } = await import("./estimate-contract-document.js");
+    await linkEstimateContractsToJob(env, jobId, row.e_id);
   }
 
   // Read back the in-transaction-allocated job_number.

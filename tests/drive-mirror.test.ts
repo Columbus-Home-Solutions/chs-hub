@@ -6,6 +6,26 @@ function mirrorDocumentSortKey(mirrorStatus: string, createdAt: string): [number
   return [priority, createdAt];
 }
 
+/** Mirrors JOB_CATEGORY_SUBFOLDER + resolveParentFolder routing rules. */
+function resolveMirrorFolder(opts: {
+  jobId: string | null;
+  documentCategory: string;
+}): "Estimates" | "Contracts & Signed Docs" | "Other" {
+  if (!opts.jobId) return "Estimates";
+  if (opts.documentCategory === "contract" || opts.documentCategory === "working_agreement") {
+    return "Contracts & Signed Docs";
+  }
+  return "Other";
+}
+
+/** Effective job id: documents.job_id, else jobs.estimate_id lookup (drive-mirror join). */
+function effectiveJobId(
+  documentJobId: string | null,
+  jobForEstimate: string | null,
+): string | null {
+  return documentJobId ?? jobForEstimate;
+}
+
 describe("drive mirror document queue", () => {
   it("processes pending documents before failed retries", () => {
     const rows = [
@@ -27,5 +47,17 @@ describe("drive mirror document queue", () => {
     expect(eligible(null)).toBe(false);
     expect(eligible("pending")).toBe(true);
     expect(eligible("skipped")).toBe(false);
+  });
+
+  it("routes signed estimate contracts to Contracts & Signed Docs when job is known", () => {
+    const jobId = effectiveJobId(null, "760c1458-3d76-48b9-8258-0d48fe611a1b");
+    expect(
+      resolveMirrorFolder({ jobId, documentCategory: "contract" }),
+    ).toBe("Contracts & Signed Docs");
+  });
+
+  it("keeps pre-job estimate contracts in Estimates when no job exists yet", () => {
+    const jobId = effectiveJobId(null, null);
+    expect(resolveMirrorFolder({ jobId, documentCategory: "contract" })).toBe("Estimates");
   });
 });

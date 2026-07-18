@@ -32,7 +32,7 @@ import {
 const SYNC_TYPE = "wc_spreadsheet";
 const CONSECUTIVE_FAILURE_ALERT = 3;
 // Never auto-target the production workbook from code (spec §12 test rule).
-const PRODUCTION_SHEET_ID = "1utmYdBkUM8cefQ-1mpEnhiyV-vVf-IOhN1yn_wfXyZo";
+export const PRODUCTION_SHEET_ID = "1utmYdBkUM8cefQ-1mpEnhiyV-vVf-IOhN1yn_wfXyZo";
 
 export type WcSyncStatus = "success" | "partial_failure" | "failure" | "skipped";
 
@@ -116,15 +116,25 @@ async function loadSettings(env: Env): Promise<WcSettings> {
   };
 }
 
-/** Resolve the sheet to write. Dev uses WC_TEST_SHEET_ID when the setting is
- * blank; the production workbook is refused unless explicitly set AND allowed. */
-function resolveSheetId(settings: WcSettings, env: Env): { id: string | null; reason?: string } {
-  const id = settings.spreadsheetId || env.WC_TEST_SHEET_ID || "";
-  if (!id) return { id: null, reason: "no spreadsheet id configured (set WC_TEST_SHEET_ID or wc_spreadsheet_id)" };
-  if (id === PRODUCTION_SHEET_ID && env.WC_TEST_SHEET_ID) {
-    return { id: null, reason: "refusing production sheet id while WC_TEST_SHEET_ID is set (dev safety)" };
+/** Resolve the sheet to write.
+ *  Production uses wc_spreadsheet_id in system_settings. WC_TEST_SHEET_ID is
+ *  dev-only fallback when the setting is blank — never silently override an
+ *  explicit production id because the secret happens to exist in the Worker. */
+export function resolveSheetId(settings: WcSettings, env: Env): { id: string | null; reason?: string } {
+  const configured = settings.spreadsheetId.trim();
+  if (configured) return { id: configured };
+
+  const testId = env.WC_TEST_SHEET_ID?.trim() || "";
+  if (!testId) {
+    return { id: null, reason: "no spreadsheet id configured (set wc_spreadsheet_id or WC_TEST_SHEET_ID)" };
   }
-  return { id };
+  if (testId === PRODUCTION_SHEET_ID) {
+    return {
+      id: null,
+      reason: "refusing production sheet id via WC_TEST_SHEET_ID alone — set wc_spreadsheet_id in system_settings",
+    };
+  }
+  return { id: testId };
 }
 
 // ─── Aggregated data (current CT week + month) ──────────────────────────────
@@ -337,27 +347,33 @@ async function findKpiRow(client: SheetsClient, s: WcSettings, today = ctToday()
 async function findMarketingRow(client: SheetsClient, s: WcSettings, weekStart: string): Promise<number | null> {
   const last = s.marketingFirstRow + 80;
   const endCol = s.marketingWeekEndCol || s.marketingWeekCol;
-  const grid = await client.readRange(
-    `${q(s.marketingTab)}!${s.marketingWeekCol}${s.marketingFirstRow}:${endCol}${last}`,
-    "FORMATTED_VALUE",
-  );
+  const range = `${q(s.marketingTab)}!${s.marketingWeekCol}${s.marketingFirstRow}:${endCol}${last}`;
+  // Prefer serial dates (UNFORMATTED) — production workbook stores week labels as
+  // Sheets serials; FORMATTED_VALUE can be locale text that parseShortDate misses.
+  let grid = await client.readRange(range, "UNFORMATTED_VALUE");
+  if (grid.length === 0) {
+    grid = await client.readRange(range, "FORMATTED_VALUE");
+  }
+
+  const today = ctToday();
   for (let i = 0; i < grid.length; i++) {
-    const rowCells = grid[i] ?? [];
-    for (const cell of rowCells) {
+    const startCell = grid[i]?.[0] ?? null;
+    const endCell = grid[i]?.[1] ?? null;
+
+    // Primary: same inclusive A..B range match as the KPI tab (current CT week).
+    if (kpiRowMatches(startCell, endCell, today)) return s.marketingFirstRow + i;
+
+    // Fallback: week-start label in col A (or any cell) resolves to this Sunday.
+    for (const cell of [startCell, endCell]) {
       const parsed = parseShortDate(cell);
       if (!parsed) continue;
-      // Align the parsed M/D to a year near today, then take its Sunday.
-      for (const baseYear of [today().year - 1, today().year, today().year + 1]) {
+      for (const baseYear of [today.year - 1, today.year, today.year + 1]) {
         const iso = `${baseYear}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
         if (sundayOf(iso) === weekStart) return s.marketingFirstRow + i;
       }
     }
   }
   return null;
-}
-
-function today() {
-  return ctToday();
 }
 
 async function findMonthlyRow(client: SheetsClient, s: WcSettings, monthIndex: number): Promise<number | null> {
@@ -410,10 +426,11 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     result.status = "skipped";
     result.reason = reason;
     result.duration_ms = Date.now() - t0;
-    await logSync(env, result);
+    await logSync(env, result, sheetId);
     return result;
   }
 
+  result.data_snapshot.spreadsheet_id = sheetId;
   const client = new SheetsClient(sa, sheetId);
   const wk = ctWeekBounds(now);
   const mo = ctMonthBounds(now);
@@ -426,7 +443,7 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
     result.status = "failure";
     result.error_message = `D1 query failed: ${(err as Error).message}`;
     result.duration_ms = Date.now() - t0;
-    await onFailure(env, result, "all", result.error_message);
+    await onFailure(env, result, "all", result.error_message, sheetId);
     return result;
   }
   result.data_snapshot = { week: wk, month: mo, weekly, monthly };
@@ -511,6 +528,17 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
       await client.batchUpdate(updates);
       const written = new Set(updates.map((u) => u.range.split("!")[0].replace(/^'|'$/g, "").replace(/''/g, "'")));
       result.tabs_updated = [...written];
+
+      const marketingRow = result.rows_matched[settings.marketingTab];
+      if (marketingRow != null && written.has(settings.marketingTab)) {
+        const fin = colRange(settings.marketingFinancialCols);
+        const verifyRange = `${q(settings.marketingTab)}!${fin.start}${marketingRow}:${fin.end}${marketingRow}`;
+        const readback = await client.readRange(verifyRange, "UNFORMATTED_VALUE");
+        result.data_snapshot.marketing_row_verify = {
+          range: verifyRange,
+          values: readback[0] ?? [],
+        };
+      }
     } catch (err) {
       result.error_message = `batchUpdate failed: ${(err as Error).message}`;
       // Every attempted tab failed to write.
@@ -525,9 +553,9 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
   result.duration_ms = Date.now() - t0;
 
   if (result.status === "failure" || result.status === "partial_failure") {
-    await onFailure(env, result, result.tabs_failed.join(",") || "all", result.error_message ?? "row(s) missing or write failed");
+    await onFailure(env, result, result.tabs_failed.join(",") || "all", result.error_message ?? "row(s) missing or write failed", sheetId);
   } else {
-    await logSync(env, result);
+    await logSync(env, result, sheetId);
     await resetFailureStreakIfHealthy(env);
   }
   return result;
@@ -543,7 +571,7 @@ function deriveStatus(r: WcSyncResult): WcSyncStatus {
 
 // ─── Reliability: sync_log + DLQ + consecutive-failure heartbeat ────────────
 
-async function logSync(env: Env, r: WcSyncResult): Promise<void> {
+async function logSync(env: Env, r: WcSyncResult, spreadsheetId?: string | null): Promise<void> {
   const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT INTO sync_log (job_name, started_at, finished_at, status, rows_affected, error_message, duration_ms, details)
@@ -558,6 +586,7 @@ async function logSync(env: Env, r: WcSyncResult): Promise<void> {
       r.error_message ?? null,
       r.duration_ms,
       JSON.stringify({
+        spreadsheet_id: spreadsheetId ?? r.data_snapshot.spreadsheet_id ?? null,
         tabs_updated: r.tabs_updated,
         tabs_failed: r.tabs_failed,
         tabs_skipped: r.tabs_skipped,
@@ -569,8 +598,14 @@ async function logSync(env: Env, r: WcSyncResult): Promise<void> {
     .run();
 }
 
-async function onFailure(env: Env, r: WcSyncResult, tabRef: string, message: string): Promise<void> {
-  await logSync(env, r);
+async function onFailure(
+  env: Env,
+  r: WcSyncResult,
+  tabRef: string,
+  message: string,
+  spreadsheetId?: string | null,
+): Promise<void> {
+  await logSync(env, r, spreadsheetId);
   await recordDeadLetter(env, {
     jobName: SYNC_TYPE,
     entityType: "wc_spreadsheet",

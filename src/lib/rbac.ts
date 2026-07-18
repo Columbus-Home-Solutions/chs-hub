@@ -208,6 +208,7 @@ const RBAC_EXEMPT_EXACT = new Set<string>([
   "/api/file-link", // create share link
   "/api/jobber/status",
   "/api/debug/sheets-inspect",
+  "/api/wc/sync", // SYNC_TRIGGER_SECRET gated manual WC sync
   "/api/calendar/ical", // token-gated iCal feed (no Access)
 ]);
 

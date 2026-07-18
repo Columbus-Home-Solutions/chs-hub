@@ -550,3 +550,69 @@ export function estimateSignatureComplete(
   }
   return !!clientSignature;
 }
+
+/**
+ * After quote→job conversion: attach estimate-phase contract rows to the job.
+ * If a signed PDF already exists in signature_data, point r2_key at it and
+ * re-queue Drive Mirror so the file lands in Contracts & Signed Docs (not
+ * client/Estimates/).
+ */
+export async function linkEstimateContractsToJob(
+  env: Env,
+  jobId: string,
+  estimateId: string,
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT id, r2_key, job_id, signature_data, is_signed
+       FROM documents
+      WHERE estimate_id = ?
+        AND context_type = 'estimate'
+        AND document_category = 'contract'
+        AND COALESCE(is_active, 1) = 1`,
+  )
+    .bind(estimateId)
+    .all<{
+      id: string;
+      r2_key: string;
+      job_id: string | null;
+      signature_data: string | null;
+      is_signed: number | null;
+    }>();
+
+  for (const row of rows.results ?? []) {
+    const meta = parseSignatureMeta(row.signature_data);
+    const signedKey = meta.signed_r2_key?.trim() || null;
+    const needsJobLink = !row.job_id;
+    const needsSignedSwap = !!(signedKey && row.r2_key !== signedKey);
+    // Re-queue only when we have a signed PDF to place under the job folder.
+    const needsRequeue = needsSignedSwap || (!!signedKey && needsJobLink) || ((row.is_signed ?? 0) === 1 && needsJobLink);
+
+    if (!needsJobLink && !needsSignedSwap) continue;
+
+    if (signedKey && (needsSignedSwap || needsRequeue)) {
+      const pdfTitle = signedKey.split("/").pop() ?? row.r2_key;
+      await env.DB.prepare(
+        `UPDATE documents
+            SET job_id = COALESCE(job_id, ?),
+                r2_key = ?,
+                file_type = 'application/pdf',
+                title = ?,
+                mirror_status = 'pending',
+                google_drive_id = NULL,
+                google_drive_url = NULL,
+                updated_at = datetime('now')
+          WHERE id = ?`,
+      )
+        .bind(jobId, signedKey, pdfTitle, row.id)
+        .run();
+    } else if (needsJobLink) {
+      await env.DB.prepare(
+        `UPDATE documents
+            SET job_id = ?, updated_at = datetime('now')
+          WHERE id = ?`,
+      )
+        .bind(jobId, row.id)
+        .run();
+    }
+  }
+}

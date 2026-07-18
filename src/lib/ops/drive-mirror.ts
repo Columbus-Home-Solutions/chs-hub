@@ -498,15 +498,22 @@ async function mirrorDocumentsBatch(
 ): Promise<void> {
   const rows = await env.DB.prepare(
     `SELECT d.id, d.r2_key, d.file_type, d.title, d.context_type, d.document_category,
-            d.job_id, COALESCE(d.client_id, j.client_id) AS client_id,
+            COALESCE(d.job_id, j.id) AS job_id,
+            COALESCE(d.client_id, j.client_id) AS client_id,
             j.job_number,
-            (SELECT property_address FROM estimate_requests WHERE converted_job_id = j.id LIMIT 1) AS address,
+            COALESCE(
+              j.property_address,
+              (SELECT property_address FROM estimate_requests WHERE converted_job_id = j.id LIMIT 1)
+            ) AS address,
             c.last_name, c.first_name, c.name AS client_name,
             (SELECT MIN(er.created_at) FROM estimate_requests er
              WHERE er.client_id = COALESCE(d.client_id, j.client_id)) AS year_anchor,
             d.created_at AS fallback_date
        FROM documents d
-       LEFT JOIN jobs j ON j.id = d.job_id
+       LEFT JOIN jobs j ON j.id = COALESCE(
+         d.job_id,
+         (SELECT id FROM jobs WHERE estimate_id = d.estimate_id LIMIT 1)
+       )
        LEFT JOIN clients c ON c.id = COALESCE(d.client_id, j.client_id)
       WHERE COALESCE(d.is_active,1) = 1
         AND d.mirror_status IN ('pending','failed')

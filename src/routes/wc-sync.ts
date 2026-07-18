@@ -10,7 +10,7 @@
  */
 
 import type { Env } from "../env.js";
-import { syncWorkbook } from "../lib/wc/sync.js";
+import { runWcSpreadsheetSync } from "../services/wc-spreadsheet.js";
 
 export async function handleWcSync(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -22,9 +22,10 @@ export async function handleWcSync(request: Request, env: Env): Promise<Response
     return new Response("Forbidden", { status: 403 });
   }
 
-  const result = await syncWorkbook(env);
+  const result = await runWcSpreadsheetSync(env);
+  const ok = result.status === "success" || result.status === "skipped";
   return new Response(JSON.stringify(result, null, 2), {
-    status: result.ok ? 200 : 500,
+    status: ok ? 200 : 500,
     headers: { "content-type": "application/json" },
   });
 }

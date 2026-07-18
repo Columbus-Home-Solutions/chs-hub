@@ -763,7 +763,14 @@ function JobDocuments({ jobId }: { jobId: string }) {
                       {d.source === "photo" ? (
                         d.title
                       ) : (
-                        <a href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer">{d.title}</a>
+                        <a
+                          href={`/api/documents/${d.id}/file`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "var(--color-info)", textDecoration: "underline" }}
+                        >
+                          {d.title}
+                        </a>
                       )}
                       {d.is_signed ? (
                         <Badge tone="success">Signed</Badge>
@@ -779,9 +786,16 @@ function JobDocuments({ jobId }: { jobId: string }) {
                         </Badge>
                       ) : "—"}
                     </td>
-                    <td style={{ width: "150px", textAlign: "right" }}>
+                    <td style={{ width: "200px", textAlign: "right" }}>
                       {d.source === "photo" ? null : (
                         <div class="flex gap-sm" style={{ justifyContent: "flex-end" }}>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => window.open(`/api/documents/${d.id}/file`, "_blank", "noopener,noreferrer")}
+                          >
+                            View
+                          </Button>
                           <Button size="sm" variant="secondary" onClick={() => void share(d)}>Share</Button>
                           <Button size="sm" variant="danger" onClick={() => void remove(d)}>Delete</Button>
                         </div>

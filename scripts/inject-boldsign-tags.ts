@@ -62,11 +62,11 @@ const TWO_PARTY_TAGS: Record<number, string> = {
   4: DATE_TAG_RUN,      // Client date line (5th pBdr)
 };
 
-// Templates to modify and their tag maps
+// Templates to modify and their tag maps.
+// change-order uses portal typed-name approval (merge fields), not BoldSign tags.
 const TEMPLATES: { file: string; tagMap: Record<number, string> }[] = [
   { file: "service-agreement.docx", tagMap: TWO_PARTY_TAGS },
   { file: "cost-plus-agreement.docx", tagMap: TWO_PARTY_TAGS },
-  { file: "change-order.docx", tagMap: TWO_PARTY_TAGS },
   // lien-waiver-conditional is signed by CHS only — skip for now
   // warranty-certificate is signed by CHS only — skip for now
 ];

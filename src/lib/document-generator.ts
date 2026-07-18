@@ -55,8 +55,16 @@ function buildContractorSignatureDrawingRun(rId: string): string {
   );
 }
 
+/** Exact prep-templates run shape (preferred). */
 const SIG_RUN_PATTERN =
   /<w:r><w:rPr><w:sz w:val="28"\/><w:szCs w:val="28"\/><\/w:rPr><w:t xml:space="preserve">\{\{contractor_signature\}\}<\/w:t><\/w:r>/;
+
+/**
+ * Fallback: any single run whose text is exactly the placeholder (font/size may differ).
+ * JOB-108 showed the exact pattern can be absent after prep/R2 drift while the token remains.
+ */
+const SIG_RUN_FALLBACK =
+  /<w:r(?:\s[^>]*)?>((?:(?!<\/w:r>).)*?)<w:t([^>]*)>\{\{contractor_signature\}\}<\/w:t>((?:(?!<\/w:r>).)*?)<\/w:r>/;
 
 function ensureSignatureImageInZip(unzipped: Record<string, Uint8Array>, png: Uint8Array): void {
   unzipped[SIG_MEDIA_PATH] = png;
@@ -88,14 +96,20 @@ function ensureSignatureImageInZip(unzipped: Record<string, Uint8Array>, png: Ui
 }
 
 function embedContractorSignatureInXml(docXml: string): string {
-  if (!SIG_RUN_PATTERN.test(docXml)) {
-    console.warn("[document-generator] {{contractor_signature}} run pattern not found — skipping image embed");
-    return docXml.replace(/\{\{contractor_signature\}\}/g, "");
+  // Prep may already bake the drawing (lien waiver); nothing to do.
+  if (!docXml.includes("{{contractor_signature}}")) {
+    return docXml;
   }
-  return docXml.replace(
-    SIG_RUN_PATTERN,
-    `<w:r>${buildContractorSignatureDrawingRun(SIG_REL_ID)}</w:r>`,
-  );
+  const drawingRun = `<w:r>${buildContractorSignatureDrawingRun(SIG_REL_ID)}</w:r>`;
+  if (SIG_RUN_PATTERN.test(docXml)) {
+    return docXml.replace(SIG_RUN_PATTERN, drawingRun);
+  }
+  if (SIG_RUN_FALLBACK.test(docXml)) {
+    console.warn("[document-generator] using fallback {{contractor_signature}} run match");
+    return docXml.replace(SIG_RUN_FALLBACK, drawingRun);
+  }
+  console.warn("[document-generator] {{contractor_signature}} run pattern not found — clearing token");
+  return docXml.replace(/\{\{contractor_signature\}\}/g, "");
 }
 
 /**

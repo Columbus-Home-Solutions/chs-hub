@@ -242,6 +242,11 @@ export async function resolveMergeFields(
     fields.revised_total = overrides.revised_total
       ? formatCurrency(parseFloat(overrides.revised_total))
       : "";
+    // Portal typed-name approval — same value on signature + printed-name lines.
+    fields.client_signature = overrides.client_signature ?? "";
+    fields.client_approved_date = overrides.client_approved_date
+      ? formatDate(overrides.client_approved_date)
+      : "";
   }
 
   if (templateType === "lien_waiver_conditional" || templateType === "lien_waiver_sub_unconditional") {
@@ -803,7 +808,7 @@ const SUB_TEMPLATE_TYPES = new Set(["lien_waiver_sub_unconditional"]);
 const TEXT_TAG_TEMPLATE_TYPES = new Set([
   "service_agreement",
   "cost_plus_agreement",
-  "change_order",
+  // change_order uses portal typed-name approval; client fields are merge-filled.
 ]);
 
 export async function handleSendForSignature(

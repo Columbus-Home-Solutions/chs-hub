@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PRODUCTION_SHEET_ID, resolveSheetId } from "../src/services/wc-spreadsheet.js";
+import { PRODUCTION_SHEET_ID, resolveSheetId, resolveTabTitle } from "../src/services/wc-spreadsheet.js";
 import type { Env } from "../src/env.js";
 
 function settings(spreadsheetId = "") {
@@ -53,5 +53,12 @@ describe("resolveSheetId", () => {
     const resolved = resolveSheetId(settings(""), env);
     expect(resolved.id).toBeNull();
     expect(resolved.reason).toMatch(/wc_spreadsheet_id/);
+  });
+});
+
+describe("resolveTabTitle", () => {
+  it("prefers the tab without trailing whitespace when both exist", () => {
+    const titles = ["Weekly Marketing Tallies ", "Weekly Marketing Tallies", "Monthly Net Profits"];
+    expect(resolveTabTitle(titles, "Weekly Marketing Tallies ")).toBe("Weekly Marketing Tallies");
   });
 });

@@ -346,7 +346,11 @@ async function findKpiRow(client: SheetsClient, s: WcSettings, today = ctToday()
   return null;
 }
 
-async function findMarketingRow(client: SheetsClient, s: WcSettings, weekStart: string): Promise<number | null> {
+async function findMarketingRow(
+  client: SheetsClient,
+  s: WcSettings,
+  weekStart: string,
+): Promise<{ row: number | null; sample?: (string | number | null)[][] }> {
   const last = s.marketingFirstRow + 80;
   const endCol = s.marketingWeekEndCol || s.marketingWeekCol;
   const range = `${q(s.marketingTab)}!${s.marketingWeekCol}${s.marketingFirstRow}:${endCol}${last}`;
@@ -363,7 +367,7 @@ async function findMarketingRow(client: SheetsClient, s: WcSettings, weekStart: 
     const endCell = grid[i]?.[1] ?? null;
 
     // Primary: inclusive A..B range match (handles merged period labels).
-    if (marketingRowMatches(startCell, endCell, today)) return s.marketingFirstRow + i;
+    if (marketingRowMatches(startCell, endCell, today)) return { row: s.marketingFirstRow + i };
 
     // Fallback: week-start label in col A (or any cell) resolves to this Sunday.
     for (const cell of [startCell, endCell]) {
@@ -371,11 +375,11 @@ async function findMarketingRow(client: SheetsClient, s: WcSettings, weekStart: 
       if (!parsed) continue;
       for (const baseYear of [today.year - 1, today.year, today.year + 1]) {
         const iso = `${baseYear}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
-        if (sundayOf(iso) === weekStart) return s.marketingFirstRow + i;
+        if (sundayOf(iso) === weekStart) return { row: s.marketingFirstRow + i };
       }
     }
   }
-  return null;
+  return { row: null, sample: grid.slice(0, 8) };
 }
 
 async function findMonthlyRow(client: SheetsClient, s: WcSettings, monthIndex: number): Promise<number | null> {
@@ -434,6 +438,12 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
 
   result.data_snapshot.spreadsheet_id = sheetId;
   const client = new SheetsClient(sa, sheetId);
+  const sheetTabs = (await client.listSheets()).map((t) => t.title);
+  const marketingTab = resolveTabTitle(sheetTabs, settings.marketingTab);
+  const marketingSettings = { ...settings, marketingTab };
+  if (marketingTab !== settings.marketingTab) {
+    result.data_snapshot.marketing_tab_resolved = marketingTab;
+  }
   const wk = ctWeekBounds(now);
   const mo = ctMonthBounds(now);
 
@@ -474,14 +484,15 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
 
   // Marketing Tallies — column letters from system_settings (§7; non-contiguous ranges).
   try {
-    const row = await findMarketingRow(client, settings, wk.start);
-    result.rows_matched[settings.marketingTab] = row;
+    const { row, sample } = await findMarketingRow(client, marketingSettings, wk.start);
+    result.rows_matched[marketingTab] = row;
     if (row == null) {
-      result.tabs_skipped.push(settings.marketingTab);
-      result.rows_matched[settings.marketingTab] = null;
-      console.warn(`[wc] ROW_MISSING marketing week=${wk.start} — skipping Marketing tab (row not yet added to sheet)`);
+      result.tabs_skipped.push(marketingTab);
+      result.rows_matched[marketingTab] = null;
+      if (sample?.length) result.data_snapshot.marketing_rows_sample = sample;
+      console.warn(`[wc] ROW_MISSING marketing week=${wk.start} tab=${marketingTab} — skipping Marketing tab (row not yet added to sheet)`);
     } else {
-      const tab = q(settings.marketingTab);
+      const tab = q(marketingTab);
       const fin = colRange(settings.marketingFinancialCols);
       const lc = settings.marketingLeadCols;
       const ls = weekly.lead_by_source;
@@ -498,7 +509,7 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
       );
     }
   } catch (err) {
-    result.tabs_failed.push(settings.marketingTab);
+    result.tabs_failed.push(marketingTab);
     const msg = (err as Error).message;
     result.error_message = (result.error_message ? result.error_message + " | " : "") + `marketing: ${msg}`;
     console.warn(`[wc] marketing discovery failed: ${msg}`);
@@ -531,10 +542,10 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
       const written = new Set(updates.map((u) => u.range.split("!")[0].replace(/^'|'$/g, "").replace(/''/g, "'")));
       result.tabs_updated = [...written];
 
-      const marketingRow = result.rows_matched[settings.marketingTab];
-      if (marketingRow != null && written.has(settings.marketingTab)) {
+      const marketingRow = result.rows_matched[marketingTab];
+      if (marketingRow != null && written.has(marketingTab)) {
         const fin = colRange(settings.marketingFinancialCols);
-        const verifyRange = `${q(settings.marketingTab)}!${fin.start}${marketingRow}:${fin.end}${marketingRow}`;
+        const verifyRange = `${q(marketingTab)}!${fin.start}${marketingRow}:${fin.end}${marketingRow}`;
         const readback = await client.readRange(verifyRange, "UNFORMATTED_VALUE");
         result.data_snapshot.marketing_row_verify = {
           range: verifyRange,
@@ -644,6 +655,17 @@ async function resetFailureStreakIfHealthy(_env: Env): Promise<void> {
   // No KV counter to reset — the streak is derived from sync_log on each check,
   // so a single 'success' row naturally breaks the consecutive-failure run.
 }
+export function resolveTabTitle(titles: string[], configured: string): string {
+  const want = configured.trim().toLowerCase();
+  const matches = titles.filter((t) => t.trim().toLowerCase() === want);
+  if (matches.length > 0) {
+    const withoutTrailingSpace = matches.find((t) => t === t.trim());
+    return withoutTrailingSpace ?? matches[0];
+  }
+  if (titles.includes(configured)) return configured;
+  return configured;
+}
+
 function q(name: string): string {
   return `'${name.replace(/'/g, "''")}'`;
 }

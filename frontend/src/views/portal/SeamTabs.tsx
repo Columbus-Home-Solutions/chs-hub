@@ -169,7 +169,7 @@ function SignModal({
             Cancel
           </button>
           <button class="quote-btn quote-btn--primary" onClick={submit} disabled={!name.trim() || !agree || busy}>
-            {busy ? "Submitting…" : "Sign &amp; approve"}
+            {busy ? "Submitting…" : "Sign & approve"}
           </button>
         </div>
       </div>

@@ -244,6 +244,14 @@ function prepLienWaiverConditional(xml: string): string {
     '<w:t xml:space="preserve">Date Signed</w:t></w:r></w:p>',
   );
 
+  // Strip mismatched unconditional-waiver NOTICE if still present in source.
+  // Arkansas has no statutory conditional-waiver notice form; the body already
+  // states this is a conditional waiver. Do not invent replacement legal text.
+  out = out.replace(
+    /<w:p\b[^>]*>((?:(?!<\/w:p>).)*?NOTICE: This document waives rights unconditionally(?:(?!<\/w:p>).)*)<\/w:p>/s,
+    "",
+  );
+
   return out;
 }
 
@@ -409,6 +417,22 @@ const TWO_PARTY_CLIENT_TAGS: Record<number, string> = {
   4: BOLDSIGN_DATE_TAG_RUN,
 };
 
+/**
+ * Change orders use portal typed-name approval (not BoldSign). Client signature,
+ * printed name, and date are filled from merge fields at generate-on-approval time.
+ */
+const PORTAL_TYPED_CLIENT_TAGS: Record<number, string> = {
+  1:
+    '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +
+    '<w:t xml:space="preserve">{{client_signature}}</w:t>',
+  3:
+    '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +
+    '<w:t xml:space="preserve">{{client_signature}}</w:t>',
+  4:
+    '<w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +
+    '<w:t xml:space="preserve">{{client_approved_date}}</w:t>',
+};
+
 /** Bake contractor name only. */
 function bakeStaticContractorName(xml: string): string {
   return xml.replace(/\{\{contractor_name\}\}/g, CONTRACTOR_NAME);
@@ -464,10 +488,12 @@ const TEMPLATES: {
   prep: (xml: string) => string;
   /** True for two-party docs: inject contractor name + date text alongside image. */
   twoPartySig: boolean;
+  /** Portal typed-name approval (change orders) — merge fields, not BoldSign tags. */
+  portalTypedClient?: boolean;
 }[] = [
   { src: "CHS-Service-Agreement-Template.docx",          dest: "service-agreement.docx",          prep: prepServiceAgreement,          twoPartySig: true  },
   { src: "CHS-Cost-Plus-Agreement-Template.docx",        dest: "cost-plus-agreement.docx",        prep: prepCostPlusAgreement,        twoPartySig: true  },
-  { src: "CHS-Change-Order-Template.docx",               dest: "change-order.docx",               prep: prepChangeOrder,               twoPartySig: true  },
+  { src: "CHS-Change-Order-Template.docx",               dest: "change-order.docx",               prep: prepChangeOrder,               twoPartySig: true, portalTypedClient: true },
   { src: "CHS-Lien-Waiver-Conditional-Template.docx",    dest: "lien-waiver-conditional.docx",    prep: prepLienWaiverConditional,    twoPartySig: false },
   { src: "CHS-Lien-Waiver-Sub-Unconditional-Template.docx", dest: "lien-waiver-sub-unconditional.docx", prep: prepSubLienWaiverUnconditional, twoPartySig: false },
   { src: "CHS-Warranty-Certificate-Template.docx",       dest: "warranty-certificate.docx",       prep: prepWarrantyCertificate,       twoPartySig: false },
@@ -543,11 +569,27 @@ function main() {
     }
     if (t.twoPartySig) {
       tagMap[2] = buildVisibleNameRun();
-      Object.assign(tagMap, TWO_PARTY_CLIENT_TAGS);
+      Object.assign(tagMap, t.portalTypedClient ? PORTAL_TYPED_CLIENT_TAGS : TWO_PARTY_CLIENT_TAGS);
     }
 
     xml = injectSignatureFields(xml, tagMap);
     xml = bakeStaticContractorName(xml);
+
+    // Lien waiver has no "SIGNATURES" heading, so injectSignatureFields cannot place
+    // the contractor image via pBdr index 0. Bake the drawing over the merge-token
+    // run here (same image path Service/Cost-Plus use) so generation cannot leave a
+    // blank signature line if runtime embed misses the token.
+    if (t.dest === "lien-waiver-conditional.docx" && sigDrawingXml) {
+      const placeholderRun =
+        '<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>' +
+        '<w:t xml:space="preserve">{{contractor_signature}}</w:t></w:r>';
+      if (xml.includes(placeholderRun)) {
+        xml = xml.replace(placeholderRun, `<w:r>${sigDrawingXml}</w:r>`);
+        console.log(`  ↳ Baked contractor signature image into ${t.dest}`);
+      } else {
+        console.warn(`  ⚠ ${t.dest}: {{contractor_signature}} run not found — image not baked`);
+      }
+    }
 
     // Embed contractor signature image in the zip
     if (sigImgBytes) {

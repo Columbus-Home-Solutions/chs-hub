@@ -1670,12 +1670,10 @@ export async function handleQuoteCombinedSelectionsSignLink(
   return json({ sign_link: signLink });
 }
 
-/** Ops/manual: force-resend combined selection approval for an estimate. */
-export async function resendCombinedSelectionApprovalForEstimate(
+async function loadEstimateSelectionContext(
   env: Env,
   estimateId: string,
-  origin: string,
-): Promise<Response> {
+): Promise<{ ctx: SelectionClientContext; portalToken: string } | null> {
   const row = await env.DB.prepare(
     `SELECT e.id AS estimate_id, e.estimate_number, e.title AS estimate_title, e.client_id,
             e.portal_token, c.first_name, c.last_name, c.email
@@ -1694,25 +1692,51 @@ export async function resendCombinedSelectionApprovalForEstimate(
       last_name: string | null;
       email: string | null;
     }>();
-  if (!row) return err(404, "estimate_not_found");
-  if (!row.portal_token) return err(400, "no_portal_token", "Estimate has no quote portal token.");
-
-  const ctx: SelectionClientContext = {
-    estimateId: row.estimate_id,
-    jobId: null,
-    clientId: row.client_id,
-    clientEmail: row.email,
-    clientName: [row.first_name, row.last_name].filter(Boolean).join(" ") || "Client",
-    estimateNumber: row.estimate_number,
-    estimateTitle: row.estimate_title,
+  if (!row?.portal_token) return null;
+  return {
+    portalToken: row.portal_token,
+    ctx: {
+      estimateId: row.estimate_id,
+      jobId: null,
+      clientId: row.client_id,
+      clientEmail: row.email,
+      clientName: [row.first_name, row.last_name].filter(Boolean).join(" ") || "Client",
+      estimateNumber: row.estimate_number,
+      estimateTitle: row.estimate_title,
+    },
   };
+}
 
+/** Ops/manual: force-resend combined selection approval for an estimate. */
+export async function resendCombinedSelectionApprovalForEstimate(
+  env: Env,
+  estimateId: string,
+  origin: string,
+): Promise<Response> {
+  const loaded = await loadEstimateSelectionContext(env, estimateId);
+  if (!loaded) return err(404, "estimate_not_found");
   return executeCombinedSelectionApproval(
     env,
-    ctx,
-    `/quote/${row.portal_token}?selection_signed=1`,
+    loaded.ctx,
+    `/quote/${loaded.portalToken}?selection_signed=1`,
     origin,
     { forceResend: true },
+  );
+}
+
+/** Ops: first-time combined selection send (choices already selected, status pending). */
+export async function sendCombinedSelectionApprovalForEstimate(
+  env: Env,
+  estimateId: string,
+  origin: string,
+): Promise<Response> {
+  const loaded = await loadEstimateSelectionContext(env, estimateId);
+  if (!loaded) return err(404, "estimate_not_found");
+  return executeCombinedSelectionApproval(
+    env,
+    loaded.ctx,
+    `/quote/${loaded.portalToken}?selection_signed=1`,
+    origin,
   );
 }
 

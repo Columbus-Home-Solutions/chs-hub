@@ -20,10 +20,18 @@ import {
   downloadSignedDocument,
   getBoldSignConfig,
   getDocumentProperties,
+  getEmbeddedSignLink,
   revokeDocument,
   sendDocumentForSignature,
 } from "../lib/boldsign.js";
-import { resendCombinedSelectionApprovalForEstimate } from "./selections.js";
+import {
+  resendCombinedSelectionApprovalForEstimate,
+  sendCombinedSelectionApprovalForEstimate,
+} from "./selections.js";
+import {
+  generateAndSendEstimateContract,
+  parseSignatureMeta,
+} from "../lib/estimate-contract-document.js";
 
 function requireSecret(request: Request, env: Env): Response | null {
   const url = new URL(request.url);
@@ -262,8 +270,79 @@ export async function handleOpsBoldsignGhostProof(
   // Re-scan an already-sent BoldSign doc (avoids another send + wait).
   if (existingId) {
     try {
+      // Lightweight: form-field bounds + status only (no PDF download — saves API quota).
+      if (url.searchParams.get("properties_only") === "1") {
+        const propsRes = await fetch(
+          `https://api.boldsign.com/v1/document/properties?documentId=${encodeURIComponent(existingId)}`,
+          { headers: { "X-API-KEY": config.apiKey } },
+        );
+        if (!propsRes.ok) {
+          return jsonOk(
+            {
+              error: `properties ${propsRes.status}: ${(await propsRes.text()).slice(0, 300)}`,
+              documentId: existingId,
+            },
+            502,
+          );
+        }
+        const full = (await propsRes.json()) as {
+          status?: string;
+          signerDetails?: Array<{
+            signerEmail?: string;
+            status?: string;
+            formFields?: Array<{
+              type?: string;
+              fieldType?: string;
+              name?: string;
+              bounds?: { x?: number; y?: number; width?: number; height?: number };
+              Bounds?: { X?: number; Y?: number; Width?: number; Height?: number };
+            }>;
+          }>;
+        };
+        const formFields = (full.signerDetails ?? []).flatMap((s) => s.formFields ?? []).map((f) => {
+          const b = f.bounds ?? f.Bounds ?? {};
+          return {
+            type: f.type ?? f.fieldType ?? f.name,
+            width: (b as { width?: number; Width?: number }).width ?? (b as { Width?: number }).Width,
+            height:
+              (b as { height?: number; Height?: number }).height ?? (b as { Height?: number }).Height,
+            x: (b as { x?: number; X?: number }).x ?? (b as { X?: number }).X,
+            y: (b as { y?: number; Y?: number }).y ?? (b as { Y?: number }).Y,
+          };
+        });
+        const sig = formFields.find((f) => String(f.type ?? "").toLowerCase().includes("sign"));
+        const fieldOk = !!sig && (sig.width ?? 0) >= 40 && (sig.height ?? 0) >= 10;
+        return jsonOk({
+          generated_at: new Date().toISOString(),
+          path: "properties_only",
+          documentId: existingId,
+          boldSignStatus: full.status ?? null,
+          formFields,
+          signerDetails: (full.signerDetails ?? []).map((s) => ({
+            email: s.signerEmail,
+            status: s.status,
+          })),
+          signatureFieldOk: fieldOk,
+          ok: fieldOk,
+        });
+      }
+
       const props = await getDocumentProperties(config, existingId);
       const pdf = await downloadSignedDocument(config, existingId);
+      if (url.searchParams.get("return_pdf_b64") === "1") {
+        const bytes = new Uint8Array(pdf);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        const pdf_b64 = btoa(binary);
+        return jsonOk({
+          generated_at: new Date().toISOString(),
+          path: "pdf_b64",
+          documentId: existingId,
+          boldSignStatus: props?.status ?? null,
+          pdfBytes: pdf.byteLength,
+          pdf_b64,
+        });
+      }
       const scan = scanPdfGhosts(pdf);
 
       // Optional: probe whether getEmbeddedSignLink works (isolates widget 403s).

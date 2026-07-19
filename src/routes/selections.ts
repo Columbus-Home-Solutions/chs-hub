@@ -38,6 +38,7 @@ import {
   downloadSignedDocument,
   getBoldSignConfig,
   getEmbeddedSignLink,
+  revokeDocument,
   sendDocumentForSignature,
 } from "../lib/boldsign.js";
 import { generateDocument, formatCurrency } from "../lib/document-generator.js";
@@ -388,11 +389,73 @@ async function executeSelectionChoose(
   });
 }
 
+/**
+ * Revoke + supersede a stuck combined selection BoldSign send (e.g. docs sent
+ * during the brief 1pt tag-shrink regression that collapsed signature fields).
+ */
+async function supersedePendingCombinedSelectionSend(
+  env: Env,
+  estimateId: string,
+): Promise<{ revoked: string[] }> {
+  const config = await getBoldSignConfig(env);
+  const pendingDocs = await env.DB.prepare(
+    `SELECT id, signature_data
+       FROM documents
+      WHERE context_type = 'selection'
+        AND document_category = 'selection_approval'
+        AND COALESCE(is_active, 1) = 1
+        AND json_extract(signature_data, '$.combined') = 1
+        AND json_extract(signature_data, '$.estimate_id') = ?`,
+  )
+    .bind(estimateId)
+    .all<{ id: string; signature_data: string }>();
+
+  const revoked: string[] = [];
+  for (const doc of pendingDocs.results ?? []) {
+    let boldId: string | undefined;
+    try {
+      boldId = (JSON.parse(doc.signature_data) as { boldsign_document_id?: string })
+        .boldsign_document_id;
+    } catch {
+      /* ignore */
+    }
+    if (boldId && config) {
+      try {
+        await revokeDocument(config, boldId, "Resend — prior signature field was unusable");
+        revoked.push(boldId);
+      } catch (e) {
+        console.warn(
+          `[selections] revoke prior combined doc ${boldId}: ${(e as Error).message}`,
+        );
+      }
+    }
+    await env.DB.prepare(
+      `UPDATE documents
+          SET is_active = 0, updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+      .bind(doc.id)
+      .run();
+  }
+
+  await env.DB.prepare(
+    `UPDATE selections
+        SET status = 'pending'
+      WHERE estimate_id = ?
+        AND status = 'sent'`,
+  )
+    .bind(estimateId)
+    .run();
+
+  return { revoked };
+}
+
 async function executeCombinedSelectionApproval(
   env: Env,
   ctx: SelectionClientContext,
   redirectPath: string,
   origin: string,
+  opts?: { forceResend?: boolean },
 ): Promise<Response> {
   if (!ctx.estimateId) {
     return err(400, "estimate_required", "Combined selection signing is only available at quote stage.");
@@ -403,7 +466,7 @@ async function executeCombinedSelectionApproval(
   )
     .bind(ctx.estimateId)
     .all<SelectionRow>();
-  const rows = sels.results ?? [];
+  let rows = sels.results ?? [];
   if (rows.length === 0) return err(404, "no_selections");
 
   const unchosen = rows.filter((s) => !s.chosen_choice_id);
@@ -420,7 +483,18 @@ async function executeCombinedSelectionApproval(
     return err(409, "already_approved", "All selections have already been approved.");
   }
 
-  const pendingSig = rows.filter((s) => s.status === "sent");
+  let pendingSig = rows.filter((s) => s.status === "sent");
+  if (pendingSig.length > 0 && opts?.forceResend) {
+    await supersedePendingCombinedSelectionSend(env, ctx.estimateId);
+    const refreshed = await env.DB.prepare(
+      `SELECT * FROM selections WHERE estimate_id = ? ORDER BY created_at ASC`,
+    )
+      .bind(ctx.estimateId)
+      .all<SelectionRow>();
+    rows = refreshed.results ?? [];
+    pendingSig = rows.filter((s) => s.status === "sent");
+  }
+
   if (pendingSig.length > 0) {
     return err(
       409,
@@ -1461,6 +1535,42 @@ export async function handleQuoteSelectionsConfirmAll(
 
 // ── GET /api/public/quote/:token/selections/sign-link ─────────────────────────
 
+/** True when BoldSign derived a collapsed signature field (1pt-shrink regression). */
+async function boldSignSignatureFieldUnusable(
+  config: NonNullable<Awaited<ReturnType<typeof getBoldSignConfig>>>,
+  documentId: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `https://api.boldsign.com/v1/document/properties?documentId=${encodeURIComponent(documentId)}`,
+      { headers: { "X-API-KEY": config.apiKey } },
+    );
+    if (!res.ok) return false;
+    const data = (await res.json()) as {
+      signerDetails?: Array<{
+        formFields?: Array<{
+          type?: string;
+          fieldType?: string;
+          bounds?: { width?: number; height?: number };
+          Bounds?: { Width?: number; Height?: number };
+        }>;
+      }>;
+    };
+    const fields = (data.signerDetails ?? []).flatMap((s) => s.formFields ?? []);
+    const sig = fields.find((f) =>
+      String(f.type ?? f.fieldType ?? "").toLowerCase().includes("sign"),
+    );
+    if (!sig) return false;
+    const b = sig.bounds ?? sig.Bounds ?? {};
+    const w = (b as { width?: number; Width?: number }).width ?? (b as { Width?: number }).Width ?? 0;
+    const h =
+      (b as { height?: number; Height?: number }).height ?? (b as { Height?: number }).Height ?? 0;
+    return w < 40 || h < 10;
+  } catch {
+    return false;
+  }
+}
+
 export async function handleQuoteCombinedSelectionsSignLink(
   request: Request,
   env: Env,
@@ -1490,7 +1600,7 @@ export async function handleQuoteCombinedSelectionsSignLink(
   } catch {
     return err(500, "invalid_signature_data");
   }
-  const boldSignDocumentId = sigData.boldsign_document_id;
+  let boldSignDocumentId = sigData.boldsign_document_id;
   if (!boldSignDocumentId) {
     return err(404, "signature_document_not_found", "BoldSign document id missing.");
   }
@@ -1510,6 +1620,39 @@ export async function handleQuoteCombinedSelectionsSignLink(
 
   const origin = new URL(request.url).origin;
   const redirectUrl = `${origin}/quote/${token}?selection_signed=1`;
+
+  // Auto-heal docs sent during the 1pt tag-shrink window (tiny unusable Sign Here).
+  if (await boldSignSignatureFieldUnusable(config, boldSignDocumentId)) {
+    console.warn(
+      `[selections] combined doc ${boldSignDocumentId} has collapsed signature field — force resending`,
+    );
+    const resent = await executeCombinedSelectionApproval(
+      env,
+      ctx,
+      `/quote/${token}?selection_signed=1`,
+      origin,
+      { forceResend: true },
+    );
+    if (resent.status >= 400) return resent;
+    const body = (await resent.clone().json()) as { sign_link?: string | null };
+    if (body.sign_link) return json({ sign_link: body.sign_link, resent: true });
+    // Fall through to fetch from the new document row.
+    const newDoc = await loadCombinedSelectionSignDocument(env, ctx.estimateId);
+    if (newDoc) {
+      try {
+        boldSignDocumentId = (
+          JSON.parse(newDoc.signature_data) as { boldsign_document_id?: string }
+        ).boldsign_document_id;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  if (!boldSignDocumentId) {
+    return err(502, "sign_link_unavailable", "Could not prepare a usable signing document.");
+  }
+
   const signLink = await fetchEmbeddedSignLinkWithRetry(
     config,
     boldSignDocumentId,
@@ -1525,6 +1668,52 @@ export async function handleQuoteCombinedSelectionsSignLink(
   }
 
   return json({ sign_link: signLink });
+}
+
+/** Ops/manual: force-resend combined selection approval for an estimate. */
+export async function resendCombinedSelectionApprovalForEstimate(
+  env: Env,
+  estimateId: string,
+  origin: string,
+): Promise<Response> {
+  const row = await env.DB.prepare(
+    `SELECT e.id AS estimate_id, e.estimate_number, e.title AS estimate_title, e.client_id,
+            e.portal_token, c.first_name, c.last_name, c.email
+       FROM estimates e
+       LEFT JOIN clients c ON c.id = e.client_id
+      WHERE e.id = ?`,
+  )
+    .bind(estimateId)
+    .first<{
+      estimate_id: string;
+      estimate_number: number | null;
+      estimate_title: string | null;
+      client_id: string | null;
+      portal_token: string | null;
+      first_name: string | null;
+      last_name: string | null;
+      email: string | null;
+    }>();
+  if (!row) return err(404, "estimate_not_found");
+  if (!row.portal_token) return err(400, "no_portal_token", "Estimate has no quote portal token.");
+
+  const ctx: SelectionClientContext = {
+    estimateId: row.estimate_id,
+    jobId: null,
+    clientId: row.client_id,
+    clientEmail: row.email,
+    clientName: [row.first_name, row.last_name].filter(Boolean).join(" ") || "Client",
+    estimateNumber: row.estimate_number,
+    estimateTitle: row.estimate_title,
+  };
+
+  return executeCombinedSelectionApproval(
+    env,
+    ctx,
+    `/quote/${row.portal_token}?selection_signed=1`,
+    origin,
+    { forceResend: true },
+  );
 }
 
 // ── Internal: complete selection choice approval (called from BoldSign webhook) ──

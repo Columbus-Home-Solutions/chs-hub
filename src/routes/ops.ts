@@ -23,6 +23,7 @@ import {
   revokeDocument,
   sendDocumentForSignature,
 } from "../lib/boldsign.js";
+import { resendCombinedSelectionApprovalForEstimate } from "./selections.js";
 
 function requireSecret(request: Request, env: Env): Response | null {
   const url = new URL(request.url);
@@ -223,6 +224,22 @@ async function sleep(ms: number): Promise<void> {
  * docs through each distinct send mode, downloads the PDF, and scans the bytes
  * for leftover {{sign|/{{date| tags and the Document ID footer. Revokes after.
  */
+/**
+ * POST /api/ops/resend-selection-approval?estimate_id=
+ * Force-resends combined selection BoldSign (revokes collapsed 1pt-field docs).
+ */
+export async function handleOpsResendSelectionApproval(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+  const estimateId = new URL(request.url).searchParams.get("estimate_id")?.trim();
+  if (!estimateId) return jsonOk({ error: "estimate_id required" }, 400);
+  const origin = new URL(request.url).origin;
+  return resendCombinedSelectionApprovalForEstimate(env, estimateId, origin);
+}
+
 export async function handleOpsBoldsignGhostProof(
   request: Request,
   env: Env,
@@ -248,6 +265,88 @@ export async function handleOpsBoldsignGhostProof(
       const props = await getDocumentProperties(config, existingId);
       const pdf = await downloadSignedDocument(config, existingId);
       const scan = scanPdfGhosts(pdf);
+
+      // Optional: probe whether getEmbeddedSignLink works (isolates widget 403s).
+      let embed: { ok: boolean; status?: number; error?: string; hasLink?: boolean } | null =
+        null;
+      if (url.searchParams.get("embed_probe") === "1") {
+        const signerEmail =
+          url.searchParams.get("signer_email")?.trim() || "tony@homesolutionsar.com";
+        const embedRes = await fetch(
+          `https://api.boldsign.com/v1/document/getEmbeddedSignLink?documentId=${encodeURIComponent(existingId)}&signerEmail=${encodeURIComponent(signerEmail)}`,
+          { headers: { "X-API-KEY": config.apiKey, accept: "application/json" } },
+        );
+        const bodyText = await embedRes.text().catch(() => "");
+        let hasLink = false;
+        try {
+          hasLink = Boolean((JSON.parse(bodyText) as { signLink?: string }).signLink);
+        } catch {
+          /* not json */
+        }
+        embed = {
+          ok: embedRes.ok && hasLink,
+          status: embedRes.status,
+          hasLink,
+          error: embedRes.ok ? undefined : bodyText.slice(0, 400),
+        };
+      }
+
+      let formFields: Array<{
+        type?: string;
+        width?: number;
+        height?: number;
+        x?: number;
+        y?: number;
+      }> = [];
+      const propsRes = await fetch(
+        `https://api.boldsign.com/v1/document/properties?documentId=${encodeURIComponent(existingId)}`,
+        { headers: { "X-API-KEY": config.apiKey } },
+      );
+      if (propsRes.ok) {
+        const full = (await propsRes.json()) as {
+          status?: string;
+          errorMessage?: string;
+          signerDetails?: Array<{
+            signerEmail?: string;
+            status?: string;
+            formFields?: Array<{
+              type?: string;
+              fieldType?: string;
+              name?: string;
+              bounds?: { x?: number; y?: number; width?: number; height?: number };
+              Bounds?: { X?: number; Y?: number; Width?: number; Height?: number };
+            }>;
+          }>;
+        };
+        formFields = (full.signerDetails ?? []).flatMap((s) => s.formFields ?? []).map((f) => {
+          const b = f.bounds ?? f.Bounds ?? {};
+          return {
+            type: f.type ?? f.fieldType ?? f.name,
+            width: (b as { width?: number; Width?: number }).width ?? (b as { Width?: number }).Width,
+            height:
+              (b as { height?: number; Height?: number }).height ?? (b as { Height?: number }).Height,
+            x: (b as { x?: number; X?: number }).x ?? (b as { X?: number }).X,
+            y: (b as { y?: number; Y?: number }).y ?? (b as { Y?: number }).Y,
+          };
+        });
+        return jsonOk({
+          generated_at: new Date().toISOString(),
+          path: "existing_document",
+          documentId: existingId,
+          boldSignStatus: full.status ?? props?.status ?? null,
+          errorMessage: full.errorMessage ?? props?.errorMessage ?? null,
+          pdfBytes: pdf.byteLength,
+          ...scan,
+          embed,
+          formFields,
+          signerDetails: (full.signerDetails ?? []).map((s) => ({
+            email: s.signerEmail,
+            status: s.status,
+          })),
+          ok: !scan.hasSignTag && !scan.hasDateTag && !scan.hasDocumentIdFooter,
+        });
+      }
+
       return jsonOk({
         generated_at: new Date().toISOString(),
         path: "existing_document",
@@ -255,6 +354,8 @@ export async function handleOpsBoldsignGhostProof(
         boldSignStatus: props?.status ?? null,
         pdfBytes: pdf.byteLength,
         ...scan,
+        embed,
+        formFields,
         ok: !scan.hasSignTag && !scan.hasDateTag && !scan.hasDocumentIdFooter,
       });
     } catch (e) {

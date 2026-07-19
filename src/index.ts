@@ -89,6 +89,7 @@ import {
   handleHeartbeatCheck,
   handleOpsAutogenDocument,
   handleOpsBoldsignGhostProof,
+  handleOpsResendSelectionApproval,
   handleSummarySend,
 } from "./routes/ops.js";
 import { runDriveMirror } from "./lib/ops/drive-mirror.js";
@@ -1133,6 +1134,9 @@ export default {
     }
     if (url.pathname === "/api/ops/boldsign-ghost-proof" && request.method === "POST") {
       return handleOpsBoldsignGhostProof(request, env);
+    }
+    if (url.pathname === "/api/ops/resend-selection-approval" && request.method === "POST") {
+      return handleOpsResendSelectionApproval(request, env);
     }
 
     // ── Legacy Jobber jobs view (old dashboard at dashboard.* host) ──

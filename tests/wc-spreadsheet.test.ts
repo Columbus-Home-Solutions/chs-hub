@@ -26,6 +26,7 @@ function settings(spreadsheetId = "") {
     },
     marketingConvertedCol: "R",
     marketingFirstRow: 4,
+    marketingActiveWeekRow: null,
     monthlyTab: "Monthly Net Profits",
     monthlyMonthCol: "A",
     monthlyDataCols: "B:C",

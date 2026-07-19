@@ -24,6 +24,7 @@ import {
   leadSourceBucket,
   type LeadSourceBucket,
   marketingRowMatches,
+  marketingRowMatchesWeek,
   monthLabelMatches,
   parseShortDate,
   parseWeekRange,
@@ -68,6 +69,7 @@ interface WcSettings {
   marketingLeadCols: Record<LeadSourceBucket, string>;
   marketingConvertedCol: string;
   marketingFirstRow: number;
+  marketingActiveWeekRow: number | null;
   monthlyTab: string;
   monthlyMonthCol: string;
   monthlyDataCols: string; // "B:C"
@@ -110,6 +112,10 @@ async function loadSettings(env: Env): Promise<WcSettings> {
     },
     marketingConvertedCol: s("wc_marketing_converted_column", "R"),
     marketingFirstRow: n("wc_marketing_first_data_row", 4),
+    marketingActiveWeekRow: (() => {
+      const v = Number(m.get("wc_marketing_active_week_row"));
+      return Number.isFinite(v) && v > 0 ? v : null;
+    })(),
     monthlyTab: s("wc_monthly_tab_name", "Monthly Net Profits"),
     monthlyMonthCol: s("wc_monthly_month_column", "A"),
     monthlyDataCols: s("wc_monthly_data_columns", "B:C"),
@@ -350,24 +356,23 @@ async function findMarketingRow(
   client: SheetsClient,
   s: WcSettings,
   weekStart: string,
-): Promise<{ row: number | null; sample?: (string | number | null)[][] }> {
+  weekEnd: string,
+): Promise<{ row: number | null; sample?: (string | number | null)[][]; formatted?: (string | number | null)[][] }> {
   const last = s.marketingFirstRow + 80;
   const endCol = s.marketingWeekEndCol || s.marketingWeekCol;
   const range = `${q(s.marketingTab)}!${s.marketingWeekCol}${s.marketingFirstRow}:${endCol}${last}`;
-  // Prefer serial dates (UNFORMATTED) — production workbook stores week labels as
-  // Sheets serials; FORMATTED_VALUE can be locale text that parseShortDate misses.
+  const formatted = await client.readRange(range, "FORMATTED_VALUE");
   let grid = await client.readRange(range, "UNFORMATTED_VALUE");
-  if (grid.length === 0) {
-    grid = await client.readRange(range, "FORMATTED_VALUE");
-  }
+  if (grid.length === 0) grid = formatted;
 
   const today = ctToday();
   for (let i = 0; i < grid.length; i++) {
     const startCell = grid[i]?.[0] ?? null;
     const endCell = grid[i]?.[1] ?? null;
 
-    // Primary: inclusive A..B range match (handles merged period labels).
-    if (marketingRowMatches(startCell, endCell, today)) return { row: s.marketingFirstRow + i };
+    if (marketingRowMatchesWeek(startCell, endCell, weekStart, weekEnd, today)) {
+      return { row: s.marketingFirstRow + i };
+    }
 
     // Fallback: week-start label in col A (or any cell) resolves to this Sunday.
     for (const cell of [startCell, endCell]) {
@@ -379,7 +384,13 @@ async function findMarketingRow(
       }
     }
   }
-  return { row: null, sample: grid.slice(0, 8) };
+  return { row: null, sample: grid.slice(0, 8), formatted: formatted.slice(0, 8) };
+}
+
+function marketingActiveWeekFallback(s: WcSettings, weekStart: string): number | null {
+  if (s.marketingActiveWeekRow == null) return null;
+  if (weekStart !== ctWeekBounds().start) return null;
+  return s.marketingActiveWeekRow;
 }
 
 async function findMonthlyRow(client: SheetsClient, s: WcSettings, monthIndex: number): Promise<number | null> {
@@ -484,28 +495,45 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
 
   // Marketing Tallies — column letters from system_settings (§7; non-contiguous ranges).
   try {
-    const { row, sample } = await findMarketingRow(client, marketingSettings, wk.start);
-    result.rows_matched[marketingTab] = row;
-    if (row == null) {
+    const { row, sample, formatted } = await findMarketingRow(client, marketingSettings, wk.start, wk.end);
+    const resolvedRow = row ?? marketingActiveWeekFallback(marketingSettings, wk.start);
+    result.rows_matched[marketingTab] = resolvedRow;
+    if (resolvedRow == null) {
       result.tabs_skipped.push(marketingTab);
       result.rows_matched[marketingTab] = null;
-      if (sample?.length) result.data_snapshot.marketing_rows_sample = sample;
+      result.data_snapshot.marketing_debug = {
+        tab: marketingTab,
+        sheet_tabs: sheetTabs,
+        read_range: `${marketingSettings.marketingWeekCol}${marketingSettings.marketingFirstRow}:${marketingSettings.marketingWeekEndCol || marketingSettings.marketingWeekCol}${marketingSettings.marketingFirstRow + 80}`,
+        sample_unformatted: sample ?? [],
+        sample_formatted: formatted ?? [],
+        row6_unformatted: await client.readRange(`${q(marketingTab)}!A6:Z6`, "UNFORMATTED_VALUE").catch(() => []),
+        row6_formatted: await client.readRange(`${q(marketingTab)}!A6:Z6`, "FORMATTED_VALUE").catch(() => []),
+        header_formatted: await client.readRange(`${q(marketingTab)}!A1:R10`, "FORMATTED_VALUE").catch(() => []),
+        fin_c6_e6_unformatted: await client
+          .readRange(
+            `${q(marketingTab)}!${colRange(settings.marketingFinancialCols).start}6:${colRange(settings.marketingFinancialCols).end}6`,
+            "UNFORMATTED_VALUE",
+          )
+          .catch(() => []),
+      };
       console.warn(`[wc] ROW_MISSING marketing week=${wk.start} tab=${marketingTab} — skipping Marketing tab (row not yet added to sheet)`);
     } else {
+      if (row == null) result.data_snapshot.marketing_row_fallback = resolvedRow;
       const tab = q(marketingTab);
       const fin = colRange(settings.marketingFinancialCols);
       const lc = settings.marketingLeadCols;
       const ls = weekly.lead_by_source;
       updates.push(
         {
-          range: `${tab}!${fin.start}${row}:${fin.end}${row}`,
+          range: `${tab}!${fin.start}${resolvedRow}:${fin.end}${resolvedRow}`,
           values: [[weekly.new_sales, weekly.bank_deposits, weekly.ar_balance]],
         },
-        { range: `${tab}!${lc.organic}${row}:${lc.adwords}${row}`, values: [[ls.organic, ls.adwords]] },
-        { range: `${tab}!${lc.lsa}${row}`, values: [[ls.lsa]] },
-        { range: `${tab}!${lc.facebook}${row}`, values: [[ls.facebook]] },
-        { range: `${tab}!${lc.referral}${row}:${lc.other}${row}`, values: [[ls.referral, ls.repeat, ls.other]] },
-        { range: `${tab}!${settings.marketingConvertedCol}${row}`, values: [[weekly.converted]] },
+        { range: `${tab}!${lc.organic}${resolvedRow}:${lc.adwords}${resolvedRow}`, values: [[ls.organic, ls.adwords]] },
+        { range: `${tab}!${lc.lsa}${resolvedRow}`, values: [[ls.lsa]] },
+        { range: `${tab}!${lc.facebook}${resolvedRow}`, values: [[ls.facebook]] },
+        { range: `${tab}!${lc.referral}${resolvedRow}:${lc.other}${resolvedRow}`, values: [[ls.referral, ls.repeat, ls.other]] },
+        { range: `${tab}!${settings.marketingConvertedCol}${resolvedRow}`, values: [[weekly.converted]] },
       );
     }
   } catch (err) {

@@ -88,6 +88,7 @@ import {
   handleDriveMirrorStatus,
   handleHeartbeatCheck,
   handleOpsAutogenDocument,
+  handleOpsBoldsignGhostProof,
   handleSummarySend,
 } from "./routes/ops.js";
 import { runDriveMirror } from "./lib/ops/drive-mirror.js";
@@ -1129,6 +1130,9 @@ export default {
     }
     if (url.pathname === "/api/ops/autogen-document" && request.method === "POST") {
       return handleOpsAutogenDocument(request, env);
+    }
+    if (url.pathname === "/api/ops/boldsign-ghost-proof" && request.method === "POST") {
+      return handleOpsBoldsignGhostProof(request, env);
     }
 
     // ── Legacy Jobber jobs view (old dashboard at dashboard.* host) ──

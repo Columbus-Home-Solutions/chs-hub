@@ -17,7 +17,7 @@ function readDocumentXml(docx: Uint8Array): string {
 }
 
 describe("canonicalizeBoldSignTextTags", () => {
-  it("forces gray text-tag runs to white so tags cannot ghost in the signed PDF", () => {
+  it("paints tag runs white but does not shrink font size (BoldSign sizes fields from tag sz)", () => {
     const xml =
       `<w:document><w:body><w:p>` +
       `<w:r><w:rPr><w:sz w:val="24"/><w:color w:val="CCCCCC"/></w:rPr>` +
@@ -29,11 +29,14 @@ describe("canonicalizeBoldSignTextTags", () => {
     const out = readDocumentXml(canonicalizeBoldSignTextTags(makeDocx(xml)));
     expect(out).toContain('w:val="FFFFFF"');
     expect(out).not.toContain('w:val="CCCCCC"');
+    // Must preserve original size — shrinking collapses the signature field.
+    expect(out).toContain('<w:sz w:val="24"/>');
+    expect(out).not.toContain('<w:sz w:val="2"/>');
     expect(out).toContain("{{sign|1|*| |client_sig}}");
     expect(out).toContain("{{date|1|*| |client_date}}");
   });
 
-  it("upgrades legacy 4-part tags and paints them white", () => {
+  it("upgrades legacy 4-part tags and paints them white without changing size", () => {
     const xml =
       `<w:document><w:body><w:p>` +
       `<w:r><w:rPr><w:sz w:val="24"/></w:rPr>` +
@@ -44,5 +47,19 @@ describe("canonicalizeBoldSignTextTags", () => {
     expect(out).toContain("{{sign|1|*| |client_sig}}");
     expect(out).not.toContain("{{sign|1|*|sig}}");
     expect(out).toContain('w:val="FFFFFF"');
+    expect(out).toContain('<w:sz w:val="24"/>');
+    expect(out).not.toContain('<w:sz w:val="2"/>');
+  });
+
+  it("injects white-only rPr when a text-tag run has none", () => {
+    const xml =
+      `<w:document><w:body><w:p>` +
+      `<w:r><w:t>{{sign|1|*| |client_sig}}</w:t></w:r>` +
+      `</w:p></w:body></w:document>`;
+
+    const out = readDocumentXml(canonicalizeBoldSignTextTags(makeDocx(xml)));
+    expect(out).toContain('<w:rPr><w:color w:val="FFFFFF"/></w:rPr>');
+    expect(out).not.toContain('<w:sz w:val="2"/>');
+    expect(out).toContain("{{sign|1|*| |client_sig}}");
   });
 });

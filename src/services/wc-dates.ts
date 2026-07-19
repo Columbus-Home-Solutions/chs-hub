@@ -171,6 +171,35 @@ export function marketingRowMatches(
   return false;
 }
 
+function cellToIso(cell: string | number | null, baseYear: number): string | null {
+  const parsed = parseShortDate(cell);
+  if (!parsed) return null;
+  return `${baseYear}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
+}
+
+/** Match a marketing row's period label to explicit Sun→Sat week bounds. */
+export function marketingRowMatchesWeek(
+  startCell: string | number | null,
+  endCell: string | number | null,
+  weekStart: string,
+  weekEnd: string,
+  today: DateParts,
+): boolean {
+  if (marketingRowMatches(startCell, endCell, today)) return true;
+  const merged = parseWeekRange(startCell);
+  const startRaw = merged?.start ?? startCell;
+  const endRaw = merged?.end ?? endCell;
+  for (const baseYear of [today.year - 1, today.year, today.year + 1]) {
+    const startIso = cellToIso(startRaw, baseYear);
+    if (!startIso) continue;
+    const endIso = cellToIso(endRaw, baseYear) ?? startIso;
+    const rowWeekStart = sundayOf(startIso);
+    if (rowWeekStart === weekStart && endIso === weekEnd) return true;
+    if (startIso === weekStart && endIso === weekEnd) return true;
+  }
+  return false;
+}
+
 /**
  * KPI row matcher (§5.2): does `today` fall between the row's start (col A) and
  * end (col B) short dates, inclusive? Years are absent in the sheet, so we test

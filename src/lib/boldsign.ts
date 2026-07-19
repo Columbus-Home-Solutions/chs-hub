@@ -23,8 +23,9 @@
  *      DOCX template as white (#FFFFFF) text and set useTextTags=true in
  *      SendDocumentArgs. BoldSign converts tags to form fields but does NOT
  *      remove the tag text from the finished PDF — gray tags ghost behind
- *      filled values. canonicalizeBoldSignTextTags() enforces white-on-white
- *      at send time.
+ *      filled values. canonicalizeBoldSignTextTags() paints tags white only
+ *      (never shrinks font — BoldSign derives field size from tag sz).
+ *      HideDocumentId=true strips the black Document ID footer.
  *   2. Coordinate-based (legacy): provide signerFormFields with pixel coordinates.
  *      Used for the working-agreement template which uses a BoldSign-stored template
  *      and cannot embed text tags. Y=0 at bottom of page, units = 96dpi pixels.
@@ -215,6 +216,24 @@ export async function sendDocumentForSignature(
 
   let res: Response;
 
+  /** Hide BoldSign's black "Document ID: …" footer stamped on every page. */
+  const appendCommonSendFlags = (form: FormData) => {
+    form.append("HideDocumentId", "true");
+  };
+
+  /** White/vanish/1pt canonicalize for any DOCX attachment (primary or extra). */
+  const canonicalizeDocxBlob = async (
+    blob: Blob,
+    filename: string,
+  ): Promise<Blob> => {
+    if (!filename.toLowerCase().endsWith(".docx")) return blob;
+    const raw = await blob.arrayBuffer();
+    const fixed = canonicalizeBoldSignTextTags(raw);
+    return new Blob([fixed], {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+  };
+
   if (args.templateId) {
     // ── Template-based send (preferred) ──────────────────────────────────────
     const signerRole = args.signerRole ?? "Client";
@@ -227,9 +246,11 @@ export async function sendDocumentForSignature(
     form.append("roles[0][signerEmail]", args.signerEmail);
     form.append("roles[0][signerRole]", signerRole);
     form.append("roles[0][signerType]", "Signer");
+    appendCommonSendFlags(form);
 
     for (const extra of args.additionalFiles ?? []) {
-      form.append("Files", extra.blob, extra.filename);
+      const blob = await canonicalizeDocxBlob(extra.blob, extra.filename);
+      form.append("Files", blob, extra.filename);
     }
 
     console.log(
@@ -244,24 +265,19 @@ export async function sendDocumentForSignature(
     );
   } else if (args.useTextTags) {
     // ── Text-tag anchored send ────────────────────────────────────────────────
-    let fileBlob = args.fileBlob;
-    if (args.filename.toLowerCase().endsWith(".docx")) {
-      const raw = await fileBlob.arrayBuffer();
-      const fixed = canonicalizeBoldSignTextTags(raw);
-      fileBlob = new Blob([fixed], {
-        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      });
-    }
+    const fileBlob = await canonicalizeDocxBlob(args.fileBlob, args.filename);
 
     const form = new FormData();
     form.append("Title", args.title);
     form.append("Message", args.message);
     form.append("Files", fileBlob, args.filename);
     for (const extra of args.additionalFiles ?? []) {
-      form.append("Files", extra.blob, extra.filename);
+      const blob = await canonicalizeDocxBlob(extra.blob, extra.filename);
+      form.append("Files", blob, extra.filename);
     }
     form.append("UseTextTags", "true");
     form.append("EnableEmbeddedSigning", "true");
+    appendCommonSendFlags(form);
     form.append("Signers[0][Name]", args.signerName);
     form.append("Signers[0][EmailAddress]", args.signerEmail);
     form.append("Signers[0][SignerType]", "Signer");
@@ -280,6 +296,7 @@ export async function sendDocumentForSignature(
     form.append("Signers[0][Name]", args.signerName);
     form.append("Signers[0][EmailAddress]", args.signerEmail);
     form.append("Signers[0][SignerType]", "Signer");
+    appendCommonSendFlags(form);
 
     const fields: SignerFormField[] = args.signerFormFields ?? [
       // Default positions match the working-agreement template layout (page 2).

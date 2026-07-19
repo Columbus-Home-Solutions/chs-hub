@@ -6,6 +6,7 @@ import {
   leadSourceBucket,
   leadSourceColumn,
   marketingRowMatches,
+  marketingRowMatchesWeek,
   monthLabelMatches,
   parseShortDate,
   parseWeekRange,
@@ -78,6 +79,12 @@ describe("marketingRowMatches", () => {
   it("matches merged A-only labels with empty B", () => {
     expect(marketingRowMatches("7/12 - 7/18", "", { year: 2026, month: 7, day: 18 })).toBe(true);
     expect(marketingRowMatches("7/12 - 7/18", null, { year: 2026, month: 7, day: 18 })).toBe(true);
+  });
+
+  it("matches explicit week bounds", () => {
+    expect(
+      marketingRowMatchesWeek("7/12 - 7/18", "", "2026-07-12", "2026-07-18", { year: 2026, month: 7, day: 18 }),
+    ).toBe(true);
   });
 
   it("matches serial start-only rows by inferring end as start+6 days", () => {

@@ -163,8 +163,9 @@ export async function generateDocument(
  * Normalize BoldSign text tags before send.
  *
  * BoldSign converts tags to form fields but does NOT remove the underlying tag
- * text from the finished PDF — tags must be white-on-white or they ghost behind
- * the signed values (see BoldSign text-tags docs).
+ * text from the finished PDF — set tag color to match the background (white).
+ * Field size is derived from the tag run's font size, so we must ONLY paint
+ * tags white — never shrink them. Pair with HideDocumentId=true on send.
  */
 export function canonicalizeBoldSignTextTags(docxBytes: ArrayBuffer): Uint8Array {
   const LEGACY_SIG = "{{sign|1|*|sig}}";
@@ -187,18 +188,25 @@ export function canonicalizeBoldSignTextTags(docxBytes: ArrayBuffer): Uint8Array
     docXml = docXml.replaceAll(LEGACY_SIG, CANON_SIG).replaceAll(LEGACY_DATE, CANON_DATE);
   }
 
-  // Force every run that contains a BoldSign text tag to white (#FFFFFF).
+  const whitenedColorOnly = (rPrInner: string): string => {
+    if (/<w:color\b/.test(rPrInner)) {
+      return rPrInner.replace(/<w:color\b[^/]*\/>/g, '<w:color w:val="FFFFFF"/>');
+    }
+    return `${rPrInner}<w:color w:val="FFFFFF"/>`;
+  };
+
+  // Runs that already have rPr immediately before the tag text — white only.
   docXml = docXml.replace(
     /<w:rPr>((?:(?!<\/w:rPr>)[\s\S])*)<\/w:rPr>(\s*<w:t[^>]*>\{\{(?:sign|date|text|checkbox)\|)/g,
-    (_m, rPrInner: string, rest: string) => {
-      let next = rPrInner;
-      if (/<w:color\b/.test(next)) {
-        next = next.replace(/<w:color\b[^/]*\/>/g, '<w:color w:val="FFFFFF"/>');
-      } else {
-        next += '<w:color w:val="FFFFFF"/>';
-      }
-      return `<w:rPr>${next}</w:rPr>${rest}`;
-    },
+    (_m, rPrInner: string, rest: string) =>
+      `<w:rPr>${whitenedColorOnly(rPrInner)}</w:rPr>${rest}`,
+  );
+
+  // Runs with a text tag but no rPr — inject white color only (preserve default size).
+  docXml = docXml.replace(
+    /<w:r((?:\s[^>]*)?)>(\s*)(<w:t[^>]*>\{\{(?:sign|date|text|checkbox)\|)/g,
+    (_m, rAttrs: string, ws: string, tOpen: string) =>
+      `<w:r${rAttrs}>${ws}<w:rPr><w:color w:val="FFFFFF"/></w:rPr>${tOpen}`,
   );
 
   unzipped[xmlKey] = strToU8(docXml);

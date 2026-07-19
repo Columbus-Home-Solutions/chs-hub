@@ -248,6 +248,266 @@ export async function handleOpsResendSelectionApproval(
   return resendCombinedSelectionApprovalForEstimate(env, estimateId, origin);
 }
 
+const E2E_CLIENT_ID = "7c4a1f2e-8b3d-4e91-a5c6-2d8f9e1a3b4c"; // ZZTEST-PRELAUNCH
+
+/**
+ * POST /api/ops/e2e-fresh-estimate-setup
+ * Creates a brand-new estimate + SA BoldSign send + selection BoldSign send.
+ * Returns document IDs, field bounds, and embed sign links — no Access cookie needed.
+ */
+export async function handleOpsE2eFreshEstimateSetup(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+
+  try {
+  const origin = "https://dashboard.homesolutionsar.com";
+  const now = new Date().toISOString();
+  const maxNum = await env.DB.prepare(
+    "SELECT COALESCE(MAX(estimate_number), 0) AS n FROM estimates",
+  ).first<{ n: number }>();
+  const estimateNumber = (maxNum?.n ?? 0) + 1;
+  const estimateId = crypto.randomUUID();
+  const portalToken = crypto.randomUUID().replace(/-/g, "");
+  const title = `E2E BoldSign Fresh EST-${estimateNumber} — ${now.slice(0, 16)}`;
+
+  const client = await env.DB.prepare(
+    "SELECT id, first_name, last_name, email FROM clients WHERE id = ?",
+  )
+    .bind(E2E_CLIENT_ID)
+    .first<{ id: string; first_name: string | null; last_name: string | null; email: string | null }>();
+  if (!client) return jsonOk({ error: "E2E test client missing" }, 500);
+
+  await env.DB.prepare(
+    `INSERT INTO estimates (
+      id, estimate_number, request_id, client_id, title, estimate_mode, billing_model,
+      status, subtotal, tax_amount, total, margin_percent,
+      deposit_amount, deposit_type, deposit_percentage, valid_days,
+      include_reviews, include_contract, version, portal_token,
+      sent_at, expiration_date, created_at, updated_at, created_by
+    ) VALUES (?, ?, NULL, ?, ?, 'trade_by_trade', 'fixed_price',
+      'sent', 2500, 0, 2500, 0,
+      750, 'percentage', 30, 7,
+      1, 1, 1, ?,
+      ?, date('now', '+7 days'), ?, ?, ?)`,
+  )
+    .bind(
+      estimateId,
+      estimateNumber,
+      E2E_CLIENT_ID,
+      title,
+      portalToken,
+      now,
+      now,
+      now,
+      "00000000-0000-0000-0000-000000000001",
+    )
+    .run();
+
+  const lineId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO estimate_line_items
+      (id, estimate_id, sort_order, product_service, description, quantity, unit, unit_price, total, created_at)
+     VALUES (?, ?, 0, 'E2E Demo Line', 'Automated E2E — DELETE-ME', 1, 'ea', 2500, 2500, datetime('now'))`,
+  )
+    .bind(lineId, estimateId)
+    .run();
+
+  await env.DB.prepare(
+    `INSERT INTO payment_schedules
+      (id, estimate_id, sort_order, description, percentage, fixed_amount, amount, is_deposit, created_at)
+     VALUES (?, ?, 0, 'Deposit', 30, NULL, NULL, 1, datetime('now'))`,
+  )
+    .bind(crypto.randomUUID(), estimateId)
+    .run();
+  await env.DB.prepare(
+    `INSERT INTO payment_schedules
+      (id, estimate_id, sort_order, description, percentage, fixed_amount, amount, is_deposit, created_at)
+     VALUES (?, ?, 1, 'Final', 70, NULL, NULL, 0, datetime('now'))`,
+  )
+    .bind(crypto.randomUUID(), estimateId)
+    .run();
+
+  const selectionId = crypto.randomUUID();
+  const choiceId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO selections
+      (id, estimate_id, job_id, title, category, allowance_amount, required, status,
+       chosen_choice_id, created_at)
+     VALUES (?, ?, NULL, 'Flooring Allowance', 'flooring', 1000, 1, 'pending', NULL, datetime('now'))`,
+  )
+    .bind(selectionId, estimateId)
+    .run();
+  await env.DB.prepare(
+    `INSERT INTO selection_choices
+      (id, selection_id, title, description, price, is_client_added, approved, created_at)
+     VALUES (?, ?, 'LVP Standard', 'E2E choice', 900, 0, 0, datetime('now'))`,
+  )
+    .bind(choiceId, selectionId)
+    .run();
+  await env.DB.prepare(
+    `UPDATE selections SET chosen_choice_id = ? WHERE id = ?`,
+  )
+    .bind(choiceId, selectionId)
+    .run();
+
+  const contractResult = await generateAndSendEstimateContract(
+    env,
+    estimateId,
+    client.email ?? "tony@homesolutionsar.com",
+  );
+  if (!contractResult.boldsign_sent || !contractResult.docId) {
+    return jsonOk(
+      {
+        error: "contract_send_failed",
+        contractResult,
+        estimateId,
+        estimateNumber,
+      },
+      502,
+    );
+  }
+
+  const selRes = await sendCombinedSelectionApprovalForEstimate(env, estimateId, origin);
+  const selBody = (await selRes.json()) as {
+    ok?: boolean;
+    boldsign_document_id?: string;
+    sign_link?: string | null;
+    error?: string;
+    details?: string;
+  };
+  if (!selRes.ok || !selBody.boldsign_document_id) {
+    return jsonOk(
+      {
+        error: "selection_send_failed",
+        selBody,
+        estimateId,
+        estimateNumber,
+        contractDocId: contractResult.docId,
+      },
+      502,
+    );
+  }
+
+  // Load contract boldsign id
+  const contractDoc = await env.DB.prepare(
+    "SELECT id, signature_data FROM documents WHERE id = ?",
+  )
+    .bind(contractResult.docId)
+    .first<{ id: string; signature_data: string | null }>();
+  const contractMeta = parseSignatureMeta(contractDoc?.signature_data);
+  const contractBoldId = contractMeta.boldsign_document_id;
+  if (!contractBoldId) {
+    return jsonOk({ error: "contract_missing_boldsign_id", estimateId }, 502);
+  }
+
+  const config = await getBoldSignConfig(env);
+  if (!config) return jsonOk({ error: "boldsign_unconfigured" }, 503);
+
+  // Wait briefly for BoldSign async processing, then probe fields + embed links
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  await sleep(6000);
+
+  async function fieldProbe(documentId: string) {
+    const propsRes = await fetch(
+      `https://api.boldsign.com/v1/document/properties?documentId=${encodeURIComponent(documentId)}`,
+      { headers: { "X-API-KEY": config!.apiKey } },
+    );
+    if (!propsRes.ok) {
+      return { error: await propsRes.text(), formFields: [] as Array<Record<string, unknown>> };
+    }
+    const full = (await propsRes.json()) as {
+      status?: string;
+      signerDetails?: Array<{
+        formFields?: Array<{
+          type?: string;
+          fieldType?: string;
+          bounds?: { width?: number; height?: number; x?: number; y?: number };
+          Bounds?: { Width?: number; Height?: number; X?: number; Y?: number };
+        }>;
+      }>;
+    };
+    const formFields = (full.signerDetails ?? []).flatMap((s) => s.formFields ?? []).map((f) => {
+      const b = f.bounds ?? f.Bounds ?? {};
+      return {
+        type: f.type ?? f.fieldType,
+        width: (b as { width?: number; Width?: number }).width ?? (b as { Width?: number }).Width,
+        height:
+          (b as { height?: number; Height?: number }).height ?? (b as { Height?: number }).Height,
+        x: (b as { x?: number; X?: number }).x ?? (b as { X?: number }).X,
+        y: (b as { y?: number; Y?: number }).y ?? (b as { Y?: number }).Y,
+      };
+    });
+    const sig = formFields.find((f) => String(f.type ?? "").toLowerCase().includes("sign"));
+    return {
+      status: full.status,
+      formFields,
+      signatureFieldOk: !!sig && (sig.width ?? 0) >= 40 && (sig.height ?? 0) >= 10,
+    };
+  }
+
+  let contractProbe = await fieldProbe(contractBoldId);
+  let selectionProbe = await fieldProbe(selBody.boldsign_document_id);
+  for (let i = 0; i < 8; i++) {
+    if (contractProbe.formFields?.length && selectionProbe.formFields?.length) break;
+    await sleep(2500);
+    if (!contractProbe.formFields?.length) contractProbe = await fieldProbe(contractBoldId);
+    if (!selectionProbe.formFields?.length) {
+      selectionProbe = await fieldProbe(selBody.boldsign_document_id);
+    }
+  }
+
+  const signerEmail = client.email ?? "tony@homesolutionsar.com";
+  let contractSignLink: string | null = null;
+  let selectionSignLink: string | null = selBody.sign_link ?? null;
+  try {
+    contractSignLink = (
+      await getEmbeddedSignLink(config, contractBoldId, signerEmail, `${origin}/quote/${portalToken}?signed=1`)
+    ).signLink;
+  } catch (e) {
+    contractSignLink = null;
+    console.warn("[e2e-setup] contract embed:", (e as Error).message);
+  }
+  if (!selectionSignLink) {
+    try {
+      selectionSignLink = (
+        await getEmbeddedSignLink(
+          config,
+          selBody.boldsign_document_id,
+          signerEmail,
+          `${origin}/quote/${portalToken}?selection_signed=1`,
+        )
+      ).signLink;
+    } catch (e) {
+      console.warn("[e2e-setup] selection embed:", (e as Error).message);
+    }
+  }
+
+  return jsonOk({
+    ok: true,
+    estimateId,
+    estimateNumber,
+    portalToken,
+    contract: {
+      docId: contractResult.docId,
+      boldsignDocumentId: contractBoldId,
+      signLink: contractSignLink,
+      ...contractProbe,
+    },
+    selection: {
+      boldsignDocumentId: selBody.boldsign_document_id,
+      signLink: selectionSignLink,
+      ...selectionProbe,
+    },
+  });
+  } catch (e) {
+    console.error("[e2e-setup] failed:", (e as Error).message, (e as Error).stack);
+    return jsonOk({ ok: false, error: (e as Error).message }, 500);
+  }
+}
+
 export async function handleOpsBoldsignGhostProof(
   request: Request,
   env: Env,

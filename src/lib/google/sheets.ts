@@ -19,6 +19,14 @@ export interface SheetTab {
   columnCount: number;
 }
 
+export interface SheetMerge {
+  sheetId: number;
+  startRowIndex: number;
+  endRowIndex: number;
+  startColumnIndex: number;
+  endColumnIndex: number;
+}
+
 export class SheetsClient {
   constructor(
     private readonly serviceAccountJson: string,
@@ -101,5 +109,89 @@ export class SheetsClient {
       }),
     });
     if (!resp.ok) throw new Error(`batchUpdate failed (${resp.status}): ${await resp.text()}`);
+  }
+
+  /** Structural updates (insert rows, merge cells) — not value writes. */
+  async batchSpreadsheetUpdate(requests: object[]): Promise<void> {
+    if (requests.length === 0) return;
+    const token = await this.token();
+    const url = `${SHEETS_API_BASE}/${this.spreadsheetId}:batchUpdate`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ requests }),
+    });
+    if (!resp.ok) throw new Error(`batchSpreadsheetUpdate failed (${resp.status}): ${await resp.text()}`);
+  }
+
+  async listMerges(): Promise<SheetMerge[]> {
+    const token = await this.token();
+    const url = `${SHEETS_API_BASE}/${this.spreadsheetId}?fields=sheets(properties(sheetId),merges)`;
+    const resp = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) throw new Error(`listMerges failed (${resp.status}): ${await resp.text()}`);
+    const data = (await resp.json()) as {
+      sheets?: {
+        properties: { sheetId: number };
+        merges?: {
+          startRowIndex: number;
+          endRowIndex: number;
+          startColumnIndex: number;
+          endColumnIndex: number;
+        }[];
+      }[];
+    };
+    const out: SheetMerge[] = [];
+    for (const sheet of data.sheets ?? []) {
+      for (const merge of sheet.merges ?? []) {
+        out.push({ sheetId: sheet.properties.sheetId, ...merge });
+      }
+    }
+    return out;
+  }
+
+  /** Insert one blank row before the 1-based row number (shifts that row down). */
+  async insertRowBefore(sheetId: number, row1Based: number, inheritFromBefore = true): Promise<void> {
+    const startIndex = row1Based - 1;
+    await this.batchSpreadsheetUpdate([
+      {
+        insertDimension: {
+          range: {
+            sheetId,
+            dimension: "ROWS",
+            startIndex,
+            endIndex: startIndex + 1,
+          },
+          inheritFromBefore,
+        },
+      },
+    ]);
+  }
+
+  async mergeCells(
+    sheetId: number,
+    startRow1Based: number,
+    endRow1Based: number,
+    startCol0Based: number,
+    endCol0Based: number,
+  ): Promise<void> {
+    await this.batchSpreadsheetUpdate([
+      {
+        mergeCells: {
+          mergeType: "MERGE_ALL",
+          range: {
+            sheetId,
+            startRowIndex: startRow1Based - 1,
+            endRowIndex: endRow1Based,
+            startColumnIndex: startCol0Based,
+            endColumnIndex: endCol0Based,
+          },
+        },
+      },
+    ]);
   }
 }

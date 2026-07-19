@@ -89,6 +89,7 @@ import {
   handleHeartbeatCheck,
   handleOpsAutogenDocument,
   handleOpsBoldsignGhostProof,
+  handleOpsE2eFreshEstimateSetup,
   handleOpsResendSelectionApproval,
   handleSummarySend,
 } from "./routes/ops.js";
@@ -1137,6 +1138,9 @@ export default {
     }
     if (url.pathname === "/api/ops/resend-selection-approval" && request.method === "POST") {
       return handleOpsResendSelectionApproval(request, env);
+    }
+    if (url.pathname === "/api/ops/e2e-fresh-estimate-setup" && request.method === "POST") {
+      return handleOpsE2eFreshEstimateSetup(request, env);
     }
 
     // ── Legacy Jobber jobs view (old dashboard at dashboard.* host) ──

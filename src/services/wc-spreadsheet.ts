@@ -7,9 +7,10 @@
  * switch, sync_log + DLQ + consecutive-failure heartbeat.
  *
  * Hard rules (spec §9): one-way (CHS → Sheet); write designated value cells
- * only — never insert/delete rows, never touch formulas/formatting/structure;
+ * only — never touch formulas/formatting/structure on KPI/Monthly tabs;
  * never write formula columns (Closed %, Converted %, NI%) or manual columns;
- * row-not-found → warn + skip (never create); idempotent (overwrite same cells).
+ * idempotent (overwrite same cells). Marketing Tallies may auto-create week
+ * rows when the current week has no matching row (see wc-marketing-rows.ts).
  */
 
 import type { Env } from "../env.js";
@@ -23,14 +24,10 @@ import {
   kpiRowMatches,
   leadSourceBucket,
   type LeadSourceBucket,
-  marketingRowMatches,
-  marketingRowMatchesWeek,
   monthLabelMatches,
-  parseShortDate,
-  parseWeekRange,
-  sundayOf,
   toCtDate,
 } from "./wc-dates.js";
+import { resolveMarketingWeekRow, type MarketingRowSettings } from "./wc-marketing-rows.js";
 
 const SYNC_TYPE = "wc_spreadsheet";
 const CONSECUTIVE_FAILURE_ALERT = 3;
@@ -352,47 +349,6 @@ async function findKpiRow(client: SheetsClient, s: WcSettings, today = ctToday()
   return null;
 }
 
-async function findMarketingRow(
-  client: SheetsClient,
-  s: WcSettings,
-  weekStart: string,
-  weekEnd: string,
-): Promise<{ row: number | null; sample?: (string | number | null)[][]; formatted?: (string | number | null)[][] }> {
-  const last = s.marketingFirstRow + 80;
-  const endCol = s.marketingWeekEndCol || s.marketingWeekCol;
-  const range = `${q(s.marketingTab)}!${s.marketingWeekCol}${s.marketingFirstRow}:${endCol}${last}`;
-  const formatted = await client.readRange(range, "FORMATTED_VALUE");
-  let grid = await client.readRange(range, "UNFORMATTED_VALUE");
-  if (grid.length === 0) grid = formatted;
-
-  const today = ctToday();
-  for (let i = 0; i < grid.length; i++) {
-    const startCell = grid[i]?.[0] ?? null;
-    const endCell = grid[i]?.[1] ?? null;
-
-    if (marketingRowMatchesWeek(startCell, endCell, weekStart, weekEnd, today)) {
-      return { row: s.marketingFirstRow + i };
-    }
-
-    // Fallback: week-start label in col A (or any cell) resolves to this Sunday.
-    for (const cell of [startCell, endCell]) {
-      const parsed = parseShortDate(cell);
-      if (!parsed) continue;
-      for (const baseYear of [today.year - 1, today.year, today.year + 1]) {
-        const iso = `${baseYear}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
-        if (sundayOf(iso) === weekStart) return { row: s.marketingFirstRow + i };
-      }
-    }
-  }
-  return { row: null, sample: grid.slice(0, 8), formatted: formatted.slice(0, 8) };
-}
-
-function marketingActiveWeekFallback(s: WcSettings, weekStart: string): number | null {
-  if (s.marketingActiveWeekRow == null) return null;
-  if (weekStart !== ctWeekBounds().start) return null;
-  return s.marketingActiveWeekRow;
-}
-
 async function findMonthlyRow(client: SheetsClient, s: WcSettings, monthIndex: number): Promise<number | null> {
   const grid = await client.readRange(
     `${q(s.monthlyTab)}!${s.monthlyMonthCol}${s.monthlyFirstRow}:${s.monthlyMonthCol}${s.monthlyLastRow}`,
@@ -449,9 +405,10 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
 
   result.data_snapshot.spreadsheet_id = sheetId;
   const client = new SheetsClient(sa, sheetId);
-  const sheetTabs = (await client.listSheets()).map((t) => t.title);
-  const marketingTab = resolveTabTitle(sheetTabs, settings.marketingTab);
-  const marketingSettings = { ...settings, marketingTab };
+  const sheetTabs = await client.listSheets();
+  const sheetTabNames = sheetTabs.map((t) => t.title);
+  const marketingTab = resolveTabTitle(sheetTabNames, settings.marketingTab);
+  const marketingSettings: MarketingRowSettings = { ...settings, marketingTab };
   if (marketingTab !== settings.marketingTab) {
     result.data_snapshot.marketing_tab_resolved = marketingTab;
   }
@@ -495,52 +452,38 @@ export async function runWcSpreadsheetSync(env: Env, now: Date = new Date()): Pr
 
   // Marketing Tallies — column letters from system_settings (§7; non-contiguous ranges).
   try {
-    const { row, sample, formatted } = await findMarketingRow(client, marketingSettings, wk.start, wk.end);
-    const resolvedRow = row ?? marketingActiveWeekFallback(marketingSettings, wk.start);
+    const resolution = await resolveMarketingWeekRow(
+      client,
+      sheetTabs,
+      marketingSettings,
+      wk.start,
+      wk.end,
+      ctToday(now),
+    );
+    const resolvedRow = resolution.row;
     result.rows_matched[marketingTab] = resolvedRow;
-    if (resolvedRow == null) {
-      result.tabs_skipped.push(marketingTab);
-      result.rows_matched[marketingTab] = null;
-      result.data_snapshot.marketing_debug = {
-        tab: marketingTab,
-        sheet_tabs: sheetTabs,
-        read_range: `${marketingSettings.marketingWeekCol}${marketingSettings.marketingFirstRow}:${marketingSettings.marketingWeekEndCol || marketingSettings.marketingWeekCol}${marketingSettings.marketingFirstRow + 80}`,
-        sample_unformatted: sample ?? [],
-        sample_formatted: formatted ?? [],
-        row6_unformatted: await client.readRange(`${q(marketingTab)}!A6:Z6`, "UNFORMATTED_VALUE").catch(() => []),
-        row6_formatted: await client.readRange(`${q(marketingTab)}!A6:Z6`, "FORMATTED_VALUE").catch(() => []),
-        header_formatted: await client.readRange(`${q(marketingTab)}!A1:R10`, "FORMATTED_VALUE").catch(() => []),
-        fin_c6_e6_unformatted: await client
-          .readRange(
-            `${q(marketingTab)}!${colRange(settings.marketingFinancialCols).start}6:${colRange(settings.marketingFinancialCols).end}6`,
-            "UNFORMATTED_VALUE",
-          )
-          .catch(() => []),
-      };
-      console.warn(`[wc] ROW_MISSING marketing week=${wk.start} tab=${marketingTab} — skipping Marketing tab (row not yet added to sheet)`);
-    } else {
-      if (row == null) result.data_snapshot.marketing_row_fallback = resolvedRow;
-      const tab = q(marketingTab);
-      const fin = colRange(settings.marketingFinancialCols);
-      const lc = settings.marketingLeadCols;
-      const ls = weekly.lead_by_source;
-      updates.push(
-        {
-          range: `${tab}!${fin.start}${resolvedRow}:${fin.end}${resolvedRow}`,
-          values: [[weekly.new_sales, weekly.bank_deposits, weekly.ar_balance]],
-        },
-        { range: `${tab}!${lc.organic}${resolvedRow}:${lc.adwords}${resolvedRow}`, values: [[ls.organic, ls.adwords]] },
-        { range: `${tab}!${lc.lsa}${resolvedRow}`, values: [[ls.lsa]] },
-        { range: `${tab}!${lc.facebook}${resolvedRow}`, values: [[ls.facebook]] },
-        { range: `${tab}!${lc.referral}${resolvedRow}:${lc.other}${resolvedRow}`, values: [[ls.referral, ls.repeat, ls.other]] },
-        { range: `${tab}!${settings.marketingConvertedCol}${resolvedRow}`, values: [[weekly.converted]] },
-      );
-    }
+    result.data_snapshot.marketing_row_resolution = resolution;
+
+    const tab = q(marketingTab);
+    const fin = colRange(settings.marketingFinancialCols);
+    const lc = settings.marketingLeadCols;
+    const ls = weekly.lead_by_source;
+    updates.push(
+      {
+        range: `${tab}!${fin.start}${resolvedRow}:${fin.end}${resolvedRow}`,
+        values: [[weekly.new_sales, weekly.bank_deposits, weekly.ar_balance]],
+      },
+      { range: `${tab}!${lc.organic}${resolvedRow}:${lc.adwords}${resolvedRow}`, values: [[ls.organic, ls.adwords]] },
+      { range: `${tab}!${lc.lsa}${resolvedRow}`, values: [[ls.lsa]] },
+      { range: `${tab}!${lc.facebook}${resolvedRow}`, values: [[ls.facebook]] },
+      { range: `${tab}!${lc.referral}${resolvedRow}:${lc.other}${resolvedRow}`, values: [[ls.referral, ls.repeat, ls.other]] },
+      { range: `${tab}!${settings.marketingConvertedCol}${resolvedRow}`, values: [[weekly.converted]] },
+    );
   } catch (err) {
     result.tabs_failed.push(marketingTab);
     const msg = (err as Error).message;
     result.error_message = (result.error_message ? result.error_message + " | " : "") + `marketing: ${msg}`;
-    console.warn(`[wc] marketing discovery failed: ${msg}`);
+    console.warn(`[wc] marketing row resolution failed: ${msg}`);
   }
 
   // Monthly Net Profits — columns B:C (configurable): Total Income, Net Profits

@@ -415,8 +415,16 @@ export async function generateAndSendEstimateContract(
 
     return { docId, skipped: false, boldsign_sent: true };
   } catch (e) {
-    console.error("[estimate-contract] BoldSign send failed:", (e as Error).message);
-    return { docId, skipped: false, boldsign_sent: false };
+    const msg = (e as Error).message;
+    console.error("[estimate-contract] BoldSign send failed:", msg);
+    meta.signature_status = "failed";
+    meta.signature_error = msg.slice(0, 500);
+    await env.DB.prepare(
+      "UPDATE documents SET signature_data = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+      .bind(serializeSignatureMeta(meta), docId)
+      .run();
+    return { docId, skipped: false, boldsign_sent: false, reason: msg.slice(0, 300) };
   }
 }
 

@@ -144,6 +144,15 @@ export function parseShortDate(cell: string | number | null): { month: number; d
   return { month, day };
 }
 
+/** Format Sun→Sat ISO bounds as a Marketing Tallies weekly period label (e.g. "7/19 - 7/25"). */
+export function formatMarketingWeekLabel(weekStart: string, weekEnd: string): string {
+  const short = (iso: string) => {
+    const [, month, day] = iso.split("-").map(Number);
+    return `${month}/${day}`;
+  };
+  return `${short(weekStart)} - ${short(weekEnd)}`;
+}
+
 /** Parse a merged "Weekly Period" label like "7/12 - 7/18" or "7/12/2026 - 7/18/2026". */
 export function parseWeekRange(cell: string | number | null): { start: string | number; end: string | number } | null {
   if (cell == null || typeof cell === "number") return null;

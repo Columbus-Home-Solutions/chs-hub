@@ -331,26 +331,33 @@ export async function handleEstimateRequestList(env: Env, url: URL): Promise<Res
 // ─── GET /api/estimate-requests/pipeline ─────────────────────────────────────
 
 export async function handleEstimateRequestPipeline(env: Env): Promise<Response> {
-  await repairOrphanedEstimateRequests(env);
+  try {
+    await repairOrphanedEstimateRequests(env);
 
-  const { results } = await env.DB.prepare(
-    `${SELECT} ORDER BY er.updated_at DESC`,
-  ).all<RequestRow>();
-  const rows = (results ?? []).map(shape);
+    const { results } = await env.DB.prepare(
+      `${SELECT} ORDER BY er.updated_at DESC`,
+    ).all<RequestRow>();
+    const rows = (results ?? []).map(shape);
 
-  // Always emit every stage key (even empty) so the board renders all columns.
-  const pipeline: Record<string, ReturnType<typeof shape>[]> = {};
-  for (const s of ALL_STATUSES) pipeline[s] = [];
-  for (const r of rows) {
-    (pipeline[r.status] ?? (pipeline[r.status] = [])).push(r);
+    // Always emit every stage key (even empty) so the board renders all columns.
+    const pipeline: Record<string, ReturnType<typeof shape>[]> = {};
+    for (const s of ALL_STATUSES) pipeline[s] = [];
+    for (const r of rows) {
+      (pipeline[r.status] ?? (pipeline[r.status] = [])).push(r);
+    }
+
+    return json({
+      as_of: new Date().toISOString(),
+      stages: ALL_STATUSES,
+      counts: Object.fromEntries(ALL_STATUSES.map((s) => [s, pipeline[s].length])),
+      pipeline,
+      total: rows.length,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("estimate-requests/pipeline failed:", message);
+    return err(500, "pipeline_failed", message);
   }
-
-  return json({
-    as_of: new Date().toISOString(),
-    stages: ALL_STATUSES,
-    counts: Object.fromEntries(ALL_STATUSES.map((s) => [s, pipeline[s].length])),
-    pipeline,
-  });
 }
 
 // ─── GET /api/estimate-requests/:id ──────────────────────────────────────────

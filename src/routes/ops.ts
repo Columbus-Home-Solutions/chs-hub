@@ -33,6 +33,7 @@ import {
   parseSignatureMeta,
 } from "../lib/estimate-contract-document.js";
 import { runHlLeadMirror } from "../lib/hl-lead-mirror.js";
+import { handleEstimateRequestPipeline } from "./estimate-requests.js";
 
 function requireSecret(request: Request, env: Env): Response | null {
   const url = new URL(request.url);
@@ -74,6 +75,41 @@ export async function handleHlLeadMirrorRun(
   } catch (err) {
     return jsonOk({ ok: false, error: (err as Error).message }, 502);
   }
+}
+
+/** Diagnose CHS Leads Kanban pipeline without Access (SYNC_TRIGGER_SECRET). */
+export async function handleOpsEstimatePipelineDiagnose(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+  const res = await handleEstimateRequestPipeline(env);
+  const text = await res.text();
+  let body: unknown = text;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = { raw: text.slice(0, 500) };
+  }
+  const counts =
+    body && typeof body === "object" && body !== null && "counts" in body
+      ? (body as { counts: unknown }).counts
+      : null;
+  const total =
+    body && typeof body === "object" && body !== null && "total" in body
+      ? (body as { total: unknown }).total
+      : null;
+  return jsonOk({
+    ok: res.ok,
+    status: res.status,
+    total,
+    counts,
+    error:
+      body && typeof body === "object" && body !== null && "error" in body
+        ? body
+        : null,
+  });
 }
 
 export async function handleDlqSummary(

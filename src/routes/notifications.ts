@@ -282,10 +282,12 @@ export async function handleInbox(request: Request, env: Env): Promise<Response>
     .bind(user.id)
     .first<{ n: number }>();
 
+  // Inbox dropdown shows unread only so Clear All empties the panel while
+  // preserving notification_logs rows (audit trail via is_read/read_at).
   const { results } = await env.DB.prepare(
     `SELECT id, trigger_event, body, subject, link_path, is_read, read_at, created_at
        FROM notification_logs
-      WHERE recipient_user_id = ? AND channel = 'in_app'
+      WHERE recipient_user_id = ? AND channel = 'in_app' AND is_read = 0
       ORDER BY created_at DESC LIMIT 50`,
   )
     .bind(user.id)

@@ -247,7 +247,16 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
   const { sorted, sortKey, sortDir, toggle } = useClientSort(allRequests, "created_at", "desc");
 
   if (loading) return <Spinner center />;
-  if (error) return <div class="empty-state">Couldn't load leads: {error}</div>;
+  if (error) {
+    return (
+      <div class="empty-state">
+        Couldn't load leads: {error}
+        <div class="mt-sm">
+          <Button variant="secondary" onClick={() => refetch()}>Retry</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

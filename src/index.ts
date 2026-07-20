@@ -88,6 +88,7 @@ import {
   handleDriveMirrorStatus,
   handleHeartbeatCheck,
   handleHlLeadMirrorRun,
+  handleOpsEstimatePipelineDiagnose,
   handleOpsAutogenDocument,
   handleOpsBoldsignGhostProof,
   handleOpsE2eFreshEstimateSetup,
@@ -1137,6 +1138,9 @@ export default {
     }
     if (url.pathname === "/api/ops/hl-lead-mirror" && request.method === "POST") {
       return handleHlLeadMirrorRun(request, env);
+    }
+    if (url.pathname === "/api/ops/estimate-pipeline-diagnose" && request.method === "GET") {
+      return handleOpsEstimatePipelineDiagnose(request, env);
     }
     if (url.pathname === "/api/ops/dlq" && request.method === "GET") {
       return handleDlqSummary(request, env);

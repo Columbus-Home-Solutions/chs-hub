@@ -62,13 +62,19 @@ export function NotificationBell() {
     if (n.link_path) route(n.link_path);
   };
 
-  const markAll = async () => {
+  const clearAll = async () => {
+    const n = unread > 0 ? unread : items.filter((i) => !i.is_read).length;
+    const label = n > 0 ? `Clear all ${n} notifications?` : "Clear all notifications?";
+    if (!confirm(label)) return;
     try {
       await api.put("/api/notifications/read-all", {});
+      setUnread(0);
+      setItems([]);
     } catch {
-      /* best-effort */
+      /* best-effort — reload so UI stays honest */
+      void load();
+      return;
     }
-    void load();
   };
 
   return (
@@ -87,9 +93,9 @@ export function NotificationBell() {
         <div class="notif-dropdown" role="menu">
           <div class="notif-dropdown__head">
             <span>Notifications</span>
-            {unread > 0 && (
-              <button class="notif-dropdown__mark" onClick={markAll}>
-                Mark all read
+            {items.length > 0 && (
+              <button class="notif-dropdown__clear" type="button" onClick={() => void clearAll()}>
+                Clear All
               </button>
             )}
           </div>

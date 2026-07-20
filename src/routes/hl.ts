@@ -51,9 +51,11 @@ export async function handleHLProxy(
   request: Request,
   url: URL,
 ): Promise<Response> {
-  // Strip the `/api/hl` prefix to get the HL path.
-  const hlPath = url.pathname.replace(/^\/api\/hl/, "");
+  // Strip the `/api/hl` prefix to get the HL path. Normalize trailing slash
+  // so `/opportunities/search/` matches the whitelist + location inject.
+  let hlPath = url.pathname.replace(/^\/api\/hl/, "");
   if (!hlPath.startsWith("/")) return json(400, { error: "bad_path" });
+  if (hlPath.length > 1 && hlPath.endsWith("/")) hlPath = hlPath.slice(0, -1);
 
   if (!pathAllowed(hlPath, request.method)) {
     return json(403, {
@@ -67,7 +69,17 @@ export async function handleHLProxy(
     return json(500, { error: "hl_not_configured" });
   }
 
-  const target = HL_BASE + hlPath + (url.search || "");
+  // HL requires a location on pipelines/search. The Preact Lead Pipeline omits
+  // it (legacy dashboard hardcoded HL_LOC). Inject server-side so callers
+  // don't need the location id in the browser.
+  const locationId = (env.HL_LOCATION_ID ?? "").trim();
+  const needsLocation =
+    hlPath === "/opportunities/pipelines" || hlPath === "/opportunities/search";
+  if (needsLocation && !locationId) {
+    return json(500, { error: "hl_location_not_configured" });
+  }
+  const search = ensureLocationQuery(hlPath, url.search, locationId);
+  const target = HL_BASE + hlPath + search;
 
   // Forward body as-is for write methods. Read the request body once so we
   // can also log failures usefully if needed.
@@ -98,6 +110,33 @@ export async function handleHLProxy(
       "cache-control": "no-store",
     },
   });
+}
+
+/**
+ * Ensure HL gets the location param it requires. Pipelines uses camelCase
+ * `locationId`; search uses snake_case `location_id`. Preserve any caller-
+ * supplied value (legacy dashboard already sends these).
+ */
+function ensureLocationQuery(
+  hlPath: string,
+  search: string,
+  locationId: string,
+): string {
+  if (!locationId) return search || "";
+  const params = new URLSearchParams(
+    search.startsWith("?") ? search.slice(1) : search,
+  );
+  if (hlPath === "/opportunities/pipelines") {
+    if (!params.has("locationId") && !params.has("location_id")) {
+      params.set("locationId", locationId);
+    }
+  } else if (hlPath === "/opportunities/search") {
+    if (!params.has("location_id") && !params.has("locationId")) {
+      params.set("location_id", locationId);
+    }
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
 }
 
 function json(status: number, body: unknown): Response {

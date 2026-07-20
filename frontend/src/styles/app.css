@@ -138,6 +138,18 @@
   cursor: pointer;
   font-size: var(--text-xs);
 }
+.notif-dropdown__clear {
+  background: none;
+  border: none;
+  color: var(--color-error);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.notif-dropdown__clear:hover {
+  color: var(--color-error);
+  text-decoration: underline;
+}
 .notif-dropdown__list {
   max-height: 420px;
   overflow-y: auto;

@@ -262,6 +262,7 @@ import {
   handleTwilioStatus,
   handleTwilioVoice,
 } from "./routes/webhooks-twilio.js";
+import { handleThumbtackLeadsWebhook } from "./routes/webhooks-thumbtack.js";
 import { handleSmsThread, handleSmsReply, handleSmsConversations } from "./routes/sms.js";
 import { processNotifications } from "./lib/notification-engine.js";
 import { processQuoteFollowUps } from "./lib/quote-follow-up.js";
@@ -746,6 +747,11 @@ export default {
     }
     if (url.pathname === "/api/webhooks/twilio/status" && request.method === "POST") {
       return handleTwilioStatus(request, env);
+    }
+    // Thumbtack leads — PUBLIC, path-secret gated (capture-only until schema known).
+    const thumbtackLeads = url.pathname.match(/^\/api\/webhooks\/thumbtack\/leads\/([^/]+)$/);
+    if (thumbtackLeads && request.method === "POST") {
+      return handleThumbtackLeadsWebhook(request, env, decodeURIComponent(thumbtackLeads[1]));
     }
     const pqSign = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/sign$/);
     if (pqSign && request.method === "POST") {

@@ -208,30 +208,12 @@ function ReplyComposer({
   return (
     <div style={{ marginTop: "var(--space-md)" }}>
       {saved && gbpLive && (
-        <div
-          style={{
-            background: "var(--color-success-bg, #ecfdf5)",
-            border: "1px solid var(--color-success-border, #a7f3d0)",
-            borderRadius: "var(--radius-md)",
-            padding: "var(--space-sm) var(--space-md)",
-            marginBottom: "var(--space-sm)",
-            fontSize: "var(--text-sm)",
-          }}
-        >
+        <div class="callout callout--success" role="status" style={{ marginBottom: "var(--space-sm)" }}>
           <strong>Posted to Google Business Profile.</strong>
         </div>
       )}
       {saved && !gbpLive && (
-        <div
-          style={{
-            background: "var(--color-warning-bg, #fffbeb)",
-            border: "1px solid var(--color-warning-border, #fde68a)",
-            borderRadius: "var(--radius-md)",
-            padding: "var(--space-sm) var(--space-md)",
-            marginBottom: "var(--space-sm)",
-            fontSize: "var(--text-sm)",
-          }}
-        >
+        <div class="callout callout--warning" role="status" style={{ marginBottom: "var(--space-sm)" }}>
           <strong>Saved here — not yet posted to Google.</strong> Copy this reply to your{" "}
           <a href="https://business.google.com" target="_blank" rel="noreferrer" style={{ color: "var(--color-primary)" }}>
             Google Business Profile
@@ -530,16 +512,7 @@ export function ReviewsPage(_props: RoutableProps) {
       </div>
 
       {gbpLive && (
-        <div
-          style={{
-            background: "var(--color-success-bg, #ecfdf5)",
-            border: "1px solid var(--color-success-border, #a7f3d0)",
-            borderRadius: "var(--radius-md)",
-            padding: "var(--space-sm) var(--space-md)",
-            marginBottom: "var(--space-md)",
-            fontSize: "var(--text-sm)",
-          }}
-        >
+        <div class="callout callout--success" role="status" style={{ marginBottom: "var(--space-md)" }}>
           <strong>GBP live sync is on.</strong> New Google reviews appear here automatically; posting a reply
           sends it to Google first.
         </div>

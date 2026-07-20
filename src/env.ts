@@ -41,6 +41,12 @@ export interface Env {
   /** Override redirect URI; default is dashboard …/google-business-profile/callback. */
   GBP_REDIRECT_URI?: string;
 
+  /**
+   * Thumbtack custom webhook header secret (X-Thumbtack-Webhook-Secret).
+   * Distinct from system_settings.thumbtack_webhook_secret (URL path segment).
+   */
+  THUMBTACK_WEBHOOK_SECRET?: string;
+
   /** Google Shared Drive ID for "CHS Hub Backup" — optional; enables D1/R2 → Drive mirror. */
   DRIVE_SHARED_DRIVE_ID?: string;
   /** @deprecated v2 mirror structure: year folders live at drive root; this var is unused. */

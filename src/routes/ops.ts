@@ -32,7 +32,6 @@ import {
   generateAndSendEstimateContract,
   parseSignatureMeta,
 } from "../lib/estimate-contract-document.js";
-
 function requireSecret(request: Request, env: Env): Response | null {
   const url = new URL(request.url);
   const secret =

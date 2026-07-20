@@ -63,6 +63,7 @@ function formatSource(source: string): string {
     inbound_sms: "SMS",
     high_level: "HL",
     website_form: "Web Form",
+    thumbtack: "Thumbtack",
   };
   return map[source] ?? source;
 }

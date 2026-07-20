@@ -15,6 +15,7 @@ import { requireRole, RoleError } from "../middleware/roles.js";
 import {
   buildGbpAuthorizeUrl,
   disconnectGbp,
+  discoverAndPersistLocation,
   exchangeGbpAuthCode,
   gbpCredentialsConfigured,
   getGbpStatus,
@@ -126,7 +127,11 @@ export async function handleGbpTest(request: Request, env: Env): Promise<Respons
   if (denied) return denied;
   try {
     const accounts = await listGbpAccounts(env);
-    const status = await getGbpStatus(env);
+    let status = await getGbpStatus(env);
+    if (!status.location_name) {
+      await discoverAndPersistLocation(env);
+      status = await getGbpStatus(env);
+    }
     return json({
       ok: true,
       note: accounts[0]
@@ -134,6 +139,7 @@ export async function handleGbpTest(request: Request, env: Env): Promise<Respons
         : "OK — no accounts returned",
       accounts: accounts.map((a) => a.name),
       location_name: status.location_name,
+      location_title: status.location_title,
     });
   } catch (err) {
     return json({ ok: false, note: (err as Error).message }, { status: 502 });

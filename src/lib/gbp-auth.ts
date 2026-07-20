@@ -31,6 +31,8 @@ export interface GbpConfiguration {
   state?: string;
   /** Full resource name, e.g. accounts/123 */
   account_name?: string;
+  /** Business Information API name, e.g. locations/456 */
+  location_resource?: string;
   /** Full v4 parent for reviews, e.g. accounts/123/locations/456 */
   location_name?: string;
   location_title?: string;
@@ -379,7 +381,18 @@ export async function listGbpAccounts(
   return data.accounts ?? [];
 }
 
-async function discoverAndPersistLocation(env: Env): Promise<void> {
+/**
+ * Discover GBP account + first location and persist for reviews sync/reply.
+ *
+ * Account list: Account Management API
+ *   GET https://mybusinessaccountmanagement.googleapis.com/v1/accounts
+ * Locations: Business Information API (NOT legacy mybusiness.googleapis.com/v4)
+ *   GET https://mybusinessbusinessinformation.googleapis.com/v1/{parent}/locations?readMask=…
+ *
+ * Business Information returns location names as `locations/{id}`. Reviews v4
+ * needs `accounts/{accountId}/locations/{locationId}` — we compose that here.
+ */
+export async function discoverAndPersistLocation(env: Env): Promise<void> {
   const accounts = await listGbpAccounts(env);
   if (accounts.length === 0) {
     throw new Error("No Google Business Profile accounts returned for this Google user.");
@@ -387,35 +400,47 @@ async function discoverAndPersistLocation(env: Env): Promise<void> {
   const accountName = accounts[0].name; // accounts/123
   const token = await getValidGbpAccessToken(env);
 
-  // Legacy v4 locations list still pairs cleanly with the v4 reviews API.
-  const locResp = await fetch(
-    `https://mybusiness.googleapis.com/v4/${accountName}/locations?pageSize=100`,
-    { headers: { authorization: `Bearer ${token}`, accept: "application/json" } },
+  const locUrl = new URL(
+    `https://mybusinessbusinessinformation.googleapis.com/v1/${accountName}/locations`,
   );
+  locUrl.searchParams.set("readMask", "name,title,storefrontAddress");
+  locUrl.searchParams.set("pageSize", "100");
+
+  const locResp = await fetch(locUrl.toString(), {
+    headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+  });
   if (!locResp.ok) {
     const text = await locResp.text();
     throw new Error(`locations.list failed (${locResp.status}): ${text.slice(0, 400)}`);
   }
   const locData = (await locResp.json()) as {
-    locations?: Array<{ name: string; locationName?: string; locationKey?: { placeId?: string } }>;
+    locations?: Array<{ name: string; title?: string }>;
   };
   const locations = locData.locations ?? [];
   if (locations.length === 0) {
     throw new Error(`No locations under ${accountName}.`);
   }
   const loc = locations[0];
+  // BI name: locations/{id} → v4 reviews parent: accounts/{aid}/locations/{id}
+  const locationId = loc.name.replace(/^locations\//, "");
+  const locationNameForReviews = `${accountName}/locations/${locationId}`;
+
   const conn = await loadGbpConnection(env);
+  if (!conn?.access_token || !conn.refresh_token) {
+    throw new GbpNotConnectedError("GBP tokens missing during location discovery");
+  }
   const configuration: GbpConfiguration = {
-    ...(conn?.configuration ?? {}),
+    ...(conn.configuration ?? {}),
     account_name: accountName,
-    location_name: loc.name,
-    location_title: loc.locationName ?? loc.name,
+    location_resource: loc.name,
+    location_name: locationNameForReviews,
+    location_title: loc.title ?? loc.name,
   };
   const accountId = accountName.replace(/^accounts\//, "");
   await writeTokens(env, {
-    accessToken: conn!.access_token!,
-    refreshToken: conn!.refresh_token!,
-    expiry: conn!.token_expiry ?? new Date(Date.now() + 3600_000).toISOString(),
+    accessToken: conn.access_token,
+    refreshToken: conn.refresh_token,
+    expiry: conn.token_expiry ?? new Date(Date.now() + 3600_000).toISOString(),
     accountId,
     configuration,
     status: "connected",

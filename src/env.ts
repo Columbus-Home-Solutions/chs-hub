@@ -32,6 +32,15 @@ export interface Env {
   /** Override redirect URI for Google Calendar OAuth callback. */
   GOOGLE_CALENDAR_REDIRECT_URI?: string;
 
+  /**
+   * Google Business Profile OAuth — separate client from Calendar
+   * ("CHS - Google Business Profile"). Worker secrets; do NOT reuse GOOGLE_OAUTH_*.
+   */
+  GBP_CLIENT_ID?: string;
+  GBP_CLIENT_SECRET?: string;
+  /** Override redirect URI; default is dashboard …/google-business-profile/callback. */
+  GBP_REDIRECT_URI?: string;
+
   /** Google Shared Drive ID for "CHS Hub Backup" — optional; enables D1/R2 → Drive mirror. */
   DRIVE_SHARED_DRIVE_ID?: string;
   /** @deprecated v2 mirror structure: year folders live at drive root; this var is unused. */

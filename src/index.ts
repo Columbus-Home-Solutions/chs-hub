@@ -533,8 +533,17 @@ import {
   handleGcalDisconnect,
   handleDashboardMeetings,
 } from "./routes/google-calendar.js";
+import {
+  handleGbpStatus,
+  handleGbpConnect,
+  handleGbpCallback,
+  handleGbpDisconnect,
+  handleGbpTest,
+  handleGbpSync,
+} from "./routes/google-business-profile.js";
 import { handleIcalFeed, handleIcalSettings, handleIcalRegenerate } from "./routes/calendar-ical.js";
 import { syncGoogleCalendarEvents } from "./lib/google-calendar-sync.js";
+import { runGbpReviewsSyncTick } from "./lib/google-reviews-sync.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 // ── Social Media Engine (Sprint 16) ─────────────────────────────────────────
 import {
@@ -1047,6 +1056,9 @@ export default {
     if (url.pathname === "/api/integrations/google-calendar/connect" && request.method === "POST") {
       return handleGcalConnect(request, env);
     }
+    if (url.pathname === "/api/integrations/google-business-profile/connect" && request.method === "POST") {
+      return handleGbpConnect(request, env);
+    }
     // Callback is Access-gated (browser redirect); matched before the generic
     // /api/integrations/:service detail route.
     if (url.pathname === "/api/integrations/quickbooks/callback" && request.method === "GET") {
@@ -1055,11 +1067,20 @@ export default {
     if (url.pathname === "/api/integrations/google-calendar/callback" && request.method === "GET") {
       return handleGcalCallback(request, env);
     }
+    if (url.pathname === "/api/integrations/google-business-profile/callback" && request.method === "GET") {
+      return handleGbpCallback(request, env);
+    }
     if (url.pathname === "/api/integrations/quickbooks/disconnect" && request.method === "POST") {
       return handleQboDisconnect(request, env);
     }
+    if (url.pathname === "/api/integrations/google-business-profile/disconnect" && request.method === "POST") {
+      return handleGbpDisconnect(request, env);
+    }
     if (url.pathname === "/api/integrations/quickbooks/test" && request.method === "POST") {
       return handleQboTest(request, env);
+    }
+    if (url.pathname === "/api/integrations/google-business-profile/test" && request.method === "POST") {
+      return handleGbpTest(request, env);
     }
     if (url.pathname === "/api/integrations/quickbooks/reference" && request.method === "GET") {
       return handleQboReference(request, env);
@@ -1516,6 +1537,12 @@ export default {
     }
     if (url.pathname === "/api/google-calendar/sync" && request.method === "POST") {
       return handleGcalSync(request, env);
+    }
+    if (url.pathname === "/api/google-business-profile/status" && request.method === "GET") {
+      return handleGbpStatus(request, env);
+    }
+    if (url.pathname === "/api/google-business-profile/sync" && request.method === "POST") {
+      return handleGbpSync(request, env);
     }
     if (url.pathname === "/api/schedule" && request.method === "GET") {
       return handleScheduleFeed(env, url);
@@ -2774,6 +2801,13 @@ async function runThirtyMinTick(cron: string, env: Env): Promise<void> {
     );
   } catch (err) {
     console.error(`[cron ${cron}] wc_spreadsheet failed:`, (err as Error).message);
+  }
+
+  // Google Business Profile reviews sync (Phase B) — isolated; never fails the WC tick.
+  try {
+    await runGbpReviewsSyncTick(env);
+  } catch (err) {
+    console.error(`[cron ${cron}] gbp_reviews_sync failed:`, (err as Error).message);
   }
 }
 

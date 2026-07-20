@@ -51,6 +51,12 @@ import {
   handleGcalConnect,
   handleGcalDisconnect,
 } from "./google-calendar.js";
+import { GBP_SERVICE } from "../lib/gbp-auth.js";
+import {
+  handleGbpConnect,
+  handleGbpDisconnect,
+  handleGbpTest,
+} from "./google-business-profile.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -345,6 +351,7 @@ export async function handleIntegrationTest(
 ): Promise<Response> {
   // QBO has a live CompanyInfo ping; route there for parity.
   if (service === QBO_SERVICE) return handleQboTest(request, env);
+  if (service === GBP_SERVICE) return handleGbpTest(request, env);
 
   const row = await env.DB.prepare(
     `SELECT service, status, last_sync, last_error FROM integration_connections WHERE service = ?`,
@@ -376,6 +383,7 @@ export async function handleIntegrationConnect(
 ): Promise<Response> {
   if (service === QBO_SERVICE) return handleQboConnect(request, env);
   if (service === GCAL_SERVICE) return handleGcalConnect(request, env);
+  if (service === GBP_SERVICE) return handleGbpConnect(request, env);
 
   let body: { configuration?: Record<string, unknown> } = {};
   try {
@@ -418,6 +426,7 @@ export async function handleIntegrationDisconnect(
 ): Promise<Response> {
   if (service === QBO_SERVICE) return handleQboDisconnect(request, env);
   if (service === GCAL_SERVICE) return handleGcalDisconnect(request, env);
+  if (service === GBP_SERVICE) return handleGbpDisconnect(request, env);
 
   const now = new Date().toISOString();
   await env.DB.prepare(

@@ -15,9 +15,12 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const ROOT = process.cwd();
+const RESUME_SETUP = process.env.RESUME_SETUP || "";
 const OUT = join(
   "/tmp",
-  `chs-boldsign-e2e-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+  RESUME_SETUP
+    ? `chs-boldsign-e2e-resume-${new Date().toISOString().replace(/[:.]/g, "-")}`
+    : `chs-boldsign-e2e-${new Date().toISOString().replace(/[:.]/g, "-")}`,
 );
 mkdirSync(OUT, { recursive: true });
 
@@ -68,117 +71,217 @@ function d1Json(sql) {
 
 async function signWithPlaywright(signLink, label) {
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1100 } });
   const shots = [];
+  const shot = async (name) => {
+    const p = join(OUT, `${label}-${name}.png`);
+    await page.screenshot({ path: p, fullPage: true });
+    shots.push(p);
+  };
+  const topBtn = () =>
+    page.locator("#btnContinueNext, #btnDesktopNext, button:has-text('Start signing'), button:has-text('Next field'), button:has-text('Finish')").first();
+
   try {
-    await page.goto(signLink, { waitUntil: "networkidle", timeout: 90000 }).catch(async () => {
-      await page.goto(signLink, { waitUntil: "domcontentloaded", timeout: 60000 });
-    });
-    await wait(4000);
-    shots.push(join(OUT, `${label}-01-loaded.png`));
-    await page.screenshot({ path: shots[0], fullPage: true });
+    await page.goto(signLink, { waitUntil: "domcontentloaded", timeout: 90000 });
+    await wait(4500);
+    await shot("01-loaded");
 
-    for (const sel of [
-      "button:has-text('Accept')",
-      "button:has-text('I Agree')",
-      "button:has-text('Agree')",
-      "button:has-text('Continue')",
-    ]) {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await btn.click().catch(() => undefined);
-        await wait(800);
-      }
+    // Reload if BoldSign reports stale state from a prior session
+    const reloadBtn = page.getByRole("button", { name: /Reload Document/i }).first();
+    if (await reloadBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await reloadBtn.click({ force: true });
+      note(`reload:${label}`, {});
+      await wait(4000);
     }
 
-    // Prefer frame if BoldSign uses iframe
-    const frames = page.frames();
-    const ctx = frames.length > 1 ? frames[frames.length - 1] : page;
-
-    const fieldSelectors = [
-      "text=Sign Here",
-      "text=Sign here",
-      "[data-field-type='Signature']",
-      ".signature-field",
-      "div[class*='signature' i]",
-    ];
-    let clicked = false;
-    for (const sel of fieldSelectors) {
-      const loc = ctx.locator(sel).first();
-      if (await loc.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await loc.click({ force: true });
-        clicked = true;
-        note(`click:${label}`, { sel });
-        break;
-      }
-    }
-    if (!clicked) {
-      await page.mouse.click(1000, 420);
-      note(`click:${label}`, { sel: "fallback-coords" });
+    // Already completed
+    const initialBody = await page.locator("body").innerText().catch(() => "");
+    if (/you have already signed|Completed/i.test(initialBody) && !/Required fields left\s*[1-9]/i.test(initialBody)) {
+      note(`already-signed:${label}`, {});
+      await shot("06-done");
+      return { shots, url: page.url(), title: await page.title(), bodyText: initialBody };
     }
 
-    await wait(2000);
-    shots.push(join(OUT, `${label}-02-dialog.png`));
-    await page.screenshot({ path: shots[1], fullPage: true });
-
-    const typeTab = page.locator("text=Type").first();
-    if (await typeTab.isVisible({ timeout: 2500 }).catch(() => false)) {
-      await typeTab.click();
-      await wait(500);
-    }
-
-    const nameInput = page
-      .locator("input[placeholder*='name' i], input[aria-label*='signature' i], input[type='text']")
-      .first();
-    if (await nameInput.isVisible({ timeout: 2500 }).catch(() => false)) {
-      await nameInput.fill("ZZTEST-PRELAUNCH Test Client");
-      note(`typed-name:${label}`, {});
+    // 1) Disclosure — #agreeCheckbox is opacity:0; force-check then #btnContinue
+    const agreeBox = await page.locator("#agreeCheckbox").boundingBox().catch(() => null);
+    if (agreeBox && agreeBox.width + agreeBox.height > 0) {
+      await page.locator("#agreeCheckbox").check({ force: true });
+      await page.locator("#btnContinue, button.bs-btn-continue-width").first().click({ force: true });
+      await page
+        .getByText("Message from the sender")
+        .first()
+        .waitFor({ state: "hidden", timeout: 10000 })
+        .catch(() => undefined);
+      note(`disclosure:${label}`, { cleared: true });
+      await wait(1200);
     } else {
-      const canvas = page.locator("canvas").last();
-      if (await canvas.isVisible({ timeout: 2000 }).catch(() => false)) {
-        const box = await canvas.boundingBox();
-        if (box) {
-          await page.mouse.move(box.x + 30, box.y + box.height / 2);
-          await page.mouse.down();
-          for (let i = 1; i <= 10; i++) {
-            await page.mouse.move(box.x + 30 + i * ((box.width - 60) / 10), box.y + box.height / 2 + Math.sin(i) * 8);
-          }
-          await page.mouse.up();
-          note(`drew:${label}`, {});
+      note(`disclosure:${label}`, { present: false });
+    }
+    await shot("02-after-disclosure");
+
+    // 2) Start signing / Next field
+    await topBtn().click({ force: true });
+    note(`start:${label}`, {
+      txt: ((await topBtn().innerText().catch(() => "")) || "").trim(),
+    });
+    await wait(2500);
+    await shot("03-at-field");
+
+    // 3) Open signature modal — Sign Here may sit below the viewport
+    let opened = await page
+      .locator("button")
+      .filter({ hasText: /Save\s*&\s*use/i })
+      .first()
+      .isVisible()
+      .catch(() => false);
+    for (let attempt = 0; attempt < 4 && !opened; attempt++) {
+      const sh = page.getByText(/Sign Here/i).first();
+      await sh.evaluate((el) => el.scrollIntoView({ block: "center" })).catch(() => undefined);
+      await wait(400);
+      const box = await sh.boundingBox().catch(() => null);
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        await wait(400);
+        await page.mouse.click(box.x + box.width / 2, Math.max(10, box.y - 8));
+      }
+      await wait(1200);
+      opened = await page
+        .locator("button")
+        .filter({ hasText: /Save\s*&\s*use/i })
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (!opened) {
+        const ins = page.getByText(/Insert Signature/i).first();
+        if (await ins.isVisible().catch(() => false)) {
+          const ib = await ins.boundingBox();
+          if (ib) await page.mouse.click(ib.x + ib.width / 2, ib.y + ib.height / 2);
+          await wait(1200);
+          opened = await page
+            .locator("button")
+            .filter({ hasText: /Save\s*&\s*use/i })
+            .first()
+            .isVisible()
+            .catch(() => false);
         }
       }
     }
+    note(`modal:${label}`, { opened });
+    await shot("04-sign-dialog");
 
-    for (const labelText of [
-      "Adopt and Sign",
-      "Adopt & Sign",
-      "Adopt",
-      "Apply",
-      "Sign",
-      "OK",
-      "Save",
-    ]) {
-      const b = page.locator(`button:has-text("${labelText}")`).first();
-      if (await b.isVisible({ timeout: 1200 }).catch(() => false)) {
-        await b.click();
-        note(`btn:${label}`, { labelText });
+    if (opened) {
+      const typeTab = page.getByRole("tab", { name: "Type" });
+      if (await typeTab.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await typeTab.click({ force: true });
+      }
+      const nameInput = page
+        .locator(".e-dlg-content input[type='text'], input[placeholder*='name' i]")
+        .first();
+      if (await nameInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await nameInput.fill("ZZTEST-PRELAUNCH Test Client");
+        note(`typed-name:${label}`, {});
+        await wait(1200);
+      }
+
+      const style = await page.evaluate(() => {
+        const dlg = Array.from(document.querySelectorAll(".e-dialog, [role='dialog'], .e-dlg-content")).find(
+          (el) => /signature/i.test(el.innerText || "") && el.getBoundingClientRect().width > 200,
+        );
+        const root = dlg || document;
+        const candidates = Array.from(root.querySelectorAll("div, span, canvas, img, li")).filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 80 && r.width < 400 && r.height > 20 && r.height < 100;
+        });
+        const tile =
+          candidates.find((el) => /ZZTEST|Test Client/i.test(el.textContent || "")) || candidates[0];
+        if (tile) {
+          tile.click();
+          return (tile.textContent || tile.tagName || "").trim().slice(0, 40);
+        }
+        return null;
+      });
+      note(`style:${label}`, { style });
+      await wait(400);
+      await page.locator(".e-dlg-content input[type=checkbox]").last().check({ force: true }).catch(() => undefined);
+
+      const save = page.locator("button").filter({ hasText: /Save\s*&\s*use/i }).first();
+      await save.click({ force: true });
+      note(`btn:${label}`, { labelText: "Save & use" });
+      await wait(3000);
+
+      if (await page.getByText(/Choose your signature type/i).first().isVisible().catch(() => false)) {
+        await page.evaluate(() => {
+          const dlg = Array.from(document.querySelectorAll(".e-dialog, [role='dialog']")).find(
+            (el) => el.getBoundingClientRect().width > 200,
+          );
+          if (!dlg) return;
+          const tiles = Array.from(dlg.querySelectorAll("div")).filter((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 100 && r.height > 30 && r.height < 80;
+          });
+          tiles[0]?.click();
+        });
+        await wait(300);
+        await save.click({ force: true });
+        await wait(2500);
+      }
+    }
+    await shot("05-after-adopt");
+
+    // 5) Finish in the SAME session (closing early drops uncommitted signature)
+    for (let i = 0; i < 8; i++) {
+      const body = await page.locator("body").innerText();
+      const filled = /All required fields have been filled/i.test(body);
+      const done = /thank you|successfully signed|signing is complete|you have completed|document has been signed/i.test(
+        body,
+      );
+      const finish = page.getByRole("button", { name: "Finish", exact: true }).first();
+      const finishVis = await finish.isVisible().catch(() => false);
+      const nextTxt = ((await topBtn().innerText().catch(() => "")) || "").trim();
+      note(`loop:${label}`, { i, filled, finishVis, nextTxt, done });
+      if (done) break;
+
+      if (finishVis || /finish/i.test(nextTxt) || filled) {
+        if (finishVis) await finish.click({ force: true });
+        else await topBtn().click({ force: true });
+        note(`finish:${label}`, { attempt: i + 1 });
+        await wait(3500);
+        for (const nm of ["Yes", "Confirm", "OK"]) {
+          const b = page.getByRole("button", { name: nm, exact: true });
+          if (await b.isVisible({ timeout: 800 }).catch(() => false)) {
+            await b.click({ force: true });
+            note(`confirm:${label}`, { nm });
+            await wait(1500);
+          }
+        }
+        continue;
+      }
+
+      const date = page.getByText(/Insert Date/i).first();
+      if (await date.isVisible().catch(() => false)) {
+        await date.click({ force: true });
+        await wait(1000);
+        continue;
+      }
+
+      if (nextTxt) {
+        await topBtn().click({ force: true });
         await wait(2000);
+      } else {
+        break;
       }
     }
 
-    // Date field auto-fill often happens; click Finish
-    for (const labelText of ["Finish", "Complete Signing", "Complete", "Submit", "Done"]) {
-      const b = page.locator(`button:has-text("${labelText}")`).first();
-      if (await b.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await b.click();
-        note(`finish:${label}`, { labelText });
-        await wait(4000);
-      }
-    }
-
-    shots.push(join(OUT, `${label}-03-done.png`));
-    await page.screenshot({ path: shots[2], fullPage: true });
-    return { shots, url: page.url(), title: await page.title() };
+    await shot("06-done");
+    const bodyText = await page.locator("body").innerText().catch(() => "");
+    note(`done-text:${label}`, {
+      snippet: bodyText.replace(/\s+/g, " ").slice(0, 280),
+      filled: /All required fields have been filled/i.test(bodyText),
+      completed: /thank you|successfully signed|signing is complete|you have completed|document has been signed/i.test(
+        bodyText,
+      ),
+    });
+    return { shots, url: page.url(), title: await page.title(), bodyText };
   } finally {
     await browser.close();
   }
@@ -190,9 +293,20 @@ import fitz, json, re
 doc = fitz.open(${JSON.stringify(pdfPath)})
 pages = []
 all_text = []
+visible_tags = []
 for i, page in enumerate(doc):
     t = page.get_text("text")
     all_text.append(t)
+    d = page.get_text("dict")
+    for block in d.get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                st = span.get("text", "")
+                if "{{sign|" in st or "{{date|" in st:
+                    color = span.get("color", 0)
+                    r,g,b = (color>>16)&255, (color>>8)&255, color&255
+                    invisible = r>=250 and g>=250 and b>=250
+                    visible_tags.append({"page": i+1, "text": st, "rgb":[r,g,b], "invisible_white": invisible})
     pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
     out = ${JSON.stringify(join(OUT, `${label}-page`))} + f"-{i+1}.png"
     pix.save(out)
@@ -200,11 +314,13 @@ for i, page in enumerate(doc):
 text = "\\n".join(all_text)
 print(json.dumps({
   "pages": pages,
-  "has_sign_tag": "{{sign|" in text,
-  "has_date_tag": "{{date|" in text,
+  "text_layer_has_tags": ("{{sign|" in text) or ("{{date|" in text),
+  "visible_ghost_tags": any(not v["invisible_white"] for v in visible_tags),
+  "tag_spans": visible_tags,
   "has_document_id": bool(re.search(r"Document\\s*ID\\s*:", text, re.I)),
   "has_client_name": ("ZZTEST" in text) or ("Test Client" in text),
   "has_signature_graphic": any(p["images"] > 0 for p in pages) or any(p["drawings"] > 5 for p in pages),
+  "date_present": ("07/19/2026" in text) or ("7/19/2026" in text),
   "text_sample_tail": text[-1500:],
   "text_len": len(text),
 }))
@@ -224,28 +340,49 @@ async function downloadPdfB64(documentId, dest) {
 }
 
 async function waitCompleted(documentId, label) {
-  for (let i = 0; i < 30; i++) {
-    const p = await ops(
-      `/api/ops/boldsign-ghost-proof?document_id=${documentId}&properties_only=1`,
-    );
+  // BoldSign sandbox: 50 API calls/hour — poll sparsely.
+  for (let i = 0; i < 12; i++) {
+    let p;
+    try {
+      p = await ops(
+        `/api/ops/boldsign-ghost-proof?document_id=${documentId}&properties_only=1`,
+      );
+    } catch (e) {
+      const msg = String(e.message || e);
+      note(`status:${label}`, { error: msg.slice(0, 160), attempt: i + 1 });
+      if (/429|quota/i.test(msg)) {
+        await wait(60_000);
+        continue;
+      }
+      throw e;
+    }
     note(`status:${label}`, { status: p.boldSignStatus, attempt: i + 1 });
     if (String(p.boldSignStatus || "").toLowerCase() === "completed") return p;
-    // Also accept signer completed
     const signerDone = (p.signerDetails || []).some((s) =>
       /completed|signed/i.test(String(s.status || "")),
     );
     if (signerDone && /completed|signed/i.test(String(p.boldSignStatus || ""))) return p;
-    await wait(4000);
+    await wait(15_000);
   }
   return null;
 }
 
 async function main() {
   log("OUT", OUT);
-  note("setup-start", {});
+  note("setup-start", { resume: Boolean(RESUME_SETUP) });
 
-  const setup = await ops("/api/ops/e2e-fresh-estimate-setup");
-  if (!setup.ok) throw new Error(`setup failed: ${JSON.stringify(setup).slice(0, 600)}`);
+  let setup;
+  if (RESUME_SETUP) {
+    setup = JSON.parse(readFileSync(RESUME_SETUP, "utf8"));
+    note("setup-resumed", {
+      from: RESUME_SETUP,
+      estimateId: setup.estimateId,
+      estimateNumber: setup.estimateNumber,
+    });
+  } else {
+    setup = await ops("/api/ops/e2e-fresh-estimate-setup");
+    if (!setup.ok) throw new Error(`setup failed: ${JSON.stringify(setup).slice(0, 600)}`);
+  }
 
   note("setup-done", {
     estimateId: setup.estimateId,
@@ -270,11 +407,23 @@ async function main() {
     throw new Error("Missing embed sign links from setup");
   }
 
-  const cSign = await signWithPlaywright(setup.contract.signLink, "contract");
-  note("playwright-contract", { title: cSign.title, shots: cSign.shots });
+  const signOnly = process.env.SIGN_ONLY === "1";
+  const verifyOnly = process.env.VERIFY_ONLY === "1";
 
-  const sSign = await signWithPlaywright(setup.selection.signLink, "selection");
-  note("playwright-selection", { title: sSign.title, shots: sSign.shots });
+  if (!verifyOnly) {
+    const cSign = await signWithPlaywright(setup.contract.signLink, "contract");
+    note("playwright-contract", { title: cSign.title, shots: cSign.shots });
+
+    const sSign = await signWithPlaywright(setup.selection.signLink, "selection");
+    note("playwright-selection", { title: sSign.title, shots: sSign.shots });
+  }
+
+  if (signOnly) {
+    writeFileSync(join(OUT, "evidence.json"), JSON.stringify({ evidence, setup, mode: "sign-only" }, null, 2));
+    log("\n======== SIGN-ONLY COMPLETE ========");
+    log(JSON.stringify({ out: OUT, estimateNumber: setup.estimateNumber }, null, 2));
+    return;
+  }
 
   await waitCompleted(setup.contract.boldsignDocumentId, "contract");
   await waitCompleted(setup.selection.boldsignDocumentId, "selection");
@@ -291,12 +440,12 @@ async function main() {
   };
   note("analysis", {
     contract: {
-      has_sign_tag: analysis.contract.has_sign_tag,
+      visible_ghost_tags: analysis.contract.visible_ghost_tags,
       has_document_id: analysis.contract.has_document_id,
       has_signature_graphic: analysis.contract.has_signature_graphic,
     },
     selection: {
-      has_sign_tag: analysis.selection.has_sign_tag,
+      visible_ghost_tags: analysis.selection.visible_ghost_tags,
       has_document_id: analysis.selection.has_document_id,
       has_signature_graphic: analysis.selection.has_signature_graphic,
     },
@@ -317,8 +466,8 @@ async function main() {
   const resolved =
     setup.contract.signatureFieldOk &&
     setup.selection.signatureFieldOk &&
-    !analysis.contract.has_sign_tag &&
-    !analysis.selection.has_sign_tag &&
+    !analysis.contract.visible_ghost_tags &&
+    !analysis.selection.visible_ghost_tags &&
     !analysis.contract.has_document_id &&
     !analysis.selection.has_document_id &&
     analysis.contract.has_signature_graphic &&

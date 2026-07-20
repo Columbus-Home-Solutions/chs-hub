@@ -1,25 +1,22 @@
 /**
- * Google Reviews API — Sprint 36 Phase A.
+ * Google Reviews API — Sprint 36 Phase A + Phase B live reply.
  *
  * Routes (all under /api/google-reviews — NOT /api/reviews, which is saved_reviews):
  *   GET    /api/google-reviews                  list + filters
  *   GET    /api/google-reviews/stats            summary strip data
- *   POST   /api/google-reviews                  manually add a review (Phase A entry point)
+ *   POST   /api/google-reviews                  manually add a review
  *   GET    /api/google-reviews/:id              single review detail
  *   POST   /api/google-reviews/:id/generate-response  AI draft reply (Claude)
- *   POST   /api/google-reviews/:id/reply        save reply locally (Phase A — no GBP call)
+ *   POST   /api/google-reviews/:id/reply        post to GBP when live; else local save
  *   PUT    /api/google-reviews/:id/match        confirm or dismiss client-match suggestion
  *   POST   /api/google-reviews/:id/feature      upsert into saved_reviews (feature on quote page)
- *
- * Phase B will extend /reply to actually call the GBP updateReply endpoint once
- * GBP_REVIEWS_LIVE is flipped to true. No changes to this file are needed for
- * the data model or the local-save path.
  */
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { claudeMessages } from "../lib/claude.js";
 import { DEFAULT_BRAND_VOICE } from "../lib/social.js";
+import { postGbpReply } from "../lib/google-reviews-sync.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -303,9 +300,11 @@ export async function handleGoogleReviewReply(
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
 
-  const review = await env.DB.prepare("SELECT id FROM google_reviews WHERE id = ?")
+  const review = await env.DB.prepare(
+    "SELECT id, google_review_id FROM google_reviews WHERE id = ?",
+  )
     .bind(id)
-    .first<{ id: string }>();
+    .first<{ id: string; google_review_id: string | null }>();
   if (!review) return err(404, "not_found", "Review not found");
 
   const body = await readJson(request);
@@ -314,20 +313,33 @@ export async function handleGoogleReviewReply(
   const replyText = str(body.reply_text);
   if (!replyText) return err(422, "validation_error", "reply_text is required");
 
-  // Phase A: always save locally. Phase B will add the GBP API call here when
-  // GBP_REVIEWS_LIVE is true.
+  const gbpLive = await isGbpLive(env);
+
+  // Business Rule 6: when live, Google API must succeed before any local write.
+  if (gbpLive) {
+    if (!review.google_review_id) {
+      return err(
+        422,
+        "not_synced",
+        "This review has no Google review ID yet. Run a GBP sync first (or wait for the next 30-min sync).",
+      );
+    }
+    const posted = await postGbpReply(env, review.google_review_id, replyText);
+    if (!posted.ok) {
+      return err(502, "gbp_reply_failed", posted.error);
+    }
+  }
+
   await env.DB.prepare(
     "UPDATE google_reviews SET reply_text = ?, reply_sent_at = datetime('now'), reply_source = 'cms' WHERE id = ?",
   )
     .bind(replyText, id)
     .run();
 
-  const gbpLive = await isGbpLive(env);
   const row = await env.DB.prepare("SELECT * FROM google_reviews WHERE id = ?").bind(id).first();
 
   return json({
     review: row,
-    // This flag drives the "not yet posted to Google" banner in the UI.
     posted_to_google: gbpLive,
     gbp_live: gbpLive,
   });

@@ -188,9 +188,15 @@ function ReplyComposer({
     }
     setSaving(true);
     try {
-      await api.post(`/api/google-reviews/${review.id}/reply`, { reply_text: replyText });
+      const res = await api.post<{ posted_to_google?: boolean }>(
+        `/api/google-reviews/${review.id}/reply`,
+        { reply_text: replyText },
+      );
       setSaved(true);
-      toast.push("success", "Reply saved");
+      toast.push(
+        "success",
+        res.posted_to_google ? "Reply posted to Google" : "Reply saved",
+      );
       onReplied();
     } catch (e) {
       toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
@@ -201,6 +207,20 @@ function ReplyComposer({
 
   return (
     <div style={{ marginTop: "var(--space-md)" }}>
+      {saved && gbpLive && (
+        <div
+          style={{
+            background: "var(--color-success-bg, #ecfdf5)",
+            border: "1px solid var(--color-success-border, #a7f3d0)",
+            borderRadius: "var(--radius-md)",
+            padding: "var(--space-sm) var(--space-md)",
+            marginBottom: "var(--space-sm)",
+            fontSize: "var(--text-sm)",
+          }}
+        >
+          <strong>Posted to Google Business Profile.</strong>
+        </div>
+      )}
       {saved && !gbpLive && (
         <div
           style={{
@@ -495,18 +515,35 @@ export function ReviewsPage(_props: RoutableProps) {
           </h1>
           <p class="view-subtitle">
             {gbpLive
-              ? "Live sync enabled — reviews pulled from Google Business Profile."
-              : "Phase A — manually tracking reviews until GBP API approval."}
+              ? "Live sync from Google Business Profile every 30 minutes. Replies post to Google."
+              : "Manual tracking until Google Business Profile is connected and live sync is enabled."}
           </p>
         </div>
         <div class="view-header__right flex items-center gap-sm">
-          {!gbpLive && (
-            <Button variant="secondary" onClick={() => setAddOpen(true)}>
-              + Add Review
-            </Button>
-          )}
+          <Button
+            variant={gbpLive ? "tertiary" : "secondary"}
+            onClick={() => setAddOpen(true)}
+          >
+            + Add Review
+          </Button>
         </div>
       </div>
+
+      {gbpLive && (
+        <div
+          style={{
+            background: "var(--color-success-bg, #ecfdf5)",
+            border: "1px solid var(--color-success-border, #a7f3d0)",
+            borderRadius: "var(--radius-md)",
+            padding: "var(--space-sm) var(--space-md)",
+            marginBottom: "var(--space-md)",
+            fontSize: "var(--text-sm)",
+          }}
+        >
+          <strong>GBP live sync is on.</strong> New Google reviews appear here automatically; posting a reply
+          sends it to Google first.
+        </div>
+      )}
 
       {/* ── Summary strip ─────────────────────────────────────────── */}
       {stats && (

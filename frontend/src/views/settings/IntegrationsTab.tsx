@@ -28,6 +28,7 @@ const SERVICE_META: Record<string, { label: string; icon: string }> = {
   wc_spreadsheet: { label: "WC Spreadsheet", icon: "📊" },
   google_drive: { label: "Google Drive", icon: "🗂️" },
   google_calendar: { label: "Google Calendar", icon: "📆" },
+  google_business_profile: { label: "Google Business Profile", icon: "⭐" },
 };
 
 function statusTone(s: string): "success" | "warning" | "error" | "neutral" {
@@ -61,8 +62,17 @@ export function IntegrationsTab() {
     client_id_configured: boolean;
     client_secret_configured: boolean;
   } | null>(null);
+  const [gbp, setGbp] = useState<{
+    connected: boolean;
+    status: string;
+    last_sync: string | null;
+    last_error: string | null;
+    location_title: string | null;
+    credentials_present: boolean;
+  } | null>(null);
   const [icalUrl, setIcalUrl] = useState<string | null>(null);
   const [gcalBusy, setGcalBusy] = useState(false);
+  const [gbpBusy, setGbpBusy] = useState(false);
   const [icalBusy, setIcalBusy] = useState(false);
   const [esig, setEsig] = useState<{
     mode: "sandbox" | "live";
@@ -99,6 +109,14 @@ export function IntegrationsTab() {
           webhook_url: string;
           setting_key: string;
         }>("/api/esignature/status"),
+        api.get<{
+          connected: boolean;
+          status: string;
+          last_sync: string | null;
+          last_error: string | null;
+          location_title: string | null;
+          credentials_present: boolean;
+        }>("/api/google-business-profile/status"),
       ]);
 
       const pick = <T,>(i: number, fallback: T): T =>
@@ -130,6 +148,14 @@ export function IntegrationsTab() {
         webhook_url: "https://dashboard.homesolutionsar.com/api/integrations/boldsign/webhook",
         setting_key: "esignature_mode",
       });
+      const gbpStatus = pick(7, {
+        connected: false,
+        status: "disconnected",
+        last_sync: null,
+        last_error: null,
+        location_title: null,
+        credentials_present: false,
+      });
 
       setConnections(integrations.integrations);
       const setting = settings.settings.find((s) => s.key === "image_gen_enabled");
@@ -143,6 +169,7 @@ export function IntegrationsTab() {
         page_label: socialStatus.page_label,
       });
       setGcal(gcalStatus);
+      setGbp(gbpStatus);
       setIcalUrl(icalSettings.url);
       setEsig(esigStatus);
     } catch (e) {
@@ -221,6 +248,65 @@ export function IntegrationsTab() {
       toast.push("error", errMsg(e));
     } finally {
       setGcalBusy(false);
+    }
+  };
+
+  const connectGbp = async () => {
+    setGbpBusy(true);
+    try {
+      const r = await api.post<{ authorize_url: string }>(
+        "/api/integrations/google-business-profile/connect",
+      );
+      window.open(r.authorize_url, "_blank", "noopener,noreferrer");
+      toast.push("info", "Complete Google Business Profile authorization in the new tab, then refresh.");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGbpBusy(false);
+    }
+  };
+
+  const syncGbp = async () => {
+    setGbpBusy(true);
+    try {
+      const r = await api.post<{
+        ok: boolean;
+        synced?: number;
+        updated?: number;
+        reconciled?: number;
+        skipped?: string;
+        error?: string;
+      }>("/api/google-business-profile/sync");
+      if (r.skipped) {
+        toast.push("info", `Sync skipped: ${r.skipped}`);
+      } else if (r.ok) {
+        toast.push(
+          "success",
+          `Reviews sync: ${r.synced ?? 0} new, ${r.updated ?? 0} updated, ${r.reconciled ?? 0} reconciled`,
+        );
+      } else {
+        toast.push("error", r.error ?? "GBP sync failed");
+      }
+      void load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGbpBusy(false);
+    }
+  };
+
+  const testGbp = async () => {
+    setGbpBusy(true);
+    try {
+      const r = await api.post<{ ok: boolean; note?: string }>(
+        "/api/integrations/google-business-profile/test",
+      );
+      toast.push(r.ok ? "success" : "error", r.note ?? (r.ok ? "Connection OK" : "Test failed"));
+      void load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGbpBusy(false);
     }
   };
 
@@ -391,6 +477,68 @@ export function IntegrationsTab() {
                   Sync now
                 </Button>
                 <Button size="sm" variant="tertiary" disabled={busy === "google_calendar"} onClick={() => void disconnect("google_calendar")}>
+                  Disconnect
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style={{ marginBottom: "var(--space-md)" }}>
+        <div class="card__body">
+          <div class="flex items-center gap-sm" style={{ justifyContent: "space-between" }}>
+            <div class="flex items-center gap-sm">
+              <span style={{ fontSize: "1.4rem" }}>⭐</span>
+              <strong>Google Business Profile (Reviews)</strong>
+            </div>
+            <Badge tone={gbp?.connected ? "success" : gbp?.status === "error" ? "error" : "neutral"}>
+              {gbp?.connected ? "Connected" : gbp?.credentials_present ? gbp?.status ?? "Not connected" : "Not configured"}
+            </Badge>
+          </div>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
+            Sync Google reviews into CHS and post replies from the Reviews page. Uses a dedicated OAuth client
+            (GBP_CLIENT_ID / GBP_CLIENT_SECRET) — separate from Calendar.
+          </p>
+          {gbp?.location_title && (
+            <p class="text--muted" style={{ fontSize: "var(--text-xs)", marginTop: 0 }}>
+              Location: {gbp.location_title}
+            </p>
+          )}
+          {gbp?.last_sync && (
+            <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
+              Last sync: {new Date(gbp.last_sync).toLocaleString()}
+            </p>
+          )}
+          {gbp?.last_error && (
+            <p class="text--muted" style={{ fontSize: "var(--text-xs)", color: "var(--color-error, #dc2626)" }}>
+              {gbp.last_error}
+            </p>
+          )}
+          <div class="flex gap-sm" style={{ marginTop: "var(--space-sm)" }}>
+            {!gbp?.connected ? (
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={gbpBusy || !gbp?.credentials_present}
+                onClick={() => void connectGbp()}
+              >
+                Connect Google Business Profile
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" variant="secondary" disabled={gbpBusy} onClick={() => void syncGbp()}>
+                  Sync reviews now
+                </Button>
+                <Button size="sm" variant="tertiary" disabled={gbpBusy} onClick={() => void testGbp()}>
+                  Test
+                </Button>
+                <Button
+                  size="sm"
+                  variant="tertiary"
+                  disabled={busy === "google_business_profile"}
+                  onClick={() => void disconnect("google_business_profile")}
+                >
                   Disconnect
                 </Button>
               </>

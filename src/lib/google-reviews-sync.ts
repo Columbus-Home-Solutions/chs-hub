@@ -1,39 +1,29 @@
 /**
- * Google Business Profile — Reviews Sync (Phase B stub).
+ * Google Business Profile — Reviews Sync + live reply (Phase B).
  *
- * This file exists so Phase B is "fill in the body and wire it up," not
- * "start from scratch." The function signatures, GBP API endpoint shapes,
- * and the data flow are documented here and ready to implement once:
+ * Cron: folded into the existing every-30-min tick (runThirtyMinTick in src/index.ts).
+ * Do NOT wire to the nightly "15 7" slot — that comment in the Phase A stub was stale.
  *
- *   1. GBP API access is approved (applied July 1, 2026 — still pending).
- *   2. OAuth credentials are stored in system_settings or Worker secrets.
- *   3. The `gbp_reviews_live` system_settings flag is flipped to 'true'.
+ * Reviews API (v4):
+ *   GET  https://mybusiness.googleapis.com/v4/{locationName}/reviews
+ *   PUT  https://mybusiness.googleapis.com/v4/{locationName}/reviews/{reviewId}/reply
  *
- * ── TODO (Phase B) ────────────────────────────────────────────────────────────
- *   - Wire syncGbpReviews() into the existing "15 7 * * *" nightly cron slot
- *     (runNightly in src/index.ts). Do NOT add a new cron trigger — the
- *     account is already at the 5-trigger Free plan cap.
- *   - Implement postGbpReply() body and call it from
- *     POST /api/google-reviews/:id/reply when gbp_reviews_live === true.
- *   - The OAuth token refresh pattern should mirror the existing QBO OAuth
- *     implementation (src/lib/qbo-sync.ts) — access token in system_settings,
- *     refresh when a 401 is received from the GBP API.
- * ─────────────────────────────────────────────────────────────────────────────
+ * locationName is the full resource, e.g. accounts/123/locations/456.
  */
 
 import type { Env } from "../env.js";
+import {
+  GbpNotConnectedError,
+  GbpReconnectError,
+  getValidGbpAccessToken,
+  loadGbpConnection,
+  markGbpSynced,
+  setGbpError,
+  type GbpConfiguration,
+} from "./gbp-auth.js";
+import { recordDeadLetter } from "./ops/dlq.js";
 
-// GBP API base URL for the My Business platform.
-const GBP_API_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1";
-
-// The reviews endpoint under a specific location resource.
-// Full path: accounts/{accountId}/locations/{locationId}/reviews
-const GBP_REVIEWS_PATH = (accountId: string, locationId: string) =>
-  `${GBP_API_BASE}/accounts/${accountId}/locations/${locationId}/reviews`;
-
-// The reply endpoint for a specific review.
-const GBP_REPLY_PATH = (accountId: string, locationId: string, reviewId: string) =>
-  `${GBP_REVIEWS_PATH(accountId, locationId)}/${reviewId}/reply`;
+const GBP_V4_BASE = "https://mybusiness.googleapis.com/v4";
 
 export interface GbpReview {
   reviewId: string;
@@ -50,59 +40,377 @@ export interface GbpReview {
     comment: string;
     updateTime: string;
   };
-  name: string; // resource name, e.g. accounts/.../locations/.../reviews/...
+  name: string;
 }
 
-/** Map GBP star rating string to integer 1–5. */
 function gbpStarToInt(star: GbpReview["starRating"]): number {
   return { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 }[star] ?? 3;
 }
 
-/**
- * Phase B entry point: pull all reviews from GBP and upsert into google_reviews.
- *
- * TODO: implement when GBP API access is approved.
- *   - GET accounts.locations.reviews.list with pageSize=50, paginate until done.
- *   - For each review: INSERT OR REPLACE INTO google_reviews with entry_source='sync'.
- *   - Run client name matching for new rows that have no matched_client_id yet.
- *   - Wire to "15 7 * * *" nightly cron — see dispatchCron in src/index.ts.
- */
-export async function syncGbpReviews(
+async function isGbpLive(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT value FROM system_settings WHERE key = 'gbp_reviews_live'",
+  ).first<{ value: string }>();
+  return row?.value === "true" || row?.value === "1";
+}
+
+async function matchReviewerToClient(
   env: Env,
-  accountId: string,
-  locationId: string,
-): Promise<{ synced: number; errors: number }> {
-  // TODO: wire to cron + flip GBP_REVIEWS_LIVE once GBP API access is approved.
-  void env;
-  void accountId;
-  void locationId;
-  void GBP_REVIEWS_PATH;
-  void gbpStarToInt;
-  return { synced: 0, errors: 0 };
+  reviewerName: string,
+): Promise<{ id: string; confidence: "suggested" } | null> {
+  if (!reviewerName.trim()) return null;
+
+  const exact = await env.DB.prepare(
+    `SELECT id FROM clients
+     WHERE LOWER(TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))) = LOWER(TRIM(?))
+        OR LOWER(TRIM(COALESCE(name, ''))) = LOWER(TRIM(?))
+     LIMIT 1`,
+  )
+    .bind(reviewerName, reviewerName)
+    .first<{ id: string }>();
+  if (exact) return { id: exact.id, confidence: "suggested" };
+
+  const parts = reviewerName.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    const lastName = parts[parts.length - 1];
+    const partial = await env.DB.prepare(
+      `SELECT id FROM clients WHERE LOWER(COALESCE(last_name, '')) = LOWER(?) LIMIT 1`,
+    )
+      .bind(lastName)
+      .first<{ id: string }>();
+    if (partial) return { id: partial.id, confidence: "suggested" };
+  }
+  return null;
+}
+
+function locationNameFromConn(configuration: GbpConfiguration): string | null {
+  return configuration.location_name?.trim() || null;
 }
 
 /**
- * Phase B entry point: post a reply to a specific GBP review.
- *
- * TODO: implement when GBP API access is approved.
- *   - PUT accounts.locations.reviews.updateReply with { comment: replyText }.
- *   - Called from POST /api/google-reviews/:id/reply when gbp_reviews_live === true.
- *   - On success: update google_reviews SET reply_source='cms', reply_sent_at=now().
- *   - On failure: surface error to caller (never silent).
+ * Pull reviews from GBP and upsert into google_reviews.
+ * Skips when gbp_reviews_live is false or GBP is not connected.
+ */
+export async function syncGbpReviews(env: Env): Promise<{
+  synced: number;
+  updated: number;
+  reconciled: number;
+  errors: number;
+  skipped?: string;
+}> {
+  if (!(await isGbpLive(env))) {
+    return { synced: 0, updated: 0, reconciled: 0, errors: 0, skipped: "gbp_reviews_live=false" };
+  }
+
+  const conn = await loadGbpConnection(env);
+  if (!conn || conn.status === "disconnected") {
+    return { synced: 0, updated: 0, reconciled: 0, errors: 0, skipped: "not_connected" };
+  }
+
+  let locationName = locationNameFromConn(conn.configuration);
+  if (!locationName) {
+    await setGbpError(env, "No GBP location configured — reconnect Google Business Profile.");
+    return { synced: 0, updated: 0, reconciled: 0, errors: 1, skipped: "no_location" };
+  }
+
+  let token: string;
+  try {
+    token = await getValidGbpAccessToken(env);
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (err instanceof GbpReconnectError || err instanceof GbpNotConnectedError) {
+      await setGbpError(env, msg);
+    }
+    throw err;
+  }
+
+  let synced = 0;
+  let updated = 0;
+  let reconciled = 0;
+  let errors = 0;
+  let pageToken: string | undefined;
+
+  try {
+    do {
+      const url = new URL(`${GBP_V4_BASE}/${locationName}/reviews`);
+      url.searchParams.set("pageSize", "50");
+      url.searchParams.set("orderBy", "updateTime desc");
+      if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+      const resp = await fetch(url.toString(), {
+        headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`reviews.list failed (${resp.status}): ${text.slice(0, 500)}`);
+      }
+
+      const data = (await resp.json()) as {
+        reviews?: GbpReview[];
+        nextPageToken?: string;
+      };
+
+      for (const review of data.reviews ?? []) {
+        try {
+          const result = await upsertGbpReview(env, review);
+          if (result === "inserted") synced += 1;
+          else if (result === "reconciled") reconciled += 1;
+          else updated += 1;
+        } catch (err) {
+          errors += 1;
+          console.error("[gbp_reviews_sync] upsert failed:", (err as Error).message, review.reviewId);
+        }
+      }
+
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+
+    await markGbpSynced(env);
+  } catch (err) {
+    const message = (err as Error).message;
+    await setGbpError(env, message);
+    await recordDeadLetter(env, {
+      jobName: "gbp_reviews_sync",
+      entityType: "google_review",
+      entityId: locationName,
+      payload: { locationName },
+      errorMessage: message,
+    });
+    throw err;
+  }
+
+  return { synced, updated, reconciled, errors };
+}
+
+type UpsertResult = "inserted" | "updated" | "reconciled";
+
+async function upsertGbpReview(env: Env, review: GbpReview): Promise<UpsertResult> {
+  const googleReviewId = review.reviewId;
+  const reviewerName = review.reviewer?.displayName?.trim() || "Anonymous";
+  const starRating = gbpStarToInt(review.starRating);
+  const commentText = review.comment ?? null;
+  const reviewCreatedAt = review.createTime;
+  const reviewUpdatedAt = review.updateTime;
+  const photoUrl = review.reviewer?.profilePhotoUrl ?? null;
+  const externalReply = review.reviewReply?.comment?.trim() || null;
+  const externalReplyAt = review.reviewReply?.updateTime ?? null;
+
+  const existing = await env.DB.prepare(
+    "SELECT * FROM google_reviews WHERE google_review_id = ?",
+  )
+    .bind(googleReviewId)
+    .first<{
+      id: string;
+      reply_text: string | null;
+      reply_source: string | null;
+      matched_client_id: string | null;
+      match_confidence: string | null;
+    }>();
+
+  if (existing) {
+    // Preserve CMS replies; pull external replies when we have none locally.
+    let replyText = existing.reply_text;
+    let replySource = existing.reply_source;
+    let replySentAt: string | null = null;
+
+    if (externalReply && !existing.reply_text) {
+      replyText = externalReply;
+      replySource = "external";
+      replySentAt = externalReplyAt;
+    } else if (
+      externalReply &&
+      existing.reply_source === "external" &&
+      existing.reply_text !== externalReply
+    ) {
+      replyText = externalReply;
+      replySource = "external";
+      replySentAt = externalReplyAt;
+    }
+
+    await env.DB.prepare(
+      `UPDATE google_reviews SET
+         reviewer_name = ?,
+         reviewer_photo_url = COALESCE(?, reviewer_photo_url),
+         star_rating = ?,
+         comment_text = ?,
+         review_created_at = ?,
+         review_updated_at = ?,
+         reply_text = COALESCE(?, reply_text),
+         reply_source = COALESCE(?, reply_source),
+         reply_sent_at = CASE WHEN ? IS NOT NULL THEN ? ELSE reply_sent_at END,
+         entry_source = 'sync',
+         synced_at = datetime('now')
+       WHERE id = ?`,
+    )
+      .bind(
+        reviewerName,
+        photoUrl,
+        starRating,
+        commentText,
+        reviewCreatedAt,
+        reviewUpdatedAt,
+        replyText,
+        replySource,
+        replySentAt,
+        replySentAt,
+        existing.id,
+      )
+      .run();
+    return "updated";
+  }
+
+  // Reconcile Phase A manual rows: same reviewer + star + same calendar day, no google id.
+  const createdDay = reviewCreatedAt.slice(0, 10);
+  const manual = await env.DB.prepare(
+    `SELECT id, reply_text, reply_source, matched_client_id, match_confidence
+       FROM google_reviews
+      WHERE google_review_id IS NULL
+        AND entry_source = 'manual'
+        AND LOWER(TRIM(reviewer_name)) = LOWER(TRIM(?))
+        AND star_rating = ?
+        AND substr(review_created_at, 1, 10) = ?
+      LIMIT 1`,
+  )
+    .bind(reviewerName, starRating, createdDay)
+    .first<{
+      id: string;
+      reply_text: string | null;
+      reply_source: string | null;
+      matched_client_id: string | null;
+      match_confidence: string | null;
+    }>();
+
+  if (manual) {
+    let replyText = manual.reply_text;
+    let replySource = manual.reply_source;
+    let replySentAt: string | null = null;
+    if (externalReply && !manual.reply_text) {
+      replyText = externalReply;
+      replySource = "external";
+      replySentAt = externalReplyAt;
+    }
+
+    await env.DB.prepare(
+      `UPDATE google_reviews SET
+         google_review_id = ?,
+         reviewer_photo_url = COALESCE(?, reviewer_photo_url),
+         comment_text = COALESCE(?, comment_text),
+         review_created_at = ?,
+         review_updated_at = ?,
+         reply_text = COALESCE(?, reply_text),
+         reply_source = COALESCE(?, reply_source),
+         reply_sent_at = CASE WHEN ? IS NOT NULL THEN ? ELSE reply_sent_at END,
+         entry_source = 'sync',
+         synced_at = datetime('now')
+       WHERE id = ?`,
+    )
+      .bind(
+        googleReviewId,
+        photoUrl,
+        commentText,
+        reviewCreatedAt,
+        reviewUpdatedAt,
+        replyText,
+        replySource,
+        replySentAt,
+        replySentAt,
+        manual.id,
+      )
+      .run();
+    return "reconciled";
+  }
+
+  // New sync row — client-match suggestion only on insert.
+  const match = await matchReviewerToClient(env, reviewerName);
+  const id = crypto.randomUUID();
+
+  await env.DB.prepare(
+    `INSERT INTO google_reviews (
+       id, google_review_id, reviewer_name, reviewer_photo_url, star_rating,
+       comment_text, review_created_at, review_updated_at,
+       reply_text, reply_sent_at, reply_source,
+       matched_client_id, match_confidence,
+       entry_source, synced_at, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sync', datetime('now'), datetime('now'))`,
+  )
+    .bind(
+      id,
+      googleReviewId,
+      reviewerName,
+      photoUrl,
+      starRating,
+      commentText,
+      reviewCreatedAt,
+      reviewUpdatedAt,
+      externalReply,
+      externalReply ? externalReplyAt : null,
+      externalReply ? "external" : null,
+      match?.id ?? null,
+      match?.confidence ?? null,
+    )
+    .run();
+
+  return "inserted";
+}
+
+/**
+ * Post a reply to Google. Caller must update local DB only after ok: true.
  */
 export async function postGbpReply(
   env: Env,
-  accountId: string,
-  locationId: string,
-  reviewId: string,
+  googleReviewId: string,
   replyText: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  // TODO: wire to cron + flip GBP_REVIEWS_LIVE once GBP API access is approved.
-  void env;
-  void accountId;
-  void locationId;
-  void reviewId;
-  void replyText;
-  void GBP_REPLY_PATH;
-  return { ok: false, error: "GBP API not yet activated — Phase B pending." };
+  const conn = await loadGbpConnection(env);
+  const locationName = conn ? locationNameFromConn(conn.configuration) : null;
+  if (!locationName) {
+    return { ok: false, error: "Google Business Profile location is not configured. Reconnect in Settings → Integrations." };
+  }
+
+  let token: string;
+  try {
+    token = await getValidGbpAccessToken(env);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+
+  const url = `${GBP_V4_BASE}/${locationName}/reviews/${encodeURIComponent(googleReviewId)}/reply`;
+  try {
+    const resp = await fetch(url, {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({ comment: replyText }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      return {
+        ok: false,
+        error: `Google reply failed (${resp.status}): ${text.slice(0, 400)}`,
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+/** Cron / manual entry point with isolation + DLQ already handled inside sync. */
+export async function runGbpReviewsSyncTick(env: Env): Promise<void> {
+  try {
+    const result = await syncGbpReviews(env);
+    if (result.skipped) {
+      console.log(`[gbp_reviews_sync] skipped: ${result.skipped}`);
+      return;
+    }
+    console.log(
+      `[gbp_reviews_sync] synced=${result.synced} updated=${result.updated} reconciled=${result.reconciled} errors=${result.errors}`,
+    );
+  } catch (err) {
+    // syncGbpReviews already DLQ'd; keep cron tick non-fatal.
+    console.error(`[gbp_reviews_sync] failed:`, (err as Error).message);
+  }
 }

@@ -30,7 +30,8 @@ export type DlqEntityType =
   | "expense"
   | "payment"
   | "client"
-  | "wc_spreadsheet";
+  | "wc_spreadsheet"
+  | "google_review";
 
 export interface RecordDeadLetterArgs {
   jobName: string;            // e.g. 'jobber_full'

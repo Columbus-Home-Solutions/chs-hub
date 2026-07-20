@@ -129,6 +129,7 @@ const ROUTE_RULES: RouteRule[] = [
   { method: "*", pattern: /^\/api\/settings(\/.*)?$/, roles: O }, // system settings
   { method: "*", pattern: /^\/api\/integrations(\/.*)?$/, roles: O },
   { method: "*", pattern: /^\/api\/google-calendar(\/.*)?$/, roles: O },
+  { method: "*", pattern: /^\/api\/google-business-profile(\/.*)?$/, roles: O },
   { method: "*", pattern: /^\/api\/calendar\/ical(\/.*)?$/, roles: O },
   { method: "GET", pattern: /^\/api\/social\/(status|test-connection)$/, roles: O },
   { method: "*", pattern: /^\/api\/quickbooks(\/.*)?$/, roles: O },

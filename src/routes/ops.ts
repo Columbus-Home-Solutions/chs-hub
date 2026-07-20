@@ -32,6 +32,8 @@ import {
   generateAndSendEstimateContract,
   parseSignatureMeta,
 } from "../lib/estimate-contract-document.js";
+import { runHlLeadMirror } from "../lib/hl-lead-mirror.js";
+
 function requireSecret(request: Request, env: Env): Response | null {
   const url = new URL(request.url);
   const secret =
@@ -57,6 +59,21 @@ export async function handleHeartbeatCheck(
   if (guard) return guard;
   const status = await checkHeartbeat(env);
   return jsonOk(status);
+}
+
+/** Manual trigger for HighLevel → CHS lead mirror (bridge). */
+export async function handleHlLeadMirrorRun(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+  try {
+    const result = await runHlLeadMirror(env);
+    return jsonOk({ ok: true, ...result });
+  } catch (err) {
+    return jsonOk({ ok: false, error: (err as Error).message }, 502);
+  }
 }
 
 export async function handleDlqSummary(

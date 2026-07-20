@@ -87,6 +87,7 @@ import {
   handleDriveMirrorRun,
   handleDriveMirrorStatus,
   handleHeartbeatCheck,
+  handleHlLeadMirrorRun,
   handleOpsAutogenDocument,
   handleOpsBoldsignGhostProof,
   handleOpsE2eFreshEstimateSetup,
@@ -545,6 +546,7 @@ import {
 import { handleIcalFeed, handleIcalSettings, handleIcalRegenerate } from "./routes/calendar-ical.js";
 import { syncGoogleCalendarEvents } from "./lib/google-calendar-sync.js";
 import { runGbpReviewsSyncTick } from "./lib/google-reviews-sync.js";
+import { runHlLeadMirror, runHlLeadMirrorTick } from "./lib/hl-lead-mirror.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
 // ── Social Media Engine (Sprint 16) ─────────────────────────────────────────
 import {
@@ -1132,6 +1134,9 @@ export default {
     // All gated by SYNC_TRIGGER_SECRET. See src/routes/ops.ts.
     if (url.pathname === "/api/ops/heartbeat" && request.method === "GET") {
       return handleHeartbeatCheck(request, env);
+    }
+    if (url.pathname === "/api/ops/hl-lead-mirror" && request.method === "POST") {
+      return handleHlLeadMirrorRun(request, env);
     }
     if (url.pathname === "/api/ops/dlq" && request.method === "GET") {
       return handleDlqSummary(request, env);
@@ -2814,6 +2819,14 @@ async function runThirtyMinTick(cron: string, env: Env): Promise<void> {
     await runGbpReviewsSyncTick(env);
   } catch (err) {
     console.error(`[cron ${cron}] gbp_reviews_sync failed:`, (err as Error).message);
+  }
+
+  // HighLevel → CHS lead mirror (bridge until Google LSA uses a direct Twilio number).
+  // One-time creation only — isolated from WC + GBP.
+  try {
+    await runHlLeadMirrorTick(env);
+  } catch (err) {
+    console.error(`[cron ${cron}] hl_lead_mirror failed:`, (err as Error).message);
   }
 }
 

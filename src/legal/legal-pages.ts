@@ -107,7 +107,7 @@ function pageShell(title: string, subtitle: string, bodyHtml: string): string {
 
 export const PRIVACY_POLICY_HTML = pageShell(
   "Privacy Policy",
-  "Last updated: June 21, 2026",
+  "Last updated: July 26, 2026",
   `<p>Columbus Home Solutions ("we," "us," or "our") operates at homesolutionsar.com and provides residential remodeling and construction services. This Privacy Policy explains how we collect, use, and protect your personal information when you use our website, request our services, or communicate with us.</p>
 
 <h2>1. Information We Collect</h2>
@@ -141,9 +141,11 @@ export const PRIVACY_POLICY_HTML = pageShell(
 </ul>
 
 <h2>3. Text Message (SMS) Program</h2>
-<p><strong>Program name:</strong> Columbus Home Solutions SMS Notifications</p>
+<p><strong>Program name:</strong> Columbus Home Solutions SMS Notifications<br>
+<strong>Sending number:</strong> (501) 263-2050</p>
 <p>By providing your phone number and opting in, you agree to receive text messages from Columbus Home Solutions at the number provided, including:</p>
 <ul>
+  <li>Estimate and quote delivery, including links to review and approve</li>
   <li>Estimate appointment confirmations and reminders</li>
   <li>Project status updates</li>
   <li>Payment confirmations and receipts</li>
@@ -153,7 +155,7 @@ export const PRIVACY_POLICY_HTML = pageShell(
 <p><strong>Message frequency:</strong> Varies based on your project activity. Typically 2–10 messages per project.</p>
 <p>Message and data rates may apply. Standard carrier rates apply to all messages sent and received.</p>
 <p><strong>To get help:</strong> Reply HELP to any message or email us at tony@homesolutionsar.com</p>
-<p><strong>To opt out:</strong> Reply STOP to any message at any time. You will receive one confirmation message and no further texts will be sent. Opting out does not affect your ability to receive service.</p>
+<p><strong>To opt out:</strong> Reply STOP to any message at any time. You will receive one confirmation message and no further texts will be sent. Opting out does not affect your ability to receive service. If you later wish to resume receiving messages, reply START to the same number.</p>
 <p>We do not sell or share your phone number with third parties for marketing purposes. Text messaging originator opt-in data and consent will not be shared with any third parties or affiliates for marketing or promotional purposes. Your consent to receive SMS is not required as a condition of receiving our services.</p>
 
 <h2>4. How We Share Your Information</h2>
@@ -205,7 +207,7 @@ tony@homesolutionsar.com · (501) 263-2050 · homesolutionsar.com</p>`,
 
 export const TERMS_HTML = pageShell(
   "Terms and Conditions",
-  "Last updated: June 21, 2026",
+  "Last updated: July 26, 2026",
   `<p>These Terms and Conditions govern your use of the Columbus Home Solutions website at homesolutionsar.com, the client portal at client.homesolutionsar.com, and our services. By using our website or engaging our services, you agree to these terms.</p>
 
 <h2>1. Services</h2>
@@ -226,8 +228,9 @@ export const TERMS_HTML = pageShell(
 <h2>6. SMS Communications Program</h2>
 <p><strong>Program name:</strong> Columbus Home Solutions SMS Notifications<br>
 <strong>Sending number:</strong> (501) 263-2050</p>
-<p>By providing your phone number and opting in on our contact or estimate request form, you consent to receive text messages from Columbus Home Solutions, including:</p>
+<p>By providing your phone number and checking the SMS consent box on our contact form at <a href="https://homesolutionsar.com/contact/">https://homesolutionsar.com/contact/</a>, you consent to receive text messages from Columbus Home Solutions, including:</p>
 <ul>
+  <li>Estimate and quote delivery, including links to review and approve</li>
   <li>Estimate appointment confirmations and reminders</li>
   <li>Project status updates and scheduling notifications</li>
   <li>Payment confirmations and receipts</li>
@@ -236,7 +239,7 @@ export const TERMS_HTML = pageShell(
 <p><strong>Message frequency:</strong> Varies based on project activity. Typically 2–10 messages per project.</p>
 <p>Message and data rates may apply. Standard carrier rates apply.</p>
 <p><strong>To get help:</strong> Reply HELP to any message or contact us at tony@homesolutionsar.com</p>
-<p><strong>To opt out:</strong> Reply STOP to any message at any time. You will receive one confirmation and no further messages will be sent. Opting out does not affect your ability to receive our services.</p>
+<p><strong>To opt out:</strong> Reply STOP to any message at any time. You will receive one confirmation and no further messages will be sent. Opting out does not affect your ability to receive our services. If you later wish to resume receiving messages, reply START to the same number.</p>
 <p>Consent to receive SMS messages is not required as a condition of purchasing or receiving services from Columbus Home Solutions.</p>
 
 <h2>7. Intellectual Property</h2>

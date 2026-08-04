@@ -182,6 +182,18 @@ async function replayOne(
       throw new Error(r.error_message ?? `wc_spreadsheet sync returned status=${r.status}`);
     }
 
+    case "google_review": {
+      // GBP location-level failure (entity_id is the v4 location parent).
+      // Re-run the same sync the cron uses; dynamic import avoids load-time
+      // cycles (google-reviews-sync imports recordDeadLetter).
+      const { syncGbpReviews } = await import("../google-reviews-sync.js");
+      const r = await syncGbpReviews(env);
+      if (r.skipped) {
+        throw new Error(`gbp_reviews_sync skipped: ${r.skipped}`);
+      }
+      return;
+    }
+
     // For other types, defer to the next full sync. Recording these still
     // gives us visibility (and an alert if they keep failing); the sync
     // job will retry naturally on its own pass.

@@ -96,6 +96,30 @@ This document consolidates every data model from the 9 module specs into a singl
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 | updated_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 
+### vendor_subscriptions
+
+Informational cost/renewal tracker for SaaS vendors and subscriptions. Distinct from `integration_connections` (OAuth/API status). Soft-delete via `is_active = 0`. Seeded from Platform Ops Guide (migration `0100_vendor_subscriptions.sql`).
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | TEXT | PRIMARY KEY | Stable seed ids (`vs-*`) or UUID |
+| service_name | TEXT | NOT NULL | Display name |
+| category | TEXT | NOT NULL, CHECK(...) | infrastructure, communications, documents, payments, accounting, ai_cloud, marketing_crm, development |
+| cost_amount | REAL | | Null when unknown / usage-based |
+| cost_period | TEXT | CHECK(... OR NULL) | monthly, annual, usage_based, one_time |
+| currency | TEXT | NOT NULL DEFAULT 'USD' | |
+| renewal_date | TEXT | | ISO date; drives ≤30-day badge + iCal |
+| auto_renews | INTEGER | NOT NULL DEFAULT 1 | |
+| account_email | TEXT | | Login email |
+| account_id | TEXT | | External account / customer id |
+| contact_name | TEXT | | Vendor contact |
+| contact_email | TEXT | | |
+| contact_phone | TEXT | | |
+| support_notes | TEXT | | Freeform |
+| is_active | INTEGER | NOT NULL DEFAULT 1 | Soft-delete flag |
+| created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
+| updated_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
+
 ---
 
 ## 2. Client Tables
@@ -1055,6 +1079,7 @@ GROUP BY cs.id;
 | 2 | system_settings | System | ~30 | Key-value store |
 | 3 | audit_logs | System | High volume | Append-only |
 | 4 | integration_connections | System | ~8 | One per service |
+| 4a | vendor_subscriptions | System | ~15 | Cost/renewal tracker (not OAuth) |
 | 5 | clients | Client | Growing | Seed from Jobber imports |
 | 6 | properties | Client | Growing | Multi-property support |
 | 7 | communications | Client | High volume | All comms logged |

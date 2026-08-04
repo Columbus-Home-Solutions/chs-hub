@@ -20,11 +20,13 @@ import { CompanyTab, FinancialSettingsTab, NotificationsTab, QuoteFollowUpsTab, 
 import { IntegrationsTab } from "./IntegrationsTab";
 import { CatalogTab } from "./CatalogTab";
 import { ManageListsTab } from "./ManageListsTab";
+import { VendorsTab } from "./VendorsTab";
 
 type TabKey =
   | "company"
   | "financial"
   | "integrations"
+  | "vendors"
   | "notifications"
   | "quote_follow_ups"
   | "lead_outreach"
@@ -41,6 +43,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "company", label: "Company" },
   { key: "financial", label: "Financial" },
   { key: "integrations", label: "Integrations" },
+  { key: "vendors", label: "Vendors & Subscriptions" },
   { key: "notifications", label: "Notifications" },
   { key: "quote_follow_ups", label: "Quote Follow-Ups" },
   { key: "lead_outreach", label: "Lead Outreach" },
@@ -112,6 +115,7 @@ export function Settings(_props: RoutableProps) {
       )}
       {tab === "financial" && <FinancialSettingsTab />}
       {tab === "integrations" && <IntegrationsTab />}
+      {tab === "vendors" && <VendorsTab />}
       {tab === "notifications" && <NotificationsTab />}
       {tab === "quote_follow_ups" && <QuoteFollowUpsTab />}
       {tab === "lead_outreach" && <LeadOutreachTab />}

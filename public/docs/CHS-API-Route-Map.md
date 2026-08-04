@@ -394,6 +394,18 @@ Client approval is **not** an internal route — it happens when the client sign
 | POST | `/api/vendor-materials` | O/PM | Create entry |
 | PUT | `/api/vendor-materials/:id` | O/PM | Update entry |
 
+### Vendor & Service Subscriptions Tracker
+
+Informational only (Settings → Vendors & Subscriptions). Not wired to billing APIs or `integration_connections`. Renewals with `renewal_date` also appear on the public iCal feed (`GET /api/calendar/ical?token=…`) as all-day VEVENTs (`UID: vendor-sub-{id}@chs`) with monthly/annual RRULE when applicable.
+
+| Method | Route | Role | Description |
+|--------|-------|------|-------------|
+| GET | `/api/vendor-subscriptions` | O | List active subscriptions. Filters: `?category=&search=` |
+| GET | `/api/vendor-subscriptions/:id` | O | Get one |
+| POST | `/api/vendor-subscriptions` | O | Create |
+| PUT | `/api/vendor-subscriptions/:id` | O | Update |
+| DELETE | `/api/vendor-subscriptions/:id` | O | Soft-delete (`is_active = 0`) |
+
 ### Financial Reports & Exports
 
 | Method | Route | Role | Description |

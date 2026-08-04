@@ -74,6 +74,47 @@ function vevent(uid: string, start: string, end: string, summary: string, descri
     .join("\r\n");
 }
 
+/** All-day VEVENT; optional RRULE for monthly/annual vendor renewals. */
+function veventAllDay(
+  uid: string,
+  dateYmd: string,
+  summary: string,
+  description: string,
+  rrule: string | null,
+): string {
+  const day = dateYmd.slice(0, 10).replace(/-/g, "");
+  // DTEND is exclusive for all-day events — next calendar day.
+  const end = new Date(`${dateYmd.slice(0, 10)}T00:00:00.000Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  const endDay = end.toISOString().slice(0, 10).replace(/-/g, "");
+  return [
+    "BEGIN:VEVENT",
+    `UID:${uid}@chs`,
+    `DTSTART;VALUE=DATE:${day}`,
+    `DTEND;VALUE=DATE:${endDay}`,
+    `SUMMARY:${escapeIcal(summary)}`,
+    description ? `DESCRIPTION:${escapeIcal(description)}` : "",
+    rrule ? `RRULE:${rrule}` : "",
+    "END:VEVENT",
+  ]
+    .filter(Boolean)
+    .join("\r\n");
+}
+
+function formatVendorCost(amount: number | null, period: string | null): string {
+  if (period === "usage_based") return "usage-based";
+  if (amount == null) return period ? period.replace("_", " ") : "";
+  const money = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+  }).format(amount);
+  if (period === "monthly") return `${money}/mo`;
+  if (period === "annual") return `${money}/yr`;
+  if (period === "one_time") return `${money} one-time`;
+  return money;
+}
+
 async function buildIcalFeed(env: Env): Promise<string> {
   const events: string[] = [];
 
@@ -147,6 +188,45 @@ async function buildIcalFeed(env: Env): Promise<string> {
         client ? `Estimate — ${client}` : "Estimate visit",
         String(r.property_address ?? r.job_type ?? ""),
       ),
+    );
+  }
+
+  // Vendor subscription renewals (informational reminders only).
+  const vendorRows =
+    (
+      await env.DB.prepare(
+        `SELECT id, service_name, renewal_date, cost_amount, cost_period,
+                auto_renews, support_notes
+           FROM vendor_subscriptions
+          WHERE is_active = 1 AND renewal_date IS NOT NULL`,
+      ).all<{
+        id: string;
+        service_name: string;
+        renewal_date: string;
+        cost_amount: number | null;
+        cost_period: string | null;
+        auto_renews: number;
+        support_notes: string | null;
+      }>()
+    ).results ?? [];
+
+  for (const r of vendorRows) {
+    const date = String(r.renewal_date).slice(0, 10);
+    const costLabel = formatVendorCost(r.cost_amount, r.cost_period);
+    const summary = costLabel
+      ? `${r.service_name} renews — ${costLabel}`
+      : `${r.service_name} renews`;
+    const descParts = [
+      costLabel ? `Cost: ${costLabel}` : null,
+      `Auto-renews: ${r.auto_renews === 1 ? "yes" : "no"}`,
+      r.support_notes ? String(r.support_notes) : null,
+    ].filter(Boolean);
+    let rrule: string | null = null;
+    if (r.cost_period === "monthly") rrule = "FREQ=MONTHLY";
+    else if (r.cost_period === "annual") rrule = "FREQ=YEARLY";
+    // usage_based / one_time / null → one-shot all-day event only when date set
+    events.push(
+      veventAllDay(`vendor-sub-${r.id}`, date, summary, descParts.join(" · "), rrule),
     );
   }
 

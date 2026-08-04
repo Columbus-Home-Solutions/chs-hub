@@ -234,13 +234,15 @@ export function buildAuthorizeUrl(env: Env, state: string): string {
 
 /**
  * Exchange the authorization code for tokens and persist them encrypted.
- * Defaults the environment to sandbox this sprint.
+ *
+ * Merges into the existing `configuration` JSON — never replaces it wholesale.
+ * `environment` defaults to sandbox only when the key is absent (brand-new
+ * connection); a prior production cutover / mapping config survives reconnect.
  */
 export async function exchangeAuthCode(
   env: Env,
   code: string,
   realmId: string,
-  environment: QboEnvironment = "sandbox",
 ): Promise<void> {
   const resp = await tokenRequest(env, {
     grant_type: "authorization_code",
@@ -252,12 +254,22 @@ export async function exchangeAuthCode(
       `Token exchange returned no tokens: ${resp.error ?? ""} ${resp.error_description ?? ""}`.trim(),
     );
   }
+
+  const existing = await loadConnection(env);
+  const prev = existing?.configuration ?? {};
+  const configuration: QboConfiguration = {
+    ...prev,
+    environment: prev.environment ?? "sandbox",
+  };
+  // CSRF state is handshake-only; drop it after a successful exchange.
+  delete configuration.state;
+
   await writeTokens(env, {
     accessToken: resp.access_token,
     refreshToken: resp.refresh_token,
     expiry: expiryIso(resp.expires_in),
     realmId,
-    configuration: { environment },
+    configuration,
     status: "connected",
   });
 }

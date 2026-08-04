@@ -582,6 +582,13 @@ import {
   handleUserNotificationPreferences,
 } from "./routes/users.js";
 import {
+  handleVendorSubscriptionList,
+  handleVendorSubscriptionGet,
+  handleVendorSubscriptionCreate,
+  handleVendorSubscriptionUpdate,
+  handleVendorSubscriptionDelete,
+} from "./routes/vendor-subscriptions.js";
+import {
   handleAuditLogList,
   handleAuditLogExport,
 } from "./routes/audit-logs.js";
@@ -1926,6 +1933,19 @@ export default {
     }
     if (url.pathname === "/api/users/assignable" && request.method === "GET") {
       return handleAssignableUsers(request, env);
+    }
+
+    // ── Vendor subscriptions tracker (Owner-only via RBAC gate) ───────────
+    if (url.pathname === "/api/vendor-subscriptions") {
+      if (request.method === "GET") return handleVendorSubscriptionList(env, url);
+      if (request.method === "POST") return handleVendorSubscriptionCreate(request, env);
+    }
+    const vendorSubById = url.pathname.match(/^\/api\/vendor-subscriptions\/([^/]+)$/);
+    if (vendorSubById) {
+      const vsId = decodeURIComponent(vendorSubById[1]);
+      if (request.method === "GET") return handleVendorSubscriptionGet(env, vsId);
+      if (request.method === "PUT") return handleVendorSubscriptionUpdate(request, env, vsId);
+      if (request.method === "DELETE") return handleVendorSubscriptionDelete(request, env, vsId);
     }
 
     // ── User management (Sprint 17, Owner-only via RBAC gate) ─────────────

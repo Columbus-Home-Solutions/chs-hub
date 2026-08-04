@@ -127,6 +127,7 @@ const ROUTE_RULES: RouteRule[] = [
   // ── System Admin surface — OWNER ONLY (business rule 1) ────────────────────
   { method: "*", pattern: /^\/api\/users(\/.*)?$/, roles: O }, // user management CRUD
   { method: "*", pattern: /^\/api\/settings(\/.*)?$/, roles: O }, // system settings
+  { method: "*", pattern: /^\/api\/vendor-subscriptions(\/.*)?$/, roles: O }, // vendor cost/renewal tracker
   { method: "*", pattern: /^\/api\/integrations(\/.*)?$/, roles: O },
   { method: "*", pattern: /^\/api\/google-calendar(\/.*)?$/, roles: O },
   { method: "*", pattern: /^\/api\/google-business-profile(\/.*)?$/, roles: O },

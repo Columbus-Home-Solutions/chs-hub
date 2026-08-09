@@ -22,6 +22,10 @@ import type { Env } from "../env.js";
 export interface TwilioConfig {
   accountSid: string | null;
   authToken: string | null;
+  /**
+   * Either an E.164 From number (+1…) or an A2P Messaging Service SID (MG…).
+   * Stored in TWILIO_FROM_NUMBER for historical naming; sendSms branches on prefix.
+   */
   fromNumber: string | null;
 }
 
@@ -68,7 +72,11 @@ export async function sendSms(cfg: TwilioConfig, to: string, body: string): Prom
 
   const form = new URLSearchParams();
   form.set("To", to);
-  form.set("From", cfg.fromNumber!);
+  // A2P Messaging Service SIDs start with MG — use MessagingServiceSid so
+  // campaign registration applies. Otherwise treat as a raw From number.
+  const sender = cfg.fromNumber!;
+  if (sender.startsWith("MG")) form.set("MessagingServiceSid", sender);
+  else form.set("From", sender);
   form.set("Body", body);
 
   const auth = btoa(`${cfg.accountSid}:${cfg.authToken}`);

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "preact/hooks";
+import { useCallback, useEffect, useState } from "preact/hooks";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
@@ -17,6 +17,8 @@ interface ClientFormProps {
   initial?: Partial<Client>;
   onClose: () => void;
   onSaved: (client: Client) => void;
+  /** Optional tertiary action under the form (e.g. "Search for existing instead"). */
+  secondaryAction?: { label: string; onClick: () => void } | null;
 }
 
 type FormValues = {
@@ -51,12 +53,26 @@ function toValues(initial?: Partial<Client>): FormValues {
   };
 }
 
-export function ClientForm({ open, mode, initial, onClose, onSaved }: ClientFormProps) {
-  const { values, errors, submitting, setValue, setErrors, handleSubmit } = useForm<FormValues>(
-    toValues(initial),
-  );
+export function ClientForm({
+  open,
+  mode,
+  initial,
+  onClose,
+  onSaved,
+  secondaryAction,
+}: ClientFormProps) {
+  const { values, errors, submitting, setValue, setValues, setErrors, handleSubmit } =
+    useForm<FormValues>(toValues(initial));
   const toast = useToast();
   const [duplicates, setDuplicates] = useState<DuplicateMatch[] | null>(null);
+
+  // Remount-friendly: when the modal opens, re-apply initial (pre-fill from parent).
+  useEffect(() => {
+    if (!open) return;
+    setValues(toValues(initial));
+    setErrors({});
+    setDuplicates(null);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps -- only on open transition
 
   const handleMailingAddressSelect = useCallback(
     (result: { street: string; city: string; state: string; zip: string }) => {
@@ -169,6 +185,18 @@ export function ClientForm({ open, mode, initial, onClose, onSaved }: ClientForm
         </div>
       ) : (
         <div>
+          {secondaryAction && (
+            <p style={{ marginTop: 0, marginBottom: "var(--space-md)" }}>
+              <button
+                type="button"
+                class="link-btn"
+                style={{ fontSize: "var(--text-sm)" }}
+                onClick={secondaryAction.onClick}
+              >
+                {secondaryAction.label}
+              </button>
+            </p>
+          )}
           <div class="form-row">
             <FormField
               label="First name"

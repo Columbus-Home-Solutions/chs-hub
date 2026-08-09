@@ -101,7 +101,10 @@ interface RequestRow {
   id: string;
   request_number: number;
   status: string;
-  client_id: string;
+  client_id: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
   property_address: string;
   property_city: string;
   property_state: string | null;
@@ -166,7 +169,11 @@ const SELECT = `
 
 function clientName(row: RequestRow): string {
   const parts = [row.c_first, row.c_last].filter(Boolean).join(" ").trim();
-  return parts || row.c_name || "(unnamed)";
+  if (parts) return parts;
+  if (row.c_name?.trim()) return row.c_name.trim();
+  if (row.contact_name?.trim()) return row.contact_name.trim();
+  if (row.contact_phone?.trim()) return row.contact_phone.trim();
+  return "(unnamed)";
 }
 
 function daysSince(iso: string | null): number {
@@ -183,8 +190,8 @@ function shape(row: RequestRow) {
     status: row.status,
     client_id: row.client_id,
     client_name: clientName(row),
-    client_phone: row.c_phone,
-    client_email: row.c_email,
+    client_phone: row.c_phone ?? row.contact_phone ?? null,
+    client_email: row.c_email ?? row.contact_email ?? null,
     is_repeat_client: (row.c_is_repeat ?? 0) === 1,
     property_address: row.property_address,
     property_city: row.property_city,
@@ -529,10 +536,21 @@ export async function handleEstimateRequestUpdate(
   const { user } = guarded;
 
   const existing = await env.DB.prepare(
-    "SELECT id, status, estimate_id FROM estimate_requests WHERE id = ?",
+    `SELECT id, status, estimate_id, client_id,
+            property_address, property_city, property_state, property_zip
+       FROM estimate_requests WHERE id = ?`,
   )
     .bind(id)
-    .first<{ id: string; status: string; estimate_id: string | null }>();
+    .first<{
+      id: string;
+      status: string;
+      estimate_id: string | null;
+      client_id: string | null;
+      property_address: string | null;
+      property_city: string | null;
+      property_state: string | null;
+      property_zip: string | null;
+    }>();
   if (!existing) return err(404, "not_found", "Estimate request not found");
 
   const body = await readJson(request);
@@ -543,6 +561,52 @@ export async function handleEstimateRequestUpdate(
 
   let triggerAppointment = false;
   let nextStatus: string | null = null;
+
+  // Re-link client (HL mirror creates thin placeholder clients; Detail can replace).
+  if ("client_id" in body) {
+    const nextClientId = str(body.client_id);
+    if (!nextClientId) return err(400, "bad_request", "client_id cannot be empty");
+    const client = await env.DB.prepare(
+      `SELECT id, mailing_address, mailing_city, mailing_state, mailing_zip
+         FROM clients WHERE id = ?`,
+    )
+      .bind(nextClientId)
+      .first<{
+        id: string;
+        mailing_address: string | null;
+        mailing_city: string | null;
+        mailing_state: string | null;
+        mailing_zip: string | null;
+      }>();
+    if (!client) return err(400, "bad_request", "Client not found");
+
+    updates.push("client_id = ?");
+    binds.push(nextClientId);
+
+    const propIsPlaceholder =
+      !existing.property_address ||
+      existing.property_address === "Unknown" ||
+      existing.property_zip === "00000";
+    const hasMailing = !!(client.mailing_address && client.mailing_address.trim());
+    // Only auto-fill property from the linked client when the request still has
+    // HL placeholders and the caller didn't send property fields explicitly.
+    if (propIsPlaceholder && hasMailing && !("property_address" in body)) {
+      updates.push("property_address = ?");
+      binds.push(client.mailing_address);
+      if (client.mailing_city) {
+        updates.push("property_city = ?");
+        binds.push(client.mailing_city);
+      }
+      if (client.mailing_state) {
+        updates.push("property_state = ?");
+        binds.push(client.mailing_state);
+      }
+      if (client.mailing_zip) {
+        updates.push("property_zip = ?");
+        binds.push(client.mailing_zip);
+      }
+    }
+  }
 
   // Status transition (validated state machine).
   if ("status" in body) {
@@ -1167,7 +1231,7 @@ export async function handleEstimateRequestDelete(
       id: string;
       request_number: number;
       status: string;
-      client_id: string;
+      client_id: string | null;
       estimate_id: string | null;
       converted_job_id: string | null;
     }>();

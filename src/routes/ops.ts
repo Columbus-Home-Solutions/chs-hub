@@ -34,6 +34,7 @@ import {
 } from "../lib/estimate-contract-document.js";
 import { runHlLeadMirror } from "../lib/hl-lead-mirror.js";
 import { handleEstimateRequestPipeline } from "./estimate-requests.js";
+import { voidErroneousQboPayments } from "../lib/qbo-sync.js";
 
 function requireSecret(request: Request, env: Env): Response | null {
   const url = new URL(request.url);
@@ -60,6 +61,30 @@ export async function handleHeartbeatCheck(
   if (guard) return guard;
   const status = await checkHeartbeat(env);
   return jsonOk(status);
+}
+
+/**
+ * Void a batch of erroneously pushed QBO payments (Aug 6 cleanup).
+ * Query: ?limit=25&offset=0  (max limit 50). Call repeatedly until scanned=0.
+ */
+export async function handleOpsQboVoidErroneousPayments(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+  const url = new URL(request.url);
+  const limit = Number(url.searchParams.get("limit") ?? "25");
+  const offset = Number(url.searchParams.get("offset") ?? "0");
+  try {
+    const result = await voidErroneousQboPayments(env, {
+      limit: Number.isFinite(limit) ? limit : 25,
+      offset: Number.isFinite(offset) ? offset : 0,
+    });
+    return jsonOk({ ok: result.failed === 0, ...result });
+  } catch (err) {
+    return jsonOk({ ok: false, error: (err as Error).message }, 502);
+  }
 }
 
 /** Manual trigger for HighLevel → CHS lead mirror (bridge). */

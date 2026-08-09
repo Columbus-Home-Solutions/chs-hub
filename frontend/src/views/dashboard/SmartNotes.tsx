@@ -3,6 +3,15 @@ import { useApi } from "../../hooks/useApi";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatDateTime } from "../../lib/format";
+import {
+  cancelGeminiVoiceCapture,
+  friendlyVoiceError,
+  geminiVoiceAvailable,
+  startGeminiVoiceCapture,
+  stopGeminiVoiceCapture,
+  uploadAndTranscribeAudio,
+  type VoiceCaptureMode,
+} from "../../lib/voice-transcribe";
 
 interface SmartNote {
   id: string;
@@ -20,16 +29,6 @@ const CATEGORIES = [
   { value: "meeting", label: "Meeting Notes" },
 ];
 
-type SpeechRecognitionLike = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-  onend: (() => void) | null;
-};
-
 export function SmartNotes() {
   const toast = useToast();
   const { data, loading, refetch } = useApi<{ notes: SmartNote[] }>(
@@ -41,39 +40,61 @@ export function SmartNotes() {
   const [category, setCategory] = useState("");
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [notesCollapsed, setNotesCollapsed] = useState(true);
-  const recRef = useRef<SpeechRecognitionLike | null>(null);
+  const [enteredViaVoice, setEnteredViaVoice] = useState(false);
+  const captureModeRef = useRef<VoiceCaptureMode | null>(null);
 
-  const toggleVoice = () => {
-    const Ctor =
-      (window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike })
-        .SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike })
-        .webkitSpeechRecognition;
-    if (!Ctor) {
+  const appendTranscript = (transcript: string) => {
+    const chunk = transcript.trim();
+    if (!chunk) {
+      toast.push("info", "No speech detected in recording");
+      return;
+    }
+    setText((prev) => (prev.trim() ? `${prev.trim()} ${chunk}` : chunk));
+    setEnteredViaVoice(true);
+    toast.push("success", "Voice note added");
+  };
+
+  const toggleVoice = async () => {
+    if (transcribing || busy) return;
+
+    if (recording) {
+      setRecording(false);
+      const mode = captureModeRef.current;
+      captureModeRef.current = null;
+      setTranscribing(true);
+      try {
+        if (!mode) throw new Error("No active recording");
+        const { blob, mimeType } = await stopGeminiVoiceCapture(mode);
+        const transcript = await uploadAndTranscribeAudio(blob, mimeType, {
+          scope: "smart-notes",
+        });
+        appendTranscript(transcript);
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : "Transcription failed";
+        toast.push("error", friendlyVoiceError(raw, "Transcription failed"));
+      } finally {
+        setTranscribing(false);
+      }
+      return;
+    }
+
+    if (!geminiVoiceAvailable()) {
       toast.push("error", "Voice capture isn't supported in this browser — type your note.");
       return;
     }
-    if (recording) {
-      recRef.current?.stop();
-      return;
+
+    try {
+      const mode = await startGeminiVoiceCapture();
+      captureModeRef.current = mode;
+      setRecording(true);
+    } catch (err) {
+      void cancelGeminiVoiceCapture();
+      captureModeRef.current = null;
+      const msg = err instanceof Error ? err.message : "Could not start recording";
+      toast.push("error", msg);
     }
-    const rec = new Ctor();
-    rec.continuous = true;
-    rec.interimResults = false;
-    rec.lang = "en-US";
-    rec.onresult = (e) => {
-      let chunk = "";
-      for (let i = 0; i < e.results.length; i++) chunk += e.results[i][0].transcript + " ";
-      setText((prev) => (prev ? prev + " " : "") + chunk.trim());
-    };
-    rec.onend = () => {
-      setRecording(false);
-      recRef.current = null;
-    };
-    recRef.current = rec;
-    rec.start();
-    setRecording(true);
   };
 
   const processNote = async () => {
@@ -82,12 +103,15 @@ export function SmartNotes() {
       toast.push("info", "Type a note above first.");
       return;
     }
-    if (recording) recRef.current?.stop();
+    if (recording) {
+      toast.push("info", "Stop recording before processing.");
+      return;
+    }
     setBusy(true);
     try {
       const res = await api.post<{ ai_ok: boolean }>("/api/smart-notes", {
         raw_content: content,
-        entered_via: recording ? "voice" : "text",
+        entered_via: enteredViaVoice ? "voice" : "text",
         category: category || "general",
       });
       toast.push(
@@ -96,6 +120,7 @@ export function SmartNotes() {
       );
       setText("");
       setCategory("");
+      setEnteredViaVoice(false);
       refetch();
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
@@ -110,18 +135,22 @@ export function SmartNotes() {
       toast.push("info", "Type a note above first.");
       return;
     }
-    if (recording) recRef.current?.stop();
+    if (recording) {
+      toast.push("info", "Stop recording before saving.");
+      return;
+    }
     setBusy(true);
     try {
       await api.post("/api/smart-notes", {
         raw_content: content,
-        entered_via: "text",
+        entered_via: enteredViaVoice ? "voice" : "text",
         category: category || "general",
         skip_ai: true,
       });
       toast.push("success", "Note saved");
       setText("");
       setCategory("");
+      setEnteredViaVoice(false);
       refetch();
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
@@ -129,6 +158,12 @@ export function SmartNotes() {
       setBusy(false);
     }
   };
+
+  const micLabel = transcribing
+    ? "Transcribing…"
+    : recording
+      ? "■ Stop"
+      : "🎤";
 
   return (
     <div class="dash-card">
@@ -141,7 +176,10 @@ export function SmartNotes() {
           rows={3}
           value={text}
           placeholder="Write your notes here. Claude will summarize, extract tasks, and save everything automatically."
-          onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+          onInput={(e) => {
+            setText((e.target as HTMLTextAreaElement).value);
+            setEnteredViaVoice(false);
+          }}
         />
 
         <div class="smart-notes__controls">
@@ -161,14 +199,18 @@ export function SmartNotes() {
             <button
               type="button"
               class={`btn btn--sm ${recording ? "btn--danger" : "btn--secondary"}`}
-              onClick={toggleVoice}
+              disabled={transcribing || busy}
+              aria-label={
+                transcribing ? "Transcribing" : recording ? "Stop recording" : "Start voice input"
+              }
+              onClick={() => void toggleVoice()}
             >
-              {recording ? "■ Stop" : "🎤"}
+              {micLabel}
             </button>
             <button
               type="button"
               class="btn btn--sm btn--primary"
-              disabled={busy}
+              disabled={busy || recording || transcribing}
               onClick={() => void processNote()}
             >
               {busy ? "Processing…" : "Process with Claude"}
@@ -176,7 +218,7 @@ export function SmartNotes() {
             <button
               type="button"
               class="btn btn--sm btn--tertiary"
-              disabled={busy}
+              disabled={busy || recording || transcribing}
               onClick={() => void saveOnly()}
             >
               Save Only

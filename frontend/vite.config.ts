@@ -1,5 +1,9 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import preact from "@preact/preset-vite";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // The new Preact app is served by the Worker at the /app path (the legacy
 // dashboard keeps running at its own host). Build output goes to ../public/app
@@ -16,6 +20,11 @@ const DEV_ACCESS_EMAIL = process.env.DEV_ACCESS_EMAIL || "tony@homesolutionsar.c
 export default defineConfig({
   plugins: [preact()],
   base: "/app/",
+  resolve: {
+    alias: {
+      "@chs/shared": path.resolve(__dirname, "../shared"),
+    },
+  },
   define: {
     "process.env.IS_PREACT": JSON.stringify("true"),
   },

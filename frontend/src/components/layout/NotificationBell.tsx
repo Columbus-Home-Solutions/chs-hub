@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { route } from "preact-router";
 import { api } from "../../api";
 import { formatDateTime } from "../../lib/format";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import type { InboxNotification } from "../../types";
 
 interface InboxResponse {
@@ -12,16 +13,19 @@ interface InboxResponse {
 const POLL_MS = 30_000;
 
 /**
- * In-app notification bell. Polls /api/notifications/inbox on an interval
- * (no WebSocket — polling matches the spec's allowance and Workers' model),
- * renders an unread-count badge, and opens a dropdown of recent in_app
- * notifications. Clicking an item marks it read and navigates to its record.
+ * In-app notification bell. Polls /api/notifications/inbox on an interval,
+ * renders an unread-count badge, and opens the inbox:
+ * - desktop: fixed dropdown anchored under the bell
+ * - mobile: full-screen panel (topnav overflow used to clip the old absolute dropdown)
  */
 export function NotificationBell() {
+  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const [items, setItems] = useState<InboxNotification[]>([]);
+  const [desktopPos, setDesktopPos] = useState<{ top: number; right: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   const load = async () => {
     try {
@@ -39,15 +43,47 @@ export function NotificationBell() {
     return () => clearInterval(t);
   }, []);
 
-  // Close on outside click.
+  // Bottom nav (and other shells) ask overlays to dismiss via this event.
   useEffect(() => {
-    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener("chs:close-overlays", close);
+    return () => window.removeEventListener("chs:close-overlays", close);
+  }, []);
+
+  // Desktop: anchor the fixed dropdown under the bell; re-measure on resize/scroll.
+  useLayoutEffect(() => {
+    if (!open || isMobile) {
+      setDesktopPos(null);
+      return;
+    }
+    const place = () => {
+      const btn = btnRef.current;
+      if (!btn) return;
+      const r = btn.getBoundingClientRect();
+      setDesktopPos({
+        top: Math.round(r.bottom + 8),
+        right: Math.round(window.innerWidth - r.right),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    // Capture scroll from any scrollport (content area, etc.).
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, isMobile]);
+
+  // Desktop: close dropdown on outside click.
+  useEffect(() => {
+    if (!open || isMobile) return;
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
-  }, [open]);
+  }, [open, isMobile]);
 
   const openItem = async (n: InboxNotification) => {
     if (!n.is_read) {
@@ -71,26 +107,54 @@ export function NotificationBell() {
       setUnread(0);
       setItems([]);
     } catch {
-      /* best-effort — reload so UI stays honest */
       void load();
       return;
     }
   };
 
+  const list = (
+    <div class={isMobile ? "notif-panel__list" : "notif-dropdown__list"}>
+      {items.length === 0 ? (
+        <div class={isMobile ? "notif-panel__empty" : "notif-dropdown__empty"}>
+          You're all caught up.
+        </div>
+      ) : (
+        items.map((n) => (
+          <button
+            key={n.id}
+            type="button"
+            class={`notif-item${n.is_read ? "" : " notif-item--unread"}`}
+            onClick={() => openItem(n)}
+          >
+            <div class="notif-item__body">{n.body}</div>
+            <div class="notif-item__meta">{formatDateTime(n.created_at)}</div>
+          </button>
+        ))
+      )}
+    </div>
+  );
+
   return (
     <div class="notif-bell" ref={ref}>
       <button
+        ref={btnRef}
+        type="button"
         class="topnav__bell"
         aria-label="Notifications"
         title="Notifications"
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
         🔔
         {unread > 0 && <span class="topnav__bell-count">{unread > 99 ? "99+" : unread}</span>}
       </button>
 
-      {open && (
-        <div class="notif-dropdown" role="menu">
+      {open && !isMobile && desktopPos && (
+        <div
+          class="notif-dropdown"
+          role="menu"
+          style={{ top: `${desktopPos.top}px`, right: `${desktopPos.right}px` }}
+        >
           <div class="notif-dropdown__head">
             <span>Notifications</span>
             {items.length > 0 && (
@@ -99,22 +163,35 @@ export function NotificationBell() {
               </button>
             )}
           </div>
-          <div class="notif-dropdown__list">
-            {items.length === 0 ? (
-              <div class="notif-dropdown__empty">You're all caught up.</div>
+          {list}
+        </div>
+      )}
+
+      {open && isMobile && (
+        <div class="notif-panel" role="dialog" aria-label="Notifications">
+          <div class="notif-panel__bar">
+            <button
+              type="button"
+              class="notif-panel__back"
+              aria-label="Close notifications"
+              onClick={() => setOpen(false)}
+            >
+              ←
+            </button>
+            <span class="notif-panel__title">Notifications</span>
+            {items.length > 0 ? (
+              <button
+                class="notif-panel__clear"
+                type="button"
+                onClick={() => void clearAll()}
+              >
+                Clear
+              </button>
             ) : (
-              items.map((n) => (
-                <button
-                  key={n.id}
-                  class={`notif-item${n.is_read ? "" : " notif-item--unread"}`}
-                  onClick={() => openItem(n)}
-                >
-                  <div class="notif-item__body">{n.body}</div>
-                  <div class="notif-item__meta">{formatDateTime(n.created_at)}</div>
-                </button>
-              ))
+              <span class="notif-panel__clear-spacer" />
             )}
           </div>
+          {list}
         </div>
       )}
     </div>

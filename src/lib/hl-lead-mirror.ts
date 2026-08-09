@@ -25,6 +25,7 @@ export interface HlOpportunityLite {
   id: string;
   name: string;
   phone: string | null;
+  email: string | null;
   source: string | null;
   status: string | null;
   address: string | null;
@@ -86,6 +87,25 @@ function pickPhone(opp: Record<string, unknown>): string | null {
   );
 }
 
+function pickEmail(opp: Record<string, unknown>): string | null {
+  const contact = (opp.contact ?? {}) as Record<string, unknown>;
+  return (
+    str(opp.email) ??
+    str(contact.email) ??
+    str(contact.emailAddress) ??
+    str(contact.email_address) ??
+    null
+  );
+}
+
+/** Google LSA often puts the dialed number in the opportunity name. */
+function looksLikePhoneName(name: string): boolean {
+  const digits = name.replace(/\D/g, "");
+  if (digits.length < 7) return false;
+  const compact = name.replace(/[\s().+\-]/g, "");
+  return digits.length / Math.max(compact.length, 1) >= 0.7;
+}
+
 function pickAddress(opp: Record<string, unknown>): {
   address: string | null;
   city: string | null;
@@ -109,13 +129,25 @@ function pickAddress(opp: Record<string, unknown>): {
 function normalizeOpportunity(raw: Record<string, unknown>): HlOpportunityLite | null {
   const id = str(raw.id);
   if (!id) return null;
-  const name = str(raw.name) ?? str((raw.contact as Record<string, unknown> | undefined)?.name) ?? "Unknown Lead";
+  const contact = (raw.contact ?? {}) as Record<string, unknown>;
+  const contactName =
+    [str(contact.firstName) ?? str(contact.first_name), str(contact.lastName) ?? str(contact.last_name)]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || str(contact.name);
+  const rawName = str(raw.name) ?? contactName ?? "Unknown Lead";
+  // Prefer a real contact name when the opportunity title is just a phone number.
+  const name =
+    looksLikePhoneName(rawName) && contactName && !looksLikePhoneName(contactName)
+      ? contactName
+      : rawName;
   const addr = pickAddress(raw);
   const notesBits = [str(raw.name), str(raw.source) ? `HL source: ${raw.source}` : null].filter(Boolean);
   return {
     id,
     name,
     phone: pickPhone(raw),
+    email: pickEmail(raw),
     source: str(raw.source),
     status: str(raw.status),
     address: addr.address,
@@ -163,7 +195,10 @@ export async function fetchOpenHlOpportunities(env: Env): Promise<HlOpportunityL
   return out;
 }
 
-function splitName(full: string): { first: string; last: string } {
+function splitName(full: string, phone: string | null): { first: string; last: string } {
+  if (looksLikePhoneName(full)) {
+    return { first: "Google LSA", last: phone ?? "Lead" };
+  }
   const cleaned = full.replace(/\s+[—\-–]\s+.*$/, "").trim(); // drop " - Category" tails
   const parts = cleaned.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return { first: "Unknown", last: "Lead" };
@@ -179,24 +214,15 @@ async function mirrorOne(env: Env, opp: HlOpportunityLite): Promise<"created" | 
     .first<{ id: string }>();
   if (existing) return "skipped";
 
-  const { first, last } = splitName(opp.name);
+  const { first, last } = splitName(opp.name, opp.phone);
+  const contactName = `${first} ${last}`.trim();
   const now = new Date().toISOString();
-  let clientId: string;
 
+  // Link only when phone matches a real existing client — never fabricate placeholders.
   const matched = opp.phone ? await findClientByPhone(env, opp.phone) : null;
-  if (matched) {
-    clientId = matched.id;
-  } else {
-    clientId = crypto.randomUUID();
-    const phone = opp.phone ?? "unknown";
-    const placeholderEmail = `hl_${clientId.slice(0, 8)}@highlevel.placeholder`;
-    await env.DB.prepare(
-      `INSERT INTO clients (id, first_name, last_name, email, phone, lead_source, synced_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'google_lsa', datetime('now'), ?, ?)`,
-    )
-      .bind(clientId, first, last, placeholderEmail, phone, now, now)
-      .run();
-  }
+  const clientId = matched?.id ?? null;
+  const contactPhone = opp.phone && opp.phone !== "unknown" ? opp.phone : null;
+  const contactEmail = opp.email?.trim() || null;
 
   const max = await env.DB.prepare(
     "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
@@ -207,16 +233,20 @@ async function mirrorOne(env: Env, opp: HlOpportunityLite): Promise<"created" | 
   await env.DB.prepare(
     `INSERT INTO estimate_requests (
        id, request_number, status, client_id,
+       contact_name, contact_phone, contact_email,
        property_address, property_city, property_state, property_zip,
        job_type, lead_source, source, visit_notes,
        high_level_opportunity_id,
        created_at, updated_at, created_by
-     ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, 'other', 'google_lsa', 'high_level', ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, 'other', 'google_lsa', 'high_level', ?, ?, ?, ?, ?)`,
   )
     .bind(
       requestId,
       requestNumber,
       clientId,
+      contactName || null,
+      contactPhone,
+      contactEmail,
       opp.address ?? "Unknown",
       opp.city ?? "Unknown",
       opp.state ?? "Arkansas",
@@ -230,7 +260,7 @@ async function mirrorOne(env: Env, opp: HlOpportunityLite): Promise<"created" | 
     .run();
 
   await createOwnerInApp(env, {
-    message: `New lead from Google LSA (via HighLevel): ${first} ${last}`.trim(),
+    message: `New lead from Google LSA (via HighLevel): ${contactName}`.trim(),
     linkPath: `/app/estimating/${requestId}`,
     clientId,
     dedupe: `hl_mirror:${opp.id}`,

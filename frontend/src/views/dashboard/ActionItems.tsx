@@ -17,7 +17,6 @@ const PRIORITY_ICON: Record<string, string> = {
   invoice_past_due: "💰",
   invoice_due_soon: "💰",
   cost_plus_cycle: "🏗️",
-  new_lead: "📋",
   follow_up_due: "📋",
   job_budget_alert: "🏗️",
   social_approval: "📱",

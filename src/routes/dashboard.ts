@@ -4,6 +4,7 @@
  *   GET /api/dashboard/kpis           → { tiles: KpiTile[] }           5-min cache
  *   GET /api/dashboard/action-items   → { items: ActionItem[] }         fresh
  *   PATCH /api/dashboard/action-items/:id/dismiss → { ok: true }        owner/admin
+ *   GET /api/dashboard/estimate-requests → { requests }                 fresh (desktop widget)
  *   GET /api/dashboard/pipeline       → { leads, jobs, conversionRate, unpaidTotal }  5-min cache
  *   GET /api/dashboard/schedule       → { entries: ScheduleEntry[] }    fresh
  *   GET /api/dashboard/activity       → { entries: ActivityEntry[], bellCount: number } fresh
@@ -60,8 +61,6 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
       return "/financial?tab=invoices&filter=due_soon";
     case "social_approval":
       return "/social?tab=queue";
-    case "new_lead":
-      return "/estimating?status=new_request";
     case "follow_up_due":
       return "/estimating?status=follow_up";
     case "cost_plus_cycle":
@@ -322,7 +321,6 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     pastDueInvoices,
     dueSoonInvoices,
     endingCycles,
-    newLeads,
     followUpLeads,
     pendingSocial,
     pendingChangOrders,
@@ -364,24 +362,21 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
        ORDER BY bc.period_end ASC LIMIT 10`,
     ).bind(dueSoonDate).all<{ id: string; job_id: string; period_end: string; job_title: string }>(),
 
-    // MEDIUM: new leads (last 7 days)
-    env.DB.prepare(
-      `SELECT er.id, c.first_name, c.last_name, er.lead_source, er.created_at
-       FROM estimate_requests er
-       JOIN clients c ON er.client_id = c.id
-       WHERE er.status = 'new_request'
-         AND er.created_at >= datetime('now', '-7 days')
-       ORDER BY er.created_at ASC LIMIT 10`,
-    ).all<{ id: string; first_name: string; last_name: string; lead_source: string; created_at: string }>(),
-
     // MEDIUM: follow-up due
     env.DB.prepare(
-      `SELECT er.id, c.first_name, c.last_name, er.created_at
+      `SELECT er.id, er.created_at,
+              c.first_name, c.last_name, er.contact_name
        FROM estimate_requests er
-       JOIN clients c ON er.client_id = c.id
+       LEFT JOIN clients c ON er.client_id = c.id
        WHERE er.status = 'follow_up'
        ORDER BY er.created_at ASC LIMIT 10`,
-    ).all<{ id: string; first_name: string; last_name: string; created_at: string }>(),
+    ).all<{
+      id: string;
+      first_name: string | null;
+      last_name: string | null;
+      contact_name: string | null;
+      created_at: string;
+    }>(),
 
     // LOW: social posts pending approval
     env.DB.prepare(
@@ -507,23 +502,14 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     });
   }
 
-  // MEDIUM: new_lead
-  for (const lead of newLeads.results ?? []) {
-    const clientName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
-    items.push({
-      id: `new_lead_${lead.id}`,
-      priority: "medium",
-      type: "new_lead",
-      title: `New lead: ${clientName} — ${lead.lead_source ?? "unknown source"}`,
-      meta: { requestId: lead.id, leadSource: lead.lead_source },
-      link: actionItemLink("new_lead", {}),
-      createdAt: lead.created_at,
-    });
-  }
-
   // MEDIUM: follow_up_due
+  // Raw new_request leads are intentionally excluded — they live in the Lead
+  // Pipeline / Estimate Requests widget once they reach Appointment Set.
   for (const lead of followUpLeads.results ?? []) {
-    const clientName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
+    const clientName =
+      `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() ||
+      lead.contact_name?.trim() ||
+      "Lead";
     items.push({
       id: `follow_up_due_${lead.id}`,
       priority: "medium",
@@ -812,13 +798,22 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
     ).bind(today).all<{ id: string; start_time: string; trade_or_work: string; job_title: string; job_id: string; job_number: string }>(),
 
     env.DB.prepare(
-      `SELECT er.id, er.appointment_date, er.appointment_time, c.first_name, c.last_name, er.property_address
+      `SELECT er.id, er.appointment_date, er.appointment_time, er.property_address,
+              c.first_name, c.last_name, er.contact_name
        FROM estimate_requests er
-       JOIN clients c ON er.client_id = c.id
+       LEFT JOIN clients c ON er.client_id = c.id
        WHERE DATE(er.appointment_date) = ?
          AND er.status NOT IN ('won', 'lost')
        ORDER BY er.appointment_date ASC`,
-    ).bind(today).all<{ id: string; appointment_date: string; appointment_time: string | null; first_name: string; last_name: string; property_address: string }>(),
+    ).bind(today).all<{
+      id: string;
+      appointment_date: string;
+      appointment_time: string | null;
+      first_name: string | null;
+      last_name: string | null;
+      contact_name: string | null;
+      property_address: string;
+    }>(),
 
     env.DB.prepare(
       `SELECT id, title, start_time, end_time, meet_link
@@ -845,7 +840,10 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
   }
 
   for (const row of apptRows.results ?? []) {
-    const clientName = `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim();
+    const clientName =
+      `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() ||
+      row.contact_name?.trim() ||
+      "Lead";
     entries.push({
       type: "appointment",
       entry_type: "estimate",
@@ -965,6 +963,68 @@ export async function handleDashboardActivity(env: Env): Promise<Response> {
   return json({ entries, bellCount });
 }
 
+/**
+ * Desktop Home "Estimate Requests" widget.
+ * Leads at Appointment Set or later that do not yet have a built estimate /
+ * converted job — distinct from Open Bid Requests (subcontractor bids).
+ */
+export async function handleDashboardEstimateRequests(env: Env): Promise<Response> {
+  const rows = await env.DB.prepare(
+    `SELECT er.id, er.status, er.job_type, er.appointment_date, er.appointment_time,
+            er.property_address, er.property_city, er.updated_at, er.created_at,
+            er.contact_name, er.contact_phone,
+            c.first_name, c.last_name, c.phone
+     FROM estimate_requests er
+     LEFT JOIN clients c ON er.client_id = c.id
+     WHERE er.status IN ('appointment_set', 'visit_done', 'building', 'sent', 'follow_up')
+       AND er.estimate_id IS NULL
+       AND er.converted_job_id IS NULL
+     ORDER BY
+       CASE WHEN er.appointment_date IS NULL THEN 1 ELSE 0 END,
+       er.appointment_date ASC,
+       er.updated_at DESC
+     LIMIT 20`,
+  ).all<{
+    id: string;
+    status: string;
+    job_type: string | null;
+    appointment_date: string | null;
+    appointment_time: string | null;
+    property_address: string | null;
+    property_city: string | null;
+    updated_at: string | null;
+    created_at: string | null;
+    contact_name: string | null;
+    contact_phone: string | null;
+    first_name: string | null;
+    last_name: string | null;
+    phone: string | null;
+  }>();
+
+  const requests = (rows.results ?? []).map((r) => {
+    const name =
+      `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() ||
+      r.contact_name?.trim() ||
+      r.phone ||
+      r.contact_phone ||
+      "Lead";
+    const place = [r.property_address, r.property_city].filter(Boolean).join(", ");
+    return {
+      id: r.id,
+      client_name: name,
+      status: r.status,
+      job_type: r.job_type,
+      appointment_date: r.appointment_date,
+      appointment_time: r.appointment_time,
+      property_label: place || null,
+      updated_at: r.updated_at,
+      created_at: r.created_at,
+    };
+  });
+
+  return json({ requests });
+}
+
 // ── Main router ────────────────────────────────────────────────────────────
 
 export async function handleDashboard(
@@ -981,6 +1041,7 @@ export async function handleDashboard(
 
   if (path === "/api/dashboard/kpis") return handleDashboardKpis(env);
   if (path === "/api/dashboard/action-items") return handleDashboardActionItems(env);
+  if (path === "/api/dashboard/estimate-requests") return handleDashboardEstimateRequests(env);
   if (path === "/api/dashboard/pipeline") return handleDashboardPipeline(env);
   if (path === "/api/dashboard/schedule") return handleDashboardSchedule(env);
   if (path === "/api/dashboard/meetings") return handleDashboardMeetings(env);

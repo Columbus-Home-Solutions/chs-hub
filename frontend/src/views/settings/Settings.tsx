@@ -21,6 +21,7 @@ import { IntegrationsTab } from "./IntegrationsTab";
 import { CatalogTab } from "./CatalogTab";
 import { ManageListsTab } from "./ManageListsTab";
 import { VendorsTab } from "./VendorsTab";
+import { MobileAppTab } from "./MobileAppTab";
 
 type TabKey =
   | "company"
@@ -124,16 +125,7 @@ export function Settings(_props: RoutableProps) {
       {tab === "dlq" && <DlqTab />}
       {tab === "backup" && <BackupTab />}
       {tab === "health" && <HealthTab />}
-      {tab === "mobile" && (
-        <Card title="Mobile App">
-          <div class="empty-state">
-            <p>📱 Native mobile app (Capacitor / App Store) is coming in a later build (Sprint 18).</p>
-            <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-              This is a placeholder seam — no mobile infrastructure ships this sprint.
-            </p>
-          </div>
-        </Card>
-      )}
+      {tab === "mobile" && <MobileAppTab />}
       {tab === "catalog" && <CatalogTab />}
       {tab === "manage_lists" && <ManageListsTab />}
     </div>

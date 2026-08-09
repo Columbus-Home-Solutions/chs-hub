@@ -40,6 +40,8 @@ import {
   handleQboTest,
   handleQboReference,
   handleQboMapping,
+  handleQboDefaultCustomerGet,
+  handleQboDefaultCustomerPut,
   handleQboStatus,
   handleQboSync,
 } from "./routes/integrations.js";
@@ -93,6 +95,7 @@ import {
   handleOpsBoldsignGhostProof,
   handleOpsE2eFreshEstimateSetup,
   handleOpsResendSelectionApproval,
+  handleOpsQboVoidErroneousPayments,
   handleSummarySend,
 } from "./routes/ops.js";
 import { runDriveMirror } from "./lib/ops/drive-mirror.js";
@@ -111,6 +114,7 @@ import {
   handlePhotoPair,
   handlePhotoUnpair,
   handleJobPhotos,
+  handleEstimateRequestPhotos,
   handleReceiptCreate,
   handleReceiptGet,
   handleReceiptConfirm,
@@ -307,6 +311,8 @@ import {
   handleSketchThumbnailGet,
   handleSketchDelete,
 } from "./routes/sketches.js";
+import { handleVisitAudioTranscribe } from "./routes/visit-audio.js";
+import { handleGeneralTranscribe } from "./routes/transcribe.js";
 import {
   handleEstimateList,
   handleEstimateGet,
@@ -1104,6 +1110,12 @@ export default {
     if (url.pathname === "/api/integrations/quickbooks/mapping" && request.method === "POST") {
       return handleQboMapping(request, env);
     }
+    if (url.pathname === "/api/integrations/quickbooks/default-customer" && request.method === "GET") {
+      return handleQboDefaultCustomerGet(request, env);
+    }
+    if (url.pathname === "/api/integrations/quickbooks/default-customer" && request.method === "PUT") {
+      return handleQboDefaultCustomerPut(request, env);
+    }
     // Generic per-service connection management (Sprint 17). QBO keeps its own
     // OAuth routes above; these manage any existing integration_connections row
     // (status/test/connect/disconnect) without wiring a new live service.
@@ -1184,6 +1196,9 @@ export default {
     }
     if (url.pathname === "/api/ops/e2e-fresh-estimate-setup" && request.method === "POST") {
       return handleOpsE2eFreshEstimateSetup(request, env);
+    }
+    if (url.pathname === "/api/ops/qbo-void-erroneous-payments" && request.method === "POST") {
+      return handleOpsQboVoidErroneousPayments(request, env);
     }
 
     // ── Legacy Jobber jobs view (old dashboard at dashboard.* host) ──
@@ -2347,6 +2362,17 @@ export default {
       const erid = decodeURIComponent(erSketches[1]);
       if (request.method === "GET") return handleSketchesList(request, env, erid);
       if (request.method === "POST") return handleSketchCreate(request, env, erid);
+    }
+    const erPhotos = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/photos$/);
+    if (erPhotos && request.method === "GET") {
+      return handleEstimateRequestPhotos(env, decodeURIComponent(erPhotos[1]), url);
+    }
+    if (url.pathname === "/api/transcribe" && request.method === "POST") {
+      return handleGeneralTranscribe(request, env);
+    }
+    const erTranscribe = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/transcribe$/);
+    if (erTranscribe && request.method === "POST") {
+      return handleVisitAudioTranscribe(request, env, decodeURIComponent(erTranscribe[1]));
     }
     const erById = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)$/);
     if (erById) {

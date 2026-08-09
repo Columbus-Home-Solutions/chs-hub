@@ -17,6 +17,7 @@
     "tail": "wrangler tail",
     "prep:templates": "tsx scripts/prep-templates.ts",
     "generate:working-agreement-template": "tsx scripts/generate-working-agreement-template.ts",
+    "assets:generate": "capacitor-assets generate --ios --android",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e:prod": "tsx scripts/e2e-prod.ts",
@@ -26,6 +27,7 @@
     "ops:sync:log": "wrangler d1 execute chs-hub-db --remote --command \"SELECT id, job_name, status, started_at, finished_at, rows_affected, duration_ms, error_message FROM sync_log ORDER BY started_at DESC LIMIT 20\""
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@cloudflare/workers-types": "^4.20250410.0",
     "docx": "^9.7.1",
     "tsx": "^4.19.4",
@@ -34,6 +36,19 @@
     "wrangler": "^4.85.0"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/camera": "^8.2.2",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/geolocation": "^8.2.0",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/push-notifications": "^8.1.2",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
+    "@capgo/capacitor-audio-recorder": "^8.2.6",
     "fflate": "^0.8.3"
   }
 }

@@ -36,11 +36,19 @@ export function Integrations(_props: RoutableProps) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [mappingOpen, setMappingOpen] = useState(false);
+  const [paymentSyncEnabled, setPaymentSyncEnabled] = useState(false);
+  const [paymentSyncBusy, setPaymentSyncBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      setStatus(await api.get<QboStatus>("/api/quickbooks/status"));
+      const [qbo, settings] = await Promise.all([
+        api.get<QboStatus>("/api/quickbooks/status"),
+        api.get<{ settings: Array<{ key: string; value: string }> }>("/api/settings"),
+      ]);
+      setStatus(qbo);
+      const flag = settings.settings?.find((s) => s.key === "qbo_payment_sync_enabled");
+      setPaymentSyncEnabled((flag?.value ?? "false").toLowerCase() === "true");
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -50,6 +58,30 @@ export function Integrations(_props: RoutableProps) {
   useEffect(() => {
     void load();
   }, []);
+
+  const togglePaymentSync = async () => {
+    const next = !paymentSyncEnabled;
+    if (
+      next &&
+      !confirm(
+        "Enable pushing payments to QuickBooks?\n\nOnly turn this on once real CHS jobs (not Jobber history) are flowing. Historical imports must stay out of QBO.",
+      )
+    ) {
+      return;
+    }
+    setPaymentSyncBusy(true);
+    try {
+      await api.put(`/api/settings/${encodeURIComponent("qbo_payment_sync_enabled")}`, {
+        value: next,
+      });
+      setPaymentSyncEnabled(next);
+      toast.push("success", next ? "Payment push enabled" : "Payment push disabled");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setPaymentSyncBusy(false);
+    }
+  };
 
   if (user && user.role !== "owner") {
     return <div class="empty-state">Integrations are owner-only.</div>;
@@ -84,14 +116,46 @@ export function Integrations(_props: RoutableProps) {
   const test = async () => {
     setBusy("test");
     try {
-      const r = await api.post<{ ok: boolean; company_name?: string; error?: string }>(
-        "/api/integrations/quickbooks/test",
-      );
-      if (r.ok) toast.push("success", `Connection OK${r.company_name ? ` — ${r.company_name}` : ""}`);
-      else toast.push("error", r.error ?? "Test failed");
+      const r = await api.post<{
+        ok: boolean;
+        company_name?: string;
+        error?: string;
+        api_host?: string;
+        realm_id?: string;
+        intuit_tid?: string | null;
+        refreshed?: boolean;
+        jwt_realmid?: string | null;
+        realm_matches_jwt?: boolean | null;
+        alternate_host?: { host: string; http_status: number; ok: boolean } | null;
+      }>("/api/integrations/quickbooks/test");
+      toast.push("success", `Connection OK${r.company_name ? ` — ${r.company_name}` : ""}`);
       void load();
     } catch (e) {
-      toast.push("error", errMsg(e));
+      const body =
+        e instanceof ApiError && e.body && typeof e.body === "object"
+          ? (e.body as Record<string, unknown>)
+          : null;
+      if (body) {
+        const alt = body.alternate_host as
+          | { host?: string; http_status?: number; ok?: boolean }
+          | null
+          | undefined;
+        const bits = [
+          String(body.error ?? (e instanceof ApiError ? e.message : "Test failed")),
+          body.api_host ? `host=${body.api_host}` : null,
+          body.realm_id ? `realm=${body.realm_id}` : null,
+          body.intuit_tid ? `tid=${body.intuit_tid}` : null,
+          body.jwt_realmid != null ? `jwt_realm=${body.jwt_realmid}` : null,
+          body.realm_matches_jwt === false ? "REALM MISMATCH vs JWT" : null,
+          body.refreshed === true ? "refreshed=yes" : body.refreshed === false ? "refreshed=no" : null,
+          alt?.host ? `alt=${alt.host}:${alt.http_status}` : null,
+        ].filter(Boolean);
+        toast.push("error", bits.join(" · "));
+        console.error("[qbo test probe]", body);
+      } else {
+        toast.push("error", errMsg(e));
+      }
+      void load();
     } finally {
       setBusy(null);
     }
@@ -189,6 +253,31 @@ export function Integrations(_props: RoutableProps) {
               </>
             )}
           </div>
+
+          <div
+            class="mt-md"
+            style={{
+              marginTop: "var(--space-md)",
+              paddingTop: "var(--space-md)",
+              borderTop: "1px solid var(--border-color, #e5e5e5)",
+            }}
+          >
+            <label class="flex items-center gap-sm" style={{ cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={paymentSyncEnabled}
+                disabled={paymentSyncBusy}
+                onChange={() => void togglePaymentSync()}
+              />
+              <span>
+                <strong>Push payments to QuickBooks</strong>
+                <span class="text--muted" style={{ display: "block", fontSize: "var(--text-sm)" }}>
+                  Keep off until real jobs are running through CHS. Prevents historical Jobber
+                  imports from inflating QBO income.
+                </span>
+              </span>
+            </label>
+          </div>
         </Card>
       )}
 
@@ -257,6 +346,9 @@ interface ReferenceResponse {
   expense_types: string[];
   account_map: Record<string, string>;
   payment_account_ref: string | null;
+  subcontractor_payment_account_ref?: string | null;
+  default_customer_id?: string | null;
+  default_customer_name?: string | null;
 }
 
 function MappingModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -268,7 +360,9 @@ function MappingModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [vendors, setVendors] = useState<Record<string, string>>({});
   const [accountMap, setAccountMap] = useState<Record<string, string>>({});
   const [paymentAccount, setPaymentAccount] = useState("");
+  const [subPaymentAccount, setSubPaymentAccount] = useState("");
   const [expenseTypes, setExpenseTypes] = useState<string[]>([]);
+  const [defaultCustomerId, setDefaultCustomerId] = useState("");
 
   useEffect(() => {
     void (async () => {
@@ -277,6 +371,8 @@ function MappingModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
         setRef(r);
         setAccountMap(r.account_map ?? {});
         setPaymentAccount(r.payment_account_ref ?? "");
+        setSubPaymentAccount(r.subcontractor_payment_account_ref ?? "");
+        setDefaultCustomerId(r.default_customer_id ?? "");
         const cm: Record<string, string> = {};
         for (const c of r.clients) if (c.qbo_id) cm[c.chs_id] = c.qbo_id;
         setClients(cm);
@@ -295,11 +391,17 @@ function MappingModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const save = async () => {
     setBusy(true);
     try {
+      const selected = (ref?.all_customers ?? []).find((c) => c.id === defaultCustomerId);
+      await api.put("/api/integrations/quickbooks/default-customer", {
+        qbo_customer_id: defaultCustomerId || null,
+        qbo_customer_name: selected?.name ?? null,
+      });
       await api.post("/api/integrations/quickbooks/mapping", {
         clients,
         vendors,
         account_map: accountMap,
-        payment_account_ref: paymentAccount,
+        payment_account_ref: paymentAccount || null,
+        subcontractor_payment_account_ref: subPaymentAccount || null,
       });
       toast.push("success", "Mapping saved");
       onSaved();
@@ -343,6 +445,20 @@ function MappingModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
               onChange={setPaymentAccount}
             />
           </FormField>
+          <FormField label="Payment account for subcontractor payments (optional)">
+            <Select
+              value={subPaymentAccount}
+              options={[
+                { value: "", label: "— same as above —" },
+                ...accountOpts,
+              ]}
+              onChange={setSubPaymentAccount}
+            />
+          </FormField>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            Leave blank to use the same payment account for subcontractor labor. This is the bank
+            account money leaves from — separate from expense-type category mapping below.
+          </p>
 
           <h3 class="section-heading">Expense type → QBO Account</h3>
           {expenseTypes.length === 0 && (
@@ -359,6 +475,17 @@ function MappingModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
           ))}
 
           <h3 class="section-heading">Clients → QBO Customers</h3>
+          <FormField label="Default QBO Customer (for clients without an individual mapping)">
+            <Select
+              value={defaultCustomerId}
+              options={[{ value: "", label: "— no default —" }, ...customerList]}
+              onChange={setDefaultCustomerId}
+            />
+          </FormField>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            Clients left as "— not mapped —" below will automatically use the default customer above
+            when synced to QuickBooks.
+          </p>
           {(ref?.clients ?? []).map((c) => (
             <FormField key={c.chs_id} label={c.chs_name}>
               <Select

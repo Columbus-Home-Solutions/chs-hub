@@ -27,7 +27,7 @@ export function SiriShortcutCard() {
             <strong>Siri Shortcut — Add Job Note</strong>
           </div>
           <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
-            Say &ldquo;Hey Siri, make a job note&rdquo; to open CHS voice capture directly.
+            Say &ldquo;Hey Siri, make a job note&rdquo; to open CHS New Note capture directly.
           </p>
           <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
             Set Up Siri Shortcut

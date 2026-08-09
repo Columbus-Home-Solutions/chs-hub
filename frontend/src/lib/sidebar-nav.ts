@@ -1,0 +1,363 @@
+import { to } from "./nav";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface NavChild {
+  label: string;
+  /** Full URL — internal (/app/...) or external (https://...) */
+  href: string;
+  external?: boolean;
+  placeholder?: boolean;
+  /**
+   * Custom active test. Receives the current pathname (no query) and the
+   * raw search string (no leading `?`). Required for items that share a
+   * path but differ only by query params (Jobs status filters, Financial tabs).
+   */
+  activeTest?: (path: string, search: string) => boolean;
+}
+
+export interface NavSection {
+  id: string;
+  label: string;
+  icon: string;
+  /**
+   * App-relative path (without /app prefix) for the parent label navigation.
+   * When undefined the section is "toggle-only" — both label and chevron
+   * click toggle the submenu (Jobs, Content, Resources).
+   */
+  navPath?: string;
+  children?: NavChild[];
+  /**
+   * Direct-nav item with no submenu (Dashboard, Schedule, Settings).
+   * navPath is still required for navigation + active detection.
+   */
+  noChildren?: boolean;
+  dividerBefore?: boolean;
+  dividerAfter?: boolean;
+}
+
+// ─── Active-detection helpers ─────────────────────────────────────────────────
+
+export function childActive(child: NavChild, path: string, search: string): boolean {
+  if (child.external || child.placeholder) return false;
+  if (child.activeTest) return child.activeTest(path, search);
+
+  const [hrefPath, hrefSearch] = child.href.split("?");
+  if (path !== hrefPath && !path.startsWith(hrefPath + "/")) return false;
+  if (!hrefSearch) return true;
+
+  const want = new URLSearchParams(hrefSearch);
+  const have = new URLSearchParams(search);
+  for (const [k, v] of want.entries()) {
+    if (have.get(k) !== v) return false;
+  }
+  return true;
+}
+
+export function parentActive(section: NavSection, path: string, search: string): boolean {
+  if (!section.navPath) return false;
+  const target = to(section.navPath);
+  if (section.navPath === "/") {
+    return path === to("/") || path === to("/") + "/";
+  }
+  // Active when on the parent route but NOT on a child route that overrides it
+  const onParentPath = path === target || path.startsWith(target + "/");
+  if (!onParentPath) return false;
+  // If any child is active (more specific match), the parent row itself isn't
+  // highlighted — the active child handles the indicator.
+  if (section.children?.some((c) => childActive(c, path, search))) return false;
+  return true;
+}
+
+// ─── Nav structure ────────────────────────────────────────────────────────────
+
+export const SIDEBAR_NAV: NavSection[] = [
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    icon: "🏠",
+    navPath: "/",
+    noChildren: true,
+    dividerAfter: true,
+  },
+  {
+    id: "pipeline",
+    label: "Pipeline",
+    icon: "📋",
+    // No navPath — label + chevron both toggle only (same as Jobs)
+    children: [
+      {
+        label: "Leads",
+        href: to("/estimating") + "?tab=chs",
+        activeTest: (p, s) =>
+          p === to("/estimating") && new URLSearchParams(s).get("tab") === "chs",
+      },
+      {
+        label: "Estimates",
+        href: to("/estimates"),
+        activeTest: (p) => p === to("/estimates"),
+      },
+      {
+        label: "Google Local Services",
+        href: "https://ads.google.com/localservices",
+        external: true,
+      },
+      {
+        label: "Thumbtack",
+        href: "https://www.thumbtack.com/pro",
+        external: true,
+      },
+    ],
+  },
+  {
+    id: "jobs",
+    label: "Jobs",
+    icon: "🏗️",
+    // No navPath — label + chevron both toggle only
+    children: [
+      {
+        label: "All Jobs",
+        href: to("/jobs"),
+        activeTest: (p, s) =>
+          p === to("/jobs") && !new URLSearchParams(s).has("status"),
+      },
+      {
+        label: "Needs Scheduling",
+        href: to("/jobs") + "?status=deposit_paid",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "deposit_paid",
+      },
+      {
+        label: "Scheduled",
+        href: to("/jobs") + "?status=scheduled",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "scheduled",
+      },
+      {
+        label: "In Progress",
+        href: to("/jobs") + "?status=in_progress",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "in_progress",
+      },
+      {
+        label: "Punch List",
+        href: to("/jobs") + "?status=punch_list",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "punch_list",
+      },
+      {
+        label: "Needs Reconciliation",
+        href: to("/jobs") + "?status=complete",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "complete",
+      },
+      {
+        label: "Closed",
+        href: to("/jobs") + "?status=closed",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "closed",
+      },
+      {
+        label: "Warranty Calls",
+        href: to("/warranty-calls"),
+        activeTest: (p) =>
+          p === to("/warranty-calls") || p.startsWith(to("/warranty-calls") + "/"),
+      },
+    ],
+  },
+  {
+    id: "schedule",
+    label: "Schedule",
+    icon: "📅",
+    navPath: "/schedule",
+    noChildren: true,
+  },
+  {
+    id: "financial",
+    label: "Financial",
+    icon: "💰",
+    // No navPath — label + chevron both toggle only (same as Jobs)
+    children: [
+      {
+        label: "Receipt Queue",
+        href: to("/financial") + "?tab=receipts",
+        activeTest: (p, s) =>
+          p === to("/financial") && new URLSearchParams(s).get("tab") === "receipts",
+      },
+      {
+        label: "Reports",
+        href: to("/financial") + "?tab=reports",
+        activeTest: (p, s) =>
+          p === to("/financial") && new URLSearchParams(s).get("tab") === "reports",
+      },
+      {
+        label: "WC Spreadsheet",
+        href: "https://docs.google.com/spreadsheets/d/1utmYdBkUM8cefQ-1mpEnhiyV-vVf-IOhN1yn_wfXyZo/edit?usp=drive_link",
+        external: true,
+      },
+      {
+        label: "Pricing Intelligence",
+        href: to("/financial") + "?tab=pricing",
+      },
+      { label: "QuickBooks", href: "https://app.qbo.intuit.com", external: true },
+      { label: "Wisetack", href: "https://app.wisetack.com", external: true },
+      { label: "Stripe", href: "https://dashboard.stripe.com", external: true },
+    ],
+  },
+  {
+    id: "people",
+    label: "People",
+    icon: "👥",
+    // No navPath — toggle only
+    children: [
+      {
+        label: "Clients",
+        href: to("/clients"),
+        activeTest: (p) =>
+          p === to("/clients") || p.startsWith(to("/clients") + "/"),
+      },
+      {
+        label: "Payers",
+        href: to("/payers"),
+        activeTest: (p) =>
+          p === to("/payers") || p.startsWith(to("/payers") + "/"),
+      },
+      {
+        label: "Subs",
+        href: to("/subcontractors"),
+        activeTest: (p) =>
+          p === to("/subcontractors") ||
+          p.startsWith(to("/subcontractors") + "/"),
+      },
+    ],
+  },
+  {
+    id: "documents",
+    label: "Documents",
+    icon: "📄",
+    // No navPath — toggle only
+    children: [
+      {
+        label: "Photos",
+        href: to("/photos"),
+        activeTest: (p) =>
+          p === to("/photos") || p.startsWith(to("/photos") + "/"),
+      },
+      {
+        label: "Documents",
+        href: to("/documents"),
+        activeTest: (p, s) =>
+          p === to("/documents") && !new URLSearchParams(s).has("tab"),
+      },
+      {
+        label: "Company Docs",
+        href: to("/company-docs"),
+        activeTest: (p) =>
+          p === to("/company-docs") || p.startsWith(to("/company-docs") + "/"),
+      },
+    ],
+  },
+  {
+    id: "social",
+    label: "Social",
+    icon: "📱",
+    // No navPath — toggle only
+    children: [
+      {
+        label: "Post Manager",
+        href: to("/social"),
+        activeTest: (p) => p === to("/social"),
+      },
+      {
+        label: "Reviews",
+        href: to("/social/reviews"),
+        activeTest: (p) => p === to("/social/reviews") || p.startsWith(to("/social/reviews") + "/"),
+      },
+      {
+        label: "Google Business",
+        href: "https://business.google.com",
+        external: true,
+      },
+      {
+        label: "Meta Business",
+        href: "https://business.facebook.com",
+        external: true,
+      },
+      { label: "Instagram", href: "https://www.instagram.com", external: true },
+      { label: "LinkedIn", href: "https://www.linkedin.com", external: true },
+      {
+        label: "Website",
+        href: "https://homesolutionsar.com",
+        external: true,
+      },
+    ],
+  },
+  {
+    id: "content",
+    label: "Content",
+    icon: "🎨",
+    // No navPath — toggle only
+    children: [
+      { label: "Canva", href: "https://www.canva.com", external: true },
+      { label: "Loom", href: "https://www.loom.com", external: true },
+    ],
+  },
+  {
+    id: "resources",
+    label: "Resources",
+    icon: "🔗",
+    // No navPath — toggle only
+    dividerAfter: true,
+    children: [
+      { label: "AFCU", href: "https://www.afcu.org", external: true },
+      {
+        label: "Lowe's Credit",
+        href: "https://lowes.syf.com/commercial/",
+        external: true,
+      },
+      { label: "Bill", href: "https://www.bill.com", external: true },
+      {
+        label: "AMEX",
+        href: "https://www.americanexpress.com",
+        external: true,
+      },
+      { label: "Bluevine", href: "https://www.bluevine.com", external: true },
+      {
+        label: "Cloudflare",
+        href: "https://dash.cloudflare.com",
+        external: true,
+      },
+      { label: "Twilio", href: "https://console.twilio.com", external: true },
+      {
+        label: "Google Cloud",
+        href: "https://console.cloud.google.com",
+        external: true,
+      },
+      {
+        label: "Google Shared Drive",
+        href: "https://drive.google.com",
+        external: true,
+      },
+      {
+        label: "QR Code Generator",
+        href: "https://www.qr-code-generator.com",
+        external: true,
+      },
+    ],
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    icon: "⚙️",
+    navPath: "/settings",
+    noChildren: true,
+    dividerBefore: true,
+  },
+];
+

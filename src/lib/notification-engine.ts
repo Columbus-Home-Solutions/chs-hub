@@ -1286,10 +1286,18 @@ export async function triggerSubScheduled(env: Env, scheduleEntryId: string): Pr
 export async function triggerPaymentReceived(env: Env, paymentId: string): Promise<void> {
   try {
     const pay = await env.DB.prepare(
-      "SELECT invoice_id, job_id, client_id, amount, convenience_fee FROM payments WHERE id = ?",
+      "SELECT invoice_id, job_id, client_id, amount, convenience_fee, payment_method, received_date FROM payments WHERE id = ?",
     )
       .bind(paymentId)
-      .first<{ invoice_id: string | null; job_id: string | null; client_id: string | null; amount: number | null; convenience_fee: number | null }>();
+      .first<{
+        invoice_id: string | null;
+        job_id: string | null;
+        client_id: string | null;
+        amount: number | null;
+        convenience_fee: number | null;
+        payment_method: string | null;
+        received_date: string | null;
+      }>();
     if (!pay?.client_id) return;
 
     let invoiceNumber: number | null = null;
@@ -1306,6 +1314,11 @@ export async function triggerPaymentReceived(env: Env, paymentId: string): Promi
       }
     }
 
+    const methodLabel = titleCase((pay.payment_method ?? "payment").replace(/_/g, " "));
+    const paymentDate = pay.received_date ? formatDate(pay.received_date) : formatDate(new Date().toISOString());
+    // Check/cash: receipt is amount + method + date (no fee). Electronic convenience
+    // fee stays on the payment row / pay page — never folded into payment_amount.
+
     await triggerNotification(env, "payment_received", {
       clientId: pay.client_id,
       jobId: pay.job_id,
@@ -1313,6 +1326,8 @@ export async function triggerPaymentReceived(env: Env, paymentId: string): Promi
       merge: {
         invoice_number: invoiceNumber != null ? String(invoiceNumber) : "",
         payment_amount: usd(pay.amount ?? 0),
+        payment_method: methodLabel,
+        payment_date: paymentDate,
         remaining_balance: usd(remaining),
       },
     });

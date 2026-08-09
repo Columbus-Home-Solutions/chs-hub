@@ -57,9 +57,10 @@ Rules:
 - Only extract items that represent actual work scope — not client preferences like "wants white cabinets" unless they define a scope item
 - Measurements in the notes should inform quantity where possible
 - If notes mention demolition separately from installation, create separate line items
-- Do not invent scope items not mentioned or implied in the notes or sketches
+- Do not invent scope items not mentioned or implied in the notes, sketches, or visit photos
 - Catalog match only when the name and work type are a clear match — do not force matches
-- When sketch images are provided, extract scope items visible in the drawings including any labeled dimensions, room names, or annotations.`;
+- When sketch images are provided, extract scope items visible in the drawings including any labeled dimensions, room names, or annotations
+- When visit photos are provided, infer visible existing conditions and scope (damage, finishes, rooms, measurements if labeled)`;
 
 export function buildClaudeMessages(
   notes: string | null,

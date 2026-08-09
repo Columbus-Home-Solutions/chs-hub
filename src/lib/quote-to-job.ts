@@ -44,6 +44,27 @@
 
 import type { Env } from "../env.js";
 
+/**
+ * Attach visit photos (estimate_request_id) onto the new job so the job gallery
+ * shows field capture from the estimate visit. Keeps estimate_request_id set
+ * for history; only fills job_id when still null.
+ */
+async function attachVisitPhotosToJob(
+  env: Env,
+  requestId: string,
+  jobId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE photos
+        SET job_id = ?
+      WHERE estimate_request_id = ?
+        AND COALESCE(is_active, 1) = 1
+        AND (job_id IS NULL OR job_id = '')`,
+  )
+    .bind(jobId, requestId)
+    .run();
+}
+
 export type DepositMethod = "check" | "cash" | "venmo" | "zelle" | "other" | "stripe";
 
 export interface DepositPayment {
@@ -161,6 +182,8 @@ export async function convertQuoteToJob(
 
   // ── Case 1: fully converted → no-op, return it. ───────────────────────
   if (existing && (existing.conversion_complete ?? 0) === 1) {
+    // Idempotent retry still attaches any visit photos not yet linked.
+    await attachVisitPhotosToJob(env, requestId, existing.id);
     return {
       ok: true,
       jobId: existing.id,
@@ -217,6 +240,8 @@ export async function convertQuoteToJob(
       const { linkEstimateContractsToJob } = await import("./estimate-contract-document.js");
       await linkEstimateContractsToJob(env, existing.id, estimateId);
     }
+
+    await attachVisitPhotosToJob(env, requestId, existing.id);
 
     return {
       ok: true,
@@ -387,6 +412,8 @@ export async function convertQuoteToJob(
     const { linkEstimateContractsToJob } = await import("./estimate-contract-document.js");
     await linkEstimateContractsToJob(env, jobId, row.e_id);
   }
+
+  await attachVisitPhotosToJob(env, requestId, jobId);
 
   // Read back the in-transaction-allocated job_number.
   const jobNumberRow = await env.DB.prepare("SELECT job_number FROM jobs WHERE id = ?")

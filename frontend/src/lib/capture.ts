@@ -12,6 +12,7 @@ const THUMB_QUALITY = 0.85;
 
 export interface CaptureMeta {
   job_id?: string | null;
+  estimate_request_id?: string | null;
   photo_type?: string;
   caption?: string | null;
   task_id?: string | null;
@@ -71,7 +72,11 @@ export async function uploadPhoto(
   form.append("image", file, "capture.jpg");
   form.append("thumb", thumb, "thumb.jpg");
   if (meta.job_id) form.append("job_id", meta.job_id);
-  form.append("photo_type", meta.photo_type ?? "job_progress");
+  if (meta.estimate_request_id) form.append("estimate_request_id", meta.estimate_request_id);
+  form.append(
+    "photo_type",
+    meta.photo_type ?? (meta.estimate_request_id && !meta.job_id ? "estimate_visit" : "job_progress"),
+  );
   if (meta.caption) form.append("caption", meta.caption);
   if (meta.task_id) form.append("task_id", meta.task_id);
   if (meta.daily_log_id) form.append("daily_log_id", meta.daily_log_id);

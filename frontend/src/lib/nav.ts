@@ -54,15 +54,45 @@ export const NAV_ITEMS: NavItem[] = [
 ];
 
 // Condensed set for the mobile bottom tab bar (left/right of the center + action).
+// Layout: Home · Estimates · [+] · Jobs · More
 export const MOBILE_TABS_LEFT: NavItem[] = [
   { label: "Home", path: "/", icon: "🏠", enabled: true },
-  { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
+  // Estimates list (Active/All). Pipeline stays under More → Pipeline.
+  { label: "Estimates", path: "/estimates", icon: "📋", enabled: true },
 ];
 
 export const MOBILE_TABS_RIGHT: NavItem[] = [
-  { label: "Clients", path: "/clients", icon: "👥", enabled: true },
-  { label: "Settings", path: "/settings", icon: "⚙️", enabled: true },
+  { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
+  // path is a sentinel — AppShell opens MoreNavSheet instead of routing.
+  { label: "More", path: "__more__", icon: "•••", enabled: true },
 ];
+
+/**
+ * Tablet rail primary destinations (vertical). Clients replaces the phone's
+ * center + slot; quick-capture is a separate FAB over content.
+ * More is a sentinel — AppShell opens MoreNavSheet (sidebar-nav tree).
+ */
+export const TABLET_TABS: NavItem[] = [
+  { label: "Home", path: "/", icon: "🏠", enabled: true },
+  { label: "Estimates", path: "/estimates", icon: "📋", enabled: true },
+  { label: "Jobs", path: "/jobs", icon: "🏗️", enabled: true },
+  { label: "Clients", path: "/clients", icon: "👥", enabled: true },
+  { label: "More", path: "__more__", icon: "•••", enabled: true },
+];
+
+/**
+ * Estimates tab/rail highlights on the list and on pipeline/request routes
+ * (still reachable via More → Pipeline) so the section stays clearly selected.
+ */
+export function isEstimatesTabActive(currentPath?: string): boolean {
+  const current = currentPath ?? getCurrentUrl() ?? "";
+  return (
+    current === to("/estimates") ||
+    current.startsWith(to("/estimates") + "/") ||
+    current === to("/estimating") ||
+    current.startsWith(to("/estimating") + "/")
+  );
+}
 
 /** @deprecated Use MOBILE_TABS_LEFT / MOBILE_TABS_RIGHT — kept for any legacy imports. */
 export const MOBILE_TABS: NavItem[] = [...MOBILE_TABS_LEFT, ...MOBILE_TABS_RIGHT];

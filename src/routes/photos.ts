@@ -62,6 +62,7 @@ const PHOTO_TYPES = new Set([
   "issue",
   "completion",
   "general",
+  "estimate_visit",
 ]);
 const LEGACY_CATEGORY: Record<string, string> = {
   job_progress: "progress",
@@ -72,6 +73,7 @@ const LEGACY_CATEGORY: Record<string, string> = {
   issue: "progress",
   completion: "final",
   general: "progress",
+  estimate_visit: "progress",
 };
 
 const OPEN_JOB_STATUSES = [
@@ -122,6 +124,7 @@ function safeJsonArray(s: string | null): string[] {
 
 interface PhotoMetaInput {
   job_id: string | null;
+  estimate_request_id: string | null;
   photo_type: string;
   caption: string | null;
   taken_at: string;
@@ -136,11 +139,19 @@ interface PhotoMetaInput {
   capture_uuid: string | null;
 }
 
+/** R2 folder segment: prefer job_id, else estimate-request-scoped path. */
+function photoFolderId(meta: PhotoMetaInput): string | null {
+  if (meta.job_id) return meta.job_id;
+  if (meta.estimate_request_id) return `er-${meta.estimate_request_id}`;
+  return null;
+}
+
 function readMeta(source: Record<string, unknown>): PhotoMetaInput {
   const rawType = str(source.photo_type) ?? str(source.category) ?? "job_progress";
   const photo_type = PHOTO_TYPES.has(rawType) ? rawType : "job_progress";
   return {
     job_id: str(source.job_id),
+    estimate_request_id: str(source.estimate_request_id),
     photo_type,
     caption: str(source.caption),
     taken_at: str(source.taken_at) ?? new Date().toISOString(), // rule #1: always timestamped
@@ -171,12 +182,12 @@ async function insertPhotoRow(
   const category = LEGACY_CATEGORY[meta.photo_type] ?? "progress";
   await env.DB.prepare(
     `INSERT INTO photos
-       (id, created_at, taken_at, job_id, category, r2_key, thumb_key,
+       (id, created_at, taken_at, job_id, estimate_request_id, category, r2_key, thumb_key,
         uploaded_by, gps_lat, gps_lng, tags, caption, before_after_pair_id,
         photo_type, latitude, longitude, location_accuracy, r2_thumbnail_key,
         r2_url, uploaded_at, synced_from_offline, task_id, daily_log_id,
         entered_via, is_active, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL,
              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
   )
     .bind(
@@ -184,6 +195,7 @@ async function insertPhotoRow(
       now,
       meta.taken_at,
       meta.job_id,
+      meta.estimate_request_id,
       category,
       keys.r2Key,
       keys.thumbKey,
@@ -333,6 +345,7 @@ export async function handlePhotoCreate(env: Env, request: Request): Promise<Res
     // Flat form fields.
     for (const k of [
       "job_id",
+      "estimate_request_id",
       "photo_type",
       "category",
       "caption",
@@ -352,6 +365,16 @@ export async function handlePhotoCreate(env: Env, request: Request): Promise<Res
   }
 
   const meta = readMeta(metaSource);
+  // Default visit captures to estimate_visit when linked to a request without a job.
+  if (meta.estimate_request_id && !meta.job_id && meta.photo_type === "job_progress") {
+    meta.photo_type = "estimate_visit";
+  }
+  if (meta.estimate_request_id) {
+    const er = await env.DB.prepare("SELECT id FROM estimate_requests WHERE id = ?")
+      .bind(meta.estimate_request_id)
+      .first<{ id: string }>();
+    if (!er) return jsonErr(400, "invalid_estimate_request", "estimate_request_id not found");
+  }
   const uploadedBy = request.headers.get("cf-access-authenticated-user-email") ?? null;
 
   // Idempotency: if the client supplied a capture UUID and we already have it,
@@ -370,8 +393,9 @@ export async function handlePhotoCreate(env: Env, request: Request): Promise<Res
   }
 
   const bucket = dateBucket(meta.taken_at);
-  const r2Key = photoOriginalKey(meta.job_id, bucket, id);
-  const thumbKey = photoThumbKey(meta.job_id, bucket, id);
+  const folder = photoFolderId(meta);
+  const r2Key = photoOriginalKey(folder, bucket, id);
+  const thumbKey = photoThumbKey(folder, bucket, id);
 
   const fullBytes = await full.arrayBuffer();
   // Thumbnail is non-fatal (#6): if no client thumb, the thumb key points at
@@ -455,8 +479,9 @@ export async function handlePhotoBatch(env: Env, request: Request): Promise<Resp
         }
       }
       const bucket = dateBucket(meta.taken_at);
-      const r2Key = photoOriginalKey(meta.job_id, bucket, id);
-      const thumbKey = photoThumbKey(meta.job_id, bucket, id);
+      const folder = photoFolderId(meta);
+      const r2Key = photoOriginalKey(folder, bucket, id);
+      const thumbKey = photoThumbKey(folder, bucket, id);
       const fullBytes = await image.arrayBuffer();
       const thumbBytes = thumb instanceof Blob ? await thumb.arrayBuffer().catch(() => null) : null;
       await putImage(env, r2Key, fullBytes, image.type);
@@ -905,6 +930,31 @@ export async function handleJobPhotos(env: Env, jobId: string, url: URL): Promis
      WHERE ${where.join(" AND ")}
      ORDER BY COALESCE(p.taken_at, p.created_at) ASC
      LIMIT 1000`,
+  )
+    .bind(...binds)
+    .all<PhotoRow>();
+
+  const photos = (rows.results ?? []).map(hydratePhoto);
+  return jsonResponse({ as_of: new Date().toISOString(), total: photos.length, photos });
+}
+
+// ─── GET /api/estimate-requests/:id/photos (visit capture gallery) ───────────
+
+export async function handleEstimateRequestPhotos(
+  env: Env,
+  requestId: string,
+  url: URL,
+): Promise<Response> {
+  const includeInactive = url.searchParams.get("include_inactive") === "1";
+  const where: string[] = ["p.estimate_request_id = ?"];
+  const binds: unknown[] = [requestId];
+  if (!includeInactive) where.push("COALESCE(p.is_active, 1) = 1");
+
+  const rows = await env.DB.prepare(
+    `SELECT ${PHOTO_SELECT}
+     WHERE ${where.join(" AND ")}
+     ORDER BY COALESCE(p.taken_at, p.created_at) ASC
+     LIMIT 500`,
   )
     .bind(...binds)
     .all<PhotoRow>();

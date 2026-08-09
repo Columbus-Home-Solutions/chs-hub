@@ -220,6 +220,7 @@ export function JobPipeline(_props: RoutableProps) {
             </button>
           </div>
         )}
+        <div class="table-container">
         <table class="data-table">
           <thead>
             <tr>
@@ -263,6 +264,7 @@ export function JobPipeline(_props: RoutableProps) {
             ))}
           </tbody>
         </table>
+        </div>
         </div>
       )}
 

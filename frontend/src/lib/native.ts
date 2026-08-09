@@ -112,3 +112,228 @@ export function nativeHaptic(style: "LIGHT" | "MEDIUM" | "HEAVY" = "LIGHT"): voi
   const haptics = plugin<HapticsPlugin>("Haptics");
   void haptics?.impact({ style }).catch(() => undefined);
 }
+
+interface SplashPlugin {
+  hide: (opts?: { fadeOutDuration?: number }) => Promise<void>;
+}
+
+/** Hide the Capacitor launch splash (native only; no-op on web). */
+export async function hideNativeSplash(fadeOutDuration = 0): Promise<void> {
+  if (!isNativePlatform()) return;
+  const splash = plugin<SplashPlugin>("SplashScreen");
+  if (!splash?.hide) return;
+  try {
+    await splash.hide({ fadeOutDuration });
+  } catch {
+    /* ignore — splash may already be gone */
+  }
+}
+
+interface CameraPhotoResult {
+  base64String?: string;
+  dataUrl?: string;
+  format: string;
+}
+
+interface CameraPlugin {
+  getPhoto: (options: Record<string, unknown>) => Promise<CameraPhotoResult>;
+  requestPermissions?: () => Promise<{ camera?: string; photos?: string }>;
+}
+
+interface AppPlugin {
+  openUrl: (opts: { url: string }) => Promise<void>;
+}
+
+function base64ToBlob(base64: string, mime: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+/**
+ * Native camera / photo-library picker via @capacitor/camera.
+ * Returns null on web (caller should fall back to `<input type="file">`).
+ * Throws on cancel/permission denial so callers can toast.
+ */
+export async function capturePhotoNative(): Promise<Blob | null> {
+  if (!isNativePlatform()) return null;
+  const camera = plugin<CameraPlugin>("Camera");
+  if (!camera?.getPhoto) return null;
+
+  try {
+    await camera.requestPermissions?.();
+  } catch {
+    /* requestPermissions may be unavailable; getPhoto will prompt */
+  }
+
+  const photo = await camera.getPhoto({
+    quality: 90,
+    allowEditing: false,
+    // Prompt = Camera + Photo Library (standard iOS action sheet).
+    source: "PROMPT",
+    resultType: "base64",
+    promptLabelHeader: "Visit photo",
+    promptLabelPicture: "Take Photo",
+    promptLabelPhoto: "Photo Library",
+    promptLabelCancel: "Cancel",
+  });
+
+  const b64 = photo.base64String;
+  if (!b64) throw new Error("Camera returned no image data");
+  const format = (photo.format || "jpeg").toLowerCase();
+  const mime = format === "png" ? "image/png" : "image/jpeg";
+  return base64ToBlob(b64, mime);
+}
+
+/** Open iOS/Android app Settings (native only) so the user can re-enable mic/camera. */
+export async function openAppSettings(): Promise<void> {
+  if (!isNativePlatform()) return;
+  const app = plugin<AppPlugin>("App");
+  if (!app?.openUrl) return;
+  try {
+    // iOS: app-settings: · Android: package settings via Capacitor App
+    const url = getPlatform() === "ios" ? "app-settings:" : "app-settings:";
+    await app.openUrl({ url });
+  } catch (err) {
+    console.warn("[native] openAppSettings failed", (err as Error).message);
+  }
+}
+
+interface AudioRecorderPlugin {
+  startRecording: (opts?: Record<string, unknown>) => Promise<void>;
+  stopRecording: () => Promise<{ uri?: string; duration?: number; blob?: Blob }>;
+  cancelRecording?: () => Promise<void>;
+  getRecordingStatus?: () => Promise<{ status: string }>;
+  requestPermissions?: () => Promise<{ recordAudio?: string }>;
+  checkPermissions?: () => Promise<{ recordAudio?: string }>;
+}
+
+interface FilesystemPlugin {
+  readFile: (opts: { path: string; directory?: string }) => Promise<{ data: string | Blob }>;
+}
+
+function convertFileSrc(path: string): string {
+  const cap = bridge() as CapacitorBridge & { convertFileSrc?: (p: string) => string };
+  return cap?.convertFileSrc?.(path) ?? path;
+}
+
+function mimeFromUri(uri: string): string {
+  const lower = uri.toLowerCase();
+  if (lower.endsWith(".webm")) return "audio/webm";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".aac")) return "audio/aac";
+  return "audio/mp4"; // Capgo iOS writes .m4a (AAC)
+}
+
+/**
+ * Read a native file:// URI into a Blob via the Filesystem bridge.
+ *
+ * Do NOT use fetch(convertFileSrc(uri)) when the app remote-loads over https —
+ * WKWebView returns TypeError "Load failed" for those capacitor-local URLs.
+ * Camera avoids this by returning base64; audio must use Filesystem.readFile.
+ */
+async function readNativeFileAsBlob(uri: string): Promise<{ blob: Blob; mimeType: string }> {
+  const mimeType = mimeFromUri(uri);
+  const fs = plugin<FilesystemPlugin>("Filesystem");
+  if (!fs?.readFile) {
+    throw new Error("Filesystem plugin unavailable — cannot read recording");
+  }
+
+  const candidates = [uri];
+  if (uri.startsWith("file://")) candidates.push(uri.replace(/^file:\/\//, ""));
+  // Some Cap versions want the path without the host-empty file:/// prefix.
+  if (uri.startsWith("file:///")) candidates.push(uri.slice("file://".length));
+
+  let lastErr: unknown;
+  for (const path of candidates) {
+    try {
+      const { data } = await fs.readFile({ path });
+      if (typeof data === "string") {
+        return { blob: base64ToBlob(data, mimeType), mimeType };
+      }
+      if (data && typeof (data as Blob).arrayBuffer === "function") {
+        const blob = data as Blob;
+        return {
+          blob: blob.type ? blob : new Blob([blob], { type: mimeType }),
+          mimeType: blob.type || mimeType,
+        };
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  // Last resort (rarely works under remote-load https origin — kept for bundled apps).
+  try {
+    const src = convertFileSrc(uri);
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    return { blob, mimeType: blob.type || mimeType };
+  } catch (e) {
+    const detail =
+      lastErr instanceof Error ? lastErr.message : e instanceof Error ? e.message : "unknown";
+    throw new Error(`Could not read recording file (${detail})`);
+  }
+}
+
+/** True when Capgo CapacitorAudioRecorder is available (native shell). */
+export function nativeAudioRecorderAvailable(): boolean {
+  if (!isNativePlatform()) return false;
+  return !!plugin<AudioRecorderPlugin>("CapacitorAudioRecorder")?.startRecording;
+}
+
+/**
+ * Start native mic recording (@capgo/capacitor-audio-recorder).
+ * Throws if unavailable or permission denied.
+ */
+export async function startNativeAudioRecording(): Promise<void> {
+  const recorder = plugin<AudioRecorderPlugin>("CapacitorAudioRecorder");
+  if (!recorder?.startRecording) throw new Error("Native audio recorder unavailable");
+
+  const perms = await recorder.requestPermissions?.();
+  if (perms?.recordAudio && perms.recordAudio !== "granted") {
+    throw new Error("Microphone permission denied");
+  }
+
+  await recorder.startRecording({
+    sampleRate: 44100,
+    audioSessionMode: "SPOKEN_AUDIO",
+  });
+}
+
+/**
+ * Stop native recording and return an audio Blob for upload/transcription.
+ */
+export async function stopNativeAudioRecording(): Promise<{
+  blob: Blob;
+  mimeType: string;
+  durationMs: number;
+}> {
+  const recorder = plugin<AudioRecorderPlugin>("CapacitorAudioRecorder");
+  if (!recorder?.stopRecording) throw new Error("Native audio recorder unavailable");
+
+  const result = await recorder.stopRecording();
+  if (result.blob) {
+    return {
+      blob: result.blob,
+      mimeType: result.blob.type || "audio/webm",
+      durationMs: result.duration ?? 0,
+    };
+  }
+  if (!result.uri) throw new Error("Recording produced no audio file");
+
+  const { blob, mimeType } = await readNativeFileAsBlob(result.uri);
+  return { blob, mimeType, durationMs: result.duration ?? 0 };
+}
+
+export async function cancelNativeAudioRecording(): Promise<void> {
+  const recorder = plugin<AudioRecorderPlugin>("CapacitorAudioRecorder");
+  try {
+    await recorder?.cancelRecording?.();
+  } catch {
+    /* ignore */
+  }
+}

@@ -20,6 +20,11 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { processNote, type NoteProcessing } from "../lib/smart-notes.js";
+import { triggerNotification } from "../lib/notification-engine.js";
+import {
+  loadActiveJobsForMatch,
+  matchJobFromTranscript,
+} from "../lib/voice-note-match.js";
 import { insertFullExpense } from "./expenses.js";
 
 const NOTE_ROLES = ["owner", "project_manager", "field_crew", "office_admin"] as const;
@@ -126,8 +131,21 @@ export async function handleSmartNoteCreate(env: Env, request: Request): Promise
   if (!body) return err(400, "invalid_json");
   const rawContent = str(body.raw_content);
   if (!rawContent) return err(400, "raw_content_required");
-  const jobId = str(body.job_id);
+  let jobId = str(body.job_id);
   const enteredVia = str(body.entered_via) ?? "text";
+  const skipAi = body.skip_ai === true || body.skip_ai === 1 || body.skip_ai === "true";
+  const autoMatchJob =
+    body.auto_match_job === true ||
+    body.auto_match_job === 1 ||
+    body.auto_match_job === "true";
+  const categoryHint = str(body.category);
+
+  // Opt-in Claude job match (New Note / Siri). Desktop Smart Notes omits this
+  // so blank job_id stays a general unlinked note.
+  if (!jobId && autoMatchJob) {
+    const activeJobs = await loadActiveJobsForMatch(env);
+    jobId = await matchJobFromTranscript(env, rawContent, activeJobs);
+  }
 
   const id = crypto.randomUUID();
   await env.DB.prepare(
@@ -138,19 +156,47 @@ export async function handleSmartNoteCreate(env: Env, request: Request): Promise
     .bind(id, jobId, rawContent, enteredVia, user.email)
     .run();
 
-  // Process now (graceful degrade — never blocks the note from existing).
-  let jobTitle: string | null = null;
-  if (jobId) {
-    const j = await env.DB.prepare("SELECT title FROM jobs WHERE id = ?")
-      .bind(jobId)
-      .first<{ title: string | null }>();
-    jobTitle = j?.title ?? null;
+  let aiOk = false;
+  let aiError: string | null = null;
+
+  if (skipAi) {
+    await env.DB.prepare(
+      `UPDATE smart_notes SET processing_status = ?, is_processed = 0, ai_category = COALESCE(?, ai_category)
+        WHERE id = ?`,
+    )
+      .bind("skipped", categoryHint, id)
+      .run();
+  } else {
+    let jobTitle: string | null = null;
+    if (jobId) {
+      const j = await env.DB.prepare("SELECT title FROM jobs WHERE id = ?")
+        .bind(jobId)
+        .first<{ title: string | null }>();
+      jobTitle = j?.title ?? null;
+    }
+    const processing = await processNote(env, rawContent, { jobTitle });
+    await persistProcessing(env, id, processing);
+    aiOk = processing.ok;
+    aiError = processing.error;
   }
-  const processing = await processNote(env, rawContent, { jobTitle });
-  await persistProcessing(env, id, processing);
+
+  if (!jobId && (enteredVia === "siri" || enteredVia === "quick_capture")) {
+    await triggerNotification(env, "voice_note_unmatched", {
+      linkPath: "/app/dashboard",
+    });
+  }
 
   const row = await loadNote(env, id);
-  return json({ note: row ? hydrate(row) : null, ai_ok: processing.ok, ai_error: processing.error }, { status: 201 });
+  return json(
+    {
+      note: row ? hydrate(row) : null,
+      job_id: jobId,
+      matched: Boolean(jobId),
+      ai_ok: aiOk,
+      ai_error: aiError,
+    },
+    { status: 201 },
+  );
 }
 
 // ─── GET /api/smart-notes ─────────────────────────────────────────────────────

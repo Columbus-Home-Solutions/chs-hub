@@ -782,7 +782,7 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
     .bind(requestId)
     .first<{
       id: string;
-      client_id: string;
+      client_id: string | null;
       job_type: string;
       property_address: string;
       property_city: string;
@@ -796,6 +796,14 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
   if (req.estimate_id) {
     const existing = await loadFullEstimate(env, req.estimate_id);
     if (existing) return json({ estimate: existing, created: false });
+  }
+
+  if (!req.client_id) {
+    return err(
+      400,
+      "bad_request",
+      "Link or create a client on this request before building an estimate",
+    );
   }
 
   const mode = str(body.mode) ?? str(body.estimate_mode) ?? "trade_by_trade";

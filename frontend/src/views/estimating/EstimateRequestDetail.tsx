@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -13,17 +13,33 @@ import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatDateTime, formatStatus } from "../../lib/format";
 import { formatCurrency } from "../../lib/format";
+import { ClientForm } from "../clients/ClientForm";
+import { uploadPhoto } from "../../lib/capture";
+import {
+  cancelNativeAudioRecording,
+  capturePhotoNative,
+  isNativePlatform,
+  nativeAudioRecorderAvailable,
+  openAppSettings,
+  startNativeAudioRecording,
+  stopNativeAudioRecording,
+} from "../../lib/native";
 import { MarkWonModal } from "./MarkWonModal";
 import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton";
 import { canDeleteRequest, DeleteRequestButton } from "./DeleteRequestButton";
 import { ScopeDraftSection } from "./ScopeDraftSection";
 import { ScopeSummaryCard } from "./ScopeSummaryCard";
 import { SketchModal } from "./SketchModal";
+import { VisitCaptureLegacy } from "./VisitCaptureLegacy";
+import { VisitCaptureRedesign } from "./VisitCaptureRedesign";
+import { useViewportTier } from "../../hooks/useViewportTier";
 import {
   ESTIMATE_SENT_TOOLTIP,
+  LEAD_SOURCES,
   LOST_REASONS,
   PIPELINE_STAGES,
   type ActivityEntry,
+  type Client,
   type Estimate,
   type EstimateRequest,
   type EstimateRequestStatus,
@@ -31,35 +47,292 @@ import {
   type SketchMeta,
 } from "../../types";
 
-type SpeechRecognitionLike = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  onresult:
-    | ((
-        e: {
-          results: ArrayLike<{ isFinal: boolean; 0: { transcript: string }; length: number }>;
-        },
-      ) => void)
-    | null;
-  onend: (() => void) | null;
-  onerror: ((e: { error: string }) => void) | null;
-};
-
-function speechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
-  return (
-    (window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike })
-      .SpeechRecognition ||
-    (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike })
-      .webkitSpeechRecognition ||
-    null
-  );
+function webMediaRecorderSupported(): boolean {
+  return typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 }
 
-function Icon({ name }: { name: string }) {
-  return <i class={`ti ti-${name}`} aria-hidden="true" />;
+function isPlaceholderEmail(email: string | null | undefined): boolean {
+  return !!email && email.includes("@highlevel.placeholder");
+}
+
+/** Same detection as HL mirror (`looksLikePhoneName`) — phone-as-title is not a real name. */
+function looksLikePhoneName(name: string): boolean {
+  const digits = name.replace(/\D/g, "");
+  if (digits.length < 7) return false;
+  const compact = name.replace(/[\s().+\-]/g, "");
+  return digits.length / Math.max(compact.length, 1) >= 0.7;
+}
+
+function isSyntheticNamePart(part: string): boolean {
+  const p = part.trim().toLowerCase();
+  return !p || p === "unknown" || p === "lead" || p === "google lsa" || looksLikePhoneName(part);
+}
+
+/** Prefer genuine first/last; leave blanks when the placeholder is phone-as-title / Unknown. */
+function namePrefillFromClient(fullName: string | null | undefined): {
+  first_name: string;
+  last_name: string;
+} {
+  const name = (fullName ?? "").trim();
+  if (!name || looksLikePhoneName(name)) return { first_name: "", last_name: "" };
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    if (isSyntheticNamePart(parts[0])) return { first_name: "", last_name: "" };
+    return { first_name: parts[0], last_name: "" };
+  }
+  const first = parts[0];
+  const last = parts.slice(1).join(" ");
+  if (isSyntheticNamePart(first) && isSyntheticNamePart(last)) {
+    return { first_name: "", last_name: "" };
+  }
+  return {
+    first_name: isSyntheticNamePart(first) ? "" : first,
+    last_name: isSyntheticNamePart(last) ? "" : last,
+  };
+}
+
+function propertyPrefill(r: EstimateRequest): Partial<Client> {
+  const addr = (r.property_address ?? "").trim();
+  const zip = (r.property_zip ?? "").trim();
+  if (!addr || addr === "Unknown" || zip === "00000") return {};
+  const city = (r.property_city ?? "").trim();
+  const state = (r.property_state ?? "").trim();
+  return {
+    mailing_address: addr,
+    mailing_city: !city || city === "Unknown" ? "" : city,
+    mailing_state: !state || state === "Unknown" ? "" : state,
+    mailing_zip: zip,
+  };
+}
+
+/**
+ * Map estimate_requests.lead_source → clients.lead_source (ClientForm LEAD_SOURCES).
+ * Shared values (e.g. google_lsa) pass through; a few estimate-only labels remap.
+ */
+function leadSourcePrefill(raw: string | null | undefined): string {
+  const v = (raw ?? "").trim();
+  if (!v) return "";
+  const aliases: Record<string, string> = {
+    website_form: "website",
+    repeat_client: "repeat",
+  };
+  const mapped = aliases[v] ?? v;
+  return (LEAD_SOURCES as readonly string[]).includes(mapped) ? mapped : "";
+}
+
+function clientCreatePrefill(r: EstimateRequest): Partial<Client> {
+  const names = namePrefillFromClient(r.client_name);
+  const email =
+    r.client_email && !isPlaceholderEmail(r.client_email) ? r.client_email.trim() : "";
+  const phone = (r.client_phone ?? "").trim();
+  const lead_source = leadSourcePrefill(r.lead_source);
+  return {
+    ...names,
+    phone: phone && phone !== "unknown" ? phone : "",
+    email,
+    ...(lead_source ? { lead_source } : {}),
+    ...propertyPrefill(r),
+  };
+}
+
+/** HL mirror often stores phone-as-name + placeholder email (property may also be Unknown). */
+function needsRealClient(r: EstimateRequest): boolean {
+  if (!r.client_id) return true;
+  if (isPlaceholderEmail(r.client_email)) return true;
+  const name = (r.client_name ?? "").trim();
+  if (looksLikePhoneName(name)) return true;
+  return false;
+}
+
+interface ClientHit {
+  id: string;
+  name: string;
+  phone: string;
+}
+
+function LinkClientModal({
+  open,
+  onClose,
+  onLinked,
+  request,
+  defaultPath = "create",
+}: {
+  open: boolean;
+  onClose: () => void;
+  onLinked: () => void;
+  request: EstimateRequest;
+  /** Thin-client CTA defaults to create; "Change client" opens search. */
+  defaultPath?: "create" | "search";
+}) {
+  const toast = useToast();
+  /** Default path is pre-filled create; search is secondary. */
+  const [path, setPath] = useState<"create" | "search">(defaultPath);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<ClientHit[]>([]);
+  const [selected, setSelected] = useState<ClientHit | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const prefill = clientCreatePrefill(request);
+
+  const reset = useCallback(() => {
+    setPath(defaultPath);
+    setQuery("");
+    setResults([]);
+    setSelected(null);
+    setSubmitting(false);
+  }, [defaultPath]);
+
+  useEffect(() => {
+    if (!open) {
+      reset();
+      return;
+    }
+    setPath(defaultPath);
+  }, [open, reset, defaultPath]);
+
+  useEffect(() => {
+    if (!open || path !== "search") return;
+    const hint = (request.client_phone ?? "").replace(/\D/g, "").slice(-10);
+    if (hint) setQuery(hint);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }, [open, path, request.client_phone]);
+
+  useEffect(() => {
+    if (!open || path !== "search" || !query.trim() || selected) {
+      if (!query.trim() || selected) setResults([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const d = await api.get<{
+          clients: {
+            id: string;
+            first_name: string | null;
+            last_name: string | null;
+            phone: string | null;
+          }[];
+        }>(`/api/clients?search=${encodeURIComponent(query)}&limit=8`);
+        setResults(
+          (d.clients ?? []).map((c) => ({
+            id: c.id,
+            name: [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || "Unknown",
+            phone: c.phone ?? "",
+          })),
+        );
+      } catch {
+        setResults([]);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query, selected, open, path]);
+
+  const link = async (clientId: string) => {
+    setSubmitting(true);
+    try {
+      await api.put(`/api/estimate-requests/${request.id}`, { client_id: clientId });
+      toast.push("success", "Client linked");
+      onLinked();
+      onClose();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : "Failed to link client");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <ClientForm
+        open={open && path === "create"}
+        mode="create"
+        initial={prefill}
+        onClose={onClose}
+        onSaved={(client) => void link(client.id)}
+        secondaryAction={{
+          label: "Search for an existing client instead",
+          onClick: () => {
+            setSelected(null);
+            setResults([]);
+            setPath("search");
+          },
+        }}
+      />
+      <Modal
+        open={open && path === "search"}
+        title="Link Existing Client"
+        onClose={onClose}
+        footer={
+          <div class="flex items-center justify-between gap-sm" style={{ width: "100%" }}>
+            <button
+              type="button"
+              class="link-btn"
+              style={{ fontSize: "var(--text-sm)" }}
+              onClick={() => setPath("create")}
+            >
+              ← Back to create
+            </button>
+            <Button
+              variant="primary"
+              disabled={!selected || submitting}
+              onClick={() => selected && void link(selected.id)}
+            >
+              {submitting ? "Linking…" : "Link Client"}
+            </Button>
+          </div>
+        }
+      >
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginTop: 0 }}>
+          Use this if the phone already belongs to a real client in CHS.
+        </p>
+        {selected ? (
+          <div class="quick-action-modal__selected-client">
+            <span>{selected.name}</span>
+            <button
+              type="button"
+              class="mc-new-compose__clear"
+              onClick={() => {
+                setSelected(null);
+                setQuery("");
+                setResults([]);
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <div style={{ position: "relative" }}>
+            <input
+              ref={inputRef}
+              class="form-input"
+              placeholder="Search client by name or phone…"
+              value={query}
+              onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+              autoComplete="off"
+            />
+            {results.length > 0 && (
+              <div class="mc-client-results">
+                {results.map((hit) => (
+                  <button
+                    key={hit.id}
+                    type="button"
+                    class="mc-client-result"
+                    onClick={() => {
+                      setSelected(hit);
+                      setQuery(hit.name);
+                      setResults([]);
+                    }}
+                  >
+                    <span class="mc-client-result__name">{hit.name}</span>
+                    <span class="mc-client-result__phone">{hit.phone}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+    </>
+  );
 }
 
 interface DetailResponse {
@@ -91,7 +364,20 @@ export function EstimateRequestDetail({ id }: DetailProps) {
     id ? `/api/estimate-requests/${id}` : null,
   );
   const toast = useToast();
+  const tier = useViewportTier();
+  const [visitLayout, setVisitLayout] = useState<"redesigned" | "legacy">("redesigned");
+  const [requestDetailsOpen, setRequestDetailsOpen] = useState(false);
   const r = data?.request;
+
+  useEffect(() => {
+    api
+      .get<{ setting: { value: string } }>("/api/settings/visit_capture_layout")
+      .then((res) => {
+        const v = (res.setting?.value ?? "redesigned").toLowerCase();
+        setVisitLayout(v === "legacy" ? "legacy" : "redesigned");
+      })
+      .catch(() => setVisitLayout("redesigned"));
+  }, []);
   const { data: estData } = useApi<{ estimate: Estimate }>(
     r?.estimate_id ? `/api/estimates/${r.estimate_id}` : null,
   );
@@ -103,14 +389,13 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   const [draftError, setDraftError] = useState<string | null>(null);
   const [hasGeneratedDraft, setHasGeneratedDraft] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [interimTranscript, setInterimTranscript] = useState("");
+  const [transcribing, setTranscribing] = useState(false);
   const [micDenied, setMicDenied] = useState(false);
-  const recRef = useRef<SpeechRecognitionLike | null>(null);
-  const pendingTranscriptRef = useRef("");
-  const speechSupported = useRef<boolean | null>(null);
-  if (speechSupported.current === null && typeof window !== "undefined") {
-    speechSupported.current = speechRecognitionCtor() != null;
-  }
+  const mediaRecRef = useRef<MediaRecorder | null>(null);
+  const mediaChunksRef = useRef<Blob[]>([]);
+  const voiceSupported =
+    typeof window !== "undefined" &&
+    (nativeAudioRecorderAvailable() || webMediaRecorderSupported());
   const [apptOpen, setApptOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [wonOpen, setWonOpen] = useState(false);
@@ -120,7 +405,31 @@ export function EstimateRequestDetail({ id }: DetailProps) {
   const [sketchModalOpen, setSketchModalOpen] = useState(false);
   const [sketchCount, setSketchCount] = useState(0);
   const [firstSketchId, setFirstSketchId] = useState<string | null>(null);
+  const [linkClientOpen, setLinkClientOpen] = useState(false);
+  const [linkClientPath, setLinkClientPath] = useState<"create" | "search">("create");
+  const [visitPhotos, setVisitPhotos] = useState<
+    { id: string; thumb_url: string; original_url: string }[]
+  >([]);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [viewPhoto, setViewPhoto] = useState<{
+    id: string;
+    thumb_url: string;
+    original_url: string;
+  } | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const prevStatusRef = useRef<EstimateRequestStatus | null>(null);
+
+  const loadVisitPhotos = useCallback(async () => {
+    if (!id) return;
+    try {
+      const res = await api.get<{
+        photos: { id: string; thumb_url: string; original_url: string }[];
+      }>(`/api/estimate-requests/${id}/photos`);
+      setVisitPhotos(res.photos ?? []);
+    } catch {
+      setVisitPhotos([]);
+    }
+  }, [id]);
 
   useEffect(() => {
     setNotes(r?.visit_notes ?? "");
@@ -139,6 +448,10 @@ export function EstimateRequestDetail({ id }: DetailProps) {
         setFirstSketchId(null);
       });
   }, [id, sketchModalOpen]);
+
+  useEffect(() => {
+    void loadVisitPhotos();
+  }, [loadVisitPhotos]);
 
   useEffect(() => {
     if (r?.scope_draft && r.scope_draft.length > 0) {
@@ -219,72 +532,211 @@ export function EstimateRequestDetail({ id }: DetailProps) {
     void patch({ visit_notes: next }, "Visit notes saved");
   };
 
-  const stopRecording = () => {
-    recRef.current?.stop();
-    recRef.current = null;
-    setRecording(false);
-    setInterimTranscript("");
+  const appendTranscriptToNotes = (transcript: string) => {
+    const chunk = transcript.trim();
+    if (!chunk) {
+      toast.push("info", "No speech detected in recording");
+      return;
+    }
+    const next = notes.trim() ? `${notes.trim()}\n${chunk}` : chunk;
+    setNotes(next);
+    saveNotes(next);
+    toast.push("success", "Voice note added");
   };
 
-  const toggleRecording = () => {
-    const Ctor = speechRecognitionCtor();
-    if (!Ctor) return;
+  const uploadAndTranscribe = async (blob: Blob, mimeType: string) => {
+    if (!id) return;
+    setTranscribing(true);
+    try {
+      const form = new FormData();
+      const ext = mimeType.includes("webm")
+        ? "webm"
+        : mimeType.includes("wav")
+          ? "wav"
+          : "m4a";
+      form.append("audio", blob, `visit-note.${ext}`);
+      form.append("mime_type", mimeType);
+      const res = await fetch(`/api/estimate-requests/${id}/transcribe`, {
+        method: "POST",
+        body: form,
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        transcript?: string;
+        error?: string;
+        details?: string;
+      };
+      if (!res.ok) {
+        throw new Error(data.details || data.error || `Transcription failed (${res.status})`);
+      }
+      appendTranscriptToNotes(data.transcript ?? "");
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : "Transcription failed";
+      // WebKit's opaque TypeError for failed fetches — surface a clearer cause.
+      const msg =
+        raw === "Load failed" || raw === "Failed to fetch"
+          ? "Could not upload recording (network/file read failed). Try again."
+          : raw;
+      toast.push("error", msg);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const startWebMediaRecorder = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+    const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    mediaChunksRef.current = [];
+    rec.ondataavailable = (e) => {
+      if (e.data.size > 0) mediaChunksRef.current.push(e.data);
+    };
+    mediaRecRef.current = rec;
+    rec.start();
+  };
+
+  const stopWebMediaRecorder = (): Promise<{ blob: Blob; mimeType: string }> =>
+    new Promise((resolve, reject) => {
+      const rec = mediaRecRef.current;
+      if (!rec) {
+        reject(new Error("No active recording"));
+        return;
+      }
+      rec.onstop = () => {
+        const mimeType = rec.mimeType || "audio/webm";
+        const blob = new Blob(mediaChunksRef.current, { type: mimeType });
+        mediaChunksRef.current = [];
+        mediaRecRef.current = null;
+        for (const track of rec.stream.getTracks()) track.stop();
+        resolve({ blob, mimeType });
+      };
+      rec.stop();
+    });
+
+  const toggleRecording = async () => {
+    if (transcribing) return;
 
     if (recording) {
-      stopRecording();
-      const chunk = pendingTranscriptRef.current.trim();
-      pendingTranscriptRef.current = "";
-      if (chunk) {
-        const next = notes.trim() ? `${notes.trim()}\n${chunk}` : chunk;
-        setNotes(next);
-        saveNotes(next);
+      setRecording(false);
+      try {
+        if (isNativePlatform() && nativeAudioRecorderAvailable()) {
+          const { blob, mimeType } = await stopNativeAudioRecording();
+          await uploadAndTranscribe(blob, mimeType);
+        } else {
+          const { blob, mimeType } = await stopWebMediaRecorder();
+          await uploadAndTranscribe(blob, mimeType);
+        }
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : "Stop recording failed";
+        if (/permission|denied/i.test(raw)) setMicDenied(true);
+        const msg =
+          raw === "Load failed" || raw === "Failed to fetch"
+            ? "Could not read recording file. Try again."
+            : raw;
+        toast.push("error", msg);
       }
       return;
     }
 
     setMicDenied(false);
-    pendingTranscriptRef.current = "";
-    const rec = new Ctor();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = "en-US";
-    rec.onresult = (e) => {
-      let interim = "";
-      let finalChunk = "";
-      for (let i = 0; i < e.results.length; i++) {
-        const result = e.results[i];
-        const t = result[0].transcript;
-        if (result.isFinal) finalChunk += t;
-        else interim += t;
-      }
-      if (finalChunk) pendingTranscriptRef.current += finalChunk;
-      setInterimTranscript(interim);
-    };
-    rec.onerror = (e) => {
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-        setMicDenied(true);
-      }
-      stopRecording();
-    };
-    rec.onend = () => {
-      setRecording(false);
-      setInterimTranscript("");
-      recRef.current = null;
-    };
-    recRef.current = rec;
     try {
-      rec.start();
+      if (isNativePlatform() && nativeAudioRecorderAvailable()) {
+        await startNativeAudioRecording();
+      } else {
+        await startWebMediaRecorder();
+      }
       setRecording(true);
-    } catch {
-      setMicDenied(true);
+    } catch (err) {
+      void cancelNativeAudioRecording();
+      const msg = err instanceof Error ? err.message : "Could not start recording";
+      if (/permission|denied|NotAllowed/i.test(msg)) setMicDenied(true);
+      else toast.push("error", msg);
+    }
+  };
+
+  /** Discard in-progress recording without uploading (Record modal dismiss). */
+  const cancelRecording = () => {
+    if (!recording) return;
+    setRecording(false);
+    if (isNativePlatform() && nativeAudioRecorderAvailable()) {
+      void cancelNativeAudioRecording();
+      return;
+    }
+    const rec = mediaRecRef.current;
+    mediaRecRef.current = null;
+    mediaChunksRef.current = [];
+    if (rec) {
+      try {
+        for (const track of rec.stream.getTracks()) track.stop();
+        rec.onstop = null;
+        rec.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  const uploadVisitPhotoBlobs = async (files: Blob[]) => {
+    if (!id || !files.length || photoUploading) return;
+    setPhotoUploading(true);
+    try {
+      for (const file of files) {
+        await uploadPhoto(file, {
+          estimate_request_id: id,
+          photo_type: "estimate_visit",
+        }, { withGps: true });
+      }
+      toast.push("success", files.length === 1 ? "Photo added" : `${files.length} photos added`);
+      await loadVisitPhotos();
+    } catch (err) {
+      toast.push("error", err instanceof Error ? err.message : "Photo upload failed");
+    } finally {
+      setPhotoUploading(false);
+      if (photoInputRef.current) photoInputRef.current.value = "";
+    }
+  };
+
+  const onVisitPhotosSelected = async (files: FileList | null) => {
+    if (!files?.length) return;
+    await uploadVisitPhotoBlobs(Array.from(files));
+  };
+
+  /** Native: Capacitor Camera (PROMPT). Web: hidden file input. */
+  const onPhotosButtonClick = async () => {
+    if (photoUploading) return;
+    if (isNativePlatform()) {
+      try {
+        const blob = await capturePhotoNative();
+        if (blob) await uploadVisitPhotoBlobs([blob]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // User cancelled the prompt — not an error.
+        if (/cancel/i.test(msg)) return;
+        toast.push("error", msg || "Camera failed");
+      }
+      return;
+    }
+    photoInputRef.current?.click();
+  };
+
+  const deleteVisitPhoto = async (photoId: string) => {
+    try {
+      await api.del(`/api/photos/${photoId}`);
+      setVisitPhotos((prev) => prev.filter((p) => p.id !== photoId));
+      toast.push("success", "Photo removed");
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : "Failed to remove photo");
     }
   };
 
   const generateScopeDraft = async () => {
     if (!id) return;
     const trimmed = notes.trim();
-    if (!trimmed && sketchCount === 0) {
-      setDraftError("Add visit notes or a sketch before generating a scope draft.");
+    if (!trimmed && sketchCount === 0 && visitPhotos.length === 0) {
+      setDraftError("Add visit notes, a sketch, or photos before generating a scope draft.");
       return;
     }
     setDraftError(null);
@@ -383,6 +835,41 @@ export function EstimateRequestDetail({ id }: DetailProps) {
     .join(", ");
   const targets = forwardTargets(r.status);
   const terminal = r.status === "won" || r.status === "lost";
+  const thinClient = needsRealClient(r);
+  const displayEmail =
+    r.client_email && !isPlaceholderEmail(r.client_email) ? r.client_email : null;
+  const useRedesign =
+    visitLayout === "redesigned" && (tier === "mobile" || tier === "tablet");
+
+  const visitCaptureProps = {
+    requestId: r.id,
+    notes,
+    onNotesInput: setNotes,
+    onNotesBlur: () => saveNotes(),
+    recording,
+    transcribing,
+    micDenied,
+    voiceSupported,
+    onDismissMicDenied: () => setMicDenied(false),
+    onToggleRecording: () => void toggleRecording(),
+    onOpenAppSettings: () => void openAppSettings(),
+    sketchCount,
+    firstSketchId,
+    sketchModalOpen,
+    onOpenSketch: () => setSketchModalOpen(true),
+    visitPhotos,
+    photoUploading,
+    photoInputRef,
+    onPhotosButtonClick: () => void onPhotosButtonClick(),
+    onVisitPhotosSelected: (files: FileList | null) => void onVisitPhotosSelected(files),
+    onViewPhoto: setViewPhoto,
+    onDeletePhoto: (photoId: string) => void deleteVisitPhoto(photoId),
+    draftGenerating,
+    draftError,
+    hasGeneratedDraft,
+    hasScopeDraft: Boolean(scopeDraft && scopeDraft.length > 0),
+    onGenerateScopeDraft: () => void generateScopeDraft(),
+  };
 
   return (
     <div>
@@ -415,9 +902,72 @@ export function EstimateRequestDetail({ id }: DetailProps) {
         </div>
       </div>
 
+      {useRedesign && (
+        <div class="stack" style={{ marginBottom: "var(--space-md)" }}>
+          <VisitCaptureRedesign
+            {...visitCaptureProps}
+            onCancelRecording={cancelRecording}
+          />
+          {scopeDraft && scopeDraft.length > 0 && (
+            <ScopeDraftSection
+              draft={scopeDraft}
+              generating={draftGenerating}
+              onRegenerate={() => void regenerateScopeDraft()}
+              onPatchItem={patchScopeDraftItem}
+            />
+          )}
+        </div>
+      )}
+
+      {useRedesign && (
+        <div class="request-details" style={{ marginBottom: "var(--space-md)" }}>
+          <button
+            type="button"
+            class="request-details__toggle"
+            aria-expanded={requestDetailsOpen}
+            onClick={() => setRequestDetailsOpen((v) => !v)}
+          >
+            <span aria-hidden="true">{requestDetailsOpen ? "▾" : "▸"}</span>
+            Request details
+          </button>
+        </div>
+      )}
+
+      <div hidden={useRedesign && !requestDetailsOpen}>
       <div class="detail-grid">
         <div class="stack">
           <Card title="Overview">
+            {thinClient && (
+              <div
+                class="flex items-center justify-between gap-sm"
+                style={{
+                  flexWrap: "wrap",
+                  marginBottom: "var(--space-md)",
+                  padding: "var(--space-sm) var(--space-md)",
+                  background: "var(--color-warning-bg, var(--color-surface-2))",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--color-border)",
+                }}
+              >
+                <span style={{ fontSize: "var(--text-sm)" }}>
+                  {!r.client_id
+                    ? "No client linked yet — create one from this lead’s contact info when you’re ready."
+                    : `This lead needs a real client — HighLevel only had a phone${
+                        r.property_address === "Unknown" ? " and no property address" : ""
+                      }.`}
+                </span>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => {
+                    setLinkClientPath("create");
+                    setLinkClientOpen(true);
+                  }}
+                >
+                  Create Client
+                </Button>
+              </div>
+            )}
             <div class="kv">
               <div class="kv__row">
                 <span class="kv__label">Job Type</span>
@@ -435,6 +985,18 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                 <span class="kv__value">{r.client_phone ?? "—"}</span>
               </div>
               <div class="kv__row">
+                <span class="kv__label">Email</span>
+                <span class="kv__value">
+                  {displayEmail ?? (
+                    <span class="text--muted">
+                      {isPlaceholderEmail(r.client_email)
+                        ? "Not captured from HighLevel"
+                        : "—"}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div class="kv__row">
                 <span class="kv__label">Property</span>
                 <span class="kv__value">{fullAddress}</span>
               </div>
@@ -443,6 +1005,21 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                 <span class="kv__value">{r.days_in_stage}</span>
               </div>
             </div>
+            {!thinClient && r.client_id && (
+              <div style={{ marginTop: "var(--space-md)" }}>
+                <button
+                  type="button"
+                  class="link-btn"
+                  style={{ fontSize: "var(--text-sm)" }}
+                  onClick={() => {
+                    setLinkClientPath("search");
+                    setLinkClientOpen(true);
+                  }}
+                >
+                  Change client
+                </button>
+              </div>
+            )}
           </Card>
 
           <Card title="Appointment">
@@ -552,94 +1129,9 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             )}
           </Card>
 
-          <Card
-            title="Visit Capture"
-            actions={
-              <div class="visit-capture__actions flex gap-sm">
-                {speechSupported.current && (
-                  <Button
-                    size="sm"
-                    variant={recording ? "danger" : "secondary"}
-                    onClick={toggleRecording}
-                  >
-                    <Icon name="microphone" /> {recording ? "Stop recording" : "Record"}
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setSketchModalOpen(true)}
-                >
-                  <Icon name="pencil" /> Draw{sketchCount > 0 ? ` ${sketchCount}` : ""}
-                </Button>
-              </div>
-            }
-          >
-            {firstSketchId && (
-              <img
-                key={`${firstSketchId}-${sketchModalOpen ? "open" : "closed"}`}
-                class="visit-capture__sketch-thumb"
-                src={`/api/estimate-requests/${r.id}/sketches/${firstSketchId}/thumbnail`}
-                alt="Sketch preview"
-                onClick={() => setSketchModalOpen(true)}
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                }}
-              />
-            )}
-            <textarea
-              class={`form-textarea${recording ? " visit-capture__textarea--recording" : ""}`}
-              placeholder={
-                recording && !notes.trim() && interimTranscript
-                  ? interimTranscript
-                  : "Notes from the estimate visit…"
-              }
-              value={notes}
-              onInput={(e) => setNotes((e.target as HTMLTextAreaElement).value)}
-              onBlur={() => saveNotes()}
-            />
-            {recording && interimTranscript && notes.trim() && (
-              <p class="visit-capture__interim text--muted">{interimTranscript}</p>
-            )}
-            {micDenied && (
-              <div class="visit-capture__alert callout callout--warning">
-                <span>Microphone access was denied. Check your browser settings.</span>
-                <button
-                  type="button"
-                  class="visit-capture__alert-dismiss"
-                  aria-label="Dismiss"
-                  onClick={() => setMicDenied(false)}
-                >
-                  <Icon name="x" />
-                </button>
-              </div>
-            )}
-            <div class="visit-capture__footer">
-              <span class="text--muted visit-capture__hint">
-                Saved when you click away
-              </span>
-              <div class="visit-capture__draft-actions">
-                {draftError && (
-                  <span class="visit-capture__error text--error">{draftError}</span>
-                )}
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={draftGenerating}
-                  onClick={() => void generateScopeDraft()}
-                >
-                  <Icon name="wand" />{" "}
-                  {draftGenerating
-                    ? "Generating…"
-                    : scopeDraft || hasGeneratedDraft
-                      ? "Regenerate scope draft"
-                      : "Build scope draft"}
-                </Button>
-              </div>
-            </div>
-          </Card>
+          {!useRedesign && <VisitCaptureLegacy {...visitCaptureProps} />}
 
-          {scopeDraft && scopeDraft.length > 0 && (
+          {!useRedesign && scopeDraft && scopeDraft.length > 0 && (
             <ScopeDraftSection
               draft={scopeDraft}
               generating={draftGenerating}
@@ -688,7 +1180,18 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                   r.status !== "lost" && (
                     <DeleteEstimateButton estimate={estimate!} size="sm" onDeleted={refetch} />
                   )}
-                <Button variant="primary" onClick={() => go(`/estimating/${r.id}/estimate`)}>
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    if (!r.client_id && !(estimate || r.estimate_id)) {
+                      setLinkClientPath("create");
+                      setLinkClientOpen(true);
+                      toast.push("info", "Create or link a client before building an estimate");
+                      return;
+                    }
+                    go(`/estimating/${r.id}/estimate`);
+                  }}
+                >
                   {estimate || r.estimate_id ? "Open Estimate" : "Build Estimate"}
                 </Button>
               </div>
@@ -801,6 +1304,7 @@ export function EstimateRequestDetail({ id }: DetailProps) {
           </Card>
         </div>
       </div>
+      </div>
 
       <AppointmentModal
         open={apptOpen}
@@ -834,6 +1338,28 @@ export function EstimateRequestDetail({ id }: DetailProps) {
       {sketchModalOpen && r && (
         <SketchModal requestId={r.id} onClose={() => setSketchModalOpen(false)} />
       )}
+
+      <LinkClientModal
+        open={linkClientOpen}
+        onClose={() => setLinkClientOpen(false)}
+        onLinked={() => refetch()}
+        request={r}
+        defaultPath={linkClientPath}
+      />
+
+      <Modal
+        open={!!viewPhoto}
+        title="Visit photo"
+        onClose={() => setViewPhoto(null)}
+      >
+        {viewPhoto && (
+          <img
+            class="visit-capture__photo-full"
+            src={viewPhoto.original_url}
+            alt="Visit photo"
+          />
+        )}
+      </Modal>
     </div>
   );
 }

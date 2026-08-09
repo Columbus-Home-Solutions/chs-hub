@@ -6,6 +6,10 @@ import { Modal } from "../../components/ui/Modal";
 import { useToast } from "../../store/toast";
 import { ClientForm } from "../clients/ClientForm";
 import type { Client } from "../../types";
+import {
+  QuickCaptureSheet,
+  type QuickCaptureStartMode,
+} from "../../components/layout/QuickCaptureSheet";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -436,6 +440,8 @@ export function QuickActionsWidget() {
   const { openCompose } = useMessageCenter();
   const [showNewEstimate, setShowNewEstimate] = useState(false);
   const [showNewInvoice, setShowNewInvoice] = useState(false);
+  // Reuse + menu job pickers (Home has no current-job context).
+  const [captureMode, setCaptureMode] = useState<QuickCaptureStartMode | null>(null);
 
   return (
     <>
@@ -451,11 +457,19 @@ export function QuickActionsWidget() {
             <span class="quick-actions__btn-icon">📝</span>
             <span class="quick-actions__btn-label">New Estimate</span>
           </button>
-          <button type="button" class="quick-actions__btn" onClick={() => go("/financial?tab=expenses&action=new")}>
+          <button
+            type="button"
+            class="quick-actions__btn"
+            onClick={() => setCaptureMode("expense")}
+          >
             <span class="quick-actions__btn-icon">💰</span>
             <span class="quick-actions__btn-label">Log Expense</span>
           </button>
-          <button type="button" class="quick-actions__btn" onClick={() => go("/photos?action=upload")}>
+          <button
+            type="button"
+            class="quick-actions__btn"
+            onClick={() => setCaptureMode("photo")}
+          >
             <span class="quick-actions__btn-icon">📷</span>
             <span class="quick-actions__btn-label">Add Photo</span>
           </button>
@@ -472,6 +486,12 @@ export function QuickActionsWidget() {
 
       <NewEstimateModal open={showNewEstimate} onClose={() => setShowNewEstimate(false)} />
       <NewInvoiceModal open={showNewInvoice} onClose={() => setShowNewInvoice(false)} />
+      <QuickCaptureSheet
+        open={captureMode !== null}
+        jobId={null}
+        startMode={captureMode}
+        onClose={() => setCaptureMode(null)}
+      />
     </>
   );
 }

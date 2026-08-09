@@ -42,26 +42,35 @@ const config: CapacitorConfig = {
   // The deploy step builds the Vite app into public/app (see package.json
   // "build:frontend"). Capacitor copies this directory into the native binary.
   webDir: "public/app",
-  // No `server.url` — bundled assets (see decision above). When/if the
-  // Access-session question is resolved in favor of server.url, set:
-  //   server: { url: "https://dashboard.homesolutionsar.com", cleartext: false }
+  // Remote-load for Access-in-WebView verification (Phase 0 follow-up).
+  // Loads the live Access-gated host so login cookies attach to the same origin
+  // as the API. Bundled webDir remains as offline fallback when url is unset.
   server: {
+    url: "https://dashboard.homesolutionsar.com/app/",
     androidScheme: "https",
     iosScheme: "https",
-    // The API the bundled app calls. Pre-Launch: confirm against the resolved
-    // public-hostname / Access decision above.
-    allowNavigation: ["dashboard.homesolutionsar.com"],
+    // Keep Access OTP/login redirects inside the WebView (not Safari).
+    allowNavigation: [
+      "dashboard.homesolutionsar.com",
+      "*.cloudflareaccess.com",
+    ],
   },
   plugins: {
     SplashScreen: {
-      launchShowDuration: 1200,
-      backgroundColor: "#1d2733",
+      // Stay up until LaunchSplash (web) takes over and calls hide().
+      launchAutoHide: false,
+      launchShowDuration: 0,
+      backgroundColor: "#000000",
+      // Fill the short axis so the badge starts oversized (edges clipped) —
+      // matching the zoom-out intro that follows in the WebView.
       androidScaleType: "CENTER_CROP",
       showSpinner: false,
     },
     StatusBar: {
       style: "DARK",
       backgroundColor: "#1d2733",
+      // Keep the WebView below the iOS status bar (default is true = overlap).
+      overlaysWebView: false,
     },
     PushNotifications: {
       // SIMULATE this sprint — the token is registered to /api/devices/register

@@ -46,6 +46,10 @@ export interface QboConfiguration {
   company_name?: string;
   // expense_type -> QBO Account id (the reference mapping, persisted here)
   account_map?: Record<string, string>;
+  /** Bank/credit account money leaves from for non-sub (materials, etc.) Purchases. */
+  payment_account_ref?: string;
+  /** Optional override for subcontractor Purchases; falls back to payment_account_ref. */
+  subcontractor_payment_account_ref?: string;
   state?: string; // transient anti-CSRF token for the in-flight auth handshake
   [k: string]: unknown;
 }
@@ -88,12 +92,46 @@ export class QboNotConnectedError extends Error {
 
 // ─── Base URLs (environment + realmId scoped) ────────────────────────────
 
-export function qboApiBase(env: QboEnvironment, realmId: string): string {
-  const host =
-    env === "production"
-      ? "https://quickbooks.api.intuit.com"
-      : "https://sandbox-quickbooks.api.intuit.com";
-  return `${host}/v3/company/${realmId}`;
+/** Normalize stored/legacy values to a known QBO environment. */
+export function normalizeQboEnvironment(value: unknown): QboEnvironment {
+  const v = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return v === "production" ? "production" : "sandbox";
+}
+
+export function qboApiHost(environment: QboEnvironment): string {
+  return environment === "production"
+    ? "https://quickbooks.api.intuit.com"
+    : "https://sandbox-quickbooks.api.intuit.com";
+}
+
+export function qboApiBase(environment: QboEnvironment, realmId: string): string {
+  return `${qboApiHost(environment)}/v3/company/${realmId}`;
+}
+
+/**
+ * Single source of truth for outbound QBO API targeting: always re-reads
+ * `integration_connections.configuration.environment` + `account_id` from D1.
+ * Auth, reference pull, and push all go through this (via qboFetch / test).
+ */
+export async function resolveQboApiContext(env: Env): Promise<{
+  connection: QboConnection;
+  environment: QboEnvironment;
+  realmId: string;
+  apiHost: string;
+  apiBase: string;
+}> {
+  const connection = await loadConnection(env);
+  if (!connection || connection.status === "disconnected" || !connection.account_id) {
+    throw new QboNotConnectedError();
+  }
+  const environment = normalizeQboEnvironment(connection.configuration.environment);
+  // Keep the in-memory config aligned with what we will actually call.
+  connection.configuration.environment = environment;
+  const apiHost = qboApiHost(environment);
+  const apiBase = qboApiBase(environment, connection.account_id);
+  return { connection, environment, realmId: connection.account_id, apiHost, apiBase };
 }
 
 // ─── Connection load / persist ───────────────────────────────────────────
@@ -121,7 +159,11 @@ export async function loadConnection(env: Env): Promise<QboConnection | null> {
   let configuration: QboConfiguration = { environment: "sandbox" };
   if (row.configuration) {
     try {
-      configuration = { environment: "sandbox", ...JSON.parse(row.configuration) };
+      const parsed = JSON.parse(row.configuration) as Partial<QboConfiguration>;
+      configuration = {
+        ...parsed,
+        environment: normalizeQboEnvironment(parsed.environment ?? "sandbox"),
+      };
     } catch {
       /* keep default */
     }
@@ -256,7 +298,7 @@ export async function exchangeAuthCode(
   }
 
   const existing = await loadConnection(env);
-  const prev = existing?.configuration ?? {};
+  const prev: Partial<QboConfiguration> = existing?.configuration ?? {};
   const configuration: QboConfiguration = {
     ...prev,
     environment: prev.environment ?? "sandbox",
@@ -309,19 +351,34 @@ export async function disconnect(env: Env): Promise<void> {
 // requests from each rotating the refresh token (the second would 400).
 let inflightRefresh: Promise<string> | null = null;
 
-export async function getValidAccessToken(env: Env): Promise<string> {
+export async function getValidAccessToken(
+  env: Env,
+  opts?: { forceRefresh?: boolean },
+): Promise<string> {
   const conn = await loadConnection(env);
   if (!conn || conn.status === "disconnected" || !conn.refresh_token) {
     throw new QboNotConnectedError();
   }
+  // Self-heal: status=error used to latch forever (same class of bug as GBP).
+  // A prior refresh blip must not freeze QBO until a human reconnects — try one
+  // refresh; doRefresh clears status to 'connected' on success, or re-latches
+  // with a fresh last_error if Intuit still rejects the refresh token.
   if (conn.status === "error") {
-    throw new QboReconnectError(
-      conn.last_error ?? "QuickBooks connection is in an error state — reconnect required",
+    console.warn(
+      `[qbo] connection status=error — attempting self-heal refresh (${conn.last_error ?? "no last_error"})`,
     );
+    if (inflightRefresh) return inflightRefresh;
+    inflightRefresh = doRefresh(env, conn.refresh_token).finally(() => {
+      inflightRefresh = null;
+    });
+    return inflightRefresh;
   }
 
   const expiresAt = conn.token_expiry ? new Date(conn.token_expiry).getTime() : 0;
-  const needsRefresh = !conn.access_token || Date.now() >= expiresAt - REFRESH_MARGIN_MS;
+  const needsRefresh =
+    !!opts?.forceRefresh ||
+    !conn.access_token ||
+    Date.now() >= expiresAt - REFRESH_MARGIN_MS;
   if (!needsRefresh && conn.access_token) {
     return conn.access_token;
   }
@@ -331,6 +388,173 @@ export async function getValidAccessToken(env: Env): Promise<string> {
     inflightRefresh = null;
   });
   return inflightRefresh;
+}
+
+/** Safe token shape for logs/API diagnostics — never the full secret. */
+export function tokenShape(token: string | null | undefined): {
+  present: boolean;
+  length: number;
+  prefix: string | null;
+  looks_like_jwt: boolean;
+} {
+  if (!token) return { present: false, length: 0, prefix: null, looks_like_jwt: false };
+  return {
+    present: true,
+    length: token.length,
+    prefix: token.slice(0, 10),
+    looks_like_jwt: token.startsWith("eyJ"),
+  };
+}
+
+/** Best-effort JWT payload decode (Intuit access tokens are often JWTs). */
+export function peekJwtPayload(token: string): Record<string, unknown> | null {
+  if (!token.startsWith("eyJ")) return null;
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const json = atob(part.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export interface QboProbeHostResult {
+  host: string;
+  url: string;
+  http_status: number;
+  ok: boolean;
+  intuit_tid: string | null;
+  body_excerpt: string | null;
+  company_name: string | null;
+}
+
+export interface QboConnectionProbe {
+  ok: boolean;
+  environment: QboEnvironment;
+  realm_id: string;
+  api_host: string;
+  url: string;
+  client_id_prefix: string | null;
+  token: ReturnType<typeof tokenShape>;
+  jwt_claims: Record<string, unknown> | null;
+  jwt_realmid: string | null;
+  realm_matches_jwt: boolean | null;
+  token_expiry_before: string | null;
+  token_expiry_after_refresh: string | null;
+  refreshed: boolean;
+  primary: QboProbeHostResult;
+  /** Only populated when primary fails — rules out host/token mismatch. */
+  alternate_host: QboProbeHostResult | null;
+}
+
+async function probeCompanyInfo(
+  host: string,
+  realmId: string,
+  token: string,
+): Promise<QboProbeHostResult> {
+  const url = `${host}/v3/company/${realmId}/companyinfo/${realmId}?minorversion=70`;
+  const resp = await fetch(url, {
+    headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+  });
+  const intuit_tid = resp.headers.get("intuit_tid");
+  const text = await resp.text();
+  let company_name: string | null = null;
+  if (resp.ok) {
+    try {
+      const data = JSON.parse(text) as { CompanyInfo?: { CompanyName?: string } };
+      company_name = data.CompanyInfo?.CompanyName ?? null;
+    } catch {
+      /* ignore */
+    }
+  }
+  return {
+    host,
+    url,
+    http_status: resp.status,
+    ok: resp.ok,
+    intuit_tid,
+    body_excerpt: resp.ok ? null : text.slice(0, 400),
+    company_name,
+  };
+}
+
+/**
+ * Deep connection probe for Test Connection / support escalation.
+ * Force-refreshes the access token, calls production (or configured) CompanyInfo,
+ * and on failure also probes the opposite host with the same token.
+ */
+export async function runQboConnectionProbe(env: Env): Promise<QboConnectionProbe> {
+  const before = await loadConnection(env);
+  if (!before?.account_id) throw new QboNotConnectedError();
+  const tokenExpiryBefore = before.token_expiry;
+
+  const token = await getValidAccessToken(env, { forceRefresh: true });
+  const after = await loadConnection(env);
+  const ctx = await resolveQboApiContext(env);
+
+  const shape = tokenShape(token);
+  const jwt = peekJwtPayload(token);
+  const jwtRealmid = jwt
+    ? String(
+        jwt.realmid ??
+          jwt.realmId ??
+          (jwt as { realmid?: unknown }).realmid ??
+          "",
+      ) || null
+    : null;
+
+  console.log(
+    `[qbo-probe] env=${ctx.environment} host=${ctx.apiHost} realm=${ctx.realmId} ` +
+      `token_len=${shape.length} prefix=${shape.prefix} jwt_realmid=${jwtRealmid ?? "n/a"} ` +
+      `client_id_prefix=${(env.QBO_CLIENT_ID ?? "").slice(0, 8) || "missing"}`,
+  );
+
+  const primary = await probeCompanyInfo(ctx.apiHost, ctx.realmId, token);
+  console.log(
+    `[qbo-probe] primary status=${primary.http_status} tid=${primary.intuit_tid ?? "none"} url=${primary.url}`,
+  );
+
+  let alternate: QboProbeHostResult | null = null;
+  if (!primary.ok) {
+    const otherHost = qboApiHost(ctx.environment === "production" ? "sandbox" : "production");
+    alternate = await probeCompanyInfo(otherHost, ctx.realmId, token);
+    console.log(
+      `[qbo-probe] alternate status=${alternate.http_status} tid=${alternate.intuit_tid ?? "none"} url=${alternate.url}`,
+    );
+  }
+
+  const realmMatchesJwt =
+    jwtRealmid == null ? null : jwtRealmid === ctx.realmId;
+
+  return {
+    ok: primary.ok,
+    environment: ctx.environment,
+    realm_id: ctx.realmId,
+    api_host: ctx.apiHost,
+    url: primary.url,
+    client_id_prefix: env.QBO_CLIENT_ID ? env.QBO_CLIENT_ID.slice(0, 8) : null,
+    token: shape,
+    jwt_claims: jwt
+      ? {
+          // Keep only non-sensitive identifying claims for the UI / escalation.
+          realmid: jwt.realmid ?? jwt.realmId ?? null,
+          aud: jwt.aud ?? null,
+          iss: jwt.iss ?? null,
+          exp: jwt.exp ?? null,
+        }
+      : null,
+    jwt_realmid: jwtRealmid,
+    realm_matches_jwt: realmMatchesJwt,
+    token_expiry_before: tokenExpiryBefore,
+    token_expiry_after_refresh: after?.token_expiry ?? null,
+    refreshed:
+      !!tokenExpiryBefore &&
+      !!after?.token_expiry &&
+      tokenExpiryBefore !== after.token_expiry,
+    primary,
+    alternate_host: alternate,
+  };
 }
 
 async function doRefresh(env: Env, refreshToken: string): Promise<string> {

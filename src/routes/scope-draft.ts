@@ -116,21 +116,39 @@ export async function handleScopeDraftGenerate(
   const sketches = parseSketches(row.sketches);
   const hasSketches = sketches.length > 0;
 
-  if (!visitNotes && !hasSketches) {
+  const visitPhotoRows = await env.DB.prepare(
+    `SELECT id, thumb_key, r2_thumbnail_key, r2_key
+       FROM photos
+      WHERE estimate_request_id = ?
+        AND COALESCE(is_active, 1) = 1
+      ORDER BY COALESCE(taken_at, created_at) ASC
+      LIMIT 6`,
+  )
+    .bind(id)
+    .all<{
+      id: string;
+      thumb_key: string | null;
+      r2_thumbnail_key: string | null;
+      r2_key: string | null;
+    }>();
+  const visitPhotos = visitPhotoRows.results ?? [];
+  const hasPhotos = visitPhotos.length > 0;
+
+  if (!visitNotes && !hasSketches && !hasPhotos) {
     return json(
-      { error: "Add visit notes or a sketch before generating a scope draft." },
+      { error: "Add visit notes, a sketch, or photos before generating a scope draft." },
       { status: 400 },
     );
   }
 
-  const sketchImages: SketchImageBlock[] = [];
+  const visionImages: SketchImageBlock[] = [];
   if (hasSketches) {
     for (const sketch of sketches.slice(0, 3)) {
       try {
         const thumbObj = await env.FILES.get(sketch.thumbnail_key);
         if (!thumbObj) continue;
         const bytes = await thumbObj.arrayBuffer();
-        sketchImages.push({
+        visionImages.push({
           base64: arrayBufferToBase64(bytes),
           mediaType: "image/png",
         });
@@ -139,9 +157,26 @@ export async function handleScopeDraftGenerate(
       }
     }
   }
+  // Visit photos as JPEG vision input (same Claude path as sketch thumbs).
+  const photoSlots = Math.max(0, 6 - visionImages.length);
+  for (const photo of visitPhotos.slice(0, photoSlots)) {
+    const key = photo.r2_thumbnail_key ?? photo.thumb_key ?? photo.r2_key;
+    if (!key) continue;
+    try {
+      const thumbObj = await env.FILES.get(key);
+      if (!thumbObj) continue;
+      const bytes = await thumbObj.arrayBuffer();
+      visionImages.push({
+        base64: arrayBufferToBase64(bytes),
+        mediaType: "image/jpeg",
+      });
+    } catch {
+      // Skip failed fetches — graceful degradation
+    }
+  }
 
   const catalogItems = await fetchActiveCatalog(env);
-  const result = await generateScopeDraft(env, visitNotes, sketchImages, catalogItems);
+  const result = await generateScopeDraft(env, visitNotes, visionImages, catalogItems);
   if (!result.ok) {
     return json(
       { error: "Scope draft generation failed.", details: result.error },

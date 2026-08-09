@@ -277,7 +277,8 @@ export interface EstimateRequest {
   id: string;
   request_number: number;
   status: EstimateRequestStatus;
-  client_id: string;
+  /** Null for pipeline leads until Tony creates/links a real client. */
+  client_id: string | null;
   client_name: string;
   client_phone: string | null;
   client_email: string | null;

@@ -6,6 +6,10 @@ import { Select } from "../../components/ui/Select";
 import { Spinner } from "../../components/ui/Spinner";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../store/toast";
+import {
+  EXPENSE_TYPE_OPTIONS,
+  expenseTypeAllowsVendorLink,
+} from "@chs/shared/expense-types";
 
 /**
  * Shared expense field set + form (Sprint 10).
@@ -14,6 +18,8 @@ import { useToast } from "../../store/toast";
  * so a receipt-sourced expense lands in the SAME full form (estimate-line-item
  * alignment, tax category, sub picker) rather than a minimal stub.
  */
+
+export { EXPENSE_TYPE_OPTIONS };
 
 export interface CostingSubLineLite {
   id: string;
@@ -37,16 +43,6 @@ export function buildAlignOptions(lines: CostingLineLite[]): { value: string; la
   }
   return opts;
 }
-
-export const EXPENSE_TYPE_OPTIONS = [
-  { value: "material", label: "Material" },
-  { value: "subcontractor", label: "Subcontractor" },
-  { value: "labor", label: "Labor" },
-  { value: "permit", label: "Permit" },
-  { value: "equipment", label: "Equipment" },
-  { value: "vehicle", label: "Vehicle / Fuel" },
-  { value: "other", label: "Other" },
-];
 
 // IRS-leaning tax categories (capture only — the CPA export that consumes these
 // is a later sprint).
@@ -115,7 +111,7 @@ export function draftToBody(d: ExpenseDraft, jobId: string | null) {
     incurred_date: d.incurred_date,
     estimate_line_item_id: d.estimate_line_item_id || null,
     tax_category: d.tax_category || null,
-    sub_id: d.expense_type === "subcontractor" ? d.sub_id.trim() || null : null,
+    sub_id: expenseTypeAllowsVendorLink(d.expense_type) ? d.sub_id.trim() || null : null,
     save_to_price_book: d.expense_type === "material" && d.save_to_price_book,
     material_name: d.material_name.trim() || null,
     material_unit: d.material_unit.trim() || null,
@@ -214,7 +210,10 @@ function ExpenseSubPicker({
   if (loading) return <Spinner />;
 
   return (
-    <FormField label="Subcontractor">
+    <FormField
+      label="Worker / subcontractor"
+      hint="Link a person from your subcontractor list for 1099 / QBO vendor tracking."
+    >
       <div class="bid-sub-picker" ref={pickerRef}>
         {selected ? (
           <span class="badge badge--brand bid-sub-chip">
@@ -228,8 +227,8 @@ function ExpenseSubPicker({
               type="button"
               class="bid-sub-chip__remove"
               onClick={clear}
-              title="Change subcontractor"
-              aria-label="Change subcontractor"
+              title="Change linked worker"
+              aria-label="Change linked worker"
             >
               ×
             </button>
@@ -239,7 +238,7 @@ function ExpenseSubPicker({
             <input
               class="form-input"
               type="text"
-              placeholder="Type a sub's name or trade…"
+              placeholder="Type a name or trade…"
               value={search}
               autoComplete="off"
               onFocus={() => setOpen(true)}
@@ -299,7 +298,7 @@ export function ExpenseFields({
 }) {
   const alignOptions = useMemo(() => buildAlignOptions(lines), [lines]);
 
-  const isSub = draft.expense_type === "subcontractor";
+  const showVendorLink = expenseTypeAllowsVendorLink(draft.expense_type);
   const isMaterial = draft.expense_type === "material";
 
   return (
@@ -313,6 +312,7 @@ export function ExpenseFields({
               class={`chip${draft.expense_type === o.value ? " chip--active" : ""}`}
               onClick={() => {
                 set("expense_type", o.value);
+                if (!expenseTypeAllowsVendorLink(o.value)) set("sub_id", "");
                 const tax = TAX_CATEGORY_BY_EXPENSE_TYPE[o.value];
                 if (tax) set("tax_category", tax);
               }}
@@ -381,7 +381,7 @@ export function ExpenseFields({
         />
       </FormField>
 
-      {isSub && <ExpenseSubPicker subId={draft.sub_id} onChange={(id) => set("sub_id", id)} />}
+      {showVendorLink && <ExpenseSubPicker subId={draft.sub_id} onChange={(id) => set("sub_id", id)} />}
 
       {isMaterial && (
         <div class="stack" style={{ gap: "var(--space-xs)" }}>

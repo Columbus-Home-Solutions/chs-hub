@@ -115,6 +115,17 @@ export async function replayDeadLetters(env: Env): Promise<ReplayResult> {
 
   result.picked = rows.results.length;
 
+  // Batch stuck alerts: one email per (entity_type + error) instead of one per
+  // row — prevents Resend quota exhaustion when many rows share the same gap.
+  const pendingAlerts: Array<{
+    id: number;
+    job_name: string;
+    entity_type: string;
+    entity_id: string | null;
+    attempts: number;
+    error: string;
+  }> = [];
+
   for (const row of rows.results) {
     try {
       await replayOne(env, row);
@@ -126,28 +137,61 @@ export async function replayDeadLetters(env: Env): Promise<ReplayResult> {
       result.failed++;
       result.errors.push(`dlq#${row.id} ${row.entity_type}:${row.entity_id}: ${msg}`);
 
-      // Alert once when we cross the 5-attempts threshold.
       const newAttempts = row.attempts + 1;
       if (newAttempts >= ALERT_AFTER_ATTEMPTS && !row.alerted_at) {
-        const sent = await notify(env, {
-          severity: "error",
-          subject: `DLQ entry stuck: ${row.entity_type} ${row.entity_id ?? "(page-level)"}`,
-          text:
-            `Dead-letter row #${row.id} has now failed ${newAttempts} replay attempts.\n` +
-            `job=${row.job_name} type=${row.entity_type} id=${row.entity_id}\n` +
-            `Last error: ${msg}\n\n` +
-            `Inspect: SELECT * FROM sync_dead_letters WHERE id = ${row.id};`,
-          dedupeKey: `dlq:${row.id}:stuck`,
-          dedupeWindowMs: 24 * 60 * 60 * 1000,
+        pendingAlerts.push({
+          id: row.id,
+          job_name: row.job_name,
+          entity_type: row.entity_type,
+          entity_id: row.entity_id,
+          attempts: newAttempts,
+          error: msg,
         });
-        if (sent.sent || sent.reason === "dry_run") {
-          await env.DB.prepare(
-            `UPDATE sync_dead_letters SET alerted_at = ? WHERE id = ?`,
-          )
-            .bind(new Date().toISOString(), row.id)
+      }
+    }
+  }
+
+  if (pendingAlerts.length > 0) {
+    const groups = new Map<string, typeof pendingAlerts>();
+    for (const a of pendingAlerts) {
+      const key = `${a.entity_type}\0${a.error}`;
+      const list = groups.get(key) ?? [];
+      list.push(a);
+      groups.set(key, list);
+    }
+    const now = new Date().toISOString();
+    for (const [, group] of groups) {
+      const sample = group[0]!;
+      const ids = group.map((g) => g.id);
+      const sent = await notify(env, {
+        severity: "error",
+        subject:
+          group.length === 1
+            ? `DLQ entry stuck: ${sample.entity_type} ${sample.entity_id ?? "(page-level)"}`
+            : `DLQ: ${group.length} ${sample.entity_type} rows stuck (same error)`,
+        text:
+          group.length === 1
+            ? `Dead-letter row #${sample.id} has now failed ${sample.attempts} replay attempts.\n` +
+              `job=${sample.job_name} type=${sample.entity_type} id=${sample.entity_id}\n` +
+              `Last error: ${sample.error}\n\n` +
+              `Inspect: SELECT * FROM sync_dead_letters WHERE id = ${sample.id};`
+            : `${group.length} dead-letter rows of type=${sample.entity_type} failed replay ` +
+              `with the same error (attempts ≥ ${ALERT_AFTER_ATTEMPTS}).\n` +
+              `job=${sample.job_name}\n` +
+              `ids=${ids.join(",")}\n` +
+              `entity_ids=${group.map((g) => g.entity_id).join(", ")}\n` +
+              `Last error: ${sample.error}\n\n` +
+              `Inspect: SELECT * FROM sync_dead_letters WHERE id IN (${ids.join(",")});`,
+        dedupeKey: `dlq:${sample.entity_type}:${sample.error.slice(0, 80)}:stuck`,
+        dedupeWindowMs: 24 * 60 * 60 * 1000,
+      });
+      if (sent.sent || sent.reason === "dry_run") {
+        for (const id of ids) {
+          await env.DB.prepare(`UPDATE sync_dead_letters SET alerted_at = ? WHERE id = ?`)
+            .bind(now, id)
             .run();
-          if (sent.sent) result.alerted++;
         }
+        if (sent.sent) result.alerted++;
       }
     }
   }
@@ -194,13 +238,42 @@ async function replayOne(
       return;
     }
 
+    case "payment": {
+      // Push the single payment through the real QBO path (same as nightly sweep).
+      // Dynamic import avoids a load-time cycle (qbo-sync imports recordDeadLetter).
+      const paymentId = row.entity_id;
+      if (!paymentId) throw new Error("payment DLQ row missing entity_id");
+      const { isQboPaymentSyncEnabled, pushPaymentById } = await import("../qbo-sync.js");
+      if (!(await isQboPaymentSyncEnabled(env))) {
+        // Resolve the DLQ row so we don't retry/alert while the go-live gate is off.
+        // The payment stays qbo_payment_id=NULL; the nightly sweep will push after enable.
+        console.log("[dlq] QBO payment sync disabled — pending go-live; clearing payment DLQ deferral");
+        return;
+      }
+      try {
+        await pushPaymentById(env, paymentId);
+      } catch (err) {
+        // Permanent Jobber exclusion — resolve the DLQ row; do not retry or push.
+        const msg = (err as Error).message ?? "";
+        if (msg.includes("permanently excluded: Jobber-imported")) {
+          console.log(
+            `[dlq] QBO payment permanently excluded (Jobber import); clearing DLQ for ${paymentId}`,
+          );
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
+
     // For other types, defer to the next full sync. Recording these still
     // gives us visibility (and an alert if they keep failing); the sync
     // job will retry naturally on its own pass.
+    // NOTE: invoice/expense under qbo_sync have the same stub gap — flag only;
+    // scoped fix for payment (see CHS-Task-QBO-Payment-DLQ-Replay-Fix).
     case "invoice":
     case "quote":
     case "expense":
-    case "payment":
     case "client": {
       if (!row.payload) throw new Error("no payload to replay");
       throw new Error(

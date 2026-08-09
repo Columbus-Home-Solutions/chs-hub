@@ -134,6 +134,9 @@
   /* ─── Layout ─── */
   --content-max-width: 1200px;
   --sidebar-width: 240px;
+  /* Tablet rail — portrait collapsed; landscape expands via orientation MQ */
+  --tablet-rail-width: 64px;
+  --tablet-rail-width-expanded: 180px;
   --nav-height: 56px;
   --capture-bar-height: 64px;
 }
@@ -170,6 +173,10 @@ html,
 body {
   margin: 0;
   padding: 0;
+  /* Defense-in-depth: stop rubber-band horizontal scroll on mobile WebViews.
+     Root oversized elements are still fixed at the source (topnav / overlays). */
+  overflow-x: hidden;
+  max-width: 100%;
 }
 
 body {
@@ -179,6 +186,18 @@ body {
   color: var(--color-text-primary);
   background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
+/* Phone/tablet shell: kill double-tap zoom + sideways overscroll rubber-band. */
+html.is-mobile-shell,
+html.is-mobile-shell body {
+  touch-action: manipulation;
+  overscroll-behavior-x: none;
 }
 
 h1,

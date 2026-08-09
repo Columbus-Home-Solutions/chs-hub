@@ -1,6 +1,7 @@
 import type { RoutableProps } from "preact-router";
 import { useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
+import { useUrlTab } from "../../hooks/useUrlTab";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { Button } from "../../components/ui/Button";
@@ -26,17 +27,39 @@ interface EstimateListResponse {
   estimates: EstimateRow[];
 }
 
+/** Active / All — same pill pattern as Clients (`filter-pill` + useUrlTab). */
+const VIEW_FILTERS = [
+  { key: "active", label: "Active" },
+  { key: "all", label: "All" },
+] as const;
+
+/**
+ * Terminal / resolved estimate statuses — hidden in the default Active view.
+ * - approved = deposit paid / converted (business “Won”)
+ * - won/lost = rare literals if ever written on estimates
+ * - expired / revised / archived = no longer actionable
+ * Active keeps: draft, sent, viewed, signed (+ any other non-terminal).
+ */
+const TERMINAL_STATUSES = new Set([
+  "approved",
+  "won",
+  "lost",
+  "expired",
+  "revised",
+  "archived",
+]);
+
+/** Stage dropdown (secondary). Empty = no stage narrowing within Active/All. */
 const STAGE_OPTIONS = [
-  { value: "", label: "All Stages" },
+  { value: "", label: "Any stage" },
   { value: "draft", label: "Draft" },
-  { value: "building", label: "Building" },
   { value: "sent", label: "Sent" },
-  { value: "follow_up", label: "Follow Up" },
-  { value: "won", label: "Won" },
-  { value: "lost", label: "Lost" },
-  { value: "revised", label: "Revised" },
+  { value: "viewed", label: "Viewed" },
   { value: "signed", label: "Signed" },
-  { value: "approved", label: "Approved" },
+  { value: "approved", label: "Approved (Won)" },
+  { value: "revised", label: "Revised" },
+  { value: "expired", label: "Expired" },
+  { value: "lost", label: "Lost" },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -250,17 +273,25 @@ function SortTh({
 // ─── Main view ───────────────────────────────────────────────────────────────
 
 export function EstimateList(_props: RoutableProps) {
+  const [viewFilter, setViewFilter] = useUrlTab(
+    VIEW_FILTERS.map((f) => f.key),
+    "active",
+    "filter",
+  );
   const [stageFilter, setStageFilter] = useState("");
   const [search, setSearch] = useState("");
 
   // Always fetch all estimates unfiltered — summary bar needs the full set,
-  // and stage + search filtering is applied client-side.
+  // and Active/All + stage + search filtering is applied client-side.
   const { data, loading, error } = useApi<EstimateListResponse>("/api/estimates");
 
   const allEstimates = useMemo(() => data?.estimates ?? [], [data]);
 
   const filtered = useMemo(() => {
     let rows = allEstimates;
+    if (viewFilter === "active") {
+      rows = rows.filter((e) => !TERMINAL_STATUSES.has(e.status ?? ""));
+    }
     if (stageFilter) rows = rows.filter((e) => e.status === stageFilter);
     const q = search.trim().toLowerCase();
     if (!q) return rows;
@@ -274,7 +305,7 @@ export function EstimateList(_props: RoutableProps) {
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [allEstimates, stageFilter, search]);
+  }, [allEstimates, viewFilter, stageFilter, search]);
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(filtered, "created_at", "desc");
 
@@ -293,7 +324,9 @@ export function EstimateList(_props: RoutableProps) {
           <h1 class="view-title">Estimates</h1>
           <p class="view-subtitle">
             {data
-              ? `${filtered.length} estimate${filtered.length !== 1 ? "s" : ""}`
+              ? `${filtered.length} estimate${filtered.length !== 1 ? "s" : ""}${
+                  viewFilter === "active" ? " · active" : ""
+                }`
               : "All estimates"}
           </p>
         </div>
@@ -301,6 +334,19 @@ export function EstimateList(_props: RoutableProps) {
 
       {/* Summary bar — always computed from full unfiltered set */}
       {!loading && !error && <EstimateSummaryBar estimates={allEstimates} />}
+
+      <div class="filters">
+        {VIEW_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            class={`filter-pill${viewFilter === f.key ? " filter-pill--active" : ""}`}
+            onClick={() => setViewFilter(f.key)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
 
       {/* Search + stage filter */}
       <div
@@ -337,99 +383,101 @@ export function EstimateList(_props: RoutableProps) {
       {error && <div class="empty-state">Couldn't load estimates: {error}</div>}
 
       {!loading && !error && (
-        <table class="data-table">
-          <thead>
-            <tr>
-              <SortTh
-                label="Est #"
-                col="estimate_number"
-                active={sortKey}
-                dir={sortDir}
-                onSort={toggle}
-              />
-              <SortTh
-                label="Client"
-                col="client_name"
-                active={sortKey}
-                dir={sortDir}
-                onSort={toggle}
-              />
-              <SortTh
-                label="Description"
-                col="title"
-                active={sortKey}
-                dir={sortDir}
-                onSort={toggle}
-              />
-              <SortTh
-                label="Total"
-                col="total"
-                active={sortKey}
-                dir={sortDir}
-                onSort={toggle}
-              />
-              <SortTh
-                label="Status"
-                col="status"
-                active={sortKey}
-                dir={sortDir}
-                onSort={toggle}
-              />
-              <SortTh
-                label="Created"
-                col="created_at"
-                active={sortKey}
-                dir={sortDir}
-                onSort={toggle}
-              />
-              <SortTh
-                label="Sent"
-                col="sent_at"
-                active={sortKey}
-                dir={sortDir}
-                onSort={toggle}
-              />
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.length === 0 && (
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
               <tr>
-                <td colSpan={8} class="text--muted">
-                  No estimates match this filter.
-                </td>
+                <SortTh
+                  label="Est #"
+                  col="estimate_number"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
+                <SortTh
+                  label="Client"
+                  col="client_name"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
+                <SortTh
+                  label="Description"
+                  col="title"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
+                <SortTh
+                  label="Total"
+                  col="total"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
+                <SortTh
+                  label="Status"
+                  col="status"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
+                <SortTh
+                  label="Created"
+                  col="created_at"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
+                <SortTh
+                  label="Sent"
+                  col="sent_at"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
+                <th />
               </tr>
-            )}
-            {sorted.map((e) => (
-              <tr key={e.id}>
-                <td>
-                  <button
-                    type="button"
-                    class="link-btn"
-                    onClick={() => navToEstimate(e)}
-                  >
-                    {e.estimate_number != null
-                      ? `EST-${String(e.estimate_number).padStart(3, "0")}`
-                      : "—"}
-                  </button>
-                </td>
-                <td>{e.client_name ?? "—"}</td>
-                <td>{truncate(e.title)}</td>
-                <td>{e.total != null ? `$${e.total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : "—"}</td>
-                <td>
-                  <Badge status={e.status ?? ""}>{formatStatus(e.status)}</Badge>
-                </td>
-                <td>{formatDate(e.created_at)}</td>
-                <td>{e.sent_at ? formatDate(e.sent_at) : "—"}</td>
-                <td>
-                  <Button size="sm" variant="tertiary" onClick={() => navToEstimate(e)}>
-                    View
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan={8} class="text--muted">
+                    No estimates match this filter.
+                  </td>
+                </tr>
+              )}
+              {sorted.map((e) => (
+                <tr key={e.id}>
+                  <td>
+                    <button
+                      type="button"
+                      class="link-btn"
+                      onClick={() => navToEstimate(e)}
+                    >
+                      {e.estimate_number != null
+                        ? `EST-${String(e.estimate_number).padStart(3, "0")}`
+                        : "—"}
+                    </button>
+                  </td>
+                  <td>{e.client_name ?? "—"}</td>
+                  <td>{truncate(e.title)}</td>
+                  <td>{e.total != null ? `$${e.total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : "—"}</td>
+                  <td>
+                    <Badge status={e.status ?? ""}>{formatStatus(e.status)}</Badge>
+                  </td>
+                  <td>{formatDate(e.created_at)}</td>
+                  <td>{e.sent_at ? formatDate(e.sent_at) : "—"}</td>
+                  <td>
+                    <Button size="sm" variant="tertiary" onClick={() => navToEstimate(e)}>
+                      View
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

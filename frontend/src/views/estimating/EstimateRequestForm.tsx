@@ -49,20 +49,32 @@ function applyProperty(
   setters.setLon(null);
 }
 
+/** Extra fields returned by GET /api/estimate-requests/:id beyond EstimateRequest. */
+type ExistingRequest = EstimateRequest & {
+  lat?: number | null;
+  lon?: number | null;
+  property_id?: string | null;
+};
+
 export function EstimateRequestForm(_props: RoutableProps) {
   const clientIdParam = searchParam("client_id");
   const propertyIdParam = searchParam("property_id");
+  const requestIdParam = searchParam("request_id");
   const autostart = searchParam("autostart") === "1";
 
   const { data: clientData, loading: clientsLoading } = useApi<ClientListResponse>(
-    clientIdParam ? null : "/api/clients?filter=all",
+    clientIdParam || requestIdParam ? null : "/api/clients?filter=all",
   );
   const { data: prefilledClientData, loading: prefilledLoading } = useApi<ClientDetailResponse>(
-    clientIdParam ? `/api/clients/${clientIdParam}` : null,
+    clientIdParam && !requestIdParam ? `/api/clients/${clientIdParam}` : null,
   );
+  const { data: existingRequestData, loading: existingRequestLoading } = useApi<{
+    request: ExistingRequest;
+  }>(requestIdParam ? `/api/estimate-requests/${requestIdParam}` : null);
 
   const toast = useToast();
-  const fromClientProfile = !!clientIdParam;
+  const fromClientProfile = !!clientIdParam && !requestIdParam;
+  const fromExistingRequest = !!requestIdParam;
 
   // Client selection / typeahead
   const [search, setSearch] = useState("");
@@ -124,7 +136,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
   const [leadSource, setLeadSource] = useState(fromClientProfile ? "repeat_client" : "");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [prefillReady, setPrefillReady] = useState(!fromClientProfile);
+  const [prefillReady, setPrefillReady] = useState(!fromClientProfile && !fromExistingRequest);
 
   const propertySetters = useMemo(
     () => ({
@@ -137,6 +149,55 @@ export function EstimateRequestForm(_props: RoutableProps) {
     }),
     [],
   );
+
+  // Pre-fill from an existing estimate_request (Dashboard Estimate Requests widget).
+  useEffect(() => {
+    if (!fromExistingRequest || !existingRequestData?.request || prefillReady) return;
+    const r = existingRequestData.request;
+    const name =
+      r.client_name?.trim() ||
+      [r.client_phone, r.client_email].filter(Boolean).join(" ") ||
+      "Client";
+    setSelected({
+      id: r.client_id,
+      name,
+      company_name: null,
+      first_name: null,
+      last_name: null,
+      email: r.client_email,
+      phone: r.client_phone,
+      phone_secondary: null,
+      mailing_address: null,
+      mailing_city: null,
+      mailing_state: null,
+      mailing_zip: null,
+      lead_source: r.lead_source,
+      referral_source_id: null,
+      high_level_contact_id: null,
+      is_repeat_client: r.is_repeat_client,
+      review_requested: false,
+      google_review_left: false,
+      notes: null,
+      last_interaction_date: null,
+      total_jobs: 0,
+      total_revenue: 0,
+      active_jobs: 0,
+      created_at: null,
+      updated_at: null,
+      created_by: null,
+    });
+    setPropertyAddress(r.property_address ?? "");
+    setCity(r.property_city ?? "");
+    setState(r.property_state || "Arkansas");
+    setZip(r.property_zip ?? "");
+    setLat(r.lat ?? null);
+    setLon(r.lon ?? null);
+    if (r.property_id) setSelectedPropertyId(r.property_id);
+    setJobType(r.job_type ?? "");
+    setLeadSource(r.lead_source ?? "");
+    setNotes(r.visit_notes ?? "");
+    setPrefillReady(true);
+  }, [fromExistingRequest, existingRequestData, prefillReady]);
 
   // Pre-fill from client profile (repeat client shortcut).
   useEffect(() => {
@@ -236,6 +297,33 @@ export function EstimateRequestForm(_props: RoutableProps) {
     if (!validate()) return;
     setSubmitting(true);
     try {
+      // Existing pipeline lead — update in place, do not create a duplicate request.
+      if (requestIdParam) {
+        await api.put(`/api/estimate-requests/${requestIdParam}`, {
+          property_address: propertyAddress,
+          property_city: city,
+          property_state: state || "Arkansas",
+          property_zip: zip,
+          job_type: jobType,
+          lead_source: leadSource,
+          visit_notes: notes,
+        });
+
+        if (autostart) {
+          const estRes = await api.post<{ estimate: { request_id: string | null } }>("/api/estimates", {
+            estimate_request_id: requestIdParam,
+          });
+          const requestId = estRes.estimate.request_id ?? requestIdParam;
+          toast.push("success", "Estimate opened");
+          go(`/estimating/${requestId}/estimate`);
+          return;
+        }
+
+        toast.push("success", "Estimate request updated");
+        go(`/estimating/${requestIdParam}`);
+        return;
+      }
+
       let clientId = selected?.id;
 
       if (showNewClient) {
@@ -284,28 +372,42 @@ export function EstimateRequestForm(_props: RoutableProps) {
     }
   };
 
-  if (fromClientProfile && (prefilledLoading || !prefillReady)) {
+  if (
+    (fromClientProfile && (prefilledLoading || !prefillReady)) ||
+    (fromExistingRequest && (existingRequestLoading || !prefillReady))
+  ) {
     return <Spinner center />;
   }
 
-  const cancelTo = fromClientProfile && clientIdParam ? `/clients/${clientIdParam}` : "/estimating";
+  const cancelTo =
+    fromExistingRequest && requestIdParam
+      ? `/estimating/${requestIdParam}`
+      : fromClientProfile && clientIdParam
+        ? `/clients/${clientIdParam}`
+        : "/estimating";
 
   return (
     <div>
       <div class="view-header">
         <div>
           <h1 class="view-title">
-            {fromClientProfile && selected ? `New Estimate — ${selected.name}` : "New Estimate Request"}
+            {fromExistingRequest && selected
+              ? `New Estimate — ${selected.name}`
+              : fromClientProfile && selected
+                ? `New Estimate — ${selected.name}`
+                : "New Estimate Request"}
           </h1>
           <p class="view-subtitle">
-            {fromClientProfile
-              ? "Repeat client — contact is pre-filled. Select a property or enter a new address."
-              : "Capture a new lead and start it in the pipeline."}
+            {fromExistingRequest
+              ? "Lead details pre-filled from the pipeline. Confirm and continue to the estimate."
+              : fromClientProfile
+                ? "Repeat client — contact is pre-filled. Select a property or enter a new address."
+                : "Capture a new lead and start it in the pipeline."}
           </p>
         </div>
         <div class="view-header__right">
           <Button variant="tertiary" onClick={() => go(cancelTo)}>
-            {fromClientProfile ? "← Client" : "← Pipeline"}
+            {fromExistingRequest ? "← Request" : fromClientProfile ? "← Client" : "← Pipeline"}
           </Button>
         </div>
       </div>
@@ -327,7 +429,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
                       {formatPhone(selected.phone)} · {selected.email ?? "—"}
                     </div>
                   </div>
-                  {!fromClientProfile && (
+                  {!fromClientProfile && !fromExistingRequest && (
                     <Button
                       size="sm"
                       variant="secondary"
@@ -395,7 +497,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
                   )}
                 </FormField>
               )}
-              {!selected && !fromClientProfile && (
+              {!selected && !fromClientProfile && !fromExistingRequest && (
                 <Button
                   size="sm"
                   variant="tertiary"
@@ -572,10 +674,16 @@ export function EstimateRequestForm(_props: RoutableProps) {
           </Button>
           <Button variant="primary" onClick={submit} disabled={submitting}>
             {submitting
-              ? "Creating…"
-              : autostart
-                ? "Create & Open Estimate"
-                : "Create Request"}
+              ? fromExistingRequest
+                ? "Opening…"
+                : "Creating…"
+              : fromExistingRequest && autostart
+                ? "Continue to Estimate"
+                : autostart
+                  ? "Create & Open Estimate"
+                  : fromExistingRequest
+                    ? "Save Request"
+                    : "Create Request"}
           </Button>
         </div>
       </div>

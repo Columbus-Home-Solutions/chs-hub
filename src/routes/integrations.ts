@@ -20,6 +20,7 @@ import type { Env } from "../env.js";
 import { authenticateRequest, AuthError } from "../middleware/auth.js";
 import { requireRole, RoleError } from "../middleware/roles.js";
 import { writeAudit } from "../lib/audit.js";
+import { EXPENSE_TYPE_VALUES } from "../../shared/expense-types.js";
 import {
   buildAuthorizeUrl,
   disconnect,
@@ -27,19 +28,23 @@ import {
   getValidAccessToken,
   loadConnection,
   makeState,
-  qboApiBase,
+  resolveQboApiContext,
+  runQboConnectionProbe,
   saveConfiguration,
   verifyState,
   QBO_SERVICE,
+  type QboConfiguration,
 } from "../lib/qbo-auth.js";
 import {
   fetchAccounts,
   fetchCustomers,
   fetchVendors,
+  getQboDefaultCustomer,
   getQboStatus,
   runQboSweep,
   setAccountMap,
   setClientMapping,
+  setQboDefaultCustomer,
   setVendorMapping,
   suggestClientMatches,
   suggestVendorMatches,
@@ -138,8 +143,14 @@ export async function handleQboConnect(request: Request, env: Env): Promise<Resp
   }
   const state = await makeState(env);
   // Stash state in configuration so the (Access-gated) callback can double-check.
+  // Preserve existing environment / mapping keys — only default sandbox when absent.
   const conn = await loadConnection(env);
-  await saveConfiguration(env, { environment: "sandbox", ...(conn?.configuration ?? {}), state });
+  const prev: Partial<QboConfiguration> = conn?.configuration ?? {};
+  await saveConfiguration(env, {
+    ...prev,
+    environment: prev.environment ?? "sandbox",
+    state,
+  });
   const authorize_url = buildAuthorizeUrl(env, state);
   return json({ authorize_url });
 }
@@ -160,23 +171,27 @@ export async function handleQboCallback(request: Request, env: Env): Promise<Res
     return htmlPage("Invalid state", `<p>The anti-CSRF state token failed verification or expired.</p>`, false, 400);
   }
   try {
-    await exchangeAuthCode(env, code, realmId, "sandbox");
+    // Merges into existing configuration — does not hardcode environment.
+    await exchangeAuthCode(env, code, realmId);
   } catch (err) {
     return htmlPage("Token exchange failed", `<p>${escapeHtml((err as Error).message)}</p>`, false, 502);
   }
   // Best-effort company name fetch so the UI can show it.
+  let environmentLabel = "sandbox";
   try {
-    const conn = await loadConnection(env);
-    if (conn?.account_id) {
-      const token = await getValidAccessToken(env);
-      const base = qboApiBase(conn.configuration.environment, conn.account_id);
-      const resp = await fetch(`${base}/companyinfo/${conn.account_id}?minorversion=70`, {
-        headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-      });
-      if (resp.ok) {
-        const data = (await resp.json()) as { CompanyInfo?: { CompanyName?: string } };
-        const name = data.CompanyInfo?.CompanyName;
-        if (name) await saveConfiguration(env, { ...conn.configuration, company_name: name, state: undefined });
+    const ctx = await resolveQboApiContext(env);
+    environmentLabel = ctx.environment;
+    const token = await getValidAccessToken(env);
+    const resp = await fetch(`${ctx.apiBase}/companyinfo/${ctx.realmId}?minorversion=70`, {
+      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+    });
+    if (resp.ok) {
+      const data = (await resp.json()) as { CompanyInfo?: { CompanyName?: string } };
+      const name = data.CompanyInfo?.CompanyName;
+      if (name) {
+        const next = { ...ctx.connection.configuration, company_name: name };
+        delete next.state;
+        await saveConfiguration(env, next);
       }
     }
   } catch {
@@ -184,7 +199,7 @@ export async function handleQboCallback(request: Request, env: Env): Promise<Res
   }
   return htmlPage(
     "QuickBooks connected ✓",
-    `<p>CHS is now connected to your QuickBooks <strong>sandbox</strong> company (realmId ${escapeHtml(realmId)}).</p>
+    `<p>CHS is now connected to your QuickBooks <strong>${escapeHtml(environmentLabel)}</strong> company (realmId ${escapeHtml(realmId)}).</p>
      <p>Next: map your expense categories and confirm customer/vendor matches in System Settings → Integrations.</p>
      <p>You can close this tab.</p>`,
     true,
@@ -201,32 +216,77 @@ export async function handleQboDisconnect(request: Request, env: Env): Promise<R
 export async function handleQboTest(request: Request, env: Env): Promise<Response> {
   const denied = await requireOwner(request, env);
   if (denied) return denied;
-  const conn = await loadConnection(env);
-  if (!conn || conn.status === "disconnected" || !conn.account_id) {
-    return json({ ok: false, error: "not_connected" }, { status: 400 });
-  }
   try {
-    const token = await getValidAccessToken(env);
-    const base = qboApiBase(conn.configuration.environment, conn.account_id);
-    const resp = await fetch(`${base}/companyinfo/${conn.account_id}?minorversion=70`, {
-      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
+    const probe = await runQboConnectionProbe(env);
+    if (!probe.ok) {
+      const excerpt = probe.primary.body_excerpt ?? "AuthenticationFailed";
       await env.DB.prepare(
         `UPDATE integration_connections SET last_error = ?, updated_at = datetime('now') WHERE service = ?`,
       )
-        .bind(`test failed (${resp.status}): ${text.slice(0, 300)}`, QBO_SERVICE)
+        .bind(
+          `test failed (${probe.primary.http_status}): tid=${probe.primary.intuit_tid ?? "none"} ${excerpt.slice(0, 280)}`,
+          QBO_SERVICE,
+        )
         .run();
-      return json({ ok: false, status: resp.status, error: text.slice(0, 300) }, { status: 502 });
+      return json(
+        {
+          ok: false,
+          status: probe.primary.http_status,
+          error: excerpt.slice(0, 300),
+          // Round-2 diagnostics — safe to surface in the UI / paste to support.
+          environment: probe.environment,
+          api_host: probe.api_host,
+          realm_id: probe.realm_id,
+          url: probe.url,
+          intuit_tid: probe.primary.intuit_tid,
+          client_id_prefix: probe.client_id_prefix,
+          token: probe.token,
+          jwt_claims: probe.jwt_claims,
+          jwt_realmid: probe.jwt_realmid,
+          realm_matches_jwt: probe.realm_matches_jwt,
+          token_expiry_before: probe.token_expiry_before,
+          token_expiry_after_refresh: probe.token_expiry_after_refresh,
+          refreshed: probe.refreshed,
+          alternate_host: probe.alternate_host
+            ? {
+                host: probe.alternate_host.host,
+                http_status: probe.alternate_host.http_status,
+                intuit_tid: probe.alternate_host.intuit_tid,
+                ok: probe.alternate_host.ok,
+                body_excerpt: probe.alternate_host.body_excerpt?.slice(0, 200) ?? null,
+              }
+            : null,
+        },
+        { status: 502 },
+      );
     }
-    const data = (await resp.json()) as { CompanyInfo?: { CompanyName?: string } };
+
     await env.DB.prepare(
       `UPDATE integration_connections SET last_sync = datetime('now'), last_error = NULL, updated_at = datetime('now') WHERE service = ?`,
     )
       .bind(QBO_SERVICE)
       .run();
-    return json({ ok: true, company_name: data.CompanyInfo?.CompanyName ?? null });
+
+    if (probe.primary.company_name) {
+      const conn = await loadConnection(env);
+      if (conn) {
+        await saveConfiguration(env, {
+          ...conn.configuration,
+          company_name: probe.primary.company_name,
+        });
+      }
+    }
+
+    return json({
+      ok: true,
+      company_name: probe.primary.company_name,
+      environment: probe.environment,
+      api_host: probe.api_host,
+      realm_id: probe.realm_id,
+      intuit_tid: probe.primary.intuit_tid,
+      refreshed: probe.refreshed,
+      token_expiry_after_refresh: probe.token_expiry_after_refresh,
+    });
   } catch (err) {
     return json({ ok: false, error: (err as Error).message }, { status: 502 });
   }
@@ -237,10 +297,16 @@ export async function handleQboTest(request: Request, env: Env): Promise<Respons
 export async function handleQboReference(request: Request, env: Env): Promise<Response> {
   const denied = await requireOwner(request, env);
   if (denied) return denied;
-  const conn = await loadConnection(env);
-  if (!conn || conn.status !== "connected") {
+  let ctx;
+  try {
+    ctx = await resolveQboApiContext(env);
+  } catch {
     return json({ error: "not_connected" }, { status: 400 });
   }
+  if (ctx.connection.status !== "connected") {
+    return json({ error: "not_connected" }, { status: 400 });
+  }
+  const conn = ctx.connection;
   try {
     const [accounts, allCustomers, allVendors, clients, vendors] = await Promise.all([
       fetchAccounts(env, conn),
@@ -249,23 +315,70 @@ export async function handleQboReference(request: Request, env: Env): Promise<Re
       suggestClientMatches(env, conn),
       suggestVendorMatches(env, conn),
     ]);
-    // Distinct expense_type values present in CHS, so the UI can map each.
-    const et = await env.DB.prepare(
-      `SELECT DISTINCT expense_type FROM expenses WHERE expense_type IS NOT NULL AND expense_type <> '' ORDER BY expense_type`,
-    ).all<{ expense_type: string }>();
+    const defaultCustomer = await getQboDefaultCustomer(env);
+    // Prefer live QBO display name when the id is still in the customer list.
+    let defaultName = defaultCustomer.qbo_customer_name;
+    if (defaultCustomer.qbo_customer_id) {
+      const hit = allCustomers.find((c) => c.id === defaultCustomer.qbo_customer_id);
+      if (hit?.name) defaultName = hit.name;
+    }
     return json({
       accounts,
       all_customers: allCustomers,
       all_vendors: allVendors,
       clients,
       vendors,
-      expense_types: (et.results ?? []).map((r) => r.expense_type),
+      expense_types: [...EXPENSE_TYPE_VALUES],
       account_map: conn.configuration.account_map ?? {},
       payment_account_ref: conn.configuration.payment_account_ref ?? null,
+      subcontractor_payment_account_ref:
+        (conn.configuration.subcontractor_payment_account_ref as string | undefined) ?? null,
+      default_customer_id: defaultCustomer.qbo_customer_id,
+      default_customer_name: defaultName,
+      environment: ctx.environment,
+      api_host: ctx.apiHost,
     });
   } catch (err) {
-    return json({ error: "qbo_fetch_failed", message: (err as Error).message }, { status: 502 });
+    return json(
+      {
+        error: "qbo_fetch_failed",
+        message: (err as Error).message,
+        environment: ctx.environment,
+        api_host: ctx.apiHost,
+      },
+      { status: 502 },
+    );
   }
+}
+
+export async function handleQboDefaultCustomerGet(request: Request, env: Env): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  const current = await getQboDefaultCustomer(env);
+  return json(current);
+}
+
+export async function handleQboDefaultCustomerPut(request: Request, env: Env): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  let body: { qbo_customer_id?: string | null; qbo_customer_name?: string | null };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return json({ error: "bad_request", message: "Body must be JSON" }, { status: 400 });
+  }
+  const id = body.qbo_customer_id === undefined ? null : body.qbo_customer_id;
+  await setQboDefaultCustomer(env, id, body.qbo_customer_name ?? null);
+  const current = await getQboDefaultCustomer(env);
+  await writeAudit(env, {
+    userEmail: actorOf(request),
+    action: "qbo_default_customer_set",
+    entityType: "system_settings",
+    entityId: "qbo_default_customer_id",
+    details: current,
+    ipAddress: request.headers.get("cf-connecting-ip"),
+  });
+  return json({ ok: true, ...current });
 }
 
 export async function handleQboMapping(request: Request, env: Env): Promise<Response> {
@@ -278,7 +391,8 @@ export async function handleQboMapping(request: Request, env: Env): Promise<Resp
     clients?: Record<string, string | null>;
     vendors?: Record<string, string | null>;
     account_map?: Record<string, string>;
-    payment_account_ref?: string;
+    payment_account_ref?: string | null;
+    subcontractor_payment_account_ref?: string | null;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -296,11 +410,22 @@ export async function handleQboMapping(request: Request, env: Env): Promise<Resp
       await setVendorMapping(env, subId, qboId);
     }
   }
-  if (body.account_map || body.payment_account_ref !== undefined) {
+  if (
+    body.account_map ||
+    body.payment_account_ref !== undefined ||
+    body.subcontractor_payment_account_ref !== undefined
+  ) {
     const fresh = await loadConnection(env);
     const config = { ...(fresh?.configuration ?? conn.configuration) };
     if (body.account_map) config.account_map = body.account_map;
-    if (body.payment_account_ref !== undefined) config.payment_account_ref = body.payment_account_ref;
+    if (body.payment_account_ref !== undefined) {
+      const v = (body.payment_account_ref ?? "").trim();
+      config.payment_account_ref = v || undefined;
+    }
+    if (body.subcontractor_payment_account_ref !== undefined) {
+      const v = (body.subcontractor_payment_account_ref ?? "").trim();
+      config.subcontractor_payment_account_ref = v || undefined;
+    }
     await saveConfiguration(env, config);
   }
   return json({ ok: true });

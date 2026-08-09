@@ -3,6 +3,7 @@ import { AuthProvider } from "./store/auth";
 import { ToastProvider } from "./store/toast";
 import { WeatherProvider } from "./store/weather";
 import { AppShell } from "./components/layout/AppShell";
+import { LaunchSplash } from "./components/layout/LaunchSplash";
 import { ToastViewport } from "./components/ui/Toast";
 import { AppRouter } from "./router";
 import { isNativePlatform, registerPushDevice } from "./lib/native";
@@ -19,6 +20,7 @@ export function App() {
     <AuthProvider>
       <ToastProvider>
         <WeatherProvider>
+          <LaunchSplash />
           <AppShell>
             <AppRouter />
           </AppShell>

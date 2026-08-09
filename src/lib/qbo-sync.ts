@@ -22,8 +22,9 @@ import {
   getValidAccessToken,
   loadConnection,
   markSynced,
-  qboApiBase,
+  resolveQboApiContext,
   saveConfiguration,
+  tokenShape,
   QboNotConnectedError,
   QboReconnectError,
   type QboConfiguration,
@@ -33,21 +34,119 @@ import {
 const QBO_DLQ_JOB = "qbo_sync";
 const MAX_429_RETRIES = 3;
 
+/** Fallback QBO Customer for clients with no per-client `qbo_customer_id`. */
+export const SETTING_QBO_DEFAULT_CUSTOMER_ID = "qbo_default_customer_id";
+export const SETTING_QBO_DEFAULT_CUSTOMER_NAME = "qbo_default_customer_name";
+/** Go-live gate: payment push (sweep + DLQ replay) stays off until Tony flips this. */
+export const SETTING_QBO_PAYMENT_SYNC_ENABLED = "qbo_payment_sync_enabled";
+
+/** True only when system_settings explicitly stores "true". Missing/false → off. */
+export async function isQboPaymentSyncEnabled(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(`SELECT value FROM system_settings WHERE key = ?`)
+    .bind(SETTING_QBO_PAYMENT_SYNC_ENABLED)
+    .first<{ value: string | null }>();
+  return (row?.value ?? "").trim().toLowerCase() === "true";
+}
+
+/**
+ * Permanent structural exclusion — Jobber history must never push to QBO,
+ * regardless of `qbo_payment_sync_enabled`. Not a toggle.
+ *
+ * Signals: jobs.data_source = 'jobber_import', or a Jobber GraphQL payment id
+ * (covers orphan payments with no job_id).
+ */
+export function isJobberExcludedPayment(opts: {
+  paymentId: string;
+  jobDataSource?: string | null;
+}): boolean {
+  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  // Jobber GraphQL global ids are base64 of "gid://Jobber/..."
+  if (opts.paymentId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
+  return false;
+}
+
+/** Explicit per-client mapping wins; otherwise the system default (if set). */
+export function resolveQboCustomerId(
+  clientQboCustomerId: string | null | undefined,
+  defaultQboCustomerId: string | null | undefined,
+): string | null {
+  const explicit = (clientQboCustomerId ?? "").trim();
+  if (explicit) return explicit;
+  const fallback = (defaultQboCustomerId ?? "").trim();
+  return fallback || null;
+}
+
+export async function getQboDefaultCustomer(
+  env: Env,
+): Promise<{ qbo_customer_id: string | null; qbo_customer_name: string | null }> {
+  const { results } = await env.DB.prepare(
+    `SELECT key, value FROM system_settings WHERE key IN (?, ?)`,
+  )
+    .bind(SETTING_QBO_DEFAULT_CUSTOMER_ID, SETTING_QBO_DEFAULT_CUSTOMER_NAME)
+    .all<{ key: string; value: string }>();
+  const map = new Map((results ?? []).map((r) => [r.key, r.value]));
+  const id = (map.get(SETTING_QBO_DEFAULT_CUSTOMER_ID) ?? "").trim() || null;
+  const name = (map.get(SETTING_QBO_DEFAULT_CUSTOMER_NAME) ?? "").trim() || null;
+  return { qbo_customer_id: id, qbo_customer_name: name };
+}
+
+export async function setQboDefaultCustomer(
+  env: Env,
+  qboCustomerId: string | null,
+  qboCustomerName?: string | null,
+): Promise<void> {
+  const id = (qboCustomerId ?? "").trim();
+  if (!id) {
+    await env.DB.prepare(`DELETE FROM system_settings WHERE key IN (?, ?)`)
+      .bind(SETTING_QBO_DEFAULT_CUSTOMER_ID, SETTING_QBO_DEFAULT_CUSTOMER_NAME)
+      .run();
+    return;
+  }
+  const name = (qboCustomerName ?? "").trim() || null;
+  await env.DB.prepare(
+    `INSERT INTO system_settings (key, value, value_type, category, label, description, updated_at)
+     VALUES (?, ?, 'string', 'integrations', 'QBO default customer',
+             'Fallback QBO Customer for CHS clients without an individual mapping.', datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+  )
+    .bind(SETTING_QBO_DEFAULT_CUSTOMER_ID, id)
+    .run();
+  if (name) {
+    await env.DB.prepare(
+      `INSERT INTO system_settings (key, value, value_type, category, label, description, updated_at)
+       VALUES (?, ?, 'string', 'integrations', 'QBO default customer name',
+               'Display name for qbo_default_customer_id.', datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+    )
+      .bind(SETTING_QBO_DEFAULT_CUSTOMER_NAME, name)
+      .run();
+  }
+}
+
 // ─── QBO API request (auth + 429 backoff + Retry-After) ────────────────────
 
 async function qboFetch(
   env: Env,
-  conn: QboConnection,
+  _conn: QboConnection,
   path: string,
   init: RequestInit = {},
 ): Promise<unknown> {
-  if (!conn.account_id) throw new QboNotConnectedError("No QBO realmId on the connection");
-  const base = qboApiBase(conn.configuration.environment, conn.account_id);
-  const url = path.startsWith("http") ? path : `${base}${path}`;
+  // Always re-resolve host/realm from D1 — never trust a possibly-stale conn.environment.
+  const ctx = await resolveQboApiContext(env);
+  const url = path.startsWith("http") ? path : `${ctx.apiBase}${path}`;
+  const pathOnly = path.split("?")[0] ?? path;
 
   let attempt = 0;
+  let forcedRefresh = false;
   for (;;) {
-    const token = await getValidAccessToken(env);
+    const token = await getValidAccessToken(env, { forceRefresh: forcedRefresh });
+    forcedRefresh = false;
+    const shape = tokenShape(token);
+    console.log(
+      `[qbo] ${init.method ?? "GET"} ${url.split("?")[0]} env=${ctx.environment} realm=${ctx.realmId} ` +
+        `token_len=${shape.length} prefix=${shape.prefix} forceRefreshAttempt=${attempt > 0}`,
+    );
+
     const resp = await fetch(url, {
       ...init,
       headers: {
@@ -57,6 +156,7 @@ async function qboFetch(
         ...(init.headers ?? {}),
       },
     });
+    const intuitTid = resp.headers.get("intuit_tid");
 
     if (resp.status === 429 && attempt < MAX_429_RETRIES) {
       const retryAfter = Number(resp.headers.get("retry-after"));
@@ -66,9 +166,23 @@ async function qboFetch(
       continue;
     }
 
+    // Expired / revoked access token → one forced refresh + retry (classic 003200).
+    if (resp.status === 401 && attempt < 1) {
+      console.warn(
+        `[qbo] 401 from ${ctx.apiHost}${pathOnly} tid=${intuitTid ?? "none"} — forcing token refresh and retrying once`,
+      );
+      // Drain body before retry.
+      await resp.text().catch(() => "");
+      forcedRefresh = true;
+      attempt++;
+      continue;
+    }
+
     const text = await resp.text();
     if (!resp.ok) {
-      throw new Error(`QBO ${init.method ?? "GET"} ${path} failed (${resp.status}): ${text.slice(0, 400)}`);
+      throw new Error(
+        `QBO ${init.method ?? "GET"} ${url} failed (${resp.status}) tid=${intuitTid ?? "none"}: ${text.slice(0, 400)}`,
+      );
     }
     return text ? JSON.parse(text) : {};
   }
@@ -255,16 +369,47 @@ interface PaymentRow {
   invoice_id: string | null;
   qbo_customer_id: string | null;
   qbo_invoice_id: string | null;
+  qbo_payment_id?: string | null;
+  received_date?: string | null;
+  collected_at?: string | null;
 }
 
-export function buildQboPayment(p: PaymentRow): Record<string, unknown> {
+/** YYYY-MM-DD for QBO TxnDate. Prefer received_date; fall back to collected_at. */
+export function resolvePaymentTxnDate(
+  p: Pick<PaymentRow, "received_date" | "collected_at">,
+): string | null {
+  for (const raw of [p.received_date, p.collected_at]) {
+    if (!raw) continue;
+    const s = String(raw).trim();
+    if (!s) continue;
+    // Already a date or ISO datetime — take the date portion.
+    const day = s.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+  }
+  return null;
+}
+
+export function buildQboPayment(
+  p: PaymentRow,
+  opts?: { depositAccountId?: string | null },
+): Record<string, unknown> {
   // TotalAmt is the gross collected amount, which INCLUDES the convenience fee
   // (income). The Stripe processing fee is a cost and is represented on the
   // expense/Purchase side, not netted out of the payment here.
   const payment: Record<string, unknown> = {
     CustomerRef: { value: p.qbo_customer_id },
     TotalAmt: round2(p.amount ?? 0),
+    // Idempotency key — same pattern as invoices (CHS-INV:) / expenses (CHS-EXP:).
+    PrivateNote: `CHS-PAY:${p.id}`,
   };
+  // Always set TxnDate from the real payment date — QBO defaults omitted TxnDate
+  // to "today", which mis-buckets historical Jobber imports into the current period.
+  const txnDate = resolvePaymentTxnDate(p);
+  if (txnDate) payment.TxnDate = txnDate;
+  const deposit = (opts?.depositAccountId ?? "").trim();
+  if (deposit) {
+    payment.DepositToAccountRef = { value: deposit };
+  }
   if (p.qbo_invoice_id) {
     payment.Line = [
       {
@@ -283,6 +428,26 @@ interface ExpenseRow {
   expense_type: string | null;
   sub_id: string | null;
   qbo_vendor_id: string | null;
+}
+
+/**
+ * Payment *source* account (bank/credit the money left from) — not the expense
+ * category AccountRef on the line. Any expense with a mapped QBO Vendor
+ * (subcontractor or day-rate labor via sub_id) may use the subcontractor
+ * payment account; otherwise fall back to payment_account_ref.
+ * Keys off vendor linkage, not expense_type.
+ */
+export function resolvePaymentAccountId(
+  e: Pick<ExpenseRow, "sub_id" | "qbo_vendor_id">,
+  paymentAccountRef: string | null | undefined,
+  subcontractorPaymentAccountRef: string | null | undefined,
+): string {
+  const defaultAcct = (paymentAccountRef ?? "").trim();
+  if (e.qbo_vendor_id) {
+    const subAcct = (subcontractorPaymentAccountRef ?? "").trim();
+    if (subAcct) return subAcct;
+  }
+  return defaultAcct;
 }
 
 export function buildQboPurchase(
@@ -333,16 +498,21 @@ export async function runQboSweep(env: Env): Promise<SweepResult> {
   };
 
   const conn = await loadConnection(env);
-  if (!conn || conn.status !== "connected") {
+  // Allow status=error through — getValidAccessToken self-heals via refresh.
+  // Only disconnected / missing connections are hard no-ops.
+  if (!conn || conn.status === "disconnected" || !conn.refresh_token) {
     result.reason = conn ? `connection status=${conn.status}` : "not_connected";
     result.duration_ms = Date.now() - t0;
     return result;
   }
   result.ran = true;
 
+  // One settings read per sweep — not per invoice/payment.
+  const { qbo_customer_id: defaultCustomerId } = await getQboDefaultCustomer(env);
+
   try {
-    await sweepInvoices(env, conn, result);
-    await sweepPayments(env, conn, result);
+    await sweepInvoices(env, conn, result, defaultCustomerId);
+    await sweepPayments(env, conn, result, defaultCustomerId);
     await sweepExpenses(env, conn, result);
     await markSynced(env);
   } catch (err) {
@@ -375,6 +545,102 @@ async function findExistingQboInvoice(
   return rows[0]?.Id ?? null;
 }
 
+/**
+ * Push a single payment to QBO (exactly-once via qbo_payment_id). Used by the
+ * nightly sweep and by DLQ replay — same code path so replay surfaces the real
+ * QBO error instead of a stub "not yet implemented" message.
+ *
+ * Note: Payment.PrivateNote is NOT queryable in QBO (unlike Invoice), so we
+ * cannot look up prior creates by note. Idempotency relies on the local
+ * qbo_payment_id stamp (partial UNIQUE index).
+ */
+export async function pushPaymentById(
+  env: Env,
+  paymentId: string,
+): Promise<{ qboId: string; alreadySynced: boolean }> {
+  if (!(await isQboPaymentSyncEnabled(env))) {
+    console.log("[qbo] QBO payment sync disabled — pending go-live; skip pushPaymentById");
+    throw new Error("QBO payment sync disabled — pending go-live");
+  }
+
+  const conn = await loadConnection(env);
+  if (!conn || (conn.status !== "connected" && conn.status !== "error")) {
+    throw new QboNotConnectedError();
+  }
+  // status=error is allowed through — getValidAccessToken self-heals via refresh.
+
+  const { qbo_customer_id: defaultCustomerId } = await getQboDefaultCustomer(env);
+  const p = await env.DB.prepare(
+    `SELECT p.id, p.amount, p.invoice_id, p.qbo_payment_id, p.received_date, p.collected_at,
+            c.qbo_customer_id, i.qbo_invoice_id, j.data_source AS job_data_source
+       FROM payments p
+       LEFT JOIN invoices i ON i.id = p.invoice_id
+       LEFT JOIN jobs j ON j.id = COALESCE(p.job_id, i.job_id)
+       LEFT JOIN clients c ON c.id = COALESCE(p.client_id, j.client_id)
+      WHERE p.id = ?`,
+  )
+    .bind(paymentId)
+    .first<PaymentRow & { job_data_source?: string | null }>();
+
+  if (!p) throw new Error(`payment not found: ${paymentId}`);
+  if (
+    isJobberExcludedPayment({
+      paymentId: p.id,
+      jobDataSource: p.job_data_source,
+    })
+  ) {
+    console.log(
+      `[qbo] permanently excluding Jobber-imported payment ${paymentId} from QBO push`,
+    );
+    throw new Error("QBO payment push permanently excluded: Jobber-imported record");
+  }
+  if (p.qbo_payment_id) {
+    return { qboId: p.qbo_payment_id, alreadySynced: true };
+  }
+  // QBO rejects TotalAmt=0 ("Enter a transaction amount to continue").
+  // Treat as nothing-to-push so DLQ replay can clear these without looping.
+  if ((p.amount ?? 0) <= 0) {
+    return { qboId: "", alreadySynced: true };
+  }
+
+  const customerRef = resolveQboCustomerId(p.qbo_customer_id, defaultCustomerId);
+  if (!customerRef) {
+    throw new Error(
+      `payment ${paymentId}: client not mapped to a QBO Customer (and no default customer set)`,
+    );
+  }
+
+  const depositAccountId = ((conn.configuration.payment_account_ref as string) ?? "").trim() || null;
+  const body = buildQboPayment(
+    { ...p, qbo_customer_id: customerRef },
+    { depositAccountId },
+  );
+  const created = (await qboFetch(env, conn, `/payment?minorversion=70`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })) as { Payment?: { Id?: string } };
+  const qboId = created.Payment?.Id;
+  if (!qboId) throw new Error("QBO returned no Payment.Id");
+  try {
+    await env.DB.prepare(
+      `UPDATE payments SET qbo_payment_id = ?, qbo_synced_at = ? WHERE id = ? AND qbo_payment_id IS NULL`,
+    )
+      .bind(qboId, new Date().toISOString(), paymentId)
+      .run();
+  } catch (err) {
+    // Race / retry: another write stamped this (or the same) QBO id. If OUR row
+    // now has a qbo_payment_id, treat as success; otherwise surface the error.
+    const again = await env.DB.prepare(`SELECT qbo_payment_id FROM payments WHERE id = ?`)
+      .bind(paymentId)
+      .first<{ qbo_payment_id: string | null }>();
+    if (again?.qbo_payment_id) {
+      return { qboId: again.qbo_payment_id, alreadySynced: true };
+    }
+    throw err;
+  }
+  return { qboId, alreadySynced: false };
+}
+
 async function findExistingQboPurchase(
   env: Env,
   conn: QboConnection,
@@ -389,7 +655,12 @@ async function findExistingQboPurchase(
   return rows[0]?.Id ?? null;
 }
 
-async function sweepInvoices(env: Env, conn: QboConnection, result: SweepResult): Promise<void> {
+async function sweepInvoices(
+  env: Env,
+  conn: QboConnection,
+  result: SweepResult,
+  defaultCustomerId: string | null,
+): Promise<void> {
   // Invoices link to a client through their job (jobs.client_id); the direct
   // invoices.client_id column is only sparsely populated, so resolve via the job
   // and fall back to a direct client_id when one is present.
@@ -403,9 +674,12 @@ async function sweepInvoices(env: Env, conn: QboConnection, result: SweepResult)
   ).all<InvoiceRow>();
 
   for (const inv of results ?? []) {
-    if (!inv.qbo_customer_id) {
+    const customerRef = resolveQboCustomerId(inv.qbo_customer_id, defaultCustomerId);
+    if (!customerRef) {
       result.invoices.skipped++;
-      result.needs_mapping.push(`invoice ${inv.id}: client not mapped to a QBO Customer`);
+      result.needs_mapping.push(
+        `invoice ${inv.id}: client not mapped to a QBO Customer (and no default customer set)`,
+      );
       continue;
     }
     try {
@@ -419,7 +693,7 @@ async function sweepInvoices(env: Env, conn: QboConnection, result: SweepResult)
         result.invoices.pushed++;
         continue;
       }
-      const body = await buildQboInvoice(env, inv);
+      const body = await buildQboInvoice(env, { ...inv, qbo_customer_id: customerRef });
       const created = (await qboFetch(env, conn, `/invoice?minorversion=70`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -445,39 +719,50 @@ async function sweepInvoices(env: Env, conn: QboConnection, result: SweepResult)
   }
 }
 
-async function sweepPayments(env: Env, conn: QboConnection, result: SweepResult): Promise<void> {
-  // Same as invoices: resolve the client through the linked invoice's job,
-  // preferring a direct payments.client_id when present.
+async function sweepPayments(
+  env: Env,
+  _conn: QboConnection,
+  result: SweepResult,
+  defaultCustomerId: string | null,
+): Promise<void> {
+  if (!(await isQboPaymentSyncEnabled(env))) {
+    console.log("[qbo] QBO payment sync disabled — pending go-live; skip payment sweep");
+    return;
+  }
+
+  // Permanent Jobber exclusion is structural (not the go-live gate): never pick
+  // jobs.data_source='jobber_import' or Jobber GraphQL payment ids.
+  // Job join prefers payments.job_id, falls back to the invoice's job.
   const { results } = await env.DB.prepare(
-    `SELECT p.id, p.amount, p.invoice_id, c.qbo_customer_id, i.qbo_invoice_id
+    `SELECT p.id, p.amount, p.invoice_id, p.received_date, p.collected_at,
+            c.qbo_customer_id, i.qbo_invoice_id
        FROM payments p
        LEFT JOIN invoices i ON i.id = p.invoice_id
-       LEFT JOIN jobs j ON j.id = i.job_id
+       LEFT JOIN jobs j ON j.id = COALESCE(p.job_id, i.job_id)
        LEFT JOIN clients c ON c.id = COALESCE(p.client_id, j.client_id)
       WHERE p.qbo_payment_id IS NULL
+        AND COALESCE(j.data_source, '') != 'jobber_import'
+        AND p.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
       LIMIT 200`,
   ).all<PaymentRow>();
 
   for (const p of results ?? []) {
-    if (!p.qbo_customer_id) {
+    if ((p.amount ?? 0) <= 0) {
       result.payments.skipped++;
-      result.needs_mapping.push(`payment ${p.id}: client not mapped to a QBO Customer`);
+      continue;
+    }
+    const customerRef = resolveQboCustomerId(p.qbo_customer_id, defaultCustomerId);
+    if (!customerRef) {
+      result.payments.skipped++;
+      result.needs_mapping.push(
+        `payment ${p.id}: client not mapped to a QBO Customer (and no default customer set)`,
+      );
       continue;
     }
     try {
-      const body = buildQboPayment(p);
-      const created = (await qboFetch(env, conn, `/payment?minorversion=70`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      })) as { Payment?: { Id?: string } };
-      const qboId = created.Payment?.Id;
-      if (!qboId) throw new Error("QBO returned no Payment.Id");
-      await env.DB.prepare(
-        `UPDATE payments SET qbo_payment_id = ?, qbo_synced_at = ? WHERE id = ? AND qbo_payment_id IS NULL`,
-      )
-        .bind(qboId, new Date().toISOString(), p.id)
-        .run();
-      result.payments.pushed++;
+      const r = await pushPaymentById(env, p.id);
+      if (r.qboId) result.payments.pushed++;
+      else result.payments.skipped++;
     } catch (err) {
       result.payments.failed++;
       await recordDeadLetter(env, {
@@ -493,7 +778,9 @@ async function sweepPayments(env: Env, conn: QboConnection, result: SweepResult)
 
 async function sweepExpenses(env: Env, conn: QboConnection, result: SweepResult): Promise<void> {
   const accountMap = conn.configuration.account_map ?? {};
-  const paymentAccountId = (conn.configuration.payment_account_ref as string) ?? "";
+  const paymentAccountRef = (conn.configuration.payment_account_ref as string) ?? "";
+  const subPaymentAccountRef =
+    (conn.configuration.subcontractor_payment_account_ref as string | undefined) ?? "";
   const { results } = await env.DB.prepare(
     `SELECT e.id, e.amount, e.description, e.expense_type, e.sub_id, s.qbo_vendor_id
        FROM expenses e
@@ -504,16 +791,17 @@ async function sweepExpenses(env: Env, conn: QboConnection, result: SweepResult)
 
   for (const e of results ?? []) {
     const accountId = e.expense_type ? accountMap[e.expense_type] : undefined;
+    if (e.sub_id && !e.qbo_vendor_id) {
+      result.expenses.skipped++;
+      result.needs_mapping.push(`expense ${e.id}: subcontractor not mapped to a QBO Vendor`);
+      continue;
+    }
+    const paymentAccountId = resolvePaymentAccountId(e, paymentAccountRef, subPaymentAccountRef);
     if (!accountId || !paymentAccountId) {
       result.expenses.skipped++;
       result.needs_mapping.push(
         `expense ${e.id}: ${!accountId ? `expense_type '${e.expense_type}' not mapped to a QBO Account` : "no payment_account_ref configured"}`,
       );
-      continue;
-    }
-    if (e.sub_id && !e.qbo_vendor_id) {
-      result.expenses.skipped++;
-      result.needs_mapping.push(`expense ${e.id}: subcontractor not mapped to a QBO Vendor`);
       continue;
     }
     try {
@@ -551,6 +839,155 @@ async function sweepExpenses(env: Env, conn: QboConnection, result: SweepResult)
       });
     }
   }
+}
+
+// ─── Erroneous payment void (Aug 6 2026 Jobber-history push cleanup) ─────────
+
+export interface VoidErroneousPaymentResult {
+  payment_id: string;
+  qbo_payment_id: string;
+  amount: number | null;
+  ok: boolean;
+  error?: string;
+}
+
+export interface VoidErroneousPaymentsBatchResult {
+  scanned: number;
+  voided: number;
+  failed: number;
+  results: VoidErroneousPaymentResult[];
+  duration_ms: number;
+}
+
+/**
+ * Void QBO Payment objects for D1 rows that carry a qbo_payment_id, then clear
+ * the local sync stamp. Batched for visibility/resume. Voids only — never deletes.
+ */
+export async function voidErroneousQboPayments(
+  env: Env,
+  opts?: { limit?: number; offset?: number },
+): Promise<VoidErroneousPaymentsBatchResult> {
+  const t0 = Date.now();
+  // Keep batches small — each void is read+void (+ optional fallback), and Workers
+  // hit the subrequest cap around ~12 payments per invocation.
+  const limit = Math.min(Math.max(opts?.limit ?? 10, 1), 15);
+  const offset = Math.max(opts?.offset ?? 0, 0);
+
+  const conn = await loadConnection(env);
+  if (!conn || (conn.status !== "connected" && conn.status !== "error")) {
+    throw new QboNotConnectedError();
+  }
+
+  const { results: rows } = await env.DB.prepare(
+    `SELECT id, amount, qbo_payment_id FROM payments
+      WHERE qbo_payment_id IS NOT NULL
+      ORDER BY qbo_synced_at ASC, id ASC
+      LIMIT ? OFFSET ?`,
+  )
+    .bind(limit, offset)
+    .all<{ id: string; amount: number | null; qbo_payment_id: string }>();
+
+  const out: VoidErroneousPaymentsBatchResult = {
+    scanned: rows?.length ?? 0,
+    voided: 0,
+    failed: 0,
+    results: [],
+    duration_ms: 0,
+  };
+
+  for (const row of rows ?? []) {
+    const qboId = row.qbo_payment_id;
+    try {
+      // Read current SyncToken (required for void).
+      const read = (await qboFetch(env, conn, `/payment/${qboId}?minorversion=70`)) as {
+        Payment?: { Id?: string; SyncToken?: string };
+      };
+      const syncToken = read.Payment?.SyncToken;
+      if (syncToken == null || syncToken === "") {
+        throw new Error(`QBO Payment ${qboId}: missing SyncToken`);
+      }
+
+      // Prefer operation=void; fall back to sparse update+include=void.
+      try {
+        await qboFetch(env, conn, `/payment?operation=void&minorversion=70`, {
+          method: "POST",
+          body: JSON.stringify({ Id: qboId, SyncToken: syncToken }),
+        });
+      } catch {
+        const again = (await qboFetch(env, conn, `/payment/${qboId}?minorversion=70`)) as {
+          Payment?: { SyncToken?: string };
+        };
+        const token2 = again.Payment?.SyncToken ?? syncToken;
+        await qboFetch(env, conn, `/payment?operation=update&include=void&minorversion=70`, {
+          method: "POST",
+          body: JSON.stringify({ Id: qboId, SyncToken: token2, sparse: true }),
+        });
+      }
+
+      await env.DB.prepare(
+        `UPDATE payments SET qbo_payment_id = NULL, qbo_synced_at = NULL WHERE id = ?`,
+      )
+        .bind(row.id)
+        .run();
+
+      // One-line audit trail per voided row.
+      await env.DB.prepare(
+        `INSERT INTO sync_log (job_name, started_at, finished_at, status, rows_affected, error_message, duration_ms, details)
+         VALUES (?, datetime('now'), datetime('now'), 'success', 1, NULL, NULL, ?)`,
+      )
+        .bind(
+          "qbo_payment_void_aug6",
+          JSON.stringify({
+            note: "Automated reversal of Aug 6 erroneous QBO payment push",
+            payment_id: row.id,
+            qbo_payment_id: qboId,
+            amount: row.amount,
+          }),
+        )
+        .run();
+
+      console.log(`[qbo-void] ok payment=${row.id} qbo=${qboId} amount=${row.amount}`);
+      out.voided++;
+      out.results.push({
+        payment_id: row.id,
+        qbo_payment_id: qboId,
+        amount: row.amount,
+        ok: true,
+      });
+    } catch (err) {
+      const error = (err as Error).message;
+      console.error(`[qbo-void] FAIL payment=${row.id} qbo=${qboId}: ${error}`);
+      out.failed++;
+      out.results.push({
+        payment_id: row.id,
+        qbo_payment_id: qboId,
+        amount: row.amount,
+        ok: false,
+        error,
+      });
+      await env.DB.prepare(
+        `INSERT INTO sync_log (job_name, started_at, finished_at, status, rows_affected, error_message, duration_ms, details)
+         VALUES (?, datetime('now'), datetime('now'), 'error', 0, ?, NULL, ?)`,
+      )
+        .bind(
+          "qbo_payment_void_aug6",
+          error.slice(0, 500),
+          JSON.stringify({
+            note: "Automated reversal of Aug 6 erroneous QBO payment push — FAILED",
+            payment_id: row.id,
+            qbo_payment_id: qboId,
+            amount: row.amount,
+          }),
+        )
+        .run();
+    }
+
+    // Gentle pacing to avoid QBO 429s across ~156 voids.
+    await sleep(200);
+  }
+
+  out.duration_ms = Date.now() - t0;
+  return out;
 }
 
 // ─── Status ─────────────────────────────────────────────────────────────────

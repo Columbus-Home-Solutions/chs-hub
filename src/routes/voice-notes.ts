@@ -8,14 +8,15 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
-import { claudeMessages } from "../lib/claude.js";
 import { processNote } from "../lib/smart-notes.js";
 import { triggerNotification } from "../lib/notification-engine.js";
+import {
+  loadActiveJobsForMatch,
+  matchJobFromTranscript,
+} from "../lib/voice-note-match.js";
 
 const NOTE_ROLES = ["owner", "project_manager", "field_crew", "office_admin"] as const;
 const ASSIGN_ROLES = ["owner", "project_manager"] as const;
-
-const ACTIVE_JOB_STATUSES = ["deposit_paid", "scheduled", "in_progress", "punch_list"] as const;
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -40,69 +41,6 @@ async function readJson(request: Request): Promise<Record<string, unknown> | nul
   } catch {
     return null;
   }
-}
-
-interface ActiveJob {
-  id: string;
-  title: string | null;
-  client_name: string | null;
-  property_address: string | null;
-}
-
-async function loadActiveJobs(env: Env): Promise<ActiveJob[]> {
-  const { results } = await env.DB.prepare(
-    `SELECT j.id, j.title, j.property_address,
-            COALESCE(c.first_name || ' ' || c.last_name, c.name) AS client_name
-       FROM jobs j
-       LEFT JOIN clients c ON c.id = j.client_id
-      WHERE j.status IN (${ACTIVE_JOB_STATUSES.map(() => "?").join(",")})
-      ORDER BY j.updated_at DESC
-      LIMIT 50`,
-  )
-    .bind(...ACTIVE_JOB_STATUSES)
-    .all<ActiveJob>();
-  return results ?? [];
-}
-
-async function matchJobFromTranscript(
-  env: Env,
-  transcript: string,
-  activeJobs: ActiveJob[],
-): Promise<string | null> {
-  if (activeJobs.length === 0) return null;
-
-  const jobList = activeJobs
-    .map(
-      (j) =>
-        `- ID: ${j.id} | Title: ${j.title ?? ""} | Client: ${j.client_name ?? ""} | Address: ${j.property_address ?? ""}`,
-    )
-    .join("\n");
-
-  const prompt = `You are helping match a field voice note to a construction job.
-
-Active jobs:
-${jobList}
-
-Voice note transcript:
-"${transcript}"
-
-If the note clearly refers to one of the jobs above, return ONLY the job ID.
-If you cannot confidently match a job, return ONLY the word "UNMATCHED".`;
-
-  const call = await claudeMessages(env, {
-    system: "Return only a job ID or the word UNMATCHED. No other text.",
-    messages: [{ role: "user", content: prompt }],
-    maxTokens: 100,
-    model: "claude-sonnet-4-6",
-  });
-
-  if (!call.ok || !call.text) return null;
-
-  const answer = call.text.trim();
-  if (answer.toUpperCase() === "UNMATCHED") return null;
-
-  const matched = activeJobs.find((j) => j.id === answer);
-  return matched?.id ?? null;
 }
 
 async function persistProcessing(
@@ -147,7 +85,7 @@ export async function handleVoiceNoteCreate(env: Env, request: Request): Promise
 
   let matchedJobId = str(body.job_id);
   if (!matchedJobId) {
-    const activeJobs = await loadActiveJobs(env);
+    const activeJobs = await loadActiveJobsForMatch(env);
     matchedJobId = await matchJobFromTranscript(env, transcript, activeJobs);
   }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildQboPayment,
   buildQboPurchase,
+  isJobberExcludedInvoice,
   isJobberExcludedPayment,
   resolvePaymentAccountId,
   resolvePaymentTxnDate,
@@ -58,6 +59,41 @@ describe("isJobberExcludedPayment", () => {
     expect(
       isJobberExcludedPayment({
         paymentId: "a900736b-0efd-44f2-89aa-76fec4155a60",
+        jobDataSource: "chs",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isJobberExcludedInvoice", () => {
+  it("excludes jobs with data_source=jobber_import regardless of invoice id shape", () => {
+    expect(
+      isJobberExcludedInvoice({
+        invoiceId: "native-uuid-invoice",
+        jobDataSource: "jobber_import",
+      }),
+    ).toBe(true);
+  });
+
+  it("excludes Jobber GraphQL invoice ids even when job_id / data_source is null", () => {
+    expect(
+      isJobberExcludedInvoice({
+        invoiceId: "Z2lkOi8vSm9iYmVyL0ludm9pY2UvMTUwMjM2ODUz",
+        jobDataSource: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows native CHS invoices on non-Jobber jobs (including null data_source)", () => {
+    expect(
+      isJobberExcludedInvoice({
+        invoiceId: "a900736b-0efd-44f2-89aa-76fec4155a60",
+        jobDataSource: null,
+      }),
+    ).toBe(false);
+    expect(
+      isJobberExcludedInvoice({
+        invoiceId: "a900736b-0efd-44f2-89aa-76fec4155a60",
         jobDataSource: "chs",
       }),
     ).toBe(false);

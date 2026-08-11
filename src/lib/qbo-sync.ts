@@ -39,11 +39,21 @@ export const SETTING_QBO_DEFAULT_CUSTOMER_ID = "qbo_default_customer_id";
 export const SETTING_QBO_DEFAULT_CUSTOMER_NAME = "qbo_default_customer_name";
 /** Go-live gate: payment push (sweep + DLQ replay) stays off until Tony flips this. */
 export const SETTING_QBO_PAYMENT_SYNC_ENABLED = "qbo_payment_sync_enabled";
+/** Go-live gate: invoice push (sweep + DLQ replay) stays off until Tony flips this. */
+export const SETTING_QBO_INVOICE_SYNC_ENABLED = "qbo_invoice_sync_enabled";
 
 /** True only when system_settings explicitly stores "true". Missing/false → off. */
 export async function isQboPaymentSyncEnabled(env: Env): Promise<boolean> {
   const row = await env.DB.prepare(`SELECT value FROM system_settings WHERE key = ?`)
     .bind(SETTING_QBO_PAYMENT_SYNC_ENABLED)
+    .first<{ value: string | null }>();
+  return (row?.value ?? "").trim().toLowerCase() === "true";
+}
+
+/** True only when system_settings explicitly stores "true". Missing/false → off. */
+export async function isQboInvoiceSyncEnabled(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(`SELECT value FROM system_settings WHERE key = ?`)
+    .bind(SETTING_QBO_INVOICE_SYNC_ENABLED)
     .first<{ value: string | null }>();
   return (row?.value ?? "").trim().toLowerCase() === "true";
 }
@@ -62,6 +72,22 @@ export function isJobberExcludedPayment(opts: {
   if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
   // Jobber GraphQL global ids are base64 of "gid://Jobber/..."
   if (opts.paymentId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
+  return false;
+}
+
+/**
+ * Permanent structural exclusion — Jobber history must never push to QBO,
+ * regardless of `qbo_invoice_sync_enabled`. Not a toggle.
+ *
+ * Signals: jobs.data_source = 'jobber_import', or a Jobber GraphQL invoice id
+ * (covers orphan invoices with job_id NULL).
+ */
+export function isJobberExcludedInvoice(opts: {
+  invoiceId: string;
+  jobDataSource?: string | null;
+}): boolean {
+  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  if (opts.invoiceId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
   return false;
 }
 
@@ -661,19 +687,38 @@ async function sweepInvoices(
   result: SweepResult,
   defaultCustomerId: string | null,
 ): Promise<void> {
+  if (!(await isQboInvoiceSyncEnabled(env))) {
+    console.log("[qbo] QBO invoice sync disabled — pending go-live; skip invoice sweep");
+    return;
+  }
+
   // Invoices link to a client through their job (jobs.client_id); the direct
   // invoices.client_id column is only sparsely populated, so resolve via the job
   // and fall back to a direct client_id when one is present.
+  // Permanent Jobber exclusion is structural (not the go-live gate): never pick
+  // jobs.data_source='jobber_import' or Jobber GraphQL invoice ids (orphans).
   const { results } = await env.DB.prepare(
-    `SELECT i.id, i.job_id, i.invoice_number, i.total, c.qbo_customer_id
+    `SELECT i.id, i.job_id, i.invoice_number, i.total, c.qbo_customer_id,
+            j.data_source AS job_data_source
        FROM invoices i
        LEFT JOIN jobs j ON j.id = i.job_id
        LEFT JOIN clients c ON c.id = COALESCE(i.client_id, j.client_id)
       WHERE i.qbo_invoice_id IS NULL
+        AND COALESCE(j.data_source, '') != 'jobber_import'
+        AND i.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
       LIMIT 200`,
-  ).all<InvoiceRow>();
+  ).all<InvoiceRow & { job_data_source?: string | null }>();
 
   for (const inv of results ?? []) {
+    if (
+      isJobberExcludedInvoice({
+        invoiceId: inv.id,
+        jobDataSource: inv.job_data_source,
+      })
+    ) {
+      result.invoices.skipped++;
+      continue;
+    }
     const customerRef = resolveQboCustomerId(inv.qbo_customer_id, defaultCustomerId);
     if (!customerRef) {
       result.invoices.skipped++;

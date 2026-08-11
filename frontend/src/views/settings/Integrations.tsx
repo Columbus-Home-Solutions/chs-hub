@@ -38,6 +38,8 @@ export function Integrations(_props: RoutableProps) {
   const [mappingOpen, setMappingOpen] = useState(false);
   const [paymentSyncEnabled, setPaymentSyncEnabled] = useState(false);
   const [paymentSyncBusy, setPaymentSyncBusy] = useState(false);
+  const [invoiceSyncEnabled, setInvoiceSyncEnabled] = useState(false);
+  const [invoiceSyncBusy, setInvoiceSyncBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -47,8 +49,10 @@ export function Integrations(_props: RoutableProps) {
         api.get<{ settings: Array<{ key: string; value: string }> }>("/api/settings"),
       ]);
       setStatus(qbo);
-      const flag = settings.settings?.find((s) => s.key === "qbo_payment_sync_enabled");
-      setPaymentSyncEnabled((flag?.value ?? "false").toLowerCase() === "true");
+      const payFlag = settings.settings?.find((s) => s.key === "qbo_payment_sync_enabled");
+      setPaymentSyncEnabled((payFlag?.value ?? "false").toLowerCase() === "true");
+      const invFlag = settings.settings?.find((s) => s.key === "qbo_invoice_sync_enabled");
+      setInvoiceSyncEnabled((invFlag?.value ?? "false").toLowerCase() === "true");
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -80,6 +84,30 @@ export function Integrations(_props: RoutableProps) {
       toast.push("error", errMsg(e));
     } finally {
       setPaymentSyncBusy(false);
+    }
+  };
+
+  const toggleInvoiceSync = async () => {
+    const next = !invoiceSyncEnabled;
+    if (
+      next &&
+      !confirm(
+        "Enable pushing invoices to QuickBooks?\n\nOnly turn this on once real CHS jobs (not Jobber history) are flowing. Historical imports must stay out of QBO.",
+      )
+    ) {
+      return;
+    }
+    setInvoiceSyncBusy(true);
+    try {
+      await api.put(`/api/settings/${encodeURIComponent("qbo_invoice_sync_enabled")}`, {
+        value: next,
+      });
+      setInvoiceSyncEnabled(next);
+      toast.push("success", next ? "Invoice push enabled" : "Invoice push disabled");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setInvoiceSyncBusy(false);
     }
   };
 
@@ -263,6 +291,24 @@ export function Integrations(_props: RoutableProps) {
             }}
           >
             <label class="flex items-center gap-sm" style={{ cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={invoiceSyncEnabled}
+                disabled={invoiceSyncBusy}
+                onChange={() => void toggleInvoiceSync()}
+              />
+              <span>
+                <strong>Push invoices to QuickBooks</strong>
+                <span class="text--muted" style={{ display: "block", fontSize: "var(--text-sm)" }}>
+                  Keep off until real jobs are running through CHS. Jobber-imported invoices are
+                  permanently excluded regardless of this toggle.
+                </span>
+              </span>
+            </label>
+            <label
+              class="flex items-center gap-sm"
+              style={{ cursor: "pointer", marginTop: "var(--space-sm)" }}
+            >
               <input
                 type="checkbox"
                 checked={paymentSyncEnabled}

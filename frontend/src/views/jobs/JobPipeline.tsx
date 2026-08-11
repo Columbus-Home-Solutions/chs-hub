@@ -199,7 +199,26 @@ export function JobPipeline(_props: RoutableProps) {
       </div>
 
       {loading && <Spinner center />}
-      {error && <div class="empty-state">Couldn't load the pipeline: {error}</div>}
+      {error && (
+        <div class="empty-state">
+          <p>Couldn't load the pipeline: {error}</p>
+          <div class="flex gap-sm" style={{ justifyContent: "center", marginTop: "0.75rem" }}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                void refetch();
+                void health.refetch();
+              }}
+            >
+              Retry
+            </Button>
+            <Button size="sm" variant="primary" onClick={() => window.location.reload()}>
+              Reload & sign in
+            </Button>
+          </div>
+        </div>
+      )}
 
       {!loading && !error && data && viewMode === "list" && (
         <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 240px)" }}>

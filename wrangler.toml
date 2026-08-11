@@ -107,7 +107,7 @@ DRIVE_SHARED_DRIVE_ID = "0ABLCFrp_XkN8Uk9PVA"
 # touching Twilio/Resend. Default = simulate so local + any creds-less env never
 # messages a real client. Twilio account/number + production Resend
 # from-address are a Pre-Launch item; flip this to "live" only once they exist.
-NOTIFICATIONS_DISPATCH_MODE = "simulate"
+NOTIFICATIONS_DISPATCH_MODE = "live"
 # Absolute origin used to build client-facing links ({{estimate_link}} →
 # /quote/<token>, invoice pay links → /pay/<token>) in rendered notifications.
 # This is the NON-Access public custom domain (DNS + custom_domain route added in

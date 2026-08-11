@@ -253,6 +253,8 @@ async function maybeCompleteJobAfterPunchListsClosed(
       templateType: "warranty_certificate",
       triggerEvent: "job_complete",
     });
+    const { maybeAutoGenerateFancyWarranty } = await import("../lib/warranty-fancy.js");
+    await maybeAutoGenerateFancyWarranty(env, jobId, "job_complete");
     await checkAndFireLienWaiverForJob(env, jobId);
   };
   if (ctx) {

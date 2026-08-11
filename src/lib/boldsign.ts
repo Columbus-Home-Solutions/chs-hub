@@ -216,9 +216,14 @@ export async function sendDocumentForSignature(
 
   let res: Response;
 
-  /** Hide BoldSign's black "Document ID: …" footer stamped on every page. */
+  /**
+   * Flags applied to every send path (template / text-tags / legacy coords).
+   * DisableEmails: CHS owns client/sub invitation email via our notification
+   * pipeline (or portal/SMS). BoldSign must not also send its invite email.
+   */
   const appendCommonSendFlags = (form: FormData) => {
     form.append("HideDocumentId", "true");
+    form.append("DisableEmails", "true");
   };
 
   /** White/vanish/1pt canonicalize for any DOCX attachment (primary or extra). */
@@ -460,6 +465,34 @@ export async function getEmbeddedSignLink(
   const data = (await res.json()) as { signLink?: string };
   if (!data.signLink) throw new Error("BoldSign embed response missing signLink");
   return { signLink: data.signLink };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * BoldSign document/send is async — embed links often 403 if fetched immediately.
+ * Retry a few times; callers should fall back to a durable portal/quote URL.
+ */
+export async function fetchEmbeddedSignLinkWithRetry(
+  config: BoldSignConfig,
+  documentId: string,
+  signerEmail: string,
+  redirectUrl?: string,
+  attempts = 4,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await sleep(1500);
+    try {
+      const linkResult = await getEmbeddedSignLink(config, documentId, signerEmail, redirectUrl);
+      return linkResult.signLink ?? null;
+    } catch (linkErr) {
+      console.warn(
+        `[boldsign] getEmbeddedSignLink attempt ${attempt + 1}/${attempts}: ${(linkErr as Error).message}`,
+      );
+      if (attempt === attempts - 1) return null;
+    }
+  }
+  return null;
 }
 
 // ─── Revoke ───────────────────────────────────────────────────────────────────

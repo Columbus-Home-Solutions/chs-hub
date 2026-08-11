@@ -21,6 +21,19 @@ function jsonErr(status: number, code: string, message?: string): Response {
   });
 }
 
+/** MIME for generated job docs — wrong type forces browsers to download instead of preview. */
+function contentTypeForFilename(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (lower.endsWith(".doc")) return "application/msword";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  return "application/octet-stream";
+}
+
 function b64uEncode(data: string): string {
   return btoa(data)
     .replace(/\+/g, "-")
@@ -218,10 +231,12 @@ export async function handleFileLinkResolve(
     const obj = await env.FILES.get(row.r2_key);
     if (!obj) return jsonErr(404, "file_not_found");
     const h = new Headers({
-      "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Type": contentTypeForFilename(row.filename),
       "Content-Disposition": `inline; filename="${row.filename}"`,
       "Cache-Control": "private, max-age=300",
       "access-control-allow-origin": "*",
+      // Allow embedding in the Hub's DocViewerModal iframe (same dashboard origin via workers.dev file host).
+      "X-Content-Type-Options": "nosniff",
     });
     const body = method === "HEAD" ? null : obj.body;
     return new Response(body, { status: 200, headers: h });

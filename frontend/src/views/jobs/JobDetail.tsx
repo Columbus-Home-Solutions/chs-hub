@@ -2,6 +2,7 @@ import type { RoutableProps } from "preact-router";
 import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { useUrlTab } from "../../hooks/useUrlTab";
+import { useViewportTier } from "../../hooks/useViewportTier";
 import { Card } from "../../components/ui/Card";
 import { WarrantyExpirationCallout } from "../../components/WarrantyExpirationCallout";
 import { Button } from "../../components/ui/Button";
@@ -11,6 +12,7 @@ import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { Timeline } from "../../components/Timeline";
+import { SlideUpSheet } from "../../components/layout/SlideUpSheet";
 import { CommunicationModal } from "../clients/ClientDetail";
 import { PhotosTab } from "./PhotosTab";
 import { DocumentsTab } from "./DocumentsTab";
@@ -84,6 +86,32 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "activity", label: "Activity" },
 ];
 
+/** Phone/tablet primary strip — field workflow. Remaining tabs live in More sheet. */
+const PRIORITY_TAB_KEYS: TabKey[] = [
+  "overview",
+  "tasks",
+  "punch_list",
+  "photos",
+  "daily_logs",
+];
+
+const MORE_TABS: { key: TabKey; label: string }[] = [
+  { key: "scope", label: "Scope of Work" },
+  { key: "selections", label: "Selections" },
+  { key: "schedule", label: "Schedule" },
+  { key: "financial", label: "Financial" },
+  { key: "change_orders", label: "Change Orders" },
+  { key: "bids", label: "Bids" },
+  { key: "permits", label: "Permits" },
+  { key: "warranty", label: "Warranty" },
+  { key: "documents", label: "Documents" },
+  { key: "notes", label: "Field Notes" },
+  { key: "activity", label: "Activity" },
+];
+
+const MORE_TAB_KEYS = new Set<TabKey>(MORE_TABS.map((t) => t.key));
+const PRIORITY_TABS = TABS.filter((t) => PRIORITY_TAB_KEYS.includes(t.key));
+
 // Legal status targets from the current status: every later stage (forward-only)
 // plus the one sanctioned backward exception. The API re-validates and gates
 // punch-list / unpaid-invoice rules.
@@ -101,7 +129,10 @@ export function JobDetail({ id }: DetailProps) {
   const { data, loading, error, refetch } = useApi<JobDetailResponse>(id ? `/api/jobs/${id}` : null);
   const toast = useToast();
   const { user } = useAuth();
+  const tier = useViewportTier();
+  const compactTabs = tier === "mobile" || tier === "tablet";
   const [tab, setTab] = useUrlTab([...TAB_KEYS], "overview");
+  const [moreOpen, setMoreOpen] = useState(false);
 
   if (loading) return <Spinner center />;
   if (error || !data) {
@@ -123,6 +154,7 @@ export function JobDetail({ id }: DetailProps) {
   const fullAddress = [job.property_address, job.property_city, job.property_state, job.property_zip]
     .filter(Boolean)
     .join(", ");
+  const moreTabActive = compactTabs && MORE_TAB_KEYS.has(tab as TabKey);
 
   return (
     <div class="job-detail">
@@ -183,16 +215,53 @@ export function JobDetail({ id }: DetailProps) {
       )}
 
       <div class="job-tabs">
-        {TABS.map((t) => (
+        {(compactTabs ? PRIORITY_TABS : TABS).map((t) => (
           <button
             key={t.key}
+            type="button"
             class={`job-tab${tab === t.key ? " job-tab--active" : ""}`}
             onClick={() => setTab(t.key)}
           >
             {t.label}
           </button>
         ))}
+        {compactTabs && (
+          <button
+            type="button"
+            class={`job-tab${moreTabActive ? " job-tab--active" : ""}`}
+            onClick={() => setMoreOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={moreOpen}
+          >
+            ••• More
+          </button>
+        )}
       </div>
+
+      {compactTabs && (
+        <SlideUpSheet
+          open={moreOpen}
+          onClose={() => setMoreOpen(false)}
+          title="More"
+          ariaLabel="More job tabs"
+        >
+          <nav class="more-nav-sheet__nav">
+            {MORE_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                class={`more-nav-sheet__row${tab === t.key ? " more-nav-sheet__row--active" : ""}`}
+                onClick={() => {
+                  setTab(t.key);
+                  setMoreOpen(false);
+                }}
+              >
+                <span>{t.label}</span>
+              </button>
+            ))}
+          </nav>
+        </SlideUpSheet>
+      )}
 
       {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
       {tab === "scope" && <ScopeOfWorkTab estimateId={job.estimate_id} jobSource={job.source} />}

@@ -7,6 +7,7 @@ import {
   parentActive,
   type NavSection,
 } from "../../lib/sidebar-nav";
+import { SlideUpSheet } from "./SlideUpSheet";
 
 /**
  * Mobile More sheet: same accordion as desktop sidebar, minus sections already
@@ -62,39 +63,23 @@ export function MoreNavSheet({
   }
 
   return (
-    <>
-      <div
-        class={`more-nav-sheet__backdrop${open ? " more-nav-sheet__backdrop--open" : ""}`}
-        onClick={open ? onClose : undefined}
-        role="presentation"
-        aria-hidden={!open}
-      />
-      <div
-        class={`more-nav-sheet${open ? " more-nav-sheet--open" : ""}`}
-        role="dialog"
-        aria-label="More navigation"
-        aria-hidden={!open}
-      >
-        <div class="more-nav-sheet__handle" />
-        <h2 class="more-nav-sheet__title">More</h2>
-
-        <nav class="more-nav-sheet__nav">
-          {sections.map((section) => (
-            <MoreSection
-              key={section.id}
-              section={section}
-              expanded={expanded.has(section.id)}
-              currentPath={currentPath}
-              currentSearch={currentSearch}
-              onToggle={() => toggle(section.id)}
-              onClose={onClose}
-              onNavInternal={navInternal}
-              onNavHref={navHref}
-            />
-          ))}
-        </nav>
-      </div>
-    </>
+    <SlideUpSheet open={open} onClose={onClose} title="More" ariaLabel="More navigation">
+      <nav class="more-nav-sheet__nav">
+        {sections.map((section) => (
+          <MoreSection
+            key={section.id}
+            section={section}
+            expanded={expanded.has(section.id)}
+            currentPath={currentPath}
+            currentSearch={currentSearch}
+            onToggle={() => toggle(section.id)}
+            onClose={onClose}
+            onNavInternal={navInternal}
+            onNavHref={navHref}
+          />
+        ))}
+      </nav>
+    </SlideUpSheet>
   );
 }
 

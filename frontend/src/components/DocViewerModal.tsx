@@ -1,9 +1,9 @@
 /**
- * DocViewerModal — Google Docs Viewer in a full-screen overlay.
+ * DocViewerModal — Office Online Viewer in a full-screen overlay.
  *
  * Fetches a short-lived HMAC-signed view URL from
  *   GET /api/jobs/:jobId/generated-documents/:docId/view-url
- * then embeds the document in Google Docs Viewer via iframe.
+ * then embeds the document via Microsoft Office Online (docx-safe).
  *
  * Header controls: Print (opens viewer in new tab), Download (direct R2 file).
  */
@@ -53,17 +53,21 @@ export function DocViewerModal({ jobId, docId, filename, downloadPath, onClose }
       .finally(() => setLoadingUrl(false));
   }, [jobId, docId]);
 
-  const handlePrint = () => {
-    if (viewData) {
-      // Open Google Docs Viewer in a new window without embedded flag so user can print/save
-      window.open(
-        `https://docs.google.com/gview?url=${encodeURIComponent(viewData.file_url)}`,
-        "_blank",
-      );
-    }
-  };
-
   const displayFilename = viewData?.filename ?? filename;
+  const isPdf = displayFilename.toLowerCase().endsWith(".pdf");
+
+  const handlePrint = () => {
+    if (!viewData) return;
+    if (isPdf) {
+      // Native PDF — open the file URL directly (Office Online is for Office formats).
+      window.open(viewData.file_url, "_blank");
+      return;
+    }
+    window.open(
+      `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(viewData.file_url)}`,
+      "_blank",
+    );
+  };
 
   return (
     <div
@@ -136,7 +140,7 @@ export function DocViewerModal({ jobId, docId, filename, downloadPath, onClose }
           <a
             href={downloadPath}
             download={displayFilename}
-            title="Download .docx"
+            title={`Download ${isPdf ? "PDF" : "document"}`}
             style={{ color: "var(--text-muted)", padding: "4px 6px", borderRadius: 4, lineHeight: 1, textDecoration: "none", display: "flex", alignItems: "center" }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

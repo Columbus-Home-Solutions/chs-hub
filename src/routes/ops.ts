@@ -94,6 +94,54 @@ export async function handleOpsQboVoidErroneousPayments(
 }
 
 /**
+ * Read-only Resend email lookup (uses Worker RESEND_API_KEY).
+ * GET/POST /api/ops/resend-email-lookup?secret=&id=
+ */
+export async function handleOpsResendEmailLookup(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+  const url = new URL(request.url);
+  const id = (url.searchParams.get("id") ?? "").trim();
+  if (!id) return jsonOk({ ok: false, error: "id required" }, 400);
+  const apiKey = (env.RESEND_API_KEY ?? "").trim();
+  if (!apiKey) return jsonOk({ ok: false, error: "RESEND_API_KEY missing" }, 500);
+
+  const res = await fetch(`https://api.resend.com/emails/${encodeURIComponent(id)}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+  });
+  const text = await res.text();
+  let body: unknown = text;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = { raw: text.slice(0, 1000) };
+  }
+  const obj = body && typeof body === "object" ? (body as Record<string, unknown>) : null;
+  return jsonOk(
+    {
+      ok: res.ok,
+      http_status: res.status,
+      id: obj?.id ?? id,
+      subject: obj?.subject ?? null,
+      to: obj?.to ?? null,
+      created_at: obj?.created_at ?? null,
+      last_event: obj?.last_event ?? null,
+      // Verbatim attachments field from Resend (absent / null / [] / populated).
+      attachments: obj && "attachments" in obj ? obj.attachments : "__FIELD_ABSENT__",
+      attachments_field_present: !!(obj && "attachments" in obj),
+      top_keys: obj ? Object.keys(obj).sort() : [],
+      // Full payload for inconclusive cases (no secrets — this is Resend's email record).
+      resend: body,
+    },
+    res.ok ? 200 : 502,
+  );
+}
+
+/**
  * Confirm D1-stamped QBO invoice against live QBO; void if present; clear stamp.
  * Default invoice id is the known Jobber stray (qbo_invoice_id=148).
  */

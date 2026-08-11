@@ -777,52 +777,56 @@ export function ClientDetail({ id }: RoutableProps & { id?: string }) {
                 No properties on file.
               </p>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--color-border)" }}>
-                    <th style={{ textAlign: "left", padding: "4px 8px 4px 0", fontWeight: 500, color: "var(--color-text-muted)" }}>Address</th>
-                    <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 500, color: "var(--color-text-muted)" }}>City</th>
-                    <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 500, color: "var(--color-text-muted)" }}>Type</th>
-                    <th style={{ padding: "4px 0" }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.properties.map((p) => (
-                    <tr key={p.id} style={{ borderBottom: "1px solid var(--color-border-subtle)" }}>
-                      <td style={{ padding: "6px 8px 6px 0" }}>
-                        <div>{p.address}</div>
-                        {p.notes && (
-                          <div class="text--muted" style={{ fontSize: "var(--text-xs)" }}>{p.notes}</div>
-                        )}
-                      </td>
-                      <td style={{ padding: "6px 8px" }}>
-                        {p.city}, {p.state} {p.zip}
-                      </td>
-                      <td style={{ padding: "6px 8px" }}>
-                        {p.property_type ? <Badge tone="neutral">{p.property_type}</Badge> : <span class="text--muted">—</span>}
-                      </td>
-                      <td style={{ padding: "6px 0", textAlign: "right" }}>
-                        <div class="flex items-center gap-xs">
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => go(`/estimating/new?client_id=${c.id}&property_id=${p.id}&autostart=1`)}
-                          >
-                            Estimate
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="tertiary"
-                            onClick={() => setPropModal({ mode: "edit", property: p })}
-                          >
-                            Edit
-                          </Button>
-                        </div>
-                      </td>
+              /* Contained horizontal scroll — same pattern as Estimates/Jobs lists.
+                 Keeps Address/City/Type columns tabular at phone width without crushing. */
+              <div class="table-container" style={{ border: "none", borderRadius: 0 }}>
+                <table class="table" style={{ minWidth: "36rem" }}>
+                  <thead>
+                    <tr>
+                      <th>Address</th>
+                      <th>City</th>
+                      <th>Type</th>
+                      <th></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {data.properties.map((p) => (
+                      <tr key={p.id}>
+                        <td>
+                          <div>{p.address}</div>
+                          {p.notes && (
+                            <div class="text--muted" style={{ fontSize: "var(--text-xs)" }}>{p.notes}</div>
+                          )}
+                        </td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          {p.city}, {p.state} {p.zip}
+                        </td>
+                        <td>
+                          {p.property_type ? <Badge tone="neutral">{p.property_type}</Badge> : <span class="text--muted">—</span>}
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          <div class="flex items-center gap-xs" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => go(`/estimating/new?client_id=${c.id}&property_id=${p.id}&autostart=1`)}
+                            >
+                              Estimate
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="tertiary"
+                              onClick={() => setPropModal({ mode: "edit", property: p })}
+                            >
+                              Edit
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </Card>
 

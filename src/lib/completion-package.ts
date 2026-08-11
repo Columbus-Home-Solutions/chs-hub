@@ -185,7 +185,7 @@ export async function buildCompletionPackageData(
     before_photos: beforeRows.map((p) => ({ id: p.id, caption: p.caption, url: photoUrl(p.id) })),
     after_photos: afterRows.map((p) => ({ id: p.id, caption: p.caption, url: photoUrl(p.id) })),
     warranty_text:
-      "Columbus Home Solutions provides a one-year workmanship warranty on completed work beginning at project completion, covering defects in workmanship (excluding normal wear, owner/third-party damage, improper maintenance, and manufacturer-covered material defects).",
+      "Columbus Home Solutions provides a five-year workmanship warranty on completed work beginning at project completion. Full exclusions and limitation of liability are set forth in the Warranty Certificate issued with your completion package.",
   };
 }
 

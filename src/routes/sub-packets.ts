@@ -29,7 +29,11 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { createOwnerInApp, sendSubEmail } from "../lib/notification-engine.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "../lib/twilio.js";
-import { getBoldSignConfig, sendDocumentForSignature } from "../lib/boldsign.js";
+import {
+  fetchEmbeddedSignLinkWithRetry,
+  getBoldSignConfig,
+  sendDocumentForSignature,
+} from "../lib/boldsign.js";
 import { generateDocument, formatToday } from "../lib/document-generator.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -775,7 +779,58 @@ export async function handleSendAgreement(
     )
     .run();
 
-  return json({ ok: true, status: "awaiting_signature", boldsign_document_id: boldSignDocumentId });
+  // BoldSign invites are disabled — SMS/email the embed Sign Now link.
+  // Onboarding-packet SMS (docs upload) is a separate earlier step and does not
+  // include a signing URL; this is the agreement-signature notification.
+  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
+  const redirectUrl = `${origin}/packet/${packet.portal_token ?? ""}?signed=1`;
+  const signLink =
+    (await fetchEmbeddedSignLinkWithRetry(
+      config,
+      boldSignDocumentId,
+      subEmail,
+      redirectUrl,
+    )) || null;
+
+  const live = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase() === "live";
+  if (signLink) {
+    const signSms = `CHS: Please sign your Subcontractor Agreement: ${signLink}`;
+    const signEmailBody =
+      `Hi ${name},\n\nYour Columbus Home Solutions Subcontractor Agreement is ready to sign.\n\n` +
+      `Sign now: ${signLink}\n\nThank you,\nColumbus Home Solutions`;
+    const phone = await env.DB.prepare("SELECT phone FROM subcontractors WHERE id = ?")
+      .bind(packet.sub_id)
+      .first<{ phone: string | null }>()
+      .then((r) => r?.phone ?? null);
+
+    if (phone) {
+      if (live) {
+        const cfg = await getTwilioConfig(env);
+        if (twilioConfigured(cfg)) {
+          const r = await sendSms(cfg, phone, signSms);
+          if (!r.ok) console.warn(`[sub-packet] agreement SMS to ${phone} failed: ${r.error}`);
+        }
+      } else {
+        console.log(`[sub_agreement][SIMULATE] SMS to=${phone} body="${signSms}"`);
+      }
+    }
+    if (live) {
+      await sendSubEmail(env, subEmail, "Sign your CHS Subcontractor Agreement", signEmailBody);
+    } else {
+      console.log(`[sub_agreement][SIMULATE] email to=${subEmail} sign_link=${signLink}`);
+    }
+  } else {
+    console.warn(
+      `[sub-packet] agreement sent but embed sign link unavailable for BoldSign doc ${boldSignDocumentId}`,
+    );
+  }
+
+  return json({
+    ok: true,
+    status: "awaiting_signature",
+    boldsign_document_id: boldSignDocumentId,
+    sign_link: signLink,
+  });
 }
 
 // ── applyAgreementSigned — called by BoldSign webhook on completion ───────────

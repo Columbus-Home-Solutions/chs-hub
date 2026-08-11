@@ -1,8 +1,9 @@
 /**
- * Desktop-only Estimate Requests widget.
+ * Estimate Requests widget (phone / tablet / desktop Home).
  *
  * Surfaces leads at Appointment Set or later that have not yet been converted
- * into a full estimate/job. Distinct from Open Bid Requests (subcontractor bids).
+ * into a full estimate/job. Rows open Request Detail (Visit Capture), not the
+ * builder. Distinct from Open Bid Requests (subcontractor bids).
  */
 
 import { useApi } from "../../hooks/useApi";

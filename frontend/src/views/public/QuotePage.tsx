@@ -250,6 +250,7 @@ export function QuotePage() {
             <ApprovalFlow quote={quote} reload={reload} selectionsRefreshKey={selectionsRefreshKey} />
           )}
           {quote.reviews.length > 0 && <ReviewsCard reviews={quote.reviews} />}
+          <CompanyAssetLinks />
         </div>
       </div>
       <footer class="quote-footer">
@@ -405,6 +406,27 @@ function ReviewsCard({ reviews }: { reviews: PublicReview[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/** Static company PDFs also attached on estimate_sent email. */
+function CompanyAssetLinks() {
+  return (
+    <p class="quote-company-links">
+      <a href="/api/public/company-assets/one-sheet" target="_blank" rel="noopener noreferrer">
+        View our One Sheet
+      </a>
+      <span class="quote-company-links__sep" aria-hidden="true">
+        ·
+      </span>
+      <a
+        href="/api/public/company-assets/price-match-guarantee"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        View our Price Match Guarantee
+      </a>
+    </p>
   );
 }
 

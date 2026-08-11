@@ -13,10 +13,14 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { buildCompletionPackageData, renderCompletionPackageHtml } from "../lib/completion-package.js";
-import { triggerNotification } from "../lib/notification-engine.js";
+import { notifySignatureNeeded, triggerNotification } from "../lib/notification-engine.js";
 import { formatDate, formatDatePlusOneYear } from "../lib/document-generator.js";
 import { sendImmediateReviewRequest } from "../lib/review-followups.js";
-import { getBoldSignConfig, sendDocumentForSignature } from "../lib/boldsign.js";
+import {
+  fetchEmbeddedSignLinkWithRetry,
+  getBoldSignConfig,
+  sendDocumentForSignature,
+} from "../lib/boldsign.js";
 
 const WRITE_ROLES = ["owner", "project_manager"] as const;
 const READ_ROLES = ["owner", "project_manager", "office_admin"] as const;
@@ -117,6 +121,33 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
         filename: warrantyRow.filename,
         r2_key: warrantyRow.r2_key,
         generated_at: warrantyRow.generated_at,
+        status: "ready" as const,
+      }
+    : {
+        document_id: null,
+        filename: null,
+        r2_key: null,
+        generated_at: null,
+        status: "missing" as const,
+      };
+
+  const fancyWarrantyRow = await env.DB.prepare(
+    `SELECT id, filename, r2_key, generated_at, review_status
+       FROM job_documents
+      WHERE job_id = ? AND template_type = 'warranty_fancy'
+        AND review_status IN ('pending_review', 'approved', 'manual')
+      ORDER BY datetime(generated_at) DESC
+      LIMIT 1`,
+  )
+    .bind(jobId)
+    .first<{ id: string; filename: string; r2_key: string; generated_at: string; review_status: string }>();
+
+  const warranty_fancy = fancyWarrantyRow
+    ? {
+        document_id: fancyWarrantyRow.id,
+        filename: fancyWarrantyRow.filename,
+        r2_key: fancyWarrantyRow.r2_key,
+        generated_at: fancyWarrantyRow.generated_at,
         status: "ready" as const,
       }
     : {
@@ -228,6 +259,7 @@ export async function buildCompletionPackageReview(env: Env, jobId: string) {
       job_number: job.job_number,
     },
     warranty,
+    warranty_fancy,
     final_invoice: finalInvoice
       ? {
           invoice_id: finalInvoice.id,
@@ -546,6 +578,49 @@ export async function handleLienWaiverRetry(
     )
       .bind(result.documentId, waiver.id)
       .run();
+
+    // BoldSign invites are disabled — notify via CHS signature_needed email.
+    try {
+      const jobRow = await env.DB.prepare(
+        "SELECT client_id, portal_token, estimate_id FROM jobs WHERE id = ?",
+      )
+        .bind(jobId)
+        .first<{
+          client_id: string | null;
+          portal_token: string | null;
+          estimate_id: string | null;
+        }>();
+      if (jobRow?.client_id) {
+        const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(
+          /\/$/,
+          "",
+        );
+        const portalLink = jobRow.portal_token
+          ? `${origin}/portal/${jobRow.portal_token}`
+          : "";
+        const embedLink = await fetchEmbeddedSignLinkWithRetry(
+          config,
+          result.documentId,
+          client.email,
+          portalLink ? `${portalLink}?signed=1` : undefined,
+        );
+        const signLink = embedLink || portalLink;
+        if (signLink) {
+          await notifySignatureNeeded(env, {
+            clientId: jobRow.client_id,
+            jobId,
+            estimateId: jobRow.estimate_id,
+            documentName: "Conditional Lien Waiver",
+            signLink,
+            instanceKey: result.documentId,
+          });
+        }
+      }
+    } catch (notifyErr) {
+      console.warn(
+        `[lien-waiver-retry] signature_needed notify failed: ${(notifyErr as Error).message}`,
+      );
+    }
 
     return json({ ok: true, boldsign_document_id: result.documentId });
   } catch (err2) {

@@ -122,6 +122,26 @@
   font-size: 13px;
 }
 
+.quote-company-links {
+  margin: 0;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+.quote-company-links a {
+  color: var(--color-accent, #2455d6);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.quote-company-links a:hover {
+  color: var(--color-text, #0b0f1a);
+}
+.quote-company-links__sep {
+  margin: 0 0.45em;
+  color: var(--color-text-muted, #5b6472);
+}
+
 /* Approve & pay */
 .quote-action {
   position: sticky;

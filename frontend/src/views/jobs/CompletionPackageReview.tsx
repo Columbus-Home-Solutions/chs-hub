@@ -21,6 +21,13 @@ interface CompletionPackageData {
     generated_at: string | null;
     status: "ready" | "pending" | "missing";
   };
+  warranty_fancy: {
+    document_id: string | null;
+    filename: string | null;
+    r2_key: string | null;
+    generated_at: string | null;
+    status: "ready" | "pending" | "missing";
+  };
   final_invoice: {
     invoice_id: string | null;
     amount: number | null;
@@ -207,7 +214,18 @@ export function CompletionPackageReview({ id }: DetailProps) {
           <section class="stack">
             <h2 class="completion-package-section-title">What's in the package</h2>
             <div class="completion-package-grid">
-              <WarrantyCard jobId={jobId} warranty={pkg.warranty} />
+              <WarrantyCard
+                jobId={jobId}
+                warranty={pkg.warranty}
+                title="Warranty Certificate"
+                fallbackFilename="warranty-certificate.docx"
+              />
+              <WarrantyCard
+                jobId={jobId}
+                warranty={pkg.warranty_fancy}
+                title="5-Year Workmanship Warranty"
+                fallbackFilename="5-year-workmanship-warranty.pdf"
+              />
               <InvoiceCard invoice={pkg.final_invoice} jobId={jobId} onCreated={refetch} />
               <LienWaiverCard lien={pkg.lien_waiver} jobId={jobId} />
               <PhotosCard jobId={jobId} before={pkg.photos.before} after={pkg.photos.after} />
@@ -275,20 +293,27 @@ export function CompletionPackageReview({ id }: DetailProps) {
 function WarrantyCard({
   jobId,
   warranty,
+  title,
+  fallbackFilename,
 }: {
   jobId: string;
   warranty: CompletionPackageData["warranty"];
+  title: string;
+  fallbackFilename: string;
 }) {
   const [viewing, setViewing] = useState(false);
   const tone = warranty.status === "ready" ? "success" : warranty.status === "pending" ? "warning" : "error";
   const label =
     warranty.status === "ready" ? "Ready ✓" : warranty.status === "pending" ? "Generating…" : "Missing";
+  const downloadPath = warranty.document_id
+    ? `/api/jobs/${jobId}/documents/${warranty.document_id}/download`
+    : "#";
   return (
     <>
       <div class="completion-package-card">
         <div class="completion-package-card__head">
           <span class="completion-package-card__icon" aria-hidden="true">🛡️</span>
-          <span class="completion-package-card__title">Warranty Certificate</span>
+          <span class="completion-package-card__title">{title}</span>
           <Badge tone={tone}>{label}</Badge>
         </div>
         {warranty.status === "ready" && warranty.generated_at && (
@@ -302,7 +327,7 @@ function WarrantyCard({
               )}
               {warranty.document_id && (
                 <a
-                  href={`/api/jobs/${jobId}/documents/${warranty.document_id}/download`}
+                  href={downloadPath}
                   target="_blank"
                   rel="noreferrer"
                   class="btn btn--sm btn--tertiary"
@@ -318,8 +343,8 @@ function WarrantyCard({
         <DocViewerModal
           jobId={jobId}
           docId={warranty.document_id}
-          filename={warranty.filename ?? "warranty-certificate.docx"}
-          downloadPath={`/api/jobs/${jobId}/documents/${warranty.document_id}/download`}
+          filename={warranty.filename ?? fallbackFilename}
+          downloadPath={downloadPath}
           onClose={() => setViewing(false)}
         />
       )}

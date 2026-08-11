@@ -5454,14 +5454,15 @@
     max-width: 100%;
     box-sizing: border-box;
   }
-  /* Mobile Home stack: KPI (outside) → Schedule → Action Items → Smart Notes */
+  /* Mobile Home stack: KPI → Schedule → Action Items → Estimate Requests */
   .dashboard-order-schedule { order: 4; }
   .dashboard-order-action-items { order: 5; }
-  .dashboard-order-smart-notes { order: 6; }
-  .dashboard-order-quick-actions { order: 7; }
-  .dashboard-order-pipeline { order: 8; }
-  .dashboard-order-jobs-map { order: 9; }
-  .dashboard-order-activity { order: 10; }
+  .dashboard-order-estimate-requests { order: 6; }
+  .dashboard-order-smart-notes { order: 7; }
+  .dashboard-order-quick-actions { order: 8; }
+  .dashboard-order-pipeline { order: 9; }
+  .dashboard-order-jobs-map { order: 10; }
+  .dashboard-order-activity { order: 11; }
   .dashboard__desktop-only {
     display: none;
   }

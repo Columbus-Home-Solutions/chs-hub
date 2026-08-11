@@ -32,14 +32,21 @@ import {
   formatPercent,
 } from "../lib/document-generator.js";
 import {
+  paymentScheduleMergeFields,
+  type PaymentScheduleRow,
+} from "../lib/payment-schedule-merge.js";
+import { ensureServiceAgreementTemplate } from "../lib/service-agreement-template.js";
+import {
   getBoldSignConfig,
   resolveESignatureMode,
   sendDocumentForSignature,
   sendReminder,
   revokeDocument,
+  fetchEmbeddedSignLinkWithRetry,
   SETTING_ESIGNATURE_MODE,
   BOLDSIGN_API_BASE,
 } from "../lib/boldsign.js";
+import { notifySignatureNeeded } from "../lib/notification-engine.js";
 import { applyPmFields, resolvePmFields } from "../lib/pm-fields.js";
 import { loadWorkingAgreementAttachment } from "../lib/working-agreement.js";
 
@@ -148,7 +155,10 @@ export async function resolveMergeFields(
   fields.estimated_budget = ""; // no estimated_cost column in jobs table
   fields.work_description = job.notes ?? job.title ?? "";
   fields.certificate_number = `WC-${job.job_number ?? "000"}-${new Date().getFullYear()}`;
-  fields.warranty_expiry = formatDatePlusOneYear(completionRaw);
+  // Prefer stamped jobs.warranty_expiration; else completion + 5 years.
+  fields.warranty_expiry = job.warranty_expiration
+    ? formatDate(job.warranty_expiration)
+    : formatDatePlusOneYear(completionRaw);
 
   // Client
   if (job.client_id) {
@@ -209,6 +219,13 @@ export async function resolveMergeFields(
 
   const pm = await resolvePmFields(env, job.assigned_to);
   Object.assign(fields, applyPmFields({}, pm));
+
+  // Payment schedule table (service agreement) — same fields as estimate-phase
+  // resolveEstimateMergeFields / paymentScheduleMergeFields.
+  if (templateType === "service_agreement") {
+    const schedule = await loadJobPaymentSchedule(env, job.id);
+    Object.assign(fields, paymentScheduleMergeFields(schedule, job.contract_total ?? 0));
+  }
 
   // Subcontractor (if sub_id provided in overrides)
   if (overrides.sub_id) {
@@ -306,6 +323,48 @@ export class MissingFieldsError extends Error {
   }
 }
 
+/**
+ * Payment milestones for a job-level Service Agreement.
+ * Prefer the linked estimate's payment_schedules (same source as estimate-phase);
+ * fall back to job billing_schedule draws when the estimate has none.
+ */
+async function loadJobPaymentSchedule(
+  env: Env,
+  jobId: string,
+): Promise<PaymentScheduleRow[]> {
+  const jobMeta = await env.DB.prepare("SELECT estimate_id FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ estimate_id: string | null }>();
+
+  if (jobMeta?.estimate_id) {
+    const fromEstimate = (
+      await env.DB.prepare(
+        `SELECT description, fixed_amount, percentage, amount, trigger
+           FROM payment_schedules
+          WHERE estimate_id = ?
+          ORDER BY sort_order ASC`,
+      )
+        .bind(jobMeta.estimate_id)
+        .all<PaymentScheduleRow>()
+    ).results ?? [];
+    if (fromEstimate.length > 0) return fromEstimate;
+  }
+
+  const fromBilling = (
+    await env.DB.prepare(
+      `SELECT label AS description, percentage, amount,
+              NULL AS fixed_amount, 'milestone' AS trigger
+         FROM billing_schedule
+        WHERE job_id = ?
+        ORDER BY sequence ASC`,
+    )
+      .bind(jobId)
+      .all<PaymentScheduleRow>()
+  ).results ?? [];
+
+  return fromBilling;
+}
+
 // ─── Shared generation helper ─────────────────────────────────────────────────
 
 export interface GenerateAndStoreOptions {
@@ -354,7 +413,10 @@ export async function generateAndStoreDocument(
   const templateObj = await env.FILES.get(r2TemplateKey);
   console.log(`[job-documents] R2 get result: ${templateObj ? `found (size=${templateObj.size})` : "null — NOT FOUND"}`);
   if (!templateObj) throw new Error(`template_not_found: ${r2TemplateKey}`);
-  const templateBuffer = await templateObj.arrayBuffer();
+  let templateBuffer = await templateObj.arrayBuffer();
+  if (templateType === "service_agreement") {
+    templateBuffer = ensureServiceAgreementTemplate(templateBuffer);
+  }
 
   // Generate document — contractor signature embedded for warranty + lien_waiver_conditional
   const docBytes = await generateDocument(templateBuffer, mergeFields, {
@@ -362,12 +424,12 @@ export async function generateAndStoreDocument(
       templateType === "warranty_certificate" || templateType === "lien_waiver_conditional",
   });
 
-  // Build filename and R2 key
+  // Build filename and R2 key (UUID prefix avoids same-day key collisions leaving a stale object)
   const today = new Date().toISOString().slice(0, 10);
   const slugType = templateType.replace(/_/g, "-");
   const jobNum = (job.job_number ?? jobId).toString().replace(/\s+/g, "-");
   const filename = `${slugType}-${jobNum}-${today}.docx`;
-  const generatedKey = `documents/generated/${jobId}/${filename}`;
+  const generatedKey = `documents/generated/${jobId}/${crypto.randomUUID()}-${filename}`;
 
   // Upload to R2
   await env.FILES.put(generatedKey, docBytes, {
@@ -375,6 +437,12 @@ export async function generateAndStoreDocument(
       contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     },
   });
+  const written = await env.FILES.head(generatedKey);
+  if (!written || written.size !== docBytes.byteLength) {
+    throw new Error(
+      `r2_put_verify_failed: key=${generatedKey} expected=${docBytes.byteLength} got=${written?.size ?? "missing"}`,
+    );
+  }
 
   // Insert job_documents row
   const docId = crypto.randomUUID();
@@ -500,9 +568,16 @@ export async function handleDownloadJobDocument(
   const obj = await env.FILES.get(row.r2_key);
   if (!obj) return err(404, "file_not_found", "R2 object missing");
 
+  const lower = row.filename.toLowerCase();
+  const contentType = lower.endsWith(".pdf")
+    ? "application/pdf"
+    : lower.endsWith(".docx")
+      ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      : "application/octet-stream";
+
   return new Response(obj.body, {
     headers: {
-      "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Type": contentType,
       "Content-Disposition": `attachment; filename="${row.filename}"`,
       "Cache-Control": "private, no-cache",
     },
@@ -755,7 +830,12 @@ export async function handleDocViewUrl(
     new URL(request.url).origin;
 
   const fileUrl = `${origin}/api/f?t=${token}`;
-  const viewerUrl = `https://docs.google.com/gview?url=${encodeURIComponent(fileUrl)}&embedded=true`;
+  // PDFs: browsers render natively. DOCX: Office Online embed (Google Docs Viewer
+  // often fails with "Could not preview the file" even for valid Word files).
+  const isPdf = row.filename.toLowerCase().endsWith(".pdf");
+  const viewerUrl = isPdf
+    ? fileUrl
+    : `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`;
 
   return json({ view_url: viewerUrl, file_url: fileUrl, filename: row.filename, expires_in: ttl });
 }
@@ -908,6 +988,7 @@ export async function handleSendForSignature(
     lien_waiver_conditional: "Conditional Lien Waiver",
     lien_waiver_sub_unconditional: "Unconditional Lien Waiver (Sub)",
     warranty_certificate: "Warranty Certificate",
+    warranty_fancy: "5-Year Workmanship Warranty",
   };
   const templateLabel = TEMPLATE_LABELS[row.template_type] ?? row.template_type;
   const title = job ? `${templateLabel} — ${job.title} (#${job.job_number})` : templateLabel;
@@ -983,6 +1064,53 @@ export async function handleSendForSignature(
   )
     .bind(boldSignResult.documentId, signerEmail, signerName, docId)
     .run();
+
+  // Client-facing docs: CHS owns the "please sign" email (BoldSign invites disabled).
+  // Sub lien waivers are handled separately (sub SMS/email — future if needed).
+  if (!isSubLienWaiver) {
+    try {
+      const jobCtx = await env.DB.prepare(
+        "SELECT client_id, portal_token, estimate_id FROM jobs WHERE id = ?",
+      )
+        .bind(jobId)
+        .first<{
+          client_id: string | null;
+          portal_token: string | null;
+          estimate_id: string | null;
+        }>();
+      if (jobCtx?.client_id) {
+        const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(
+          /\/$/,
+          "",
+        );
+        const portalLink = jobCtx.portal_token
+          ? `${origin}/portal/${jobCtx.portal_token}`
+          : "";
+        const redirectUrl = portalLink ? `${portalLink}?signed=1` : undefined;
+        const embedLink = await fetchEmbeddedSignLinkWithRetry(
+          config,
+          boldSignResult.documentId,
+          signerEmail,
+          redirectUrl,
+        );
+        const signLink = embedLink || portalLink;
+        if (signLink) {
+          await notifySignatureNeeded(env, {
+            clientId: jobCtx.client_id,
+            jobId,
+            estimateId: jobCtx.estimate_id,
+            documentName: templateLabel,
+            signLink,
+            instanceKey: boldSignResult.documentId,
+          });
+        }
+      }
+    } catch (notifyErr) {
+      console.warn(
+        `[SEND-FOR-SIG] signature_needed notify failed: ${(notifyErr as Error).message}`,
+      );
+    }
+  }
 
   return json({
     ok: true,

@@ -12,11 +12,8 @@ describe("close job helpers", () => {
   });
 
   it("computes five-year warranty expiration from completion date", () => {
-    const exp = warrantyExpirationDate("2026-01-01");
-    const start = new Date("2026-01-01T12:00:00Z");
-    const end = new Date(`${exp}T12:00:00Z`);
-    const days = Math.round((end.getTime() - start.getTime()) / 86_400_000);
-    expect(days).toBe(1825);
+    expect(warrantyExpirationDate("2026-01-01")).toBe("2031-01-01");
+    expect(warrantyExpirationDate("2024-02-29")).toBe("2029-03-01"); // JS Date rolls Feb 29 + 5y
   });
 });
 

@@ -39,6 +39,7 @@ const TEMPLATE_LABELS: Record<string, string> = {
   lien_waiver_conditional: "Conditional Lien Waiver",
   lien_waiver_sub_unconditional: "Sub Unconditional Lien Waiver",
   warranty_certificate: "Warranty Certificate",
+  warranty_fancy: "5-Year Workmanship Warranty",
 };
 
 const TEMPLATE_ICON: Record<string, string> = {
@@ -48,6 +49,7 @@ const TEMPLATE_ICON: Record<string, string> = {
   lien_waiver_conditional: "📑",
   lien_waiver_sub_unconditional: "📑",
   warranty_certificate: "🏅",
+  warranty_fancy: "🎖️",
 };
 
 function relativeTime(iso: string): string {

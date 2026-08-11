@@ -88,16 +88,25 @@ interface GeneratedDoc {
   signer_name: string | null;
 }
 
-const TEMPLATE_LABELS: Record<TemplateType, string> = {
+const TEMPLATE_LABELS: Record<string, string> = {
   service_agreement: "Service Agreement",
   cost_plus_agreement: "Cost-Plus Billing Agreement",
   change_order: "Change Order",
   lien_waiver_conditional: "Conditional Lien Waiver (Client)",
   lien_waiver_sub_unconditional: "Unconditional Lien Waiver (Sub)",
   warranty_certificate: "Warranty Certificate",
+  warranty_fancy: "5-Year Workmanship Warranty",
 };
 
-const ALL_TYPES = Object.keys(TEMPLATE_LABELS) as TemplateType[];
+/** Manual generate picker — fancy warranty is auto-only on job complete. */
+const ALL_TYPES: TemplateType[] = [
+  "service_agreement",
+  "cost_plus_agreement",
+  "change_order",
+  "lien_waiver_conditional",
+  "lien_waiver_sub_unconditional",
+  "warranty_certificate",
+];
 
 function fmtDateTime(s: string) {
   try {
@@ -290,6 +299,13 @@ function GeneratedDocuments({ jobId }: { jobId: string }) {
                   <td style={{ textAlign: "right" }}>
                     <div class="flex gap-sm" style={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
                       <Button size="sm" variant="secondary" onClick={() => setViewing(d)}>View</Button>
+                      <a
+                        href={`/api/jobs/${jobId}/documents/${d.id}/download`}
+                        download={d.filename}
+                        class="btn btn--sm btn--tertiary"
+                      >
+                        Download
+                      </a>
                       {isPending && (
                         <>
                           <Button size="sm" variant="primary" disabled={busy} onClick={() => void approveDoc(d)}>

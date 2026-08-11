@@ -144,6 +144,9 @@ export async function generateDocument(
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+    // Templates often bake a leading $ before currency tags (${{amount}}).
+    // Consume that $ so formatCurrency("$X.XX") does not become "$$X.XX".
+    docXml = docXml.replaceAll(`\${{${key}}}`, safe);
     docXml = docXml.replaceAll(`{{${key}}}`, safe);
   }
 
@@ -152,8 +155,10 @@ export async function generateDocument(
     docXml = embedContractorSignatureInXml(docXml);
   }
 
-  // Business rule 5: clear any unreplaced {{token}} placeholders
-  docXml = docXml.replace(/\{\{[a-z_]+\}\}/g, "");
+  // Business rule 5: clear any unreplaced {{token}} placeholders.
+  // Include digits so payment_1_amount etc. are cleared when missing (BoldSign
+  // text tags use | and are intentionally left alone).
+  docXml = docXml.replace(/\$?\{\{[a-z0-9_]+\}\}/g, "");
 
   unzipped["word/document.xml"] = strToU8(docXml);
   return zipSync(unzipped);
@@ -251,12 +256,15 @@ export function formatToday(): string {
   }).format(new Date());
 }
 
-/** Add five years (1825 days) to a date string for warranty expiry display. */
-export function formatDatePlusOneYear(value: string | null | undefined): string {
+/**
+ * Add five years (1825 days) to a date string for warranty expiry display.
+ * Name retained as formatDatePlusOneYear for call-site compatibility; term is 5 years.
+ */
+export function formatDatePlusFiveYears(value: string | null | undefined): string {
   if (!value) return "";
   const d = new Date(value.includes("T") ? value : value + "T12:00:00Z");
   if (isNaN(d.getTime())) return "";
-  d.setDate(d.getDate() + 1825);
+  d.setUTCFullYear(d.getUTCFullYear() + 5);
   return new Intl.DateTimeFormat("en-US", {
     month: "long",
     day: "numeric",
@@ -264,6 +272,9 @@ export function formatDatePlusOneYear(value: string | null | undefined): string 
     timeZone: "America/Chicago",
   }).format(d);
 }
+
+/** @deprecated Use formatDatePlusFiveYears — alias kept for existing imports. */
+export const formatDatePlusOneYear = formatDatePlusFiveYears;
 
 /** Format a number as "15%" (percentage). */
 export function formatPercent(value: number | string | null | undefined): string {

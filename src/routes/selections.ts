@@ -33,7 +33,7 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
-import { createOwnerInApp } from "../lib/notification-engine.js";
+import { createOwnerInApp, notifySignatureNeeded } from "../lib/notification-engine.js";
 import {
   downloadSignedDocument,
   getBoldSignConfig,
@@ -615,6 +615,33 @@ async function executeCombinedSelectionApproval(
       redirectUrl,
     );
 
+    if (ctx.clientId) {
+      const estimateLink = ctx.estimateId
+        ? await env.DB.prepare("SELECT portal_token FROM estimates WHERE id = ?")
+            .bind(ctx.estimateId)
+            .first<{ portal_token: string | null }>()
+            .then((r) => (r?.portal_token ? `${origin}/quote/${r.portal_token}` : ""))
+        : "";
+      const effectiveSignLink = signLink || estimateLink || redirectUrl;
+      try {
+        await notifySignatureNeeded(env, {
+          clientId: ctx.clientId,
+          estimateId: ctx.estimateId,
+          jobId: ctx.jobId,
+          documentName:
+            pairs.length === 1
+              ? "Material Selection Approval"
+              : `Material Selections Approval (${pairs.length})`,
+          signLink: effectiveSignLink,
+          instanceKey: boldSignDocumentId,
+        });
+      } catch (notifyErr) {
+        console.warn(
+          `[selections] signature_needed notify failed: ${(notifyErr as Error).message}`,
+        );
+      }
+    }
+
     return json({
       ok: true,
       signature_pending: true,
@@ -941,6 +968,31 @@ async function executeSelectionApproval(
       clientEmail,
       redirectUrl,
     );
+
+    if (ctx.clientId) {
+      const estId = ctx.estimateId || sel.estimate_id;
+      const estimateLink = estId
+        ? await env.DB.prepare("SELECT portal_token FROM estimates WHERE id = ?")
+            .bind(estId)
+            .first<{ portal_token: string | null }>()
+            .then((r) => (r?.portal_token ? `${origin}/quote/${r.portal_token}` : ""))
+        : "";
+      const effectiveSignLink = signLink || estimateLink || redirectUrl;
+      try {
+        await notifySignatureNeeded(env, {
+          clientId: ctx.clientId,
+          estimateId: estId,
+          jobId: ctx.jobId,
+          documentName: `Selection Approval: ${sel.title}`,
+          signLink: effectiveSignLink,
+          instanceKey: boldSignDocumentId,
+        });
+      } catch (notifyErr) {
+        console.warn(
+          `[selections] signature_needed notify failed: ${(notifyErr as Error).message}`,
+        );
+      }
+    }
 
     return json({
       ok: true,

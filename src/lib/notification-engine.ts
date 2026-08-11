@@ -38,6 +38,7 @@ export const WIRED_EVENTS = [
   "appointment_confirmed",
   "appointment_reminder",
   "estimate_sent",
+  "signature_needed",
   "quote_follow_up_1",
   "quote_follow_up_2",
   "quote_expiring",
@@ -57,6 +58,7 @@ const TRANSACTIONAL_EVENTS = new Set([
   "appointment_confirmed",
   "appointment_reminder",
   "estimate_sent",
+  "signature_needed",
   "deposit_received",
   "welcome_portal",
   "work_starting",
@@ -377,10 +379,9 @@ async function buildMergeContext(env: Env, ctx: TriggerContext): Promise<Record<
   }
 
   if (ctx.linkPath) {
-    const dashOrigin = (env.APP_PUBLIC_ORIGIN ?? "https://dashboard.homesolutionsar.com").replace(
-      /\/$/,
-      "",
-    );
+    // In-app deep links go to the Access-gated dashboard host, not APP_PUBLIC_ORIGIN
+    // (which is the public client/quote/portal origin).
+    const dashOrigin = "https://dashboard.homesolutionsar.com";
     const path = ctx.linkPath.startsWith("/") ? ctx.linkPath : `/${ctx.linkPath}`;
     m.review_link = `${dashOrigin}${path}`;
   }
@@ -678,7 +679,12 @@ async function sendByChannel(env: Env, row: LogRow, live: boolean): Promise<Send
   }
 
   if (row.channel === "email") {
-    if (!live) return { kind: "simulated", externalId: `simulated:${crypto.randomUUID()}` };
+    if (!live) {
+      console.log(
+        `[notify][email][SIMULATE] event=${row.trigger_event} to=${row.recipient_contact}`,
+      );
+      return { kind: "simulated", externalId: `simulated:${crypto.randomUUID()}` };
+    }
     // Client-notification from-address is NOTIFICATIONS_EMAIL_FROM ONLY. No
     // fallback to ALERT_EMAIL_FROM here on purpose: that address belongs to the
     // owner-facing daily-summary / system-alert path (src/lib/ops/notify.ts) and
@@ -690,15 +696,41 @@ async function sendByChannel(env: Env, row: LogRow, live: boolean): Promise<Send
     const from = (env.NOTIFICATIONS_EMAIL_FROM ?? "").trim();
     const apiKey = (env.RESEND_API_KEY ?? "").trim();
     if (!from || !apiKey || env.RESEND_DRY_RUN === "1") {
+      console.log(
+        `[notify][email][SIMULATE] event=${row.trigger_event} to=${row.recipient_contact} reason=missing_creds_or_dry_run`,
+      );
       return { kind: "simulated", externalId: `simulated:${crypto.randomUUID()}` };
     }
-    const r = await sendResendEmail(apiKey, from, row.recipient_contact, row.subject ?? "", row.body);
+    const { text, html } = prepareEmailBodies(row.body);
+    const r = await sendResendEmail(
+      apiKey,
+      from,
+      row.recipient_contact,
+      row.subject ?? "",
+      text,
+      undefined,
+      html,
+    );
     return r.ok
       ? { kind: "sent", externalId: r.id }
       : { kind: "failed", error: r.error };
   }
 
   return { kind: "failed", error: `unknown_channel:${row.channel}` };
+}
+
+/**
+ * Templates are plain text by default. When a body includes authored <a href>
+ * anchors (estimate_sent One Sheet / Price Match links), send HTML so the
+ * phrases are clickable, plus a plain-text fallback with "Label (url)".
+ */
+function prepareEmailBodies(body: string): { text: string; html?: string } {
+  if (!/<a\s/i.test(body)) return { text: body };
+  const text = body
+    .replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, "$2 ($1)")
+    .replace(/<[^>]+>/g, "");
+  const html = body.replace(/\n/g, "<br>\n");
+  return { text, html };
 }
 
 /**
@@ -741,6 +773,13 @@ function maskDeviceToken(token: string): string {
   return `••••${token.slice(-4)}`;
 }
 
+type ResendAttachment = {
+  filename: string;
+  /** Base64 content XOR remote URL path (Resend fetches path server-side). */
+  content?: string;
+  path?: string;
+};
+
 /** Minimal Resend send (reuses the established daily-summary Resend HTTP path). */
 async function sendResendEmail(
   apiKey: string,
@@ -748,7 +787,8 @@ async function sendResendEmail(
   to: string,
   subject: string,
   text: string,
-  attachment?: { filename: string; content: string },
+  attachments?: ResendAttachment[],
+  html?: string,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   try {
     const payload: Record<string, unknown> = {
@@ -757,8 +797,12 @@ async function sendResendEmail(
       subject: subject || "Columbus Home Solutions",
       text,
     };
-    if (attachment) {
-      payload.attachments = [{ filename: attachment.filename, content: attachment.content }];
+    if (html) payload.html = html;
+    if (attachments && attachments.length > 0) {
+      payload.attachments = attachments.map((a) => {
+        if (a.path) return { filename: a.filename, path: a.path };
+        return { filename: a.filename, content: a.content };
+      });
     }
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -807,18 +851,20 @@ export async function sendSubEmail(
     return;
   }
 
-  let b64Attachment: { filename: string; content: string } | undefined;
+  let attachments: ResendAttachment[] | undefined;
   if (attachment) {
     const bytes = attachment.pdfBytes;
     let binary = "";
     for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    b64Attachment = {
-      filename: attachment.filename,
-      content: btoa(binary),
-    };
+    attachments = [
+      {
+        filename: attachment.filename,
+        content: btoa(binary),
+      },
+    ];
   }
 
-  const r = await sendResendEmail(apiKey, from, to, subject, text, b64Attachment);
+  const r = await sendResendEmail(apiKey, from, to, subject, text, attachments);
   if (!r.ok) {
     console.warn(`[sub_email] send to ${to} failed: ${r.error}`);
   }
@@ -1047,9 +1093,15 @@ export async function createOwnerInApp(
 
 // ─── preview + test (Templates API) ──────────────────────────────────────────
 
-/** Representative sample data so owners can preview/test any template's render. */
-export function sampleMergeContext(): Record<string, string> {
-  const origin = "https://chs-hub.homesolutionsar.com";
+/**
+ * Representative sample data so owners can preview/test any template's render.
+ * Origin MUST match APP_PUBLIC_ORIGIN (client.homesolutionsar.com) — never the
+ * Worker script name. chs-hub.homesolutionsar.com is NXDOMAIN.
+ */
+export function sampleMergeContext(
+  origin = "https://client.homesolutionsar.com",
+): Record<string, string> {
+  const base = origin.replace(/\/$/, "");
   return {
     company_name: "Columbus Home Solutions",
     company_phone: "(501) 551-1814",
@@ -1064,14 +1116,44 @@ export function sampleMergeContext(): Record<string, string> {
     job_type: "Kitchen Remodel",
     appointment_date: "March 14, 2026",
     appointment_time: "10:00 AM",
-    estimate_link: `${origin}/quote/sample-token`,
-    portal_link: `${origin}/portal/sample-token`,
+    estimate_link: `${base}/quote/sample-token`,
+    portal_link: `${base}/portal/sample-token`,
+    sign_link: `${base}/quote/sample-token?sign=1`,
+    document_name: "Service Agreement",
     deposit_amount: "$2,500.00",
     estimate_total: "$25,000.00",
     contract_total: "$25,000.00",
     expiration_date: "March 21, 2026",
     start_date: "March 28, 2026",
   };
+}
+
+/**
+ * Enqueue client signature-needed notifications (email + SMS templates).
+ * `signLink` should be the BoldSign embed URL when available; callers may fall
+ * back to the durable quote/portal URL where the in-app Sign Now button lives.
+ */
+export async function notifySignatureNeeded(
+  env: Env,
+  args: {
+    clientId: string;
+    estimateId?: string | null;
+    jobId?: string | null;
+    documentName: string;
+    signLink: string;
+    instanceKey: string;
+  },
+): Promise<TriggerResult> {
+  return triggerNotification(env, "signature_needed", {
+    clientId: args.clientId,
+    estimateId: args.estimateId ?? null,
+    jobId: args.jobId ?? null,
+    instanceKey: args.instanceKey,
+    merge: {
+      document_name: args.documentName,
+      sign_link: args.signLink,
+    },
+  });
 }
 
 /** Render a template against sample data (no send, no log) — POST .../preview. */
@@ -1083,7 +1165,8 @@ export async function previewTemplate(
     .bind(templateId)
     .first<TemplateRow>();
   if (!tpl) return null;
-  const ctx = sampleMergeContext();
+  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
+  const ctx = sampleMergeContext(origin);
   const subject = tpl.subject ? renderTemplate(tpl.subject, ctx).text : null;
   const rendered = renderTemplate(tpl.body_template, ctx);
   return { subject, body: rendered.text, missing: rendered.missing };
@@ -1106,7 +1189,8 @@ export async function sendOwnerTest(
   const owner = await resolveOwner(env);
   if (!owner) return { ok: false, simulated: false, detail: "No active owner user to test against.", subject: null, body: "" };
 
-  const ctx = sampleMergeContext();
+  const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
+  const ctx = sampleMergeContext(origin);
   const subject = tpl.subject ? renderTemplate(tpl.subject, ctx).text : null;
   const body = renderTemplate(tpl.body_template, ctx).text;
   const name = [owner.first_name, owner.last_name].filter(Boolean).join(" ").trim() || owner.email;

@@ -173,5 +173,7 @@ export function ensureServiceAgreementTemplate(docxBytes: ArrayBuffer): ArrayBuf
   xml = patchSignatureTable(xml);
 
   zip["word/document.xml"] = strToU8(xml);
-  return zipSync(zip).buffer;
+  const out = zipSync(zip);
+  // Uint8Array.buffer may be larger than the view — slice to exact bytes.
+  return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
 }

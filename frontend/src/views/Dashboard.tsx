@@ -37,7 +37,9 @@ export function Dashboard(_props: RoutableProps) {
   const showQuickActions = !isPhone;
   const showPipeline = isDesktop;
   const showJobHealth = !isPhone;
-  const showEstimateRequests = !isPhone;
+  // Estimate Requests is action-oriented (Visit Capture) — include on phone Home too.
+  // Job Health / Open Bids stay tablet+desktop only.
+  const showEstimateRequests = true;
   const showOpenBids = !isPhone;
   const showJobsMap = isDesktop;
   const showActivity = isDesktop;
@@ -132,6 +134,12 @@ export function Dashboard(_props: RoutableProps) {
 
             <div class="dashboard-order-action-items">{actionItemsBlock}</div>
 
+            {isPhone && showEstimateRequests && (
+              <div class="dashboard-order-estimate-requests">
+                <EstimateRequestsWidget />
+              </div>
+            )}
+
             {showQuickActions && (
               <div class="dashboard-order-quick-actions dashboard-order-quick-actions--mobile">
                 <QuickActionsWidget />
@@ -158,7 +166,7 @@ export function Dashboard(_props: RoutableProps) {
               </div>
             )}
 
-            {showEstimateRequests && (
+            {!isPhone && showEstimateRequests && (
               <div class="dashboard-order-estimate-requests">
                 <EstimateRequestsWidget />
               </div>

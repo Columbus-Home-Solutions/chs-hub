@@ -97,6 +97,7 @@ import {
   handleOpsResendSelectionApproval,
   handleOpsQboVoidErroneousPayments,
   handleOpsQboResolveErroneousInvoice,
+  handleOpsResendEmailLookup,
   handleOpsProbeJobsPipeline,
   handleOpsNotificationDispatchStatus,
   handleOpsNotifyTemplateTest,
@@ -1231,6 +1232,12 @@ export default {
     }
     if (url.pathname === "/api/ops/qbo-resolve-erroneous-invoice" && request.method === "POST") {
       return handleOpsQboResolveErroneousInvoice(request, env);
+    }
+    if (
+      url.pathname === "/api/ops/resend-email-lookup" &&
+      (request.method === "GET" || request.method === "POST")
+    ) {
+      return handleOpsResendEmailLookup(request, env);
     }
 
     // ── Legacy Jobber jobs view (old dashboard at dashboard.* host) ──

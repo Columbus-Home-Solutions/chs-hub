@@ -851,6 +851,9 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
           templateType: "warranty_certificate",
           triggerEvent: "job_complete",
         });
+        // Companion fancy visual warranty (same trigger; does not replace the personalized cert).
+        const { maybeAutoGenerateFancyWarranty } = await import("../lib/warranty-fancy.js");
+        await maybeAutoGenerateFancyWarranty(env, id, "job_complete");
         // If final payment already settled before complete, generate the lien waiver now.
         await checkAndFireLienWaiverForJob(env, id);
       })().catch((e) =>

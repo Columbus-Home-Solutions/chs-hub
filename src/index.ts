@@ -96,6 +96,12 @@ import {
   handleOpsE2eFreshEstimateSetup,
   handleOpsResendSelectionApproval,
   handleOpsQboVoidErroneousPayments,
+  handleOpsQboResolveErroneousInvoice,
+  handleOpsProbeJobsPipeline,
+  handleOpsNotificationDispatchStatus,
+  handleOpsNotifyTemplateTest,
+  handleOpsNotifySignatureNeededSimulate,
+  handleOpsNotifySignatureGapSimulate,
   handleSummarySend,
 } from "./routes/ops.js";
 import { runDriveMirror } from "./lib/ops/drive-mirror.js";
@@ -358,6 +364,7 @@ import {
   handlePublicQuoteSignLink,
   handleStripeWebhook,
 } from "./routes/public-quote.js";
+import { handlePublicCompanyAsset } from "./routes/public-company-assets.js";
 import {
   handleInvoiceList,
   handleInvoiceGet,
@@ -671,6 +678,7 @@ export default {
         p.startsWith("/app/assets/") ||
         p.startsWith("/api/public/pay/") ||
         p.startsWith("/api/public/quote/") ||
+        p.startsWith("/api/public/company-assets/") ||
         p.startsWith("/api/public/social-posts/") ||
         p.startsWith("/api/public/social/") ||
         p.startsWith("/api/portal/") ||
@@ -749,6 +757,12 @@ export default {
     // UNAUTHENTICATED on purpose: gated only by the estimate's portal_token
     // (or, for the webhook, the Stripe signature). No guard()/Access here.
     // Matched early so the token paths never fall through to auth'd routes.
+    const publicCompanyAsset = url.pathname.match(
+      /^\/api\/public\/company-assets\/([a-z0-9-]+)$/,
+    );
+    if (publicCompanyAsset) {
+      return handlePublicCompanyAsset(request, env, publicCompanyAsset[1]);
+    }
     if (url.pathname === "/api/webhooks/stripe" && request.method === "POST") {
       return handleStripeWebhook(request, env, ctx);
     }
@@ -1188,6 +1202,21 @@ export default {
     if (url.pathname === "/api/ops/autogen-document" && request.method === "POST") {
       return handleOpsAutogenDocument(request, env);
     }
+    if (url.pathname === "/api/ops/probe-jobs-pipeline" && request.method === "GET") {
+      return handleOpsProbeJobsPipeline(request, env);
+    }
+    if (url.pathname === "/api/ops/notification-dispatch-status" && request.method === "GET") {
+      return handleOpsNotificationDispatchStatus(request, env);
+    }
+    if (url.pathname === "/api/ops/notify-template-test" && request.method === "POST") {
+      return handleOpsNotifyTemplateTest(request, env);
+    }
+    if (url.pathname === "/api/ops/notify-signature-needed-simulate" && request.method === "POST") {
+      return handleOpsNotifySignatureNeededSimulate(request, env);
+    }
+    if (url.pathname === "/api/ops/notify-signature-gap-simulate" && request.method === "POST") {
+      return handleOpsNotifySignatureGapSimulate(request, env);
+    }
     if (url.pathname === "/api/ops/boldsign-ghost-proof" && request.method === "POST") {
       return handleOpsBoldsignGhostProof(request, env);
     }
@@ -1199,6 +1228,9 @@ export default {
     }
     if (url.pathname === "/api/ops/qbo-void-erroneous-payments" && request.method === "POST") {
       return handleOpsQboVoidErroneousPayments(request, env);
+    }
+    if (url.pathname === "/api/ops/qbo-resolve-erroneous-invoice" && request.method === "POST") {
+      return handleOpsQboResolveErroneousInvoice(request, env);
     }
 
     // ── Legacy Jobber jobs view (old dashboard at dashboard.* host) ──

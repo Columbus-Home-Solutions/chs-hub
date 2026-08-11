@@ -344,6 +344,25 @@ interface InvoiceRow {
   invoice_number: number | null;
   total: number | null;
   qbo_customer_id: string | null;
+  qbo_invoice_id?: string | null;
+  sent_date?: string | null;
+  issued_date?: string | null;
+  created_at?: string | null;
+  job_data_source?: string | null;
+}
+
+/** YYYY-MM-DD for QBO TxnDate. Prefer sent_date; then issued_date; then created_at. */
+export function resolveInvoiceTxnDate(
+  inv: Pick<InvoiceRow, "sent_date" | "issued_date" | "created_at">,
+): string | null {
+  for (const raw of [inv.sent_date, inv.issued_date, inv.created_at]) {
+    if (!raw) continue;
+    const s = String(raw).trim();
+    if (!s) continue;
+    const day = s.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+  }
+  return null;
 }
 
 export async function buildQboInvoice(env: Env, inv: InvoiceRow): Promise<Record<string, unknown>> {
@@ -381,12 +400,16 @@ export async function buildQboInvoice(env: Env, inv: InvoiceRow): Promise<Record
           },
         ];
 
-  return {
+  const invoice: Record<string, unknown> = {
     CustomerRef: { value: inv.qbo_customer_id },
     DocNumber: inv.invoice_number != null ? String(inv.invoice_number) : undefined,
     PrivateNote: `CHS-INV:${inv.id}`,
     Line,
   };
+  // Always set TxnDate from the real invoice date — QBO defaults omitted TxnDate to today.
+  const txnDate = resolveInvoiceTxnDate(inv);
+  if (txnDate) invoice.TxnDate = txnDate;
+  return invoice;
 }
 
 interface PaymentRow {
@@ -572,6 +595,86 @@ async function findExistingQboInvoice(
 }
 
 /**
+ * Push a single invoice to QBO (exactly-once via qbo_invoice_id). Used by the
+ * nightly sweep and by DLQ replay — same code path so replay surfaces the real
+ * QBO error instead of a stub "not yet implemented" message.
+ */
+export async function pushInvoiceById(
+  env: Env,
+  invoiceId: string,
+): Promise<{ qboId: string; alreadySynced: boolean }> {
+  if (!(await isQboInvoiceSyncEnabled(env))) {
+    console.log("[qbo] QBO invoice sync disabled — pending go-live; skip pushInvoiceById");
+    throw new Error("QBO invoice sync disabled — pending go-live");
+  }
+
+  const conn = await loadConnection(env);
+  if (!conn || (conn.status !== "connected" && conn.status !== "error")) {
+    throw new QboNotConnectedError();
+  }
+
+  const { qbo_customer_id: defaultCustomerId } = await getQboDefaultCustomer(env);
+  const inv = await env.DB.prepare(
+    `SELECT i.id, i.job_id, i.invoice_number, i.total, i.qbo_invoice_id,
+            i.sent_date, i.issued_date, i.created_at,
+            c.qbo_customer_id, j.data_source AS job_data_source
+       FROM invoices i
+       LEFT JOIN jobs j ON j.id = i.job_id
+       LEFT JOIN clients c ON c.id = COALESCE(i.client_id, j.client_id)
+      WHERE i.id = ?`,
+  )
+    .bind(invoiceId)
+    .first<InvoiceRow>();
+
+  if (!inv) throw new Error(`invoice not found: ${invoiceId}`);
+  if (
+    isJobberExcludedInvoice({
+      invoiceId: inv.id,
+      jobDataSource: inv.job_data_source,
+    })
+  ) {
+    console.log(
+      `[qbo] permanently excluding Jobber-imported invoice ${invoiceId} from QBO push`,
+    );
+    throw new Error("QBO invoice push permanently excluded: Jobber-imported record");
+  }
+  if (inv.qbo_invoice_id) {
+    return { qboId: inv.qbo_invoice_id, alreadySynced: true };
+  }
+
+  const customerRef = resolveQboCustomerId(inv.qbo_customer_id, defaultCustomerId);
+  if (!customerRef) {
+    throw new Error(
+      `invoice ${invoiceId}: client not mapped to a QBO Customer (and no default customer set)`,
+    );
+  }
+
+  const existingId = await findExistingQboInvoice(env, conn, inv.id);
+  if (existingId) {
+    await env.DB.prepare(
+      `UPDATE invoices SET qbo_invoice_id = ?, qbo_synced_at = ? WHERE id = ? AND qbo_invoice_id IS NULL`,
+    )
+      .bind(existingId, new Date().toISOString(), inv.id)
+      .run();
+    return { qboId: existingId, alreadySynced: true };
+  }
+
+  const body = await buildQboInvoice(env, { ...inv, qbo_customer_id: customerRef });
+  const created = (await qboFetch(env, conn, `/invoice?minorversion=70`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })) as { Invoice?: { Id?: string } };
+  const qboId = created.Invoice?.Id;
+  if (!qboId) throw new Error("QBO returned no Invoice.Id");
+  await env.DB.prepare(
+    `UPDATE invoices SET qbo_invoice_id = ?, qbo_synced_at = ? WHERE id = ? AND qbo_invoice_id IS NULL`,
+  )
+    .bind(qboId, new Date().toISOString(), inv.id)
+    .run();
+  return { qboId, alreadySynced: false };
+}
+
+/**
  * Push a single payment to QBO (exactly-once via qbo_payment_id). Used by the
  * nightly sweep and by DLQ replay — same code path so replay surfaces the real
  * QBO error instead of a stub "not yet implemented" message.
@@ -683,82 +786,51 @@ async function findExistingQboPurchase(
 
 async function sweepInvoices(
   env: Env,
-  conn: QboConnection,
+  _conn: QboConnection,
   result: SweepResult,
-  defaultCustomerId: string | null,
+  _defaultCustomerId: string | null,
 ): Promise<void> {
   if (!(await isQboInvoiceSyncEnabled(env))) {
     console.log("[qbo] QBO invoice sync disabled — pending go-live; skip invoice sweep");
     return;
   }
 
-  // Invoices link to a client through their job (jobs.client_id); the direct
-  // invoices.client_id column is only sparsely populated, so resolve via the job
-  // and fall back to a direct client_id when one is present.
   // Permanent Jobber exclusion is structural (not the go-live gate): never pick
   // jobs.data_source='jobber_import' or Jobber GraphQL invoice ids (orphans).
+  // Connection/customer resolution lives in pushInvoiceById (same as payments).
   const { results } = await env.DB.prepare(
-    `SELECT i.id, i.job_id, i.invoice_number, i.total, c.qbo_customer_id,
-            j.data_source AS job_data_source
+    `SELECT i.id
        FROM invoices i
        LEFT JOIN jobs j ON j.id = i.job_id
-       LEFT JOIN clients c ON c.id = COALESCE(i.client_id, j.client_id)
       WHERE i.qbo_invoice_id IS NULL
         AND COALESCE(j.data_source, '') != 'jobber_import'
         AND i.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
       LIMIT 200`,
-  ).all<InvoiceRow & { job_data_source?: string | null }>();
+  ).all<{ id: string }>();
 
   for (const inv of results ?? []) {
-    if (
-      isJobberExcludedInvoice({
-        invoiceId: inv.id,
-        jobDataSource: inv.job_data_source,
-      })
-    ) {
-      result.invoices.skipped++;
-      continue;
-    }
-    const customerRef = resolveQboCustomerId(inv.qbo_customer_id, defaultCustomerId);
-    if (!customerRef) {
-      result.invoices.skipped++;
-      result.needs_mapping.push(
-        `invoice ${inv.id}: client not mapped to a QBO Customer (and no default customer set)`,
-      );
-      continue;
-    }
     try {
-      const existingId = await findExistingQboInvoice(env, conn, inv.id);
-      if (existingId) {
-        await env.DB.prepare(
-          `UPDATE invoices SET qbo_invoice_id = ?, qbo_synced_at = ? WHERE id = ? AND qbo_invoice_id IS NULL`,
-        )
-          .bind(existingId, new Date().toISOString(), inv.id)
-          .run();
-        result.invoices.pushed++;
+      const r = await pushInvoiceById(env, inv.id);
+      if (r.qboId) result.invoices.pushed++;
+      else result.invoices.skipped++;
+    } catch (err) {
+      const msg = (err as Error).message ?? "";
+      if (msg.includes("permanently excluded: Jobber-imported")) {
+        result.invoices.skipped++;
         continue;
       }
-      const body = await buildQboInvoice(env, { ...inv, qbo_customer_id: customerRef });
-      const created = (await qboFetch(env, conn, `/invoice?minorversion=70`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      })) as { Invoice?: { Id?: string } };
-      const qboId = created.Invoice?.Id;
-      if (!qboId) throw new Error("QBO returned no Invoice.Id");
-      await env.DB.prepare(
-        `UPDATE invoices SET qbo_invoice_id = ?, qbo_synced_at = ? WHERE id = ? AND qbo_invoice_id IS NULL`,
-      )
-        .bind(qboId, new Date().toISOString(), inv.id)
-        .run();
-      result.invoices.pushed++;
-    } catch (err) {
+      if (msg.includes("client not mapped to a QBO Customer")) {
+        result.invoices.skipped++;
+        result.needs_mapping.push(msg);
+        continue;
+      }
       result.invoices.failed++;
       await recordDeadLetter(env, {
         jobName: QBO_DLQ_JOB,
         entityType: "invoice",
         entityId: inv.id,
         payload: { kind: "invoice", id: inv.id },
-        errorMessage: (err as Error).message,
+        errorMessage: msg,
       });
     }
   }
@@ -1033,6 +1105,165 @@ export async function voidErroneousQboPayments(
 
   out.duration_ms = Date.now() - t0;
   return out;
+}
+
+export interface ResolveErroneousQboInvoiceResult {
+  invoice_id: string;
+  qbo_invoice_id: string | null;
+  qbo_found: boolean;
+  voided: boolean;
+  d1_reset: boolean;
+  qbo_snapshot: Record<string, unknown> | null;
+  error?: string;
+}
+
+/**
+ * Deliverable 1: confirm a stamped D1 invoice against live QBO, void if present,
+ * always clear local qbo_invoice_id / qbo_synced_at. Voids only — never deletes.
+ */
+export async function resolveErroneousQboInvoice(
+  env: Env,
+  invoiceId: string,
+): Promise<ResolveErroneousQboInvoiceResult> {
+  const row = await env.DB.prepare(
+    `SELECT id, total, qbo_invoice_id, qbo_synced_at FROM invoices WHERE id = ?`,
+  )
+    .bind(invoiceId)
+    .first<{
+      id: string;
+      total: number | null;
+      qbo_invoice_id: string | null;
+      qbo_synced_at: string | null;
+    }>();
+
+  if (!row) {
+    return {
+      invoice_id: invoiceId,
+      qbo_invoice_id: null,
+      qbo_found: false,
+      voided: false,
+      d1_reset: false,
+      qbo_snapshot: null,
+      error: "invoice not found in D1",
+    };
+  }
+
+  const qboId = row.qbo_invoice_id;
+  if (!qboId) {
+    await env.DB.prepare(
+      `INSERT INTO sync_log (job_name, started_at, finished_at, status, rows_affected, error_message, duration_ms, details)
+       VALUES (?, datetime('now'), datetime('now'), 'success', 0, NULL, NULL, ?)`,
+    )
+      .bind(
+        "qbo_invoice_resolve_148",
+        JSON.stringify({
+          note: "No qbo_invoice_id on D1 row — nothing to void or reset",
+          invoice_id: invoiceId,
+        }),
+      )
+      .run();
+    return {
+      invoice_id: invoiceId,
+      qbo_invoice_id: null,
+      qbo_found: false,
+      voided: false,
+      d1_reset: false,
+      qbo_snapshot: null,
+    };
+  }
+
+  const conn = await loadConnection(env);
+  if (!conn || (conn.status !== "connected" && conn.status !== "error")) {
+    throw new QboNotConnectedError();
+  }
+
+  let qboFound = false;
+  let voided = false;
+  let snapshot: Record<string, unknown> | null = null;
+  let syncToken: string | null = null;
+
+  try {
+    const read = (await qboFetch(env, conn, `/invoice/${qboId}?minorversion=70`)) as {
+      Invoice?: Record<string, unknown> & { Id?: string; SyncToken?: string; TotalAmt?: number; Balance?: number };
+    };
+    if (read.Invoice?.Id) {
+      qboFound = true;
+      snapshot = {
+        Id: read.Invoice.Id,
+        DocNumber: read.Invoice.DocNumber ?? null,
+        TotalAmt: read.Invoice.TotalAmt ?? null,
+        Balance: read.Invoice.Balance ?? null,
+        TxnDate: read.Invoice.TxnDate ?? null,
+        PrivateNote: read.Invoice.PrivateNote ?? null,
+        CustomerRef: read.Invoice.CustomerRef ?? null,
+      };
+      syncToken = read.Invoice.SyncToken != null ? String(read.Invoice.SyncToken) : null;
+    }
+  } catch (err) {
+    const msg = (err as Error).message ?? "";
+    if (!/\(404\)/.test(msg) && !/Object Not Found/i.test(msg)) {
+      throw err;
+    }
+    // 404 → stale D1 stamp; reset only.
+  }
+
+  if (qboFound) {
+    if (syncToken == null || syncToken === "") {
+      throw new Error(`QBO Invoice ${qboId}: missing SyncToken`);
+    }
+    try {
+      await qboFetch(env, conn, `/invoice?operation=void&minorversion=70`, {
+        method: "POST",
+        body: JSON.stringify({ Id: qboId, SyncToken: syncToken }),
+      });
+    } catch {
+      const again = (await qboFetch(env, conn, `/invoice/${qboId}?minorversion=70`)) as {
+        Invoice?: { SyncToken?: string };
+      };
+      const token2 = again.Invoice?.SyncToken != null ? String(again.Invoice.SyncToken) : syncToken;
+      await qboFetch(env, conn, `/invoice?operation=update&include=void&minorversion=70`, {
+        method: "POST",
+        body: JSON.stringify({ Id: qboId, SyncToken: token2, sparse: true }),
+      });
+    }
+    voided = true;
+  }
+
+  await env.DB.prepare(
+    `UPDATE invoices SET qbo_invoice_id = NULL, qbo_synced_at = NULL WHERE id = ?`,
+  )
+    .bind(invoiceId)
+    .run();
+
+  await env.DB.prepare(
+    `INSERT INTO sync_log (job_name, started_at, finished_at, status, rows_affected, error_message, duration_ms, details)
+     VALUES (?, datetime('now'), datetime('now'), 'success', 1, NULL, NULL, ?)`,
+  )
+    .bind(
+      "qbo_invoice_resolve_148",
+      JSON.stringify({
+        note: qboFound
+          ? "Voided live QBO invoice and cleared D1 sync stamp"
+          : "QBO invoice not found — cleared stale D1 sync stamp only",
+        invoice_id: invoiceId,
+        qbo_invoice_id: qboId,
+        total: row.total,
+        prior_qbo_synced_at: row.qbo_synced_at,
+        qbo_found: qboFound,
+        voided,
+        qbo_snapshot: snapshot,
+      }),
+    )
+    .run();
+
+  return {
+    invoice_id: invoiceId,
+    qbo_invoice_id: qboId,
+    qbo_found: qboFound,
+    voided,
+    d1_reset: true,
+    qbo_snapshot: snapshot,
+  };
 }
 
 // ─── Status ─────────────────────────────────────────────────────────────────

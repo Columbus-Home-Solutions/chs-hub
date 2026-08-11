@@ -4,6 +4,7 @@ import {
   buildQboPurchase,
   isJobberExcludedInvoice,
   isJobberExcludedPayment,
+  resolveInvoiceTxnDate,
   resolvePaymentAccountId,
   resolvePaymentTxnDate,
   resolveQboCustomerId,
@@ -111,6 +112,35 @@ describe("resolvePaymentTxnDate", () => {
     expect(resolvePaymentTxnDate({ received_date: null, collected_at: "2024-08-06T12:00:00Z" })).toBe(
       "2024-08-06",
     );
+  });
+});
+
+describe("resolveInvoiceTxnDate", () => {
+  it("prefers sent_date over issued_date and created_at", () => {
+    expect(
+      resolveInvoiceTxnDate({
+        sent_date: "2025-03-15",
+        issued_date: "2025-03-01",
+        created_at: "2024-01-01",
+      }),
+    ).toBe("2025-03-15");
+  });
+
+  it("falls back to issued_date then created_at", () => {
+    expect(
+      resolveInvoiceTxnDate({
+        sent_date: null,
+        issued_date: "2025-04-02T12:00:00Z",
+        created_at: "2024-01-01",
+      }),
+    ).toBe("2025-04-02");
+    expect(
+      resolveInvoiceTxnDate({
+        sent_date: null,
+        issued_date: null,
+        created_at: "2024-08-06T12:00:00Z",
+      }),
+    ).toBe("2024-08-06");
   });
 });
 

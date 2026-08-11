@@ -266,12 +266,35 @@ async function replayOne(
       return;
     }
 
+    case "invoice": {
+      const invoiceId = row.entity_id;
+      if (!invoiceId) throw new Error("invoice DLQ row missing entity_id");
+      const { isQboInvoiceSyncEnabled, pushInvoiceById } = await import("../qbo-sync.js");
+      if (!(await isQboInvoiceSyncEnabled(env))) {
+        // Leave open while gate is off? Payments clear deferral. Invoices: clear
+        // so hourly replay stops burning attempts; sweep will push after enable
+        // for eligible (non-Jobber) rows only.
+        console.log("[dlq] QBO invoice sync disabled — pending go-live; clearing invoice DLQ deferral");
+        return;
+      }
+      try {
+        await pushInvoiceById(env, invoiceId);
+      } catch (err) {
+        const msg = (err as Error).message ?? "";
+        if (msg.includes("permanently excluded: Jobber-imported")) {
+          console.log(
+            `[dlq] QBO invoice permanently excluded (Jobber import); clearing DLQ for ${invoiceId}`,
+          );
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
+
     // For other types, defer to the next full sync. Recording these still
     // gives us visibility (and an alert if they keep failing); the sync
     // job will retry naturally on its own pass.
-    // NOTE: invoice/expense under qbo_sync have the same stub gap — flag only;
-    // scoped fix for payment (see CHS-Task-QBO-Payment-DLQ-Replay-Fix).
-    case "invoice":
     case "quote":
     case "expense":
     case "client": {

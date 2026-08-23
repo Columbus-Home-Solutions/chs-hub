@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { formatCurrency, formatDate } from "../../lib/format";
+import { formatCurrency, formatDate, formatPhone, formatPropertySlashLine } from "../../lib/format";
 import { ClientSelectionsPanel } from "../../components/ClientSelectionCards";
 import logoUrl from "../../assets/chs-logo.png";
 
@@ -262,66 +262,80 @@ export function QuotePage() {
 }
 
 function Header({ quote }: { quote: PublicQuote }) {
-  const label = quote.expired ? "Expired" : statusLabel[quote.status] ?? quote.status;
   return (
     <header class="quote-header">
       <div class="quote-header__brand">
         <img class="quote-header__logo" src={logoUrl} alt={quote.company_name} />
         <div>
           <div class="quote-header__company">{quote.company_name}</div>
-          <div class="quote-header__est">
-            EST-{String(quote.estimate_number ?? 0).padStart(3, "0")}
-            {quote.sent_date ? ` · Sent ${formatDate(quote.sent_date)}` : ""}
-          </div>
         </div>
       </div>
-      <span class={`quote-status quote-status--${quote.expired ? "expired" : quote.status}`}>{label}</span>
     </header>
   );
 }
 
 function ScopeCard({ quote }: { quote: PublicQuote }) {
-  const address = [quote.property_address, quote.property_city, quote.property_state, quote.property_zip]
-    .filter(Boolean)
-    .join(", ");
+  const addressLine = formatPropertySlashLine({
+    address: quote.property_address,
+    city: quote.property_city,
+    state: quote.property_state,
+    zip: quote.property_zip,
+  });
+  const phone = quote.client_phone ? formatPhone(quote.client_phone) : "";
+  const statusKey = quote.expired ? "expired" : quote.status;
+  const statusText = quote.expired ? "Expired" : statusLabel[quote.status] ?? quote.status;
+  const depositDue = quote.deposit_amount ?? 0;
+
   return (
     <div class="quote-card quote-main-col">
       <div class="preview theme-light" style={{ boxShadow: "none", border: "none", padding: 0 }}>
-        <div class="preview__meta">
-          <div>
-            <div class="preview__meta-label">Prepared for</div>
-            <div>{quote.client_name ?? "—"}</div>
-            {address && <div class="preview__meta-sub">{address}</div>}
-            {quote.client_phone && <div class="preview__meta-sub">{quote.client_phone}</div>}
+        <div class="preview__header-grid" style={{ marginTop: 0 }}>
+          <div class="preview__header-main">
+            <div class="preview__est-heading">Estimate #{quote.estimate_number ?? "—"}</div>
+            <div class="preview__client-name">{quote.client_name ?? "—"}</div>
+            {addressLine ? <div class="preview__meta-sub">{addressLine}</div> : null}
+            {phone && phone !== "—" ? <div class="preview__meta-sub">{phone}</div> : null}
+            {depositDue > 0 ? (
+              <div class="preview__deposit-note">
+                An outstanding deposit of {formatCurrency(depositDue)} will be required to begin.
+              </div>
+            ) : null}
           </div>
-          {(quote.deposit_amount ?? 0) > 0 && (
-            <div class="preview__deposit">
-              <div class="preview__meta-label">Deposit to begin</div>
-              <div class="preview__deposit-amount">{formatCurrency(quote.deposit_amount)}</div>
-            </div>
-          )}
+          <div class="preview__header-aside">
+            <span class={`quote-status quote-status--${statusKey}`}>{statusText}</span>
+            {quote.sent_date ? (
+              <div>
+                <div class="preview__sent-on-label">Sent on</div>
+                <div class="preview__sent-on-date">{formatDate(quote.sent_date)}</div>
+              </div>
+            ) : null}
+          </div>
         </div>
-
-        {quote.title && <div class="preview__title">{quote.title}</div>}
 
         <div class="preview__lines">
           {quote.line_items.length === 0 ? (
             <div class="preview__empty">No line items.</div>
           ) : (
-            quote.line_items.map((li) => (
-              <div class="preview__line" key={li.id}>
-                <div class="preview__line-main">
-                  <span class="preview__line-name">{li.product_service}</span>
-                  <span class="preview__line-total">{formatCurrency(li.total)}</span>
-                </div>
-                {li.description && <div class="preview__line-desc">{li.description}</div>}
-                <div class="preview__line-qty">
-                  {li.quantity ?? 1}
-                  {li.unit ? ` ${li.unit}` : ""} × {formatCurrency(li.unit_price)}
-                  {li.includes_note ? ` · ${li.includes_note}` : ""}
-                </div>
+            <>
+              <div class="preview__lines-head" aria-hidden="true">
+                <span>Product / Service</span>
+                <span class="preview__lines-head-qty">Qty</span>
+                <span class="preview__lines-head-total">Total</span>
               </div>
-            ))
+              {quote.line_items.map((li) => {
+                const detail = [li.description, li.includes_note].filter(Boolean).join("\n");
+                return (
+                  <div class="preview__line" key={li.id}>
+                    <div>
+                      <div class="preview__line-name">{li.product_service}</div>
+                      {detail ? <div class="preview__line-desc">{detail}</div> : null}
+                    </div>
+                    <div class="preview__line-qty">{li.quantity ?? 1}</div>
+                    <div class="preview__line-total">{formatCurrency(li.total)}</div>
+                  </div>
+                );
+              })}
+            </>
           )}
         </div>
 

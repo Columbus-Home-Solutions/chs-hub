@@ -95,7 +95,12 @@ export const SIDEBAR_NAV: NavSection[] = [
       {
         label: "Estimates",
         href: to("/estimates"),
-        activeTest: (p) => p === to("/estimates"),
+        activeTest: (p) => p === to("/estimates") || p.startsWith(to("/estimates/")),
+      },
+      {
+        label: "Pending Imports",
+        href: to("/pending-imports"),
+        activeTest: (p) => p === to("/pending-imports"),
       },
       {
         label: "Google Local Services",
@@ -233,7 +238,13 @@ export const SIDEBAR_NAV: NavSection[] = [
         href: to("/subcontractors"),
         activeTest: (p) =>
           p === to("/subcontractors") ||
-          p.startsWith(to("/subcontractors") + "/"),
+          (p.startsWith(to("/subcontractors") + "/") && !p.includes("/labor")),
+      },
+      {
+        label: "Labor",
+        href: to("/labor"),
+        activeTest: (p) =>
+          p === to("/labor") || p.startsWith(to("/labor") + "/"),
       },
     ],
   },

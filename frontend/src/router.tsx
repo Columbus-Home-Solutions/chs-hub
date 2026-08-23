@@ -4,7 +4,7 @@ import { BASE } from "./lib/nav";
 import { Dashboard } from "./views/Dashboard";
 import { ClientList } from "./views/clients/ClientList";
 import { ClientDetail } from "./views/clients/ClientDetail";
-import { SubcontractorList } from "./views/subcontractors/SubcontractorList";
+import { SubcontractorList, LaborDirectory } from "./views/subcontractors/SubcontractorList";
 import { SubcontractorDetail } from "./views/subcontractors/SubcontractorDetail";
 import { Settings } from "./views/settings/Settings";
 import { Integrations } from "./views/settings/Integrations";
@@ -17,6 +17,7 @@ import { EstimateRequestDetail } from "./views/estimating/EstimateRequestDetail"
 import { EstimateBuilder } from "./views/estimating/EstimateBuilder";
 import { EstimateTemplates } from "./views/estimating/EstimateTemplates";
 import { EstimateList } from "./views/estimating/EstimateList";
+import { PendingQuoteImports } from "./views/estimating/PendingQuoteImports";
 import { JobPipeline } from "./views/jobs/JobPipeline";
 import { JobDetail } from "./views/jobs/JobDetail";
 import { CompletionPackageReview } from "./views/jobs/CompletionPackageReview";
@@ -44,6 +45,8 @@ export function AppRouter() {
       <ClientList path={`${BASE}/clients`} />
       <ClientDetail path={`${BASE}/clients/:id`} />
       <SubcontractorList path={`${BASE}/subcontractors`} />
+      <LaborDirectory path={`${BASE}/labor`} />
+      <SubcontractorDetail path={`${BASE}/labor/:id`} />
       <SubcontractorDetail path={`${BASE}/subcontractors/:id`} />
       <Settings path={`${BASE}/settings`} />
       <Integrations path={`${BASE}/settings/integrations`} />
@@ -51,6 +54,7 @@ export function AppRouter() {
       <NotificationSettings path={`${BASE}/settings/notifications`} />
       <NotificationLogs path={`${BASE}/settings/notifications/logs`} />
       <EstimateList path={`${BASE}/estimates`} />
+      <PendingQuoteImports path={`${BASE}/pending-imports`} />
       <EstimateBuilder path={`${BASE}/estimates/:estimateId`} />
       <EstimateRequestPipeline path={`${BASE}/estimating`} />
       <EstimateRequestForm path={`${BASE}/estimating/new`} />

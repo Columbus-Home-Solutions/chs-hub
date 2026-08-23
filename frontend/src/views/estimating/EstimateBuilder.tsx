@@ -10,7 +10,13 @@ import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
-import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
+import {
+  formatCurrency,
+  formatDate,
+  formatPhone,
+  formatPropertySlashLine,
+  formatStatus,
+} from "../../lib/format";
 import {
   buildDefaultMilestones,
   defaultDepositAmount,
@@ -1319,10 +1325,30 @@ function OptionsCard({
 
 // ─── Client-facing preview (sub-items NEVER appear here) ───────────────────────
 
+const CLIENT_PREVIEW_STATUS: Record<string, string> = {
+  draft: "Draft",
+  sent: "Awaiting Response",
+  viewed: "Viewed",
+  signed: "Agreement Signed",
+  approved: "Approved",
+  expired: "Expired",
+  revised: "Revised",
+};
+
 function ClientPreview({ estimate, reviews }: { estimate: Estimate; reviews: SavedReview[] }) {
   const e = estimate;
   const depositDue = effectiveDeposit(e);
   const shownReviews = useMemo(() => reviews.filter((r) => r.is_active).slice(0, 3), [reviews]);
+  const estLabel = `Estimate #${e.estimate_number ?? "—"}`;
+  const addressLine = formatPropertySlashLine({
+    address: e.property_address,
+    city: e.property_city,
+    state: e.property_state,
+    zip: e.property_zip,
+  });
+  const phone = e.client_phone ? formatPhone(e.client_phone) : "";
+  const statusKey = e.status || "draft";
+  const statusText = CLIENT_PREVIEW_STATUS[statusKey] ?? formatStatus(statusKey);
 
   return (
     <Card title="Client Preview">
@@ -1331,50 +1357,59 @@ function ClientPreview({ estimate, reviews }: { estimate: Estimate; reviews: Sav
           <div class="preview__logo">CHS</div>
           <div>
             <div class="preview__company">Columbus Home Solutions</div>
-            <div class="preview__est-num">
-              EST-{String(e.estimate_number ?? 0).padStart(3, "0")}
-              {e.version > 1 ? ` · Revision ${e.version}` : ""}
-            </div>
+            {e.version > 1 ? (
+              <div class="preview__est-num">Revision {e.version}</div>
+            ) : null}
           </div>
-          <span class="preview__status">{formatStatus(e.status)}</span>
         </div>
 
-        <div class="preview__meta">
-          <div>
-            <div class="preview__meta-label">Prepared for</div>
-            <div>{e.client_name ?? "—"}</div>
-            <div class="preview__meta-sub">
-              {[e.property_address, e.property_city, e.property_state, e.property_zip].filter(Boolean).join(", ")}
-            </div>
+        <div class="preview__header-grid">
+          <div class="preview__header-main">
+            <div class="preview__est-heading">{estLabel}</div>
+            <div class="preview__client-name">{e.client_name ?? "—"}</div>
+            {addressLine ? <div class="preview__meta-sub">{addressLine}</div> : null}
+            {phone && phone !== "—" ? <div class="preview__meta-sub">{phone}</div> : null}
+            {depositDue > 0 ? (
+              <div class="preview__deposit-note">
+                An outstanding deposit of {formatCurrency(depositDue)} will be required to begin.
+              </div>
+            ) : null}
           </div>
-          {depositDue > 0 && (
-            <div class="preview__deposit">
-              <div class="preview__meta-label">Deposit to begin</div>
-              <div class="preview__deposit-amount">{formatCurrency(depositDue)}</div>
-            </div>
-          )}
+          <div class="preview__header-aside">
+            <span class={`quote-status quote-status--${statusKey}`}>{statusText}</span>
+            {e.sent_at ? (
+              <div>
+                <div class="preview__sent-on-label">Sent on</div>
+                <div class="preview__sent-on-date">{formatDate(e.sent_at)}</div>
+              </div>
+            ) : null}
+          </div>
         </div>
-
-        {e.title && <div class="preview__title">{e.title}</div>}
 
         <div class="preview__lines">
           {e.line_items.length === 0 ? (
             <div class="preview__empty">Line items will appear here as you build the estimate.</div>
           ) : (
-            e.line_items.map((li) => (
-              <div class="preview__line" key={li.id}>
-                <div class="preview__line-main">
-                  <span class="preview__line-name">{li.product_service}</span>
-                  <span class="preview__line-total">{formatCurrency(li.total)}</span>
-                </div>
-                {li.description && <div class="preview__line-desc">{li.description}</div>}
-                <div class="preview__line-qty">
-                  {li.quantity ?? 1}
-                  {li.unit ? ` ${li.unit}` : ""} × {formatCurrency(li.unit_price)}
-                  {li.includes_note ? ` · ${li.includes_note}` : ""}
-                </div>
+            <>
+              <div class="preview__lines-head" aria-hidden="true">
+                <span>Product / Service</span>
+                <span class="preview__lines-head-qty">Qty</span>
+                <span class="preview__lines-head-total">Total</span>
               </div>
-            ))
+              {e.line_items.map((li) => {
+                const detail = [li.description, li.includes_note].filter(Boolean).join("\n");
+                return (
+                  <div class="preview__line" key={li.id}>
+                    <div>
+                      <div class="preview__line-name">{li.product_service}</div>
+                      {detail ? <div class="preview__line-desc">{detail}</div> : null}
+                    </div>
+                    <div class="preview__line-qty">{li.quantity ?? 1}</div>
+                    <div class="preview__line-total">{formatCurrency(li.total)}</div>
+                  </div>
+                );
+              })}
+            </>
           )}
         </div>
 

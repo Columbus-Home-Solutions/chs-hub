@@ -119,6 +119,7 @@ interface JobListRow {
   client_name: string | null;
   billing_model: string | null;
   job_type: string | null;
+  job_type_detail: string | null;
   lead_source: string | null;
   property_address: string | null;
   property_city: string | null;
@@ -146,7 +147,7 @@ const NATIVE_JOB_WHERE = nativeJobSourceWhereAliased("j");
 
 const JOB_SELECT = `
   SELECT j.id, j.job_number, j.title, j.status, j.client_id, c.name AS client_name,
-         j.billing_model, j.job_type, j.lead_source, j.source,
+         j.billing_model, j.job_type, j.job_type_detail, j.lead_source, j.source,
          j.property_address, j.property_city, j.property_state, j.property_zip,
          j.contract_total, j.deposit_amount, j.deposit_paid,
          j.start_date, j.target_end_date, j.actual_end_date, j.warranty_expiration,
@@ -182,6 +183,7 @@ function shapeJobCard(r: JobListRow) {
     client_name: r.client_name,
     billing_model: r.billing_model,
     job_type: r.job_type,
+    job_type_detail: r.job_type_detail ?? null,
     lead_source: r.lead_source,
     property_address: r.property_address,
     property_city: r.property_city,

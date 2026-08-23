@@ -18,6 +18,7 @@ import { useMessageCenter } from "../../store/messageCenter";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { loadStoredView, storeView, truncate, useClientSort } from "../../lib/list-view";
+import { jobTypeDisplayLabel } from "@chs/shared/job-type-label";
 import { formatDate, formatStatus } from "../../lib/format";
 import {
   type EstimateRequest,
@@ -118,7 +119,7 @@ function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete,
       )}
 
       <div class="er-card__meta">
-        <Badge tone="neutral">{formatStatus(request.job_type)}</Badge>
+        <Badge tone="neutral">{jobTypeDisplayLabel(request.job_type, request.job_type_detail)}</Badge>
         {request.lead_source && (
           <Badge tone="neutral">{formatStatus(request.lead_source)}</Badge>
         )}
@@ -310,7 +311,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                     <span class="badge badge--sms" style={{ marginLeft: "0.4rem" }}>💬 SMS</span>
                   )}
                 </td>
-                <td>{truncate(`${formatStatus(r.job_type)} — ${r.property_city}`)}</td>
+                <td>{truncate(`${jobTypeDisplayLabel(r.job_type, r.job_type_detail)} — ${r.property_city}`)}</td>
                 <td><Badge status={r.status}>{formatStatus(r.status)}</Badge></td>
                 <td><span class="text--muted">{formatSource(r.source)}</span></td>
                 <td>{r.created_at ? formatDate(r.created_at) : "—"}</td>

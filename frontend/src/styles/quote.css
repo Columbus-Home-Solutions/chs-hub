@@ -61,17 +61,21 @@
   font-weight: 600;
   padding: 6px 12px;
   border-radius: 999px;
-  background: #e8eefc;
-  color: #2455d6;
+  background: #eef1f5;
+  color: #50607a;
   white-space: nowrap;
+}
+.quote-status--draft {
+  background: #eef1f5;
+  color: #50607a;
 }
 .quote-status--viewed {
   background: #e8eefc;
   color: #2455d6;
 }
 .quote-status--sent {
-  background: #eef1f5;
-  color: #50607a;
+  background: #fef3c7;
+  color: #92400e;
 }
 .quote-status--approved {
   background: #e6f6ec;
@@ -80,6 +84,10 @@
 .quote-status--expired {
   background: #fdeaea;
   color: #c0392b;
+}
+.quote-status--revised {
+  background: #f3e8ff;
+  color: #6b21a8;
 }
 
 .quote-body {

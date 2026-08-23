@@ -43,6 +43,7 @@
  */
 
 import type { Env } from "../env.js";
+import { jobTypeTitleFragment } from "../../shared/job-type-label.js";
 
 /**
  * Attach visit photos (estimate_request_id) onto the new job so the job gallery
@@ -107,6 +108,7 @@ interface RequestJoin {
   lat: number | null;
   lon: number | null;
   job_type: string;
+  job_type_detail: string | null;
   lead_source: string;
   estimate_id: string | null;
   converted_job_id: string | null;
@@ -152,7 +154,7 @@ export async function convertQuoteToJob(
   const row = await env.DB.prepare(
     `SELECT er.id, er.status, er.client_id, er.property_id,
             er.property_address, er.property_city,
-            er.property_state, er.property_zip, er.lat, er.lon, er.job_type, er.lead_source,
+            er.property_state, er.property_zip, er.lat, er.lon, er.job_type, er.job_type_detail, er.lead_source,
             er.estimate_id, er.converted_job_id,
             e.id AS e_id, e.total AS e_total, e.title AS e_title,
             e.billing_model AS e_billing, e.status AS e_status, e.sent_at AS e_sent_at,
@@ -297,7 +299,10 @@ export async function convertQuoteToJob(
   const portalToken = crypto.randomUUID().replace(/-/g, "");
   const billingModel = row.e_billing;
 
-  const title = row.e_title || `${titleCase(row.job_type)} — ${row.property_address}`;
+  const typeFrag = jobTypeTitleFragment(row.job_type, row.job_type_detail);
+  const title =
+    row.e_title ||
+    `${row.job_type === "other" && row.job_type_detail?.trim() ? typeFrag : titleCase(row.job_type)} — ${row.property_address}`;
 
   // job_number hardening (Sprint 6 deviation 2): allocate INSIDE the INSERT via
   // COALESCE(MAX(job_number),0)+1, backed by the UNIQUE index idx_jobs_job_number.
@@ -313,10 +318,10 @@ export async function convertQuoteToJob(
        created_at, synced_at, updated_at, created_by,
        billing_model, property_id, property_address, property_city, property_state, property_zip,
        lat, lon,
-       job_type, lead_source, estimate_id, contract_total, deposit_amount, deposit_paid,
+       job_type, job_type_detail, lead_source, estimate_id, contract_total, deposit_amount, deposit_paid,
        portal_token, portal_type, conversion_complete, payer_id
      )
-     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?`,
+     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?`,
   ).bind(
     jobId,
     title,
@@ -335,6 +340,7 @@ export async function convertQuoteToJob(
     row.lat,
     row.lon,
     row.job_type,
+    row.job_type_detail,
     row.lead_source,
     row.e_id,
     total,

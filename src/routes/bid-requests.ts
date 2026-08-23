@@ -588,6 +588,7 @@ export async function handleAwardBid(
     br,
     winningSubmission.price,
     vendorName,
+    winningSubmission.sub_id,
   );
   if (linkedSubItemId && !br.estimate_sub_item_id) {
     await env.DB.prepare(

@@ -133,6 +133,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
   );
 
   const [jobType, setJobType] = useState("");
+  const [jobTypeDetail, setJobTypeDetail] = useState("");
   const [leadSource, setLeadSource] = useState(fromClientProfile ? "repeat_client" : "");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -194,6 +195,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
     setLon(r.lon ?? null);
     if (r.property_id) setSelectedPropertyId(r.property_id);
     setJobType(r.job_type ?? "");
+    setJobTypeDetail(r.job_type_detail ?? "");
     setLeadSource(r.lead_source ?? "");
     setNotes(r.visit_notes ?? "");
     setPrefillReady(true);
@@ -288,6 +290,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
     if (!city.trim()) e.property_city = "Required";
     if (!zip.trim()) e.property_zip = "Required";
     if (!jobType) e.job_type = "Required";
+    if (jobType === "other" && !jobTypeDetail.trim()) e.job_type_detail = "Required";
     if (!leadSource) e.lead_source = "Required";
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -305,6 +308,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
           property_state: state || "Arkansas",
           property_zip: zip,
           job_type: jobType,
+          job_type_detail: jobType === "other" ? jobTypeDetail.trim() : null,
           lead_source: leadSource,
           visit_notes: notes,
         });
@@ -349,6 +353,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
         lat,
         lon,
         job_type: jobType,
+        job_type_detail: jobType === "other" ? jobTypeDetail.trim() : null,
         lead_source: leadSource,
         notes,
       });
@@ -647,7 +652,10 @@ export function EstimateRequestForm(_props: RoutableProps) {
                 value={jobType}
                 placeholder="Select…"
                 options={ESTIMATE_JOB_TYPES.map((t) => ({ value: t, label: formatStatus(t) }))}
-                onChange={setJobType}
+                onChange={(v) => {
+                  setJobType(v);
+                  if (v !== "other") setJobTypeDetail("");
+                }}
               />
             </FormField>
             <FormField label="Lead source" required error={errors.lead_source}>
@@ -659,6 +667,18 @@ export function EstimateRequestForm(_props: RoutableProps) {
               />
             </FormField>
           </div>
+          {jobType === "other" && (
+            <FormField
+              label="What kind of job is this?"
+              required
+              error={errors.job_type_detail}
+              inputProps={{
+                value: jobTypeDetail,
+                placeholder: "Pergola repair",
+                onInput: (e) => setJobTypeDetail((e.target as HTMLInputElement).value),
+              }}
+            />
+          )}
           <FormField label="Notes">
             <textarea
               class="form-textarea"

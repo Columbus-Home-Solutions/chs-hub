@@ -31,6 +31,10 @@ export type ClaudeBlock =
   | {
       type: "image";
       source: { type: "base64"; media_type: string; data: string };
+    }
+  | {
+      type: "document";
+      source: { type: "base64"; media_type: "application/pdf"; data: string };
     };
 
 export interface ClaudeMessage {

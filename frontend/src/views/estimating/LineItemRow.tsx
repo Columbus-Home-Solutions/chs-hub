@@ -7,13 +7,16 @@ import { formatCurrency, formatStatus } from "../../lib/format";
 import { useCatalogAutocomplete } from "../../hooks/useCatalogAutocomplete";
 import type { CatalogItem } from "../settings/CatalogTab";
 import {
-  SUB_ITEM_CATEGORIES,
+  SUB_ITEM_MATERIAL_CATEGORIES,
   type EstimateLineItem,
   type EstimateSubItem,
+  type Subcontractor,
   type VendorMaterial,
 } from "../../types";
+import { go } from "../../lib/nav";
 import { BidRequestModal } from "./BidRequestModal";
 import { BidComparisonView } from "./BidComparisonView";
+import { ImportQuoteModal } from "./ImportQuoteModal";
 
 export interface LineItemRowProps {
   item: EstimateLineItem;
@@ -574,6 +577,7 @@ export function LineItemRow({
           <SubItemList
             item={item}
             mutate={mutate}
+            reload={reload}
             freshBidId={freshBidId}
             bidsBySubItem={bidsBySubItem}
             onOpenBidModal={openBidModal}
@@ -626,6 +630,7 @@ export function LineItemRow({
 function SubItemList({
   item,
   mutate,
+  reload,
   freshBidId,
   bidsBySubItem,
   onOpenBidModal,
@@ -634,6 +639,7 @@ function SubItemList({
 }: {
   item: EstimateLineItem;
   mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+  reload?: () => Promise<void>;
   freshBidId: string | null;
   bidsBySubItem: Map<string, BidRequestSummary>;
   onOpenBidModal: (sub: EstimateSubItem | null) => void;
@@ -641,6 +647,8 @@ function SubItemList({
   onDismissFreshBid: () => void;
 }) {
   const [materialFor, setMaterialFor] = useState(false);
+  const [laborSubOpen, setLaborSubOpen] = useState(false);
+  const [importQuoteOpen, setImportQuoteOpen] = useState(false);
 
   const addSub = () =>
     mutate(
@@ -662,11 +670,17 @@ function SubItemList({
           <Button size="sm" variant="tertiary" onClick={() => setMaterialFor(true)}>
             Search Materials
           </Button>
+          <Button size="sm" variant="secondary" onClick={() => setImportQuoteOpen(true)}>
+            Import Quote
+          </Button>
           <Button size="sm" variant="secondary" onClick={() => onOpenBidModal(null)}>
             Request Bids
           </Button>
           <Button size="sm" variant="secondary" onClick={addSub}>
             + Add Sub-Item
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => setLaborSubOpen(true)}>
+            + Add Labor/Sub
           </Button>
         </div>
       </div>
@@ -724,11 +738,15 @@ function SubItemList({
         onClose={() => setMaterialFor(false)}
         onPick={(m) => {
           setMaterialFor(false);
+          const cat = (m.category || "material").toLowerCase();
+          const safeCat = (SUB_ITEM_MATERIAL_CATEGORIES as readonly string[]).includes(cat)
+            ? cat
+            : "material";
           void mutate(
             () =>
               api.post(`/api/line-items/${item.id}/sub-items`, {
                 description: m.material_name,
-                category: m.category || "material",
+                category: safeCat,
                 vendor: m.vendor_name,
                 quantity: 1,
                 unit: m.unit,
@@ -739,8 +757,28 @@ function SubItemList({
           );
         }}
       />
+
+      <LaborSubModal
+        open={laborSubOpen}
+        lineItemId={item.id}
+        onClose={() => setLaborSubOpen(false)}
+        mutate={mutate}
+      />
+
+      <ImportQuoteModal
+        open={importQuoteOpen}
+        lineItemId={item.id}
+        onClose={() => setImportQuoteOpen(false)}
+        onDone={async () => {
+          if (reload) await reload();
+        }}
+      />
     </div>
   );
+}
+
+function vendorLabel(sub: EstimateSubItem): string {
+  return sub.vendor || sub.description || "—";
 }
 
 function SubItemRow({
@@ -756,6 +794,7 @@ function SubItemRow({
   onViewComparison: (bidId: string) => void;
   onRequestBids?: () => void;
 }) {
+  const linked = Boolean(sub.sub_id);
   const [f, setF] = useState({
     description: sub.description,
     category: sub.category,
@@ -777,31 +816,65 @@ function SubItemRow({
 
   const save = (patch: Record<string, unknown>) => mutate(() => api.put(`/api/sub-items/${sub.id}`, patch));
 
+  const materialCats = SUB_ITEM_MATERIAL_CATEGORIES.map((c) => ({
+    value: c,
+    label: formatStatus(c),
+  }));
+  // Legacy labor/subcontractor rows (no sub_id) keep their category visible for edit.
+  const categoryOptions =
+    !linked && (sub.category === "labor" || sub.category === "subcontractor")
+      ? [...materialCats, { value: sub.category, label: formatStatus(sub.category) }]
+      : materialCats;
+
   return (
     <div>
       <div class="subitem">
-        <input
-          class="form-input"
-          value={f.description}
-          placeholder="Description"
-          onInput={(ev) => setF((p) => ({ ...p, description: (ev.target as HTMLInputElement).value }))}
-          onBlur={() => f.description !== sub.description && save({ description: f.description })}
-        />
-        <Select
-          value={f.category}
-          options={SUB_ITEM_CATEGORIES.map((c) => ({ value: c, label: formatStatus(c) }))}
-          onChange={(v) => {
-            setF((p) => ({ ...p, category: v }));
-            if (v !== sub.category) save({ category: v });
-          }}
-        />
-        <input
-          class="form-input"
-          value={f.vendor}
-          placeholder="Vendor"
-          onInput={(ev) => setF((p) => ({ ...p, vendor: (ev.target as HTMLInputElement).value }))}
-          onBlur={() => (f.vendor || null) !== (sub.vendor ?? null) && save({ vendor: f.vendor })}
-        />
+        {linked ? (
+          <div class="form-input" style={{ display: "flex", alignItems: "center", background: "var(--color-surface-2)" }}>
+            {sub.description}
+          </div>
+        ) : (
+          <input
+            class="form-input"
+            value={f.description}
+            placeholder="Description"
+            onInput={(ev) => setF((p) => ({ ...p, description: (ev.target as HTMLInputElement).value }))}
+            onBlur={() => f.description !== sub.description && save({ description: f.description })}
+          />
+        )}
+        {linked ? (
+          <div class="form-input" style={{ display: "flex", alignItems: "center", background: "var(--color-surface-2)" }}>
+            {formatStatus(sub.category)}
+          </div>
+        ) : (
+          <Select
+            value={f.category}
+            options={categoryOptions}
+            onChange={(v) => {
+              setF((p) => ({ ...p, category: v }));
+              if (v !== sub.category) save({ category: v });
+            }}
+          />
+        )}
+        {linked && sub.sub_id ? (
+          <button
+            type="button"
+            class="link-btn"
+            style={{ textAlign: "left", fontSize: "var(--text-sm)" }}
+            onClick={() => go(sub.category === "labor" ? `/labor/${sub.sub_id}` : `/subcontractors/${sub.sub_id}`)}
+            title="Open People profile"
+          >
+            {vendorLabel(sub)}
+          </button>
+        ) : (
+          <input
+            class="form-input"
+            value={f.vendor}
+            placeholder="Vendor"
+            onInput={(ev) => setF((p) => ({ ...p, vendor: (ev.target as HTMLInputElement).value }))}
+            onBlur={() => (f.vendor || null) !== (sub.vendor ?? null) && save({ vendor: f.vendor })}
+          />
+        )}
         <input
           class="form-input subitem__num"
           type="number"
@@ -867,6 +940,210 @@ function SubItemRow({
         </div>
       )}
     </div>
+  );
+}
+
+function LaborSubModal({
+  open,
+  lineItemId,
+  onClose,
+  mutate,
+}: {
+  open: boolean;
+  lineItemId: string;
+  onClose: () => void;
+  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+}) {
+  const [people, setPeople] = useState<Subcontractor[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState<Subcontractor | null>(null);
+  const [quantity, setQuantity] = useState(1);
+  const [unit, setUnit] = useState("");
+  const [unitCost, setUnitCost] = useState(0);
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setQ("");
+      setPicked(null);
+      setQuantity(1);
+      setUnit("");
+      setUnitCost(0);
+      setNotes("");
+      return;
+    }
+    setLoading(true);
+    api
+      .get<{ subcontractors: Subcontractor[] }>("/api/subcontractors?active=1")
+      .then((d) => setPeople(d.subcontractors ?? []))
+      .catch(() => setPeople([]))
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const list = people;
+    if (!needle) return list;
+    return list.filter((p) =>
+      [p.company_name, p.contact_name, p.trade, p.phone]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [people, q]);
+
+  const subs = filtered.filter((p) => (p.worker_type ?? "subcontractor") === "subcontractor");
+  const labor = filtered.filter((p) => p.worker_type === "day_rate_labor");
+
+  const pick = (p: Subcontractor) => {
+    setPicked(p);
+    setQ(p.company_name || p.contact_name || "");
+    if (p.worker_type === "day_rate_labor" && p.day_rate != null && Number.isFinite(p.day_rate)) {
+      setUnitCost((prev) => (prev === 0 ? Number(p.day_rate) : prev));
+      setUnit((prev) => (prev.trim() === "" ? "day" : prev));
+    }
+  };
+
+  const submit = async () => {
+    if (!picked) return;
+    setBusy(true);
+    try {
+      await mutate(
+        () =>
+          api.post(`/api/line-items/${lineItemId}/sub-items`, {
+            sub_id: picked.id,
+            quantity,
+            unit: unit || null,
+            unit_cost: unitCost,
+            notes: notes || null,
+          }),
+        "Labor/Sub cost added",
+      );
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title="Add Labor / Sub Cost"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={busy || !picked}>
+            {busy ? "Saving…" : "Add"}
+          </Button>
+        </>
+      }
+    >
+      <label class="form-label">Vendor</label>
+      <input
+        class="form-input"
+        placeholder="Search subcontractors or day-rate labor…"
+        value={q}
+        onInput={(ev) => {
+          setQ((ev.target as HTMLInputElement).value);
+          setPicked(null);
+        }}
+      />
+      <div class="typeahead" style={{ position: "static", marginTop: "var(--space-xs)", maxHeight: 220, overflow: "auto" }}>
+        {loading && <div class="text--muted" style={{ padding: "8px" }}>Loading…</div>}
+        {!loading && people.length === 0 && (
+          <div class="text--muted" style={{ padding: "8px", fontSize: "var(--text-sm)" }}>
+            No people yet. Add someone under People → Subs or People → Labor first.
+          </div>
+        )}
+        {!loading && people.length > 0 && filtered.length === 0 && (
+          <div class="text--muted" style={{ padding: "8px" }}>No matches.</div>
+        )}
+        {subs.length > 0 && (
+          <>
+            <div class="text--muted" style={{ padding: "6px 8px", fontSize: "var(--text-xs)", fontWeight: 600 }}>
+              Subcontractors
+            </div>
+            {subs.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                class={`typeahead__item${picked?.id === p.id ? " typeahead__item--active" : ""}`}
+                onClick={() => pick(p)}
+              >
+                <span>{p.company_name || p.contact_name || p.id}</span>
+                <span class="text--muted">{p.trade ?? ""}</span>
+              </button>
+            ))}
+          </>
+        )}
+        {labor.length > 0 && (
+          <>
+            <div class="text--muted" style={{ padding: "6px 8px", fontSize: "var(--text-xs)", fontWeight: 600 }}>
+              Day-Rate Labor
+            </div>
+            {labor.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                class={`typeahead__item${picked?.id === p.id ? " typeahead__item--active" : ""}`}
+                onClick={() => pick(p)}
+              >
+                <span>{p.company_name || p.contact_name || p.id}</span>
+                <span class="text--muted">
+                  {p.day_rate != null ? formatCurrency(p.day_rate) + "/day" : "day rate"}
+                </span>
+              </button>
+            ))}
+          </>
+        )}
+      </div>
+
+      <div class="form-row" style={{ marginTop: "var(--space-md)" }}>
+        <label class="form-field">
+          <span class="form-label">Qty</span>
+          <input
+            class="form-input"
+            type="number"
+            step="any"
+            value={quantity}
+            onInput={(ev) => setQuantity(Number((ev.target as HTMLInputElement).value))}
+          />
+        </label>
+        <label class="form-field">
+          <span class="form-label">Unit</span>
+          <input
+            class="form-input"
+            value={unit}
+            placeholder="day, hr…"
+            onInput={(ev) => setUnit((ev.target as HTMLInputElement).value)}
+          />
+        </label>
+        <label class="form-field">
+          <span class="form-label">Unit cost</span>
+          <input
+            class="form-input"
+            type="number"
+            step="any"
+            value={unitCost}
+            onInput={(ev) => setUnitCost(Number((ev.target as HTMLInputElement).value))}
+          />
+        </label>
+      </div>
+      <label class="form-field" style={{ marginTop: "var(--space-sm)" }}>
+        <span class="form-label">Notes</span>
+        <input
+          class="form-input"
+          value={notes}
+          onInput={(ev) => setNotes((ev.target as HTMLInputElement).value)}
+        />
+      </label>
+    </Modal>
   );
 }
 

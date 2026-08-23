@@ -41,12 +41,21 @@ interface SubListResponse {
 }
 
 export function SubcontractorList(_props: RoutableProps) {
+  return <PeopleDirectory workerType="subcontractor" />;
+}
+
+export function LaborDirectory(_props: RoutableProps) {
+  return <PeopleDirectory workerType="day_rate_labor" />;
+}
+
+function PeopleDirectory({ workerType }: { workerType: "subcontractor" | "day_rate_labor" }) {
+  const isLabor = workerType === "day_rate_labor";
   const [trade, setTrade] = useState("");
   const [search, setSearch] = useState("");
   const [activeOnly, setActiveOnly] = useState(true);
   const [modal, setModal] = useState<{ mode: "create" | "edit"; sub?: Subcontractor } | null>(null);
 
-  const url = `/api/subcontractors${activeOnly ? "?active=1" : ""}`;
+  const url = `/api/subcontractors?worker_type=${workerType}${activeOnly ? "&active=1" : ""}`;
   const { data, loading, error, refetch } = useApi<SubListResponse>(url);
 
   const rows = useMemo(() => {
@@ -68,42 +77,85 @@ export function SubcontractorList(_props: RoutableProps) {
   const columns: Column<Subcontractor>[] = [
     {
       key: "company_name",
-      header: "Company",
+      header: isLabor ? "Name" : "Company",
       sortValue: (s) => (s.company_name ?? "").toLowerCase(),
       render: (s) => <strong>{s.company_name ?? "—"}</strong>,
     },
     { key: "contact_name", header: "Contact", render: (s) => s.contact_name ?? "—" },
-    {
-      key: "trade",
-      header: "Trade",
-      sortValue: (s) => s.trade ?? "",
-      render: (s) => (s.trade ? <Badge tone="info">{s.trade}</Badge> : "—"),
-    },
+    ...(isLabor
+      ? [
+          {
+            key: "day_rate",
+            header: "Day Rate",
+            sortValue: (s: Subcontractor) => s.day_rate ?? 0,
+            render: (s: Subcontractor) =>
+              s.day_rate != null ? `$${Number(s.day_rate).toFixed(2)}` : "—",
+          } as Column<Subcontractor>,
+        ]
+      : [
+          {
+            key: "trade",
+            header: "Trade",
+            sortValue: (s: Subcontractor) => s.trade ?? "",
+            render: (s: Subcontractor) => (s.trade ? <Badge tone="info">{s.trade}</Badge> : "—"),
+          } as Column<Subcontractor>,
+        ]),
     { key: "phone", header: "Phone", render: (s) => formatPhone(s.phone) },
-    {
-      key: "insurance_on_file",
-      header: "Insurance",
-      render: (s) => (s.insurance_on_file ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge>),
-    },
-    {
-      key: "w9_on_file",
-      header: "W-9",
-      render: (s) => (s.w9_on_file ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge>),
-    },
-    {
-      key: "coi_expiration_date",
-      header: "COI Exp.",
-      render: (s) => <ExpirationBadge date={s.coi_expiration_date} />,
-    },
-    {
-      key: "license_expiration_date",
-      header: "License Exp.",
-      render: (s) => <ExpirationBadge date={s.license_expiration_date} />,
-    },
+    ...(isLabor
+      ? [
+          {
+            key: "w9_on_file",
+            header: "W-9",
+            render: (s: Subcontractor) =>
+              s.w9_on_file ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge>,
+          } as Column<Subcontractor>,
+        ]
+      : [
+          {
+            key: "insurance_on_file",
+            header: "Insurance",
+            render: (s: Subcontractor) =>
+              s.insurance_on_file ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge>,
+          } as Column<Subcontractor>,
+          {
+            key: "w9_on_file",
+            header: "W-9",
+            render: (s: Subcontractor) =>
+              s.w9_on_file ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge>,
+          } as Column<Subcontractor>,
+          {
+            key: "coi_expiration_date",
+            header: "COI Exp.",
+            render: (s: Subcontractor) => <ExpirationBadge date={s.coi_expiration_date} />,
+          } as Column<Subcontractor>,
+          {
+            key: "license_expiration_date",
+            header: "License Exp.",
+            render: (s: Subcontractor) => <ExpirationBadge date={s.license_expiration_date} />,
+          } as Column<Subcontractor>,
+        ]),
     {
       key: "is_active",
       header: "Active",
       render: (s) => (s.is_active ? <Badge tone="success">Active</Badge> : <Badge>Inactive</Badge>),
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (s) => (
+        <span
+          onClick={(e) => {
+            e.stopPropagation();
+          }}
+        >
+          <DeleteSubButton
+            sub={s}
+            size="sm"
+            listBase={isLabor ? "/labor" : "/subcontractors"}
+            onDeleted={() => refetch()}
+          />
+        </span>
+      ),
     },
   ];
 
@@ -111,12 +163,18 @@ export function SubcontractorList(_props: RoutableProps) {
     <div>
       <div class="view-header">
         <div>
-          <h1 class="view-title">Subcontractors</h1>
-          <p class="view-subtitle">{data ? `${data.total} subs` : "Subcontractor directory"}</p>
+          <h1 class="view-title">{isLabor ? "Day-Rate Labor" : "Subcontractors"}</h1>
+          <p class="view-subtitle">
+            {data
+              ? `${data.total} ${isLabor ? "workers" : "subs"}`
+              : isLabor
+                ? "Day-rate labor directory"
+                : "Subcontractor directory"}
+          </p>
         </div>
         <div class="view-header__right">
           <Button variant="primary" onClick={() => setModal({ mode: "create" })}>
-            + New Sub
+            {isLabor ? "+ New Worker" : "+ New Sub"}
           </Button>
         </div>
       </div>
@@ -125,16 +183,18 @@ export function SubcontractorList(_props: RoutableProps) {
         <input
           class="form-input toolbar__search"
           type="search"
-          placeholder="Search company, contact, phone…"
+          placeholder={isLabor ? "Search name, phone…" : "Search company, contact, phone…"}
           value={search}
           onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
         />
-        <Select
-          value={trade}
-          placeholder="All trades"
-          onChange={setTrade}
-          options={TRADES.map((t) => ({ value: t, label: t }))}
-        />
+        {!isLabor && (
+          <Select
+            value={trade}
+            placeholder="All trades"
+            onChange={setTrade}
+            options={TRADES.map((t) => ({ value: t, label: t }))}
+          />
+        )}
         <button
           class={`filter-pill${activeOnly ? " filter-pill--active" : ""}`}
           onClick={() => setActiveOnly((v) => !v)}
@@ -144,12 +204,16 @@ export function SubcontractorList(_props: RoutableProps) {
       </div>
 
       {loading && <Spinner center />}
-      {error && <div class="empty-state">Couldn't load subcontractors: {error}</div>}
+      {error && (
+        <div class="empty-state">
+          Couldn't load {isLabor ? "labor" : "subcontractors"}: {error}
+        </div>
+      )}
       {!loading && !error && rows.length === 0 && (
         <div class="empty-state">
-          <div class="empty-state__icon">🔧</div>
-          <div class="empty-state__title">No subcontractors</div>
-          <div>Add your first sub to build the directory.</div>
+          <div class="empty-state__icon">{isLabor ? "👷" : "🔧"}</div>
+          <div class="empty-state__title">{isLabor ? "No day-rate workers" : "No subcontractors"}</div>
+          <div>{isLabor ? "Add your first day-rate worker." : "Add your first sub to build the directory."}</div>
         </div>
       )}
       {!loading && !error && rows.length > 0 && (
@@ -157,7 +221,7 @@ export function SubcontractorList(_props: RoutableProps) {
           columns={columns}
           rows={rows}
           rowKey={(s) => s.id}
-          onRowClick={(s) => go(`/subcontractors/${s.id}`)}
+          onRowClick={(s) => go(isLabor ? `/labor/${s.id}` : `/subcontractors/${s.id}`)}
           initialSort="company_name"
         />
       )}
@@ -166,6 +230,7 @@ export function SubcontractorList(_props: RoutableProps) {
         <SubForm
           mode={modal.mode}
           sub={modal.sub}
+          defaultWorkerType={workerType}
           onClose={() => setModal(null)}
           onSaved={() => {
             setModal(null);
@@ -184,16 +249,23 @@ export function SubForm({
   sub,
   onClose,
   onSaved,
+  defaultWorkerType = "subcontractor",
 }: {
   mode: "create" | "edit";
   sub?: Subcontractor;
   onClose: () => void;
   onSaved: () => void;
+  defaultWorkerType?: "subcontractor" | "day_rate_labor";
 }) {
   const toast = useToast();
+  const workerType = sub?.worker_type ?? defaultWorkerType;
+  const isLabor = workerType === "day_rate_labor";
   const [companyName, setCompanyName] = useState(sub?.company_name ?? "");
   const [contactName, setContactName] = useState(sub?.contact_name ?? "");
   const [tradeVal, setTradeVal] = useState(sub?.trade ?? "general");
+  const [dayRate, setDayRate] = useState(
+    sub?.day_rate != null ? String(sub.day_rate) : "",
+  );
   const [phone, setPhone] = useState(sub?.phone ?? "");
   const [email, setEmail] = useState(sub?.email ?? "");
   const [taxId, setTaxId] = useState(sub?.tax_id ?? "");
@@ -209,7 +281,7 @@ export function SubForm({
 
   const submit = async () => {
     if (!companyName.trim() || !tradeVal) {
-      toast.push("error", "Company name and trade are required");
+      toast.push("error", isLabor ? "Name and trade are required" : "Company name and trade are required");
       return;
     }
     setBusy(true);
@@ -221,18 +293,33 @@ export function SubForm({
         phone,
         email,
         tax_id: taxId,
-        license_number: license,
-        insurance_on_file: insurance,
         w9_on_file: w9,
         is_active: active,
         notes,
-        coi_expiration_date: coiExp || null,
-        license_expiration_date: licenseExp || null,
         rating: rating ? parseInt(rating, 10) : null,
+        worker_type: workerType,
+        day_rate: dayRate.trim() === "" ? null : Number(dayRate),
+        ...(isLabor
+          ? {}
+          : {
+              license_number: license,
+              insurance_on_file: insurance,
+              coi_expiration_date: coiExp || null,
+              license_expiration_date: licenseExp || null,
+            }),
       };
       if (mode === "create") await api.post("/api/subcontractors", body);
       else await api.put(`/api/subcontractors/${sub!.id}`, body);
-      toast.push("success", mode === "create" ? "Subcontractor created" : "Subcontractor updated");
+      toast.push(
+        "success",
+        mode === "create"
+          ? isLabor
+            ? "Worker created"
+            : "Subcontractor created"
+          : isLabor
+            ? "Worker updated"
+            : "Subcontractor updated",
+      );
       onSaved();
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
@@ -244,7 +331,15 @@ export function SubForm({
   return (
     <Modal
       open
-      title={mode === "create" ? "New Subcontractor" : "Edit Subcontractor"}
+      title={
+        mode === "create"
+          ? isLabor
+            ? "New Day-Rate Worker"
+            : "New Subcontractor"
+          : isLabor
+            ? "Edit Day-Rate Worker"
+            : "Edit Subcontractor"
+      }
       onClose={onClose}
       footer={
         <>
@@ -259,21 +354,42 @@ export function SubForm({
     >
       <div class="form-row">
         <FormField
-          label="Company name"
+          label={isLabor ? "Name" : "Company name"}
           required
           inputProps={{
             value: companyName,
             onInput: (e) => setCompanyName((e.target as HTMLInputElement).value),
           }}
         />
-        <FormField label="Trade" required>
+        {isLabor ? (
+          <FormField
+            label="Day Rate ($)"
+            inputProps={{
+              type: "number",
+              step: "any",
+              value: dayRate,
+              onInput: (e) => setDayRate((e.target as HTMLInputElement).value),
+            }}
+          />
+        ) : (
+          <FormField label="Trade" required>
+            <Select
+              value={tradeVal}
+              onChange={setTradeVal}
+              options={TRADES.map((t) => ({ value: t, label: t }))}
+            />
+          </FormField>
+        )}
+      </div>
+      {isLabor && (
+        <FormField label="Trade">
           <Select
             value={tradeVal}
             onChange={setTradeVal}
             options={TRADES.map((t) => ({ value: t, label: t }))}
           />
         </FormField>
-      </div>
+      )}
       <FormField
         label="Contact name"
         inputProps={{
@@ -296,40 +412,53 @@ export function SubForm({
         />
       </div>
       <FormField
-        label="Tax ID / EIN"
+        label={isLabor ? "Social Security Number" : "Tax ID / EIN"}
         inputProps={{
           value: taxId,
-          placeholder: "XX-XXXXXXX",
+          placeholder: isLabor ? "XXX-XX-XXXX" : "XX-XXXXXXX",
           onInput: (e) => setTaxId((e.target as HTMLInputElement).value),
         }}
       />
-      <FormField
-        label="License number"
-        inputProps={{ value: license, onInput: (e) => setLicense((e.target as HTMLInputElement).value) }}
-      />
-      <div class="form-row">
-        <FormField label="COI Expiration Date" hint="Leave blank if not on file">
-          <input
-            class="form-input"
-            type="date"
-            value={coiExp}
-            onInput={(e) => setCoiExp((e.target as HTMLInputElement).value)}
+      {!isLabor && (
+        <>
+          <FormField
+            label="License number"
+            inputProps={{
+              value: license,
+              onInput: (e) => setLicense((e.target as HTMLInputElement).value),
+            }}
           />
-        </FormField>
-        <FormField label="License Expiration Date" hint="Leave blank if not applicable">
-          <input
-            class="form-input"
-            type="date"
-            value={licenseExp}
-            onInput={(e) => setLicenseExp((e.target as HTMLInputElement).value)}
-          />
-        </FormField>
-      </div>
+          <div class="form-row">
+            <FormField label="COI Expiration Date" hint="Leave blank if not on file">
+              <input
+                class="form-input"
+                type="date"
+                value={coiExp}
+                onInput={(e) => setCoiExp((e.target as HTMLInputElement).value)}
+              />
+            </FormField>
+            <FormField label="License Expiration Date" hint="Leave blank if not applicable">
+              <input
+                class="form-input"
+                type="date"
+                value={licenseExp}
+                onInput={(e) => setLicenseExp((e.target as HTMLInputElement).value)}
+              />
+            </FormField>
+          </div>
+        </>
+      )}
       <div class="flex gap-lg flex-wrap mb-lg">
-        <label class="flex items-center gap-sm" style={{ fontSize: "var(--text-sm)" }}>
-          <input type="checkbox" checked={insurance} onChange={(e) => setInsurance((e.target as HTMLInputElement).checked)} />
-          Insurance on file
-        </label>
+        {!isLabor && (
+          <label class="flex items-center gap-sm" style={{ fontSize: "var(--text-sm)" }}>
+            <input
+              type="checkbox"
+              checked={insurance}
+              onChange={(e) => setInsurance((e.target as HTMLInputElement).checked)}
+            />
+            Insurance on file
+          </label>
+        )}
         <label class="flex items-center gap-sm" style={{ fontSize: "var(--text-sm)" }}>
           <input type="checkbox" checked={w9} onChange={(e) => setW9((e.target as HTMLInputElement).checked)} />
           W-9 on file
@@ -361,5 +490,68 @@ export function SubForm({
         />
       </FormField>
     </Modal>
+  );
+}
+
+/** Hard-delete a sub/labor person with no history — same modal pattern as estimates/clients. */
+export function DeleteSubButton({
+  sub,
+  size = "default",
+  listBase,
+  onDeleted,
+}: {
+  sub: Subcontractor;
+  size?: "default" | "sm";
+  /** Where to navigate after delete from detail; list passes onDeleted instead. */
+  listBase?: "/labor" | "/subcontractors";
+  onDeleted?: () => void;
+}) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const isLabor = (sub.worker_type ?? "subcontractor") === "day_rate_labor";
+  const label = sub.company_name || sub.contact_name || "this person";
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await api.del(`/api/subcontractors/${sub.id}`);
+      toast.push("success", isLabor ? "Worker deleted" : "Subcontractor deleted");
+      setOpen(false);
+      if (onDeleted) onDeleted();
+      else go(listBase ?? (isLabor ? "/labor" : "/subcontractors"));
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Button size={size === "sm" ? "sm" : undefined} variant="danger" onClick={() => setOpen(true)}>
+        Delete
+      </Button>
+      <Modal
+        open={open}
+        title={isLabor ? "Delete day-rate worker" : "Delete subcontractor"}
+        onClose={() => setOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" disabled={busy} onClick={() => void remove()}>
+              {busy ? "Deleting…" : "Yes, delete"}
+            </Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>
+          Delete <strong>{label}</strong>? This cannot be undone. If they have job or payment
+          history, deactivate them instead.
+        </p>
+      </Modal>
+    </>
   );
 }

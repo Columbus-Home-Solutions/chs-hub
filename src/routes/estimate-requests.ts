@@ -112,6 +112,7 @@ interface RequestRow {
   lat: number | null;
   lon: number | null;
   job_type: string;
+  job_type_detail: string | null;
   lead_source: string;
   lead_source_detail: string | null;
   high_level_opportunity_id: string | null;
@@ -200,6 +201,7 @@ function shape(row: RequestRow) {
     lat: row.lat ?? null,
     lon: row.lon ?? null,
     job_type: row.job_type,
+    job_type_detail: row.job_type_detail ?? null,
     lead_source: row.lead_source,
     lead_source_detail: row.lead_source_detail,
     high_level_opportunity_id: row.high_level_opportunity_id,
@@ -402,6 +404,7 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
   const propertyZip = str(body.property_zip);
   const jobType = str(body.job_type);
   const leadSource = str(body.lead_source);
+  const jobTypeDetail = jobType === "other" ? str(body.job_type_detail) : null;
 
   const missing: string[] = [];
   if (!clientId) missing.push("client_id");
@@ -409,6 +412,7 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
   if (!propertyCity) missing.push("property_city");
   if (!propertyZip) missing.push("property_zip");
   if (!jobType) missing.push("job_type");
+  if (jobType === "other" && !jobTypeDetail) missing.push("job_type_detail");
   if (!leadSource) missing.push("lead_source");
   if (missing.length > 0) {
     return err(400, "bad_request", `Missing required field(s): ${missing.join(", ")}`);
@@ -461,9 +465,9 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
       id, request_number, status, client_id,
       property_id, property_address, property_city, property_state, property_zip,
       lat, lon,
-      job_type, lead_source, lead_source_detail, high_level_opportunity_id,
+      job_type, job_type_detail, lead_source, lead_source_detail, high_level_opportunity_id,
       visit_notes, created_at, updated_at, created_by
-    ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -477,6 +481,7 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
       optionalCoord(body.lat),
       optionalCoord(body.lon),
       jobType,
+      jobTypeDetail,
       leadSource,
       str(body.lead_source_detail),
       str(body.high_level_opportunity_id),
@@ -517,6 +522,7 @@ const UPDATABLE_TEXT = [
   "property_state",
   "property_zip",
   "job_type",
+  "job_type_detail",
   "lead_source",
   "lead_source_detail",
   "high_level_opportunity_id",
@@ -666,6 +672,18 @@ export async function handleEstimateRequestUpdate(
       updates.push(`${col} = ?`);
       // property_state has a NOT NULL DEFAULT — never null it.
       binds.push(col === "property_state" ? str(body[col]) ?? "Arkansas" : str(body[col]));
+    }
+  }
+
+  if ("job_type" in body) {
+    const jt = str(body.job_type);
+    if (jt === "other" && "job_type_detail" in body && !str(body.job_type_detail)) {
+      return err(400, "bad_request", "job_type_detail is required when job_type is other");
+    }
+    // Switching away from Other — drop stale specify text unless caller set it.
+    if (jt && jt !== "other" && !("job_type_detail" in body)) {
+      updates.push("job_type_detail = ?");
+      binds.push(null);
     }
   }
 
@@ -1029,6 +1047,10 @@ export async function handleEstimateRequestQuickLead(
     const phone = str(body.phone);
     const email = str(body.email);
     const jobType = str(body.job_type) ?? "other";
+    const jobTypeDetail = jobType === "other" ? str(body.job_type_detail) : null;
+    if (jobType === "other" && !jobTypeDetail) {
+      return err(400, "bad_request", "job_type_detail is required when job_type is other");
+    }
     const leadSource = str(body.lead_source) ?? "direct_call";
     const propertyAddress = str(body.property_address) ?? "Unknown";
     const notes = str(body.notes);
@@ -1092,9 +1114,9 @@ export async function handleEstimateRequestQuickLead(
       `INSERT INTO estimate_requests (
         id, request_number, status, client_id,
         property_address, property_city, property_state, property_zip,
-        job_type, lead_source, source, visit_notes,
+        job_type, job_type_detail, lead_source, source, visit_notes,
         created_at, updated_at, created_by
-      ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?)`,
+      ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?)`,
     )
       .bind(
         requestId,
@@ -1105,6 +1127,7 @@ export async function handleEstimateRequestQuickLead(
         str(body.property_state) ?? "Arkansas",
         str(body.property_zip) ?? "00000",
         jobType,
+        jobTypeDetail,
         leadSource,
         notes,
         now,

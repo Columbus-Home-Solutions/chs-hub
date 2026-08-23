@@ -8,6 +8,7 @@
  */
 
 import type { Env } from "../env.js";
+import { allocateNextEstimateNumber } from "../lib/estimate-number.js";
 import { runBackup, getLatestBackup } from "../lib/ops/backup.js";
 import { sendDailySummary } from "../lib/ops/daily-summary.js";
 import { getDlqSummary, replayDeadLetters } from "../lib/ops/dlq.js";
@@ -462,10 +463,7 @@ export async function handleOpsE2eFreshEstimateSetup(
   try {
   const origin = "https://dashboard.homesolutionsar.com";
   const now = new Date().toISOString();
-  const maxNum = await env.DB.prepare(
-    "SELECT COALESCE(MAX(estimate_number), 0) AS n FROM estimates",
-  ).first<{ n: number }>();
-  const estimateNumber = (maxNum?.n ?? 0) + 1;
+  const estimateNumber = await allocateNextEstimateNumber(env);
   const estimateId = crypto.randomUUID();
   const portalToken = crypto.randomUUID().replace(/-/g, "");
   const title = `E2E BoldSign Fresh EST-${estimateNumber} — ${now.slice(0, 16)}`;

@@ -289,6 +289,7 @@ import {
   handleSubcontractorGet,
   handleSubcontractorList,
   handleSubcontractorUpdate,
+  handleSubcontractorDelete,
   handleTestComplianceCheck,
 } from "./routes/subcontractors.js";
 import {
@@ -349,7 +350,17 @@ import {
   handleReviewUpdate,
   handleReviewDelete,
   handleMaterialSearch,
+  handleImportQuoteExtract,
+  handleImportQuoteConfirm,
 } from "./routes/estimates.js";
+import {
+  handlePendingQuoteImportList,
+  handlePendingQuoteImportGet,
+  handlePendingQuoteImportDiscard,
+  handlePendingQuoteImportAssign,
+  handlePendingQuoteImportSimulate,
+} from "./routes/pending-quote-imports.js";
+import { handleInboundQuoteEmail } from "./lib/inbound-quote-email.js";
 import {
   handleCatalogList,
   handleCatalogCreate,
@@ -633,6 +644,10 @@ async function fetchAssetWithDashboardInject(
 }
 
 export default {
+  async email(message: ForwardableEmailMessage, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await handleInboundQuoteEmail(message, env);
+  },
+
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
@@ -995,6 +1010,11 @@ export default {
     }
     if (url.pathname === "/api/documents/company" && request.method === "GET") {
       return handleCompanyDocuments(env, url);
+    }
+    // Sprint 20 review queue — must be registered BEFORE /api/documents/:id
+    // so "review-queue" is not captured as a document id (404).
+    if (url.pathname === "/api/documents/review-queue" && request.method === "GET") {
+      return handleReviewQueue(request, env);
     }
     const docFile = url.pathname.match(/^\/api\/documents\/([^/]+)\/file$/);
     if (docFile && (request.method === "GET" || request.method === "HEAD")) {
@@ -1382,9 +1402,6 @@ export default {
       if (request.method === "POST") return handleChangeOrderCreate(request, env, jid);
     }
     // ── Sprint 19/20/21: Auto-fill .docx generation + Review Queue + E-Signature ──
-    if (url.pathname === "/api/documents/review-queue" && request.method === "GET") {
-      return handleReviewQueue(request, env);
-    }
     if (url.pathname === "/api/esignature/status" && request.method === "GET") {
       return handleESignatureStatus(request, env);
     }
@@ -2252,6 +2269,7 @@ export default {
       const sid = decodeURIComponent(subcontractorById[1]);
       if (request.method === "GET") return handleSubcontractorGet(env, sid);
       if (request.method === "PUT") return handleSubcontractorUpdate(request, env, sid);
+      if (request.method === "DELETE") return handleSubcontractorDelete(request, env, sid);
     }
 
     // ── Sub onboarding packets — owner-facing (Sprint 39 Run 1) ─────────────
@@ -2518,6 +2536,33 @@ export default {
     }
 
     // Line item sub-resources (sub-items) before the bare line-item :id route.
+    if (url.pathname === "/api/estimate-sub-items/import-quote" && request.method === "POST") {
+      return handleImportQuoteExtract(request, env);
+    }
+    if (url.pathname === "/api/pending-quote-imports" && request.method === "GET") {
+      return handlePendingQuoteImportList(request, env, url);
+    }
+    if (url.pathname === "/api/pending-quote-imports/simulate" && request.method === "POST") {
+      return handlePendingQuoteImportSimulate(request, env);
+    }
+    const pendingQuoteById = url.pathname.match(/^\/api\/pending-quote-imports\/([^/]+)$/);
+    if (pendingQuoteById && request.method === "GET") {
+      return handlePendingQuoteImportGet(request, env, decodeURIComponent(pendingQuoteById[1]));
+    }
+    const pendingDiscard = url.pathname.match(/^\/api\/pending-quote-imports\/([^/]+)\/discard$/);
+    if (pendingDiscard && request.method === "POST") {
+      return handlePendingQuoteImportDiscard(request, env, decodeURIComponent(pendingDiscard[1]));
+    }
+    const pendingAssign = url.pathname.match(/^\/api\/pending-quote-imports\/([^/]+)\/assign$/);
+    if (pendingAssign && request.method === "POST") {
+      return handlePendingQuoteImportAssign(request, env, decodeURIComponent(pendingAssign[1]));
+    }
+    const lineImportConfirm = url.pathname.match(
+      /^\/api\/line-items\/([^/]+)\/import-quote-confirm$/,
+    );
+    if (lineImportConfirm && request.method === "POST") {
+      return handleImportQuoteConfirm(request, env, decodeURIComponent(lineImportConfirm[1]));
+    }
     const lineSubItems = url.pathname.match(/^\/api\/line-items\/([^/]+)\/sub-items$/);
     if (lineSubItems && request.method === "POST") {
       return handleSubItemCreate(request, env, decodeURIComponent(lineSubItems[1]));

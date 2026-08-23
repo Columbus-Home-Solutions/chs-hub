@@ -12,6 +12,7 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatDateTime, formatStatus } from "../../lib/format";
+import { jobTypeDisplayLabel } from "@chs/shared/job-type-label";
 import { formatCurrency } from "../../lib/format";
 import { ClientForm } from "../clients/ClientForm";
 import { uploadPhoto } from "../../lib/capture";
@@ -971,7 +972,7 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             <div class="kv">
               <div class="kv__row">
                 <span class="kv__label">Job Type</span>
-                <span class="kv__value">{formatStatus(r.job_type)}</span>
+                <span class="kv__value">{jobTypeDisplayLabel(r.job_type, r.job_type_detail)}</span>
               </div>
               <div class="kv__row">
                 <span class="kv__label">Lead Source</span>

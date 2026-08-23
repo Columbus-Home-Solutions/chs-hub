@@ -47,6 +47,7 @@ export async function applyBidAwardSubItemCost(
   br: BidAwardCostContext,
   winningPrice: number,
   vendorName: string | null,
+  awardedSubId?: string | null,
 ): Promise<string | null> {
   const price = round2(winningPrice);
   if (price <= 0) return null;
@@ -85,9 +86,24 @@ export async function applyBidAwardSubItemCost(
   const quantity = parsed?.quantity ?? 1;
   const unitCost = round2(price / quantity);
 
+  // Prefer linking the awarded subcontractor so Internal Cost shows a People profile link.
+  // When sub_id is set, createEstimateSubItem snapshots description/vendor from that person
+  // and sets category from worker_type (subcontractor vs labor).
+  if (awardedSubId) {
+    const created = await createEstimateSubItem(env, br.estimate_line_item_id, {
+      sub_id: awardedSubId,
+      quantity: parsed ? parsed.quantity : 1,
+      unit: parsed?.unit ?? null,
+      unit_cost: unitCost,
+      notes: br.title ? `Awarded bid: ${br.title}` : null,
+    });
+    return created?.id ?? null;
+  }
+
+  // Fallback if the winning sub row disappeared — keep prior free-text behavior.
   const created = await createEstimateSubItem(env, br.estimate_line_item_id, {
     description: br.title,
-    category: "subcontractor",
+    category: "other",
     vendor: vendorName,
     quantity: parsed ? parsed.quantity : 1,
     unit: parsed?.unit ?? null,

@@ -8,6 +8,8 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
+import { jobTypeTitleFragment } from "../../shared/job-type-label.js";
+import { allocateNextEstimateNumber } from "../lib/estimate-number.js";
 import {
   generateScopeDraft,
   parseStoredScopeDraft,
@@ -398,7 +400,7 @@ export async function handlePushToEstimate(
   const { user } = guarded;
 
   const row = await env.DB.prepare(
-    `SELECT id, client_id, job_type, property_address, estimate_id, scope_draft, status
+    `SELECT id, client_id, job_type, job_type_detail, property_address, estimate_id, scope_draft, status
      FROM estimate_requests WHERE id = ?`,
   )
     .bind(id)
@@ -406,6 +408,7 @@ export async function handlePushToEstimate(
       id: string;
       client_id: string;
       job_type: string;
+      job_type_detail: string | null;
       property_address: string;
       estimate_id: string | null;
       scope_draft: string | null;
@@ -424,12 +427,9 @@ export async function handlePushToEstimate(
   let estimateCreated = false;
 
   if (!estimateId) {
-    const maxNum = await env.DB.prepare(
-      "SELECT COALESCE(MAX(estimate_number), 0) AS n FROM estimates",
-    ).first<{ n: number }>();
-    const estimateNumber = (maxNum?.n ?? 0) + 1;
+    const estimateNumber = await allocateNextEstimateNumber(env);
     estimateId = crypto.randomUUID();
-    const title = `${(row.job_type ?? "Estimate").replace(/_/g, " ")} — ${row.property_address ?? ""}`.trim();
+    const title = `${jobTypeTitleFragment(row.job_type, row.job_type_detail)} — ${row.property_address ?? ""}`.trim();
 
     await env.DB.prepare(
       `INSERT INTO estimates (

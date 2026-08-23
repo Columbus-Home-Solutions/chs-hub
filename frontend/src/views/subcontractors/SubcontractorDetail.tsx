@@ -6,14 +6,14 @@ import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { Modal } from "../../components/ui/Modal";
-import { go } from "../../lib/nav";
+import { go, BASE } from "../../lib/nav";
 import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
 import { useAuth } from "../../store/auth";
 import { isOwner } from "../../lib/rbac";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import type { Subcontractor } from "../../types";
-import { SubForm, ExpirationBadge, daysUntilExpiration } from "./SubcontractorList";
+import { SubForm, ExpirationBadge, daysUntilExpiration, DeleteSubButton } from "./SubcontractorList";
 import { PacketReviewModal } from "./PacketReviewModal";
 import type { Packet } from "./PacketReviewModal";
 
@@ -51,7 +51,7 @@ interface SubDetailResponse {
   payments: SubPayments;
 }
 
-export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
+export function SubcontractorDetail({ id, path }: RoutableProps & { id?: string }) {
   const { user } = useAuth();
   const { data, loading, error, refetch } = useApi<SubDetailResponse>(
     id ? `/api/subcontractors/${id}` : null,
@@ -67,6 +67,11 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
   const [packetSendError, setPacketSendError] = useState<string | null>(null);
   const [packetSendOk, setPacketSendOk] = useState(false);
 
+  const onLaborRoute =
+    typeof path === "string"
+      ? path.includes("/labor/")
+      : typeof window !== "undefined" && window.location.pathname.includes(`${BASE}/labor/`);
+
   if (loading) return <Spinner center />;
   if (error || !data) {
     return <div class="empty-state">Couldn't load subcontractor: {error ?? "not found"}</div>;
@@ -74,6 +79,9 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
 
   const s = data.subcontractor;
   const p = data.payments;
+  const isLabor =
+    onLaborRoute || (s.worker_type ?? "subcontractor") === "day_rate_labor";
+  const listPath = isLabor ? "/labor" : "/subcontractors";
 
   return (
     <div>
@@ -81,7 +89,10 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
         <div>
           <h1 class="view-title">
             {s.company_name ?? "—"}{" "}
-            {s.trade && <Badge tone="info">{s.trade}</Badge>}
+            {!isLabor && s.trade && <Badge tone="info">{s.trade}</Badge>}
+            {isLabor && s.day_rate != null && (
+              <Badge tone="info">{formatCurrency(s.day_rate)}/day</Badge>
+            )}
             {!s.is_active && <Badge>Inactive</Badge>}
           </h1>
           <p class="view-subtitle">
@@ -89,13 +100,14 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
           </p>
         </div>
         <div class="view-header__right">
-          <Button variant="tertiary" onClick={() => go("/subcontractors")}>
+          <Button variant="tertiary" onClick={() => go(listPath)}>
             ← Back
           </Button>
-          {isOwner(user) && id && <ComplianceCheckButton subId={id} />}
+          {isOwner(user) && id && !isLabor && <ComplianceCheckButton subId={id} />}
           <Button variant="secondary" onClick={() => setEditing(true)}>
             Edit
           </Button>
+          <DeleteSubButton sub={s} listBase={isLabor ? "/labor" : "/subcontractors"} />
         </div>
       </div>
 
@@ -188,10 +200,20 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
         <div class="stack">
           <Card title="Details">
             <div class="kv">
-              <div class="kv__row">
-                <span class="kv__label">Trade</span>
-                <span class="kv__value">{s.trade ?? "—"}</span>
-              </div>
+              {!isLabor && (
+                <div class="kv__row">
+                  <span class="kv__label">Trade</span>
+                  <span class="kv__value">{s.trade ?? "—"}</span>
+                </div>
+              )}
+              {isLabor && (
+                <div class="kv__row">
+                  <span class="kv__label">Day rate</span>
+                  <span class="kv__value">
+                    {s.day_rate == null ? "—" : `${formatCurrency(s.day_rate)}/day`}
+                  </span>
+                </div>
+              )}
               <div class="kv__row">
                 <span class="kv__label">Contact</span>
                 <span class="kv__value">{s.contact_name ?? "—"}</span>
@@ -205,67 +227,80 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
                 <span class="kv__value">{s.email ?? "—"}</span>
               </div>
               <div class="kv__row">
-                <span class="kv__label">Tax ID / EIN</span>
+                <span class="kv__label">{isLabor ? "SSN" : "Tax ID / EIN"}</span>
                 <span class="kv__value">{s.tax_id ?? "—"}</span>
               </div>
-              <div class="kv__row">
-                <span class="kv__label">License</span>
-                <span class="kv__value">{s.license_number ?? "—"}</span>
-              </div>
-              <div class="kv__row">
-                <span class="kv__label">Hourly rate</span>
-                <span class="kv__value">
-                  {s.hourly_rate == null ? "—" : `${formatCurrency(s.hourly_rate)}/hr`}
-                </span>
-              </div>
+              {!isLabor && (
+                <>
+                  <div class="kv__row">
+                    <span class="kv__label">License</span>
+                    <span class="kv__value">{s.license_number ?? "—"}</span>
+                  </div>
+                  <div class="kv__row">
+                    <span class="kv__label">Hourly rate</span>
+                    <span class="kv__value">
+                      {s.hourly_rate == null ? "—" : `${formatCurrency(s.hourly_rate)}/hr`}
+                    </span>
+                  </div>
+                </>
+              )}
               <div class="kv__row">
                 <span class="kv__label">Rating</span>
                 <span class="kv__value">{s.rating == null ? "—" : `${s.rating}/5`}</span>
               </div>
-              <div class="kv__row">
-                <span class="kv__label">Insurance</span>
-                <span class="kv__value">
-                  {s.insurance_on_file ? <Badge tone="success">On file</Badge> : <Badge>No</Badge>}
-                </span>
-              </div>
-              <div class="kv__row">
-                <span class="kv__label">COI Expiration</span>
-                <span class="kv__value">
-                  {s.coi_expiration_date ? (
-                    <span class="flex items-center gap-sm">
-                      <span>{formatDate(s.coi_expiration_date)}</span>
-                      <ExpirationBadge date={s.coi_expiration_date} />
+              {!isLabor && (
+                <>
+                  <div class="kv__row">
+                    <span class="kv__label">Insurance</span>
+                    <span class="kv__value">
+                      {s.insurance_on_file ? <Badge tone="success">On file</Badge> : <Badge>No</Badge>}
                     </span>
-                  ) : (
-                    <span class="text--muted">—</span>
-                  )}
-                </span>
-              </div>
+                  </div>
+                  <div class="kv__row">
+                    <span class="kv__label">COI Expiration</span>
+                    <span class="kv__value">
+                      {s.coi_expiration_date ? (
+                        <span class="flex items-center gap-sm">
+                          <span>{formatDate(s.coi_expiration_date)}</span>
+                          <ExpirationBadge date={s.coi_expiration_date} />
+                        </span>
+                      ) : (
+                        <span class="text--muted">—</span>
+                      )}
+                    </span>
+                  </div>
+                </>
+              )}
               <div class="kv__row">
                 <span class="kv__label">W-9</span>
                 <span class="kv__value">
                   {s.w9_on_file ? <Badge tone="success">On file</Badge> : <Badge>No</Badge>}
                 </span>
               </div>
-              <div class="kv__row">
-                <span class="kv__label">License Expiration</span>
-                <span class="kv__value">
-                  {s.license_expiration_date ? (
-                    <span class="flex items-center gap-sm">
-                      <span>{formatDate(s.license_expiration_date)}</span>
-                      <ExpirationBadge date={s.license_expiration_date} />
-                    </span>
-                  ) : (
-                    <span class="text--muted">—</span>
-                  )}
-                </span>
-              </div>
+              {!isLabor && (
+                <div class="kv__row">
+                  <span class="kv__label">License Expiration</span>
+                  <span class="kv__value">
+                    {s.license_expiration_date ? (
+                      <span class="flex items-center gap-sm">
+                        <span>{formatDate(s.license_expiration_date)}</span>
+                        <ExpirationBadge date={s.license_expiration_date} />
+                      </span>
+                    ) : (
+                      <span class="text--muted">—</span>
+                    )}
+                  </span>
+                </div>
+              )}
             </div>
           </Card>
 
           {/* Compliance alert banner when a date is expired or expiring within 30 days */}
-          {(daysUntilExpiration(s.coi_expiration_date) !== null && (daysUntilExpiration(s.coi_expiration_date) ?? 999) <= 30 ||
-            daysUntilExpiration(s.license_expiration_date) !== null && (daysUntilExpiration(s.license_expiration_date) ?? 999) <= 30) && (
+          {!isLabor &&
+            ((daysUntilExpiration(s.coi_expiration_date) !== null &&
+              (daysUntilExpiration(s.coi_expiration_date) ?? 999) <= 30) ||
+              (daysUntilExpiration(s.license_expiration_date) !== null &&
+                (daysUntilExpiration(s.license_expiration_date) ?? 999) <= 30)) && (
             <div class="alert alert--warning" role="alert">
               <strong>Compliance alert:</strong>{" "}
               {(daysUntilExpiration(s.coi_expiration_date) ?? 999) <= 30 && s.coi_expiration_date && (
@@ -291,7 +326,7 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
           )}
 
           {/* ── Onboarding Packet (Sprint 39) ───────────────────────── */}
-          {isOwner(user) && (
+          {isOwner(user) && !isLabor && (
             <OnboardingCard
               subId={id ?? ""}
               subName={s.company_name ?? s.contact_name ?? "Sub"}
@@ -325,6 +360,7 @@ export function SubcontractorDetail({ id }: RoutableProps & { id?: string }) {
         <SubForm
           mode="edit"
           sub={s}
+          defaultWorkerType={isLabor ? "day_rate_labor" : "subcontractor"}
           onClose={() => setEditing(false)}
           onSaved={() => {
             setEditing(false);

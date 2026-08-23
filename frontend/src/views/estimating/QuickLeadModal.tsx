@@ -43,6 +43,7 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
     phone: "",
     email: "",
     job_type: "remodel",
+    job_type_detail: "",
     lead_source: "direct_call",
     property_address: "",
     property_city: "",
@@ -52,7 +53,11 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
   });
 
   function set(field: keyof typeof form, value: string) {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === "job_type" && value !== "other") next.job_type_detail = "";
+      return next;
+    });
     // Clear matched notice when phone changes.
     if (field === "phone") setMatchedClient(null);
   }
@@ -75,6 +80,10 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
       toast.push("error", "First name, last name, and phone are required.");
       return;
     }
+    if (form.job_type === "other" && !form.job_type_detail.trim()) {
+      toast.push("error", "Describe what kind of job this is.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -86,6 +95,7 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
           phone: form.phone.trim(),
           email: form.email.trim() || undefined,
           job_type: form.job_type,
+          job_type_detail: form.job_type === "other" ? form.job_type_detail.trim() : null,
           lead_source: form.lead_source,
           property_address: form.property_address.trim() || undefined,
           property_city: form.property_city.trim() || undefined,
@@ -203,6 +213,21 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
                 </select>
               </div>
             </div>
+
+            {form.job_type === "other" && (
+              <div class="form-group">
+                <label class="form-label" for="ql-jobdetail">What kind of job is this?</label>
+                <input
+                  id="ql-jobdetail"
+                  class="form-input"
+                  type="text"
+                  required
+                  placeholder="Pergola repair"
+                  value={form.job_type_detail}
+                  onInput={(e) => set("job_type_detail", (e.target as HTMLInputElement).value)}
+                />
+              </div>
+            )}
 
             <div class="form-group">
               <AddressAutocomplete

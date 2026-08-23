@@ -50,6 +50,7 @@
     "@capacitor/status-bar": "^8.0.3",
     "@capgo/capacitor-audio-recorder": "^8.2.6",
     "fflate": "^0.8.3",
-    "pdf-lib": "^1.17.1"
+    "pdf-lib": "^1.17.1",
+    "postal-mime": "^3.0.0"
   }
 }

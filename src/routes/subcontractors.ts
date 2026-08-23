@@ -1,10 +1,11 @@
 /**
  * Subcontractor module API (CHS-API-Route-Map §12).
  *
- *   GET    /api/subcontractors        list + filters (?trade=&search=&active=1)
+ *   GET    /api/subcontractors        list + filters (?trade=&search=&active=1&worker_type=)
  *   GET    /api/subcontractors/:id    detail
  *   POST   /api/subcontractors        create
  *   PUT    /api/subcontractors/:id    update
+ *   DELETE /api/subcontractors/:id    hard delete when no history
  *
  * Schema note: the live `subcontractors` table carries BOTH the legacy chs-hub
  * columns (company, primary_contact, insurance_verified, active_status — driven
@@ -83,6 +84,8 @@ interface RawSub {
   tax_id: string | null;
   coi_expiration_date: string | null;
   license_expiration_date: string | null;
+  worker_type: string | null;
+  day_rate: number | null;
 }
 
 /** Normalize a raw row (legacy + canonical columns) into the canonical shape. */
@@ -90,6 +93,8 @@ function shape(row: RawSub) {
   const isActive =
     row.is_active != null ? row.is_active === 1 : row.active_status !== "Inactive";
   const insurance = (row.insurance_on_file ?? 0) === 1 || (row.insurance_verified ?? 0) === 1;
+  const workerType =
+    row.worker_type === "day_rate_labor" ? "day_rate_labor" : "subcontractor";
   return {
     id: row.id,
     company_name: row.company_name ?? row.company,
@@ -108,6 +113,8 @@ function shape(row: RawSub) {
     tax_id: row.tax_id,
     coi_expiration_date: row.coi_expiration_date ?? null,
     license_expiration_date: row.license_expiration_date ?? null,
+    worker_type: workerType,
+    day_rate: row.day_rate ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -119,6 +126,7 @@ export async function handleSubcontractorList(env: Env, url: URL): Promise<Respo
   const trade = str(url.searchParams.get("trade"));
   const search = (url.searchParams.get("search") ?? "").trim().toLowerCase();
   const activeParam = url.searchParams.get("active");
+  const workerTypeParam = str(url.searchParams.get("worker_type"));
 
   const { results } = await env.DB.prepare(
     "SELECT * FROM subcontractors ORDER BY COALESCE(company_name, company) COLLATE NOCASE ASC",
@@ -128,6 +136,9 @@ export async function handleSubcontractorList(env: Env, url: URL): Promise<Respo
   if (trade) subs = subs.filter((s) => (s.trade ?? "").toLowerCase() === trade.toLowerCase());
   if (activeParam === "1") subs = subs.filter((s) => s.is_active);
   else if (activeParam === "0") subs = subs.filter((s) => !s.is_active);
+  if (workerTypeParam === "subcontractor" || workerTypeParam === "day_rate_labor") {
+    subs = subs.filter((s) => s.worker_type === workerTypeParam);
+  }
   if (search) {
     subs = subs.filter((s) => {
       const hay = [s.company_name, s.contact_name, s.trade, s.phone, s.email, s.notes]
@@ -268,6 +279,19 @@ export async function handleSubcontractorCreate(request: Request, env: Env): Pro
     return err(422, "validation_error", `trade must be one of: ${TRADES.join(", ")}`);
   }
 
+  const workerTypeRaw = str(body.worker_type) ?? "subcontractor";
+  if (workerTypeRaw !== "subcontractor" && workerTypeRaw !== "day_rate_labor") {
+    return err(422, "validation_error", "worker_type must be subcontractor or day_rate_labor");
+  }
+  const workerType = workerTypeRaw;
+  const dayRate =
+    body.day_rate == null || body.day_rate === ""
+      ? null
+      : Number(body.day_rate);
+  if (dayRate != null && !Number.isFinite(dayRate)) {
+    return err(422, "validation_error", "day_rate must be a number");
+  }
+
   const contactName = str(body.contact_name) ?? str(body.primary_contact);
   const insurance = bool(body.insurance_on_file);
   const isActive = body.is_active == null ? 1 : bool(body.is_active);
@@ -280,8 +304,9 @@ export async function handleSubcontractorCreate(request: Request, env: Env): Pro
       id, created_at, updated_at,
       company_name, contact_name, trade, phone, email, license_number,
       insurance_on_file, w9_on_file, hourly_rate, flat_rate_notes, rating, notes, is_active, tax_id,
-      company, primary_contact, insurance_verified, active_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      company, primary_contact, insurance_verified, active_status,
+      worker_type, day_rate
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -305,10 +330,16 @@ export async function handleSubcontractorCreate(request: Request, env: Env): Pro
       contactName,
       insurance,
       isActive === 1 ? "Active" : "Inactive",
+      workerType,
+      dayRate,
     )
     .run();
 
-  await logAudit(env, user.email, "subcontractor_created", id, { company_name: companyName, trade });
+  await logAudit(env, user.email, "subcontractor_created", id, {
+    company_name: companyName,
+    trade,
+    worker_type: workerType,
+  });
 
   const row = await env.DB.prepare("SELECT * FROM subcontractors WHERE id = ?").bind(id).first<RawSub>();
   return json({ subcontractor: row ? shape(row) : null }, { status: 201 });
@@ -380,6 +411,21 @@ export async function handleSubcontractorUpdate(
   if ("tax_id" in body) set("tax_id", str(body.tax_id));
   if ("coi_expiration_date" in body) set("coi_expiration_date", str(body.coi_expiration_date));
   if ("license_expiration_date" in body) set("license_expiration_date", str(body.license_expiration_date));
+  if ("worker_type" in body) {
+    const wt = str(body.worker_type);
+    if (wt !== "subcontractor" && wt !== "day_rate_labor") {
+      return err(422, "validation_error", "worker_type must be subcontractor or day_rate_labor");
+    }
+    set("worker_type", wt);
+  }
+  if ("day_rate" in body) {
+    const dayRate =
+      body.day_rate == null || body.day_rate === "" ? null : Number(body.day_rate);
+    if (dayRate != null && !Number.isFinite(dayRate)) {
+      return err(422, "validation_error", "day_rate must be a number");
+    }
+    set("day_rate", dayRate);
+  }
   if ("is_active" in body) {
     const v = bool(body.is_active);
     set("is_active", v);
@@ -398,6 +444,77 @@ export async function handleSubcontractorUpdate(
 
   const row = await env.DB.prepare("SELECT * FROM subcontractors WHERE id = ?").bind(id).first<RawSub>();
   return json({ subcontractor: row ? shape(row) : null });
+}
+
+// ─── DELETE /api/subcontractors/:id ───────────────────────────────────────────
+
+/**
+ * Hard-delete a subcontractor / day-rate worker with no operational history.
+ * Guard covers every live FK that points at subcontractors(id).
+ */
+export async function handleSubcontractorDelete(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const existing = await env.DB.prepare(
+    `SELECT id, company_name, company, contact_name, primary_contact, worker_type
+       FROM subcontractors WHERE id = ?`,
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      company_name: string | null;
+      company: string | null;
+      contact_name: string | null;
+      primary_contact: string | null;
+      worker_type: string | null;
+    }>();
+  if (!existing) return err(404, "not_found", "Subcontractor not found");
+
+  const history = await env.DB.prepare(
+    `SELECT
+        (SELECT COUNT(*) FROM expenses WHERE sub_id = ?) AS expenses,
+        (SELECT COUNT(*) FROM schedule_entries WHERE sub_id = ?) AS schedule_entries,
+        (SELECT COUNT(*) FROM lien_waivers WHERE sub_id = ?) AS lien_waivers,
+        (SELECT COUNT(*) FROM estimate_sub_items WHERE sub_id = ?) AS estimate_sub_items,
+        (SELECT COUNT(*) FROM punch_list_items WHERE sub_id = ?) AS punch_list_items,
+        (SELECT COUNT(*) FROM punch_list_sub_tokens WHERE sub_id = ?) AS punch_list_sub_tokens,
+        (SELECT COUNT(*) FROM subcontractor_packets WHERE sub_id = ?) AS subcontractor_packets,
+        (SELECT COUNT(*) FROM bid_request_recipients WHERE sub_id = ?) AS bid_request_recipients,
+        (SELECT COUNT(*) FROM bid_submissions WHERE sub_id = ?) AS bid_submissions,
+        (SELECT COUNT(*) FROM bid_requests WHERE awarded_sub_id = ?) AS bid_awards,
+        (SELECT COUNT(*) FROM warranty_calls WHERE assigned_sub_id = ?) AS warranty_calls,
+        (SELECT COUNT(*) FROM sub_access_tokens WHERE sub_id = ?) AS sub_access_tokens`,
+  )
+    .bind(id, id, id, id, id, id, id, id, id, id, id, id)
+    .first<Record<string, number>>();
+
+  const blocking = Object.values(history ?? {}).some((n) => (n ?? 0) > 0);
+  if (blocking) {
+    return json(
+      {
+        error: "cannot_delete_sub_with_history",
+        message:
+          "This person has job or payment history — deactivate instead to preserve records.",
+      },
+      { status: 409 },
+    );
+  }
+
+  await env.DB.prepare("DELETE FROM subcontractors WHERE id = ?").bind(id).run();
+
+  await logAudit(env, user.email, "subcontractor_deleted", id, {
+    company_name: existing.company_name ?? existing.company,
+    contact_name: existing.contact_name ?? existing.primary_contact,
+    worker_type: existing.worker_type ?? "subcontractor",
+  });
+
+  return json({ ok: true, deleted: true, id });
 }
 
 // ── POST /api/subcontractors/:id/test-compliance-check (owner-only) ───────────

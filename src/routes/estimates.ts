@@ -52,7 +52,11 @@ import { triggerNotification } from "../lib/notification-engine.js";
 import { renderContract } from "../lib/contracts.js";
 import { depositFromSchedule, isPerLineItemBilling } from "../lib/deposit-from-schedule.js";
 import { generateAndSendEstimateContract } from "../lib/estimate-contract-document.js";
-import { createEstimateSubItem } from "../lib/estimate-sub-items.js";
+import { createEstimateSubItem, SubItemValidationError } from "../lib/estimate-sub-items.js";
+import { jobTypeTitleFragment } from "../../shared/job-type-label.js";
+import { allocateNextEstimateNumber } from "../lib/estimate-number.js";
+import { extractSupplierQuote } from "../lib/quote-import.js";
+import { upsertVendorMaterial } from "./vendor-materials.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -185,6 +189,7 @@ interface SubItemRow {
   total_cost: number | null;
   material_id: string | null;
   notes: string | null;
+  sub_id: string | null;
   created_at: string | null;
 }
 
@@ -303,6 +308,7 @@ function shapeSubItem(r: SubItemRow) {
     total_cost: round2((r.quantity ?? 0) * (r.unit_cost ?? 0)),
     material_id: r.material_id,
     notes: r.notes,
+    sub_id: r.sub_id ?? null,
   };
 }
 
@@ -727,10 +733,7 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
       client.name ||
       "Client";
     const title = str(body.title) ?? `Estimate — ${clientLabel}`;
-    const maxNum = await env.DB.prepare(
-      "SELECT COALESCE(MAX(estimate_number), 0) AS n FROM estimates",
-    ).first<{ n: number }>();
-    const estimateNumber = (maxNum?.n ?? 0) + 1;
+    const estimateNumber = await allocateNextEstimateNumber(env);
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const dep = await defaultDeposit(env, billingModel, 0, null);
@@ -775,7 +778,7 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
 
   // ── Normal (request-linked) path ──────────────────────────────────────────
   const req = await env.DB.prepare(
-    `SELECT id, client_id, job_type,
+    `SELECT id, client_id, job_type, job_type_detail,
             property_address, property_city, property_state, property_zip, estimate_id
      FROM estimate_requests WHERE id = ?`,
   )
@@ -784,6 +787,7 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
       id: string;
       client_id: string | null;
       job_type: string;
+      job_type_detail: string | null;
       property_address: string;
       property_city: string;
       property_state: string | null;
@@ -810,12 +814,9 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
   const billingModel = str(body.billing_model) ?? "fixed_price";
   const title =
     str(body.title) ??
-    `${(req.job_type ?? "Estimate").replace(/_/g, " ")} — ${req.property_address ?? ""}`.trim();
+    `${jobTypeTitleFragment(req.job_type, req.job_type_detail)} — ${req.property_address ?? ""}`.trim();
 
-  const maxNum = await env.DB.prepare(
-    "SELECT COALESCE(MAX(estimate_number), 0) AS n FROM estimates",
-  ).first<{ n: number }>();
-  const estimateNumber = (maxNum?.n ?? 0) + 1;
+  const estimateNumber = await allocateNextEstimateNumber(env);
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -1248,10 +1249,7 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
 
   const newId = crypto.randomUUID();
   const now = new Date().toISOString();
-  const maxNum = await env.DB.prepare(
-    "SELECT COALESCE(MAX(estimate_number), 0) AS n FROM estimates",
-  ).first<{ n: number }>();
-  const estimateNumber = (maxNum?.n ?? 0) + 1;
+  const estimateNumber = await allocateNextEstimateNumber(env);
 
   // Clone the header into a fresh draft version.
   await env.DB.prepare(
@@ -1336,8 +1334,8 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
       if (!newParent) continue;
       await env.DB.prepare(
         `INSERT INTO estimate_sub_items
-          (id, parent_line_item_id, sort_order, description, category, vendor, quantity, unit, unit_cost, total_cost, material_id, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, parent_line_item_id, sort_order, description, category, vendor, quantity, unit, unit_cost, total_cost, material_id, notes, sub_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
         .bind(
           crypto.randomUUID(),
@@ -1352,6 +1350,7 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
           si.total_cost,
           si.material_id,
           si.notes,
+          si.sub_id ?? null,
           now,
         )
         .run();
@@ -1680,27 +1679,32 @@ export async function handleSubItemCreate(
 
   const body = await readJson(request);
   if (!body) return err(400, "bad_request", "Body must be JSON");
-  const description = str(body.description);
-  const category = str(body.category);
-  if (!description) return err(400, "bad_request", "description is required");
-  if (!category) return err(400, "bad_request", "category is required");
 
-  const created = await createEstimateSubItem(
-    env,
-    lineItemId,
-    {
-      description,
-      category,
-      vendor: str(body.vendor),
-      quantity: num(body.quantity),
-      unit: str(body.unit),
-      unit_cost: num(body.unit_cost) ?? 0,
-      material_id: str(body.material_id),
-      notes: str(body.notes),
-      sort_order: num(body.sort_order),
-    },
-    { auditUserEmail: user.email },
-  );
+  let created: { id: string; estimate_id: string } | null;
+  try {
+    created = await createEstimateSubItem(
+      env,
+      lineItemId,
+      {
+        description: str(body.description),
+        category: str(body.category),
+        vendor: str(body.vendor),
+        quantity: num(body.quantity),
+        unit: str(body.unit),
+        unit_cost: num(body.unit_cost) ?? 0,
+        material_id: str(body.material_id),
+        notes: str(body.notes),
+        sort_order: num(body.sort_order),
+        sub_id: str(body.sub_id),
+      },
+      { auditUserEmail: user.email },
+    );
+  } catch (e) {
+    if (e instanceof SubItemValidationError) {
+      return err(400, e.code, e.message);
+    }
+    throw e;
+  }
   if (!created) return err(404, "not_found", "Parent line item not found");
 
   const row = await env.DB.prepare("SELECT * FROM estimate_sub_items WHERE id = ?")
@@ -1730,9 +1734,20 @@ export async function handleSubItemUpdate(
   const body = await readJson(request);
   if (!body) return err(400, "bad_request", "Body must be JSON");
 
+  const existingRow = await env.DB.prepare(
+    "SELECT sub_id, category FROM estimate_sub_items WHERE id = ?",
+  )
+    .bind(subItemId)
+    .first<{ sub_id: string | null; category: string }>();
+
   const updates: string[] = [];
   const binds: unknown[] = [];
-  for (const col of ["description", "category", "vendor", "unit", "notes"] as const) {
+  // Labor/Sub-linked rows: description/category/vendor are system snapshots — don't rewrite.
+  const linked = Boolean(existingRow?.sub_id);
+  const editableTextCols = linked
+    ? (["unit", "notes"] as const)
+    : (["description", "category", "vendor", "unit", "notes"] as const);
+  for (const col of editableTextCols) {
     if (col in body) {
       updates.push(`${col} = ?`);
       binds.push(str(body[col]));
@@ -1746,7 +1761,7 @@ export async function handleSubItemUpdate(
     updates.push("unit_cost = ?");
     binds.push(num(body.unit_cost) ?? 0);
   }
-  if ("material_id" in body) {
+  if ("material_id" in body && !linked) {
     updates.push("material_id = ?");
     binds.push(str(body.material_id));
   }
@@ -2298,3 +2313,137 @@ export async function handleMaterialSearch(env: Env, url: URL): Promise<Response
     })),
   });
 }
+
+// ─── Import supplier quote → material sub-items (AI extract + confirm) ────────
+
+/** POST /api/estimate-sub-items/import-quote — read-only extraction. */
+export async function handleImportQuoteExtract(request: Request, env: Env): Promise<Response> {
+  const guarded = await guard(request, env, ["owner", "project_manager"]);
+  if (guarded instanceof Response) return guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  const result = await extractSupplierQuote(env, {
+    text: str(body.text),
+    imageBase64: str(body.image_base64) ?? str(body.imageBase64),
+    mediaType: str(body.media_type) ?? str(body.mediaType),
+    pdfBase64: str(body.pdf_base64) ?? str(body.pdfBase64),
+  });
+
+  if (!result.ok) {
+    return err(502, "extraction_failed", result.error ?? "Could not extract quote lines");
+  }
+
+  return json({
+    vendor_guess: result.vendor_guess,
+    lines: result.lines,
+    quote_total: result.quote_total,
+  });
+}
+
+/**
+ * POST /api/line-items/:id/import-quote-confirm
+ * Creates material sub-items for confirmed lines; optional vendor_materials upserts.
+ */
+export async function handleImportQuoteConfirm(
+  request: Request,
+  env: Env,
+  lineItemId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, ["owner", "project_manager"]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const parent = await env.DB.prepare(
+    "SELECT id, estimate_id FROM estimate_line_items WHERE id = ?",
+  )
+    .bind(lineItemId)
+    .first<{ id: string; estimate_id: string }>();
+  if (!parent) return err(404, "not_found", "Parent line item not found");
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  const vendor = str(body.vendor) ?? "";
+  const lines = Array.isArray(body.lines) ? body.lines : null;
+  if (!lines || lines.length === 0) {
+    return err(400, "bad_request", "Provide at least one line to import");
+  }
+
+  const createdIds: string[] = [];
+  const priceBook: Array<{ material_name: string; created: boolean }> = [];
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const raw of lines) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Record<string, unknown>;
+    const description = str(row.description);
+    if (!description) continue;
+
+    const quantity = num(row.quantity) ?? 1;
+    const unit = str(row.unit) ?? "each";
+    const unitCost = num(row.unit_cost) ?? 0;
+    const sku = str(row.sku);
+    const notes = sku ? `SKU: ${sku}` : null;
+
+    let created: { id: string; estimate_id: string } | null;
+    try {
+      created = await createEstimateSubItem(
+        env,
+        lineItemId,
+        {
+          description,
+          category: "material",
+          vendor: vendor || null,
+          quantity,
+          unit,
+          unit_cost: unitCost,
+          notes,
+        },
+        { auditUserEmail: user.email },
+      );
+    } catch (e) {
+      if (e instanceof SubItemValidationError) {
+        return err(400, e.code, e.message);
+      }
+      throw e;
+    }
+    if (!created) return err(404, "not_found", "Parent line item not found");
+    createdIds.push(created.id);
+
+    const saveBook =
+      row.save_to_price_book === true ||
+      row.save_to_price_book === 1 ||
+      row.save_to_price_book === "true";
+    if (saveBook && vendor && description && unit) {
+      const price = unitCost;
+      const upsert = await upsertVendorMaterial(env, {
+        vendor,
+        materialName: description,
+        unit,
+        category: "material",
+        price,
+        date: today,
+        expenseId: null,
+      });
+      priceBook.push({ material_name: description, created: upsert.created });
+    }
+  }
+
+  await logAudit(env, user.email, "estimate_quote_imported", "estimate", parent.estimate_id, {
+    line_item_id: lineItemId,
+    vendor,
+    sub_item_ids: createdIds,
+    price_book: priceBook,
+  });
+
+  const estimate = await loadFullEstimate(env, parent.estimate_id);
+  return json({
+    created_count: createdIds.length,
+    sub_item_ids: createdIds,
+    price_book: priceBook,
+    estimate,
+  }, { status: 201 });
+}
+

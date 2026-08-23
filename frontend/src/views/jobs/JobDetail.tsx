@@ -32,6 +32,7 @@ import { useAuth } from "../../store/auth";
 import { isOwner } from "../../lib/rbac";
 import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatDateTime, formatPhone, formatStatus } from "../../lib/format";
+import { jobTypeDisplayLabel } from "@chs/shared/job-type-label";
 import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
@@ -383,7 +384,7 @@ function OverviewTab({
             </div>
             <div class="kv__row">
               <span class="kv__label">Job Type</span>
-              <span class="kv__value">{formatStatus(job.job_type)}</span>
+              <span class="kv__value">{jobTypeDisplayLabel(job.job_type, job.job_type_detail)}</span>
             </div>
             <div class="kv__row">
               <span class="kv__label">Days in Status</span>

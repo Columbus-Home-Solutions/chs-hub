@@ -187,6 +187,9 @@ export interface Subcontractor {
   is_active: boolean;
   coi_expiration_date: string | null;
   license_expiration_date: string | null;
+  /** Project-priced sub vs day-rate labor — same table, filtered in People nav. */
+  worker_type?: "subcontractor" | "day_rate_labor" | null;
+  day_rate?: number | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -288,6 +291,8 @@ export interface EstimateRequest {
   property_state: string | null;
   property_zip: string;
   job_type: string;
+  /** Free-text when job_type is "other" — used in internal titles/labels. */
+  job_type_detail: string | null;
   lead_source: string;
   lead_source_detail: string | null;
   high_level_opportunity_id: string | null;
@@ -405,6 +410,9 @@ export const SUB_ITEM_CATEGORIES = [
   "other",
 ];
 
+/** Categories allowed on "+ Add Sub-Item" (Material / Permit / Equipment / Other). */
+export const SUB_ITEM_MATERIAL_CATEGORIES = ["material", "permit", "equipment", "other"] as const;
+
 export const PAYMENT_TRIGGERS = [
   "contract_signing",
   "milestone",
@@ -426,6 +434,8 @@ export interface EstimateSubItem {
   total_cost: number;
   material_id: string | null;
   notes: string | null;
+  /** Linked People profile (sub or day-rate labor); null for material-flow / legacy rows. */
+  sub_id?: string | null;
 }
 
 export interface EstimateLineItem {
@@ -619,6 +629,7 @@ export interface JobCard {
   client_name: string | null;
   billing_model: BillingModel | null;
   job_type: string | null;
+  job_type_detail?: string | null;
   lead_source: string | null;
   property_address: string | null;
   property_city: string | null;

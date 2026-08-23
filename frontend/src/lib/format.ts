@@ -58,6 +58,22 @@ export function formatPhone(phone: string | null | undefined): string {
   return phone;
 }
 
+/** Jobber-style address: "12 Seminole Circle / Austin, Arkansas 72007" */
+export function formatPropertySlashLine(opts: {
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+}): string {
+  const street = (opts.address ?? "").trim();
+  const cityStateZip = [opts.city, [opts.state, opts.zip].filter(Boolean).join(" ")]
+    .filter(Boolean)
+    .join(", ")
+    .trim();
+  if (street && cityStateZip) return `${street} / ${cityStateZip}`;
+  return street || cityStateZip;
+}
+
 export function initials(first?: string | null, last?: string | null, fallback?: string | null): string {
   const a = (first || "").trim()[0] ?? "";
   const b = (last || "").trim()[0] ?? "";

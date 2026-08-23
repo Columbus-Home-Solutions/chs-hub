@@ -644,15 +644,9 @@ function SignSection({
           <p class="quote-muted">
             Review and sign electronically. Deposit payment unlocks once your signature is complete.
           </p>
-          {quote.signature_status && quote.signature_status !== "none" && (
+          {quote.signature_status === "pending" && (
             <div class="quote-signed-note">
-              Signature status: <strong>{quote.signature_status}</strong>
-              {quote.signature_status === "failed" && quote.signature_error && (
-                <p class="quote-muted">{quote.signature_error}</p>
-              )}
-              {quote.signature_status === "pending" && (
-                <p class="quote-muted">Your agreement is being prepared — this usually takes a few seconds.</p>
-              )}
+              <p class="quote-muted">Your agreement is being prepared — this usually takes a few seconds.</p>
             </div>
           )}
           {err && <div class="quote-error">{err}</div>}

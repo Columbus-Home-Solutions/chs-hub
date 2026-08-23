@@ -308,7 +308,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
           property_state: state || "Arkansas",
           property_zip: zip,
           job_type: jobType,
-          job_type_detail: jobType === "other" ? jobTypeDetail.trim() : null,
+          job_type_detail: jobTypeDetail.trim() || null,
           lead_source: leadSource,
           visit_notes: notes,
         });
@@ -353,7 +353,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
         lat,
         lon,
         job_type: jobType,
-        job_type_detail: jobType === "other" ? jobTypeDetail.trim() : null,
+        job_type_detail: jobTypeDetail.trim() || null,
         lead_source: leadSource,
         notes,
       });
@@ -652,10 +652,7 @@ export function EstimateRequestForm(_props: RoutableProps) {
                 value={jobType}
                 placeholder="Select…"
                 options={ESTIMATE_JOB_TYPES.map((t) => ({ value: t, label: formatStatus(t) }))}
-                onChange={(v) => {
-                  setJobType(v);
-                  if (v !== "other") setJobTypeDetail("");
-                }}
+                onChange={setJobType}
               />
             </FormField>
             <FormField label="Lead source" required error={errors.lead_source}>
@@ -667,18 +664,16 @@ export function EstimateRequestForm(_props: RoutableProps) {
               />
             </FormField>
           </div>
-          {jobType === "other" && (
-            <FormField
-              label="What kind of job is this?"
-              required
-              error={errors.job_type_detail}
-              inputProps={{
-                value: jobTypeDetail,
-                placeholder: "Pergola repair",
-                onInput: (e) => setJobTypeDetail((e.target as HTMLInputElement).value),
-              }}
-            />
-          )}
+          <FormField
+            label="Description"
+            required={jobType === "other"}
+            error={errors.job_type_detail}
+            inputProps={{
+              value: jobTypeDetail,
+              placeholder: "e.g. Pergola repair, Kitchen remodel…",
+              onInput: (e) => setJobTypeDetail((e.target as HTMLInputElement).value),
+            }}
+          />
           <FormField label="Notes">
             <textarea
               class="form-textarea"

@@ -421,7 +421,7 @@ async function loadFullEstimate(env: Env, id: string) {
             c.phone AS client_phone, c.email AS client_email,
             er.request_number AS request_number,
             er.property_address, er.property_city, er.property_state, er.property_zip,
-            er.job_type
+            er.job_type, er.job_type_detail
      FROM estimates e
      LEFT JOIN clients c ON c.id = e.client_id
      LEFT JOIN estimate_requests er ON er.id = e.request_id
@@ -494,6 +494,7 @@ async function loadFullEstimate(env: Env, id: string) {
     property_state: ctx?.property_state ?? null,
     property_zip: ctx?.property_zip ?? null,
     job_type: ctx?.job_type ?? null,
+    job_type_detail: (ctx?.job_type_detail as string | null) ?? null,
     resent_dates: resentRows.map((r) => r.created_at),
     line_items: lineItems.map((li) => shapeLineItem(li, subItems)),
     payment_schedule: schedule.map((p) => shapePayment(p, totals.total)),

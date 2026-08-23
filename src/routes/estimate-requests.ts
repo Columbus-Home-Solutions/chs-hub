@@ -30,6 +30,7 @@ import { cascadeDeleteEstimateRequest } from "../lib/cascade-delete.js";
 import { triggerPostVisitFollowUp } from "../lib/new-lead-outreach.js";
 import { parseStoredScopeDraft } from "../lib/scope-draft.js";
 import { NON_TEST_OR_ORPHAN_CLIENT } from "../lib/non-test-client.js";
+import { jobTypeTitleFragment } from "../../shared/job-type-label.js";
 
 // Write roles match the app-wide convention (clients/subs): owner, PM, and
 // office_admin — office_admin managing the pipeline is the realistic workflow.
@@ -183,6 +184,29 @@ function daysSince(iso: string | null): number {
   const t = new Date(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z").getTime();
   if (isNaN(t)) return 0;
   return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
+}
+
+/** Recompute estimates.title from request job_type_detail + address. */
+async function syncEstimateTitleFromRequest(env: Env, requestId: string): Promise<void> {
+  const req = await env.DB.prepare(
+    `SELECT estimate_id, job_type, job_type_detail, property_address
+       FROM estimate_requests WHERE id = ?`,
+  )
+    .bind(requestId)
+    .first<{
+      estimate_id: string | null;
+      job_type: string | null;
+      job_type_detail: string | null;
+      property_address: string | null;
+    }>();
+  if (!req?.estimate_id) return;
+  const title =
+    `${jobTypeTitleFragment(req.job_type, req.job_type_detail)} — ${req.property_address ?? ""}`.trim();
+  await env.DB.prepare(
+    `UPDATE estimates SET title = ?, updated_at = ? WHERE id = ?`,
+  )
+    .bind(title, new Date().toISOString(), req.estimate_id)
+    .run();
 }
 
 function shape(row: RequestRow) {
@@ -405,7 +429,8 @@ export async function handleEstimateRequestCreate(request: Request, env: Env): P
   const propertyZip = str(body.property_zip);
   const jobType = str(body.job_type);
   const leadSource = str(body.lead_source);
-  const jobTypeDetail = jobType === "other" ? str(body.job_type_detail) : null;
+  // Free-text description for any job type (column remains job_type_detail).
+  const jobTypeDetail = str(body.job_type_detail);
 
   const missing: string[] = [];
   if (!clientId) missing.push("client_id");
@@ -543,7 +568,7 @@ export async function handleEstimateRequestUpdate(
   const { user } = guarded;
 
   const existing = await env.DB.prepare(
-    `SELECT id, status, estimate_id, client_id,
+    `SELECT id, status, estimate_id, client_id, job_type_detail,
             property_address, property_city, property_state, property_zip
        FROM estimate_requests WHERE id = ?`,
   )
@@ -553,6 +578,7 @@ export async function handleEstimateRequestUpdate(
       status: string;
       estimate_id: string | null;
       client_id: string | null;
+      job_type_detail: string | null;
       property_address: string | null;
       property_city: string | null;
       property_state: string | null;
@@ -678,13 +704,13 @@ export async function handleEstimateRequestUpdate(
 
   if ("job_type" in body) {
     const jt = str(body.job_type);
-    if (jt === "other" && "job_type_detail" in body && !str(body.job_type_detail)) {
-      return err(400, "bad_request", "job_type_detail is required when job_type is other");
-    }
-    // Switching away from Other — drop stale specify text unless caller set it.
-    if (jt && jt !== "other" && !("job_type_detail" in body)) {
-      updates.push("job_type_detail = ?");
-      binds.push(null);
+    const detailInBody = "job_type_detail" in body ? str(body.job_type_detail) : undefined;
+    if (jt === "other") {
+      const effectiveDetail =
+        detailInBody !== undefined ? detailInBody : existing.job_type_detail;
+      if (!effectiveDetail?.trim()) {
+        return err(400, "bad_request", "job_type_detail is required when job_type is other");
+      }
     }
   }
 
@@ -740,6 +766,11 @@ export async function handleEstimateRequestUpdate(
     void triggerPostVisitFollowUp(id, env).catch((e) =>
       console.error("[post_visit] failed for", id, (e as Error).message),
     );
+  }
+
+  // Keep linked estimate list/builder title in sync when description or address changes.
+  if ("job_type_detail" in body || "job_type" in body || "property_address" in body) {
+    await syncEstimateTitleFromRequest(env, id);
   }
 
   return json({ request: updated });
@@ -1048,7 +1079,7 @@ export async function handleEstimateRequestQuickLead(
     const phone = str(body.phone);
     const email = str(body.email);
     const jobType = str(body.job_type) ?? "other";
-    const jobTypeDetail = jobType === "other" ? str(body.job_type_detail) : null;
+    const jobTypeDetail = str(body.job_type_detail);
     if (jobType === "other" && !jobTypeDetail) {
       return err(400, "bad_request", "job_type_detail is required when job_type is other");
     }

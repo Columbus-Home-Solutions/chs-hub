@@ -53,11 +53,7 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
   });
 
   function set(field: keyof typeof form, value: string) {
-    setForm((prev) => {
-      const next = { ...prev, [field]: value };
-      if (field === "job_type" && value !== "other") next.job_type_detail = "";
-      return next;
-    });
+    setForm((prev) => ({ ...prev, [field]: value }));
     // Clear matched notice when phone changes.
     if (field === "phone") setMatchedClient(null);
   }
@@ -95,7 +91,7 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
           phone: form.phone.trim(),
           email: form.email.trim() || undefined,
           job_type: form.job_type,
-          job_type_detail: form.job_type === "other" ? form.job_type_detail.trim() : null,
+          job_type_detail: form.job_type_detail.trim() || null,
           lead_source: form.lead_source,
           property_address: form.property_address.trim() || undefined,
           property_city: form.property_city.trim() || undefined,
@@ -214,20 +210,20 @@ export function QuickLeadModal({ onClose, onCreated }: QuickLeadModalProps) {
               </div>
             </div>
 
-            {form.job_type === "other" && (
-              <div class="form-group">
-                <label class="form-label" for="ql-jobdetail">What kind of job is this?</label>
-                <input
-                  id="ql-jobdetail"
-                  class="form-input"
-                  type="text"
-                  required
-                  placeholder="Pergola repair"
-                  value={form.job_type_detail}
-                  onInput={(e) => set("job_type_detail", (e.target as HTMLInputElement).value)}
-                />
-              </div>
-            )}
+            <div class="form-group">
+              <label class="form-label" for="ql-jobdetail">
+                Description{form.job_type === "other" ? " *" : ""}
+              </label>
+              <input
+                id="ql-jobdetail"
+                class="form-input"
+                type="text"
+                required={form.job_type === "other"}
+                placeholder="e.g. Pergola repair, Kitchen remodel…"
+                value={form.job_type_detail}
+                onInput={(e) => set("job_type_detail", (e.target as HTMLInputElement).value)}
+              />
+            </div>
 
             <div class="form-group">
               <AddressAutocomplete

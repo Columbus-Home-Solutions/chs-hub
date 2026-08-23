@@ -7,6 +7,19 @@ export function formatCurrency(amount: number | null | undefined): string {
 
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
+  // Date-only (YYYY-MM-DD) — parse as local calendar day to avoid UTC→Central
+  // shifting "Aug 23" back to "Aug 22" in the evening.
+  const dayOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (dayOnly) {
+    const y = Number(dayOnly[1]);
+    const m = Number(dayOnly[2]);
+    const d = Number(dayOnly[3]);
+    return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });

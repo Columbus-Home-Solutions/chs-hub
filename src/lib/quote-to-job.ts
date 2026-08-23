@@ -301,8 +301,7 @@ export async function convertQuoteToJob(
 
   const typeFrag = jobTypeTitleFragment(row.job_type, row.job_type_detail);
   const title =
-    row.e_title ||
-    `${row.job_type === "other" && row.job_type_detail?.trim() ? typeFrag : titleCase(row.job_type)} — ${row.property_address}`;
+    row.e_title || `${typeFrag} — ${row.property_address}`;
 
   // job_number hardening (Sprint 6 deviation 2): allocate INSIDE the INSERT via
   // COALESCE(MAX(job_number),0)+1, backed by the UNIQUE index idx_jobs_job_number.
@@ -792,8 +791,4 @@ function addDays(isoDate: string, days: number): string {
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
-}
-
-function titleCase(s: string): string {
-  return s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

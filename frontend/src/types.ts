@@ -291,7 +291,7 @@ export interface EstimateRequest {
   property_state: string | null;
   property_zip: string;
   job_type: string;
-  /** Free-text when job_type is "other" — used in internal titles/labels. */
+  /** Free-text description for any job type — used in internal titles/labels. */
   job_type_detail: string | null;
   lead_source: string;
   lead_source_detail: string | null;
@@ -480,6 +480,8 @@ export interface Estimate {
   property_state: string | null;
   property_zip: string | null;
   job_type: string | null;
+  /** Free-text description (any job type) — used in internal titles/labels. */
+  job_type_detail?: string | null;
   title: string | null;
   estimate_mode: EstimateMode | null;
   billing_model: BillingModel | null;

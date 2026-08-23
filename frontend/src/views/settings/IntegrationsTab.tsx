@@ -672,7 +672,21 @@ export function IntegrationsTab() {
               color: "var(--color-warning-dark, #92400e)",
               fontSize: "var(--text-sm)",
             }}>
-              ⚠️ SANDBOX MODE — signature requests are non-binding watermarked test documents. Flip to LIVE only when ready.
+              ⚠️ SANDBOX — documents are watermarked and not legally binding. Live requires a BoldSign <em>Live</em> API key (`wrangler secret put BOLDSIGN_API_KEY`), not just flipping this toggle.
+            </div>
+          )}
+          {esig?.mode === "live" && (
+            <div style={{
+              background: "var(--color-warning-light, #fff3cd)",
+              border: "2px solid var(--color-warning, #f59e0b)",
+              borderRadius: "var(--radius-sm)",
+              padding: "var(--space-sm) var(--space-md)",
+              marginBottom: "var(--space-sm)",
+              fontWeight: 600,
+              color: "var(--color-warning-dark, #92400e)",
+              fontSize: "var(--text-sm)",
+            }}>
+              LIVE badge is set — but BoldSign only binds if the Worker secret is a <em>Live</em> API key. A Sandbox key still watermarks PDFs even when this toggle says LIVE.
             </div>
           )}
 
@@ -714,12 +728,12 @@ export function IntegrationsTab() {
                 variant="secondary"
                 disabled={esigModeBusy}
                 onClick={async () => {
-                  if (!confirm("CAUTION: Switching to LIVE mode will send real, legally-binding signature requests. Are you sure you want to proceed?")) return;
+                  if (!confirm("CAUTION: This only flips the CHS mode badge. Legally binding signatures also require replacing BOLDSIGN_API_KEY with a BoldSign Live API key (not Sandbox). Have you already put the Live key via wrangler secret?")) return;
                   setEsigModeBusy(true);
                   try {
                     await api.put(`/api/settings/${esig.setting_key}`, { value: "live" });
                     setEsig((e) => e ? { ...e, mode: "live" } : e);
-                    toast.push("success", "E-signature mode set to LIVE. All new requests are legally binding.");
+                    toast.push("success", "Mode set to LIVE. Confirm PDFs have no sandbox watermark on the next ZZTEST send.");
                   } catch (e) {
                     toast.push("error", errMsg(e));
                   } finally {

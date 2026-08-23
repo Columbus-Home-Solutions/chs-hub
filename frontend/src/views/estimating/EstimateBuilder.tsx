@@ -68,9 +68,39 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
   const [restorationHintDismissed, setRestorationHintDismissed] = useState(false);
   const [wonRequest, setWonRequest] = useState<EstimateRequest | null>(null);
   const [wonLoading, setWonLoading] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
+  const [descSaving, setDescSaving] = useState(false);
   const scheduleBootstrappedRef = useRef<string | null>(null);
 
   const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
+
+  const saveDescription = async () => {
+    const e = estimate;
+    if (!e?.request_id || descSaving) return;
+    const next = descDraft.trim();
+    const prev = (e.job_type_detail ?? "").trim();
+    if (next === prev) return;
+    if (e.job_type === "other" && !next) {
+      toast.push("error", "Description is required for Other job types");
+      setDescDraft(e.job_type_detail ?? "");
+      return;
+    }
+    setDescSaving(true);
+    try {
+      await api.put(`/api/estimate-requests/${e.request_id}`, {
+        job_type_detail: next || null,
+      });
+      const refreshed = await api.get<{ estimate: Estimate }>(`/api/estimates/${e.id}`);
+      setEstimate(refreshed.estimate);
+      setDescDraft(refreshed.estimate.job_type_detail ?? "");
+      toast.push("success", "Description updated");
+    } catch (err) {
+      toast.push("error", errMsg(err));
+      setDescDraft(e.job_type_detail ?? "");
+    } finally {
+      setDescSaving(false);
+    }
+  };
 
   // Create-or-open the estimate. Two paths:
   //   1. requestId provided → POST create-or-open (normal workflow)
@@ -94,6 +124,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
         }
         if (cancelled) return;
         setEstimate(res.estimate);
+        setDescDraft(res.estimate.job_type_detail ?? "");
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
       } finally {
@@ -264,6 +295,26 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
             ) : (e.client_name ?? "—")}
             {" · "}{e.title ?? formatStatus(e.job_type ?? "")}
           </p>
+          {e.request_id && (
+            <div class="form-group" style={{ marginTop: "0.5rem", maxWidth: "28rem" }}>
+              <label class="form-label" for="builder-desc">Description</label>
+              <input
+                id="builder-desc"
+                class="form-input"
+                type="text"
+                value={descDraft}
+                placeholder="e.g. Pergola repair"
+                disabled={descSaving}
+                onInput={(ev) => setDescDraft((ev.target as HTMLInputElement).value)}
+                onBlur={() => void saveDescription()}
+                onKeyDown={(ev) => {
+                  if ((ev as KeyboardEvent).key === "Enter") {
+                    (ev.target as HTMLInputElement).blur();
+                  }
+                }}
+              />
+            </div>
+          )}
         </div>
         <div class="view-header__right">
           <Button

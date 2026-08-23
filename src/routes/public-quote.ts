@@ -80,6 +80,23 @@ function str(v: unknown): string | null {
   return s === "" ? null : s;
 }
 
+/**
+ * Client-facing signature status only. Never expose internal ops values like
+ * "failed" / audit notes — those live in documents.signature_data for admin.
+ */
+function clientFacingSignatureStatus(
+  raw: string | null | undefined,
+  signatureComplete: boolean,
+): string {
+  if (signatureComplete) return "completed";
+  const s = (raw ?? "none").trim() || "none";
+  if (s === "pending") return "pending";
+  if (s === "completed") return "completed";
+  if (s === "none") return "none";
+  // failed / revoked / declined / expired / sent / viewed → ready to sign
+  return "ready";
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
@@ -317,8 +334,9 @@ async function publicPayload(env: Env, qc: QuoteContext, cfg: { publishableKey: 
     signature_required: signatureRequired,
     signature_complete: signatureComplete,
     contract_signature_mode: !includeContract ? "none" : boldsignMode ? "boldsign" : "typed",
-    signature_status: sigMeta.signature_status ?? (signatureComplete ? "completed" : "none"),
-    signature_error: sigMeta.signature_error ?? null,
+    signature_status: clientFacingSignatureStatus(sigMeta.signature_status, signatureComplete),
+    // Never expose internal signature_error (ops/audit notes) on the public portal.
+    signature_error: null,
     contract_document_id: contractDoc?.id ?? null,
     selections_required: selectionProgress.required,
     selections_total: selectionProgress.total,
@@ -527,8 +545,7 @@ export async function handlePublicQuoteSignLink(
     return err(
       502,
       "signature_failed",
-      activeMeta.signature_error ??
-        "Could not prepare your service agreement for signing. Please try again or contact us.",
+      "Could not prepare your service agreement for signing. Please try again or contact us.",
     );
   }
 
@@ -536,7 +553,7 @@ export async function handlePublicQuoteSignLink(
     return err(
       409,
       "signature_not_ready",
-      `Agreement is not ready to sign yet (status: ${activeMeta.signature_status ?? "unknown"}).`,
+      "Your agreement is being prepared. Please wait a few seconds and try again.",
     );
   }
 
@@ -547,13 +564,20 @@ export async function handlePublicQuoteSignLink(
       activeMeta.signer_email!,
       redirectUrl,
     );
-    return json({ sign_link: link.signLink, signature_status: activeMeta.signature_status ?? "sent" });
+    return json({
+      sign_link: link.signLink,
+      signature_status: clientFacingSignatureStatus(activeMeta.signature_status, false),
+    });
   } catch (signErr) {
     const msg = (signErr as Error).message;
     if (msg.includes("Invalid Document ID") || msg.includes("403")) {
       const resent = await resendEstimateContractForSigning(env, e.id, "quote-sign-link-403-resend");
       if (!resent || !estimateBoldsignEmbedReady(resent.meta)) {
-        return err(502, "boldsign_error", msg);
+        return err(
+          502,
+          "boldsign_error",
+          "Could not open the signature page. Please try again or contact us.",
+        );
       }
       try {
         const link = await getEmbeddedSignLink(
@@ -562,12 +586,23 @@ export async function handlePublicQuoteSignLink(
           resent.meta.signer_email!,
           redirectUrl,
         );
-        return json({ sign_link: link.signLink, signature_status: resent.meta.signature_status ?? "sent" });
-      } catch (retryErr) {
-        return err(502, "boldsign_error", (retryErr as Error).message);
+        return json({
+          sign_link: link.signLink,
+          signature_status: clientFacingSignatureStatus(resent.meta.signature_status, false),
+        });
+      } catch {
+        return err(
+          502,
+          "boldsign_error",
+          "Could not open the signature page. Please try again or contact us.",
+        );
       }
     }
-    return err(502, "boldsign_error", msg);
+    return err(
+      502,
+      "boldsign_error",
+      "Could not open the signature page. Please try again or contact us.",
+    );
   }
 }
 

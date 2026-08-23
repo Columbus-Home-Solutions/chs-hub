@@ -21,34 +21,8 @@ import { depositFromSchedule } from "./deposit-from-schedule.js";
 import { paymentScheduleMergeFields } from "./payment-schedule-merge.js";
 import { ensureServiceAgreementTemplate } from "./service-agreement-template.js";
 import { getBoldSignConfig, getDocumentProperties, getEmbeddedSignLink, mapBoldSignDocumentStatus, sendDocumentForSignature } from "./boldsign.js";
-import { notifySignatureNeeded } from "./notification-engine.js";
 import { applyPmFields, resolvePmFields } from "./pm-fields.js";
 import { loadWorkingAgreementAttachment } from "./working-agreement.js";
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** BoldSign document/send is async — embed link often fails if fetched immediately. */
-async function fetchEstimateEmbedSignLink(
-  config: NonNullable<Awaited<ReturnType<typeof getBoldSignConfig>>>,
-  documentId: string,
-  signerEmail: string,
-  redirectUrl: string,
-  attempts = 4,
-): Promise<string | null> {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(1500);
-    try {
-      const linkResult = await getEmbeddedSignLink(config, documentId, signerEmail, redirectUrl);
-      return linkResult.signLink ?? null;
-    } catch (linkErr) {
-      console.warn(
-        `[estimate-contract] getEmbeddedSignLink attempt ${attempt + 1}/${attempts}: ${(linkErr as Error).message}`,
-      );
-      if (attempt === attempts - 1) return null;
-    }
-  }
-  return null;
-}
 
 export interface EstimateSignatureMeta {
   template_type?: string;
@@ -286,6 +260,8 @@ export async function generateAndSendEstimateContract(
   env: Env,
   estimateId: string,
   generatedBy: string,
+  // Kept for call-site compatibility (Send used to pass waitUntil for signature_needed).
+  _opts?: { exec?: { waitUntil: (p: Promise<unknown>) => void } },
 ): Promise<GenerateEstimateContractResult> {
   const row = await env.DB.prepare(
     `SELECT id, estimate_number, title, billing_model, include_contract, contract_template_id, client_id
@@ -439,37 +415,10 @@ export async function generateAndSendEstimateContract(
       .bind(serializeSignatureMeta(meta), docId)
       .run();
 
-    // CHS (not BoldSign) emails the client a Sign Now link via the notification engine.
-    if (row.client_id) {
-      const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
-      const portal = await env.DB.prepare("SELECT portal_token FROM estimates WHERE id = ?")
-        .bind(estimateId)
-        .first<{ portal_token: string | null }>();
-      const estimateLink = portal?.portal_token ? `${origin}/quote/${portal.portal_token}` : "";
-      const redirectUrl = estimateLink ? `${estimateLink}?signed=1` : `${origin}/quote`;
-      const embedLink = await fetchEstimateEmbedSignLink(
-        config,
-        result.documentId,
-        signerEmail,
-        redirectUrl,
-      );
-      const signLink = embedLink || estimateLink;
-      if (signLink) {
-        try {
-          await notifySignatureNeeded(env, {
-            clientId: row.client_id,
-            estimateId,
-            documentName: templateLabel,
-            signLink,
-            instanceKey: result.documentId,
-          });
-        } catch (notifyErr) {
-          console.warn(
-            `[estimate-contract] signature_needed notify failed: ${(notifyErr as Error).message}`,
-          );
-        }
-      }
-    }
+    // Do NOT fire signature_needed here. Send Estimate already sends estimate_sent
+    // with the quote portal link; signing happens inside that portal (review →
+    // sign → pay). A raw BoldSign URL at send time reads as "sign first".
+    // Job-phase docs still call notifySignatureNeeded from their own send paths.
 
     return { docId, skipped: false, boldsign_sent: true };
   } catch (e) {

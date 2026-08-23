@@ -6,13 +6,15 @@
  *
  * Pipeline:
  *   trigger → active-template lookup → merge-field render → enqueue
- *           → (every-15-min cron) due-check + stop/preference/rate re-check → send
+ *           → immediate dispatch attempt (waitUntil when ExecutionContext given)
+ *           → (every-15-min cron) due-check + stop/preference/rate re-check → retry
  *           → log → auto-log to communications
  *
  * Mirrors the WC "log intent at the event site, recompute/process on cron"
- * split: trigger sites call triggerNotification() which only WRITES a queued
- * notification_logs row. Nothing is sent inline in a request handler — the
- * Notification Processor cron (processNotifications) does all dispatching.
+ * split: trigger sites call triggerNotification() which WRITES queued
+ * notification_logs rows, then best-effort dispatches those rows immediately
+ * so the common case delivers in seconds. The every-15-min cron remains the
+ * retry / scheduled-trigger safety net for anything still queued.
  *
  * Idempotency / no-double-send: every enqueue carries a deterministic
  * dedupe_key (trigger_event + entity id + channel + instance key). A UNIQUE
@@ -130,19 +132,40 @@ export interface TriggerResult {
   enqueued: number;
   skipped: number;
   reasons: string[];
+  /** Row ids successfully inserted this call (for immediate dispatch). */
+  enqueuedIds: string[];
+}
+
+/** Optional ExecutionContext-like handle for post-response background work. */
+export type NotifyExec = { waitUntil: (p: Promise<unknown>) => void };
+
+export interface TriggerOptions {
+  /**
+   * When provided, immediate dispatch runs inside waitUntil so the HTTP
+   * response is not blocked on Resend/Twilio. Without it, immediate dispatch
+   * is still attempted but awaited inline.
+   */
+  exec?: NotifyExec;
+  /**
+   * Enqueue only — skip immediate dispatch. Used by scanScheduledTriggers
+   * inside processNotifications (the same cron drain sends those rows).
+   */
+  skipImmediate?: boolean;
 }
 
 /**
  * Look up every ACTIVE template for `event`, render it against the assembled
  * context, and enqueue one queued notification_logs row per template (idempotent
- * on dedupe_key). Does NOT send — the cron does.
+ * on dedupe_key). Then best-effort immediate dispatch for due rows unless
+ * skipImmediate is set; the every-15-min cron retries anything still queued.
  */
 export async function triggerNotification(
   env: Env,
   event: string,
   ctx: TriggerContext,
+  opts?: TriggerOptions,
 ): Promise<TriggerResult> {
-  const result: TriggerResult = { enqueued: 0, skipped: 0, reasons: [] };
+  const result: TriggerResult = { enqueued: 0, skipped: 0, reasons: [], enqueuedIds: [] };
   try {
     const { results } = await env.DB.prepare(
       "SELECT * FROM notification_templates WHERE trigger_event = ? AND is_active = 1",
@@ -176,7 +199,7 @@ export async function triggerNotification(
       const scheduledFor = computeScheduledFor(tpl, ctx);
       const dedupeKey = buildDedupeKey(event, ctx, tpl.channel);
 
-      const inserted = await enqueueRow(env, {
+      const insertedId = await enqueueRow(env, {
         template: tpl,
         event,
         recipientName: recipient.name,
@@ -192,11 +215,17 @@ export async function triggerNotification(
         estimateRequestId: ctx.estimateRequestId ?? null,
         linkPath: ctx.linkPath ?? null,
       });
-      if (inserted) result.enqueued++;
-      else {
+      if (insertedId) {
+        result.enqueued++;
+        result.enqueuedIds.push(insertedId);
+      } else {
         result.skipped++;
         result.reasons.push(`duplicate:${dedupeKey}`);
       }
+    }
+
+    if (!opts?.skipImmediate && result.enqueuedIds.length > 0) {
+      await scheduleImmediateDispatch(env, result.enqueuedIds, opts?.exec);
     }
   } catch (err) {
     console.error(`[notify] triggerNotification(${event}) failed:`, (err as Error).message);
@@ -222,8 +251,9 @@ interface EnqueueArgs {
   linkPath: string | null;
 }
 
-/** Insert a queued row. Returns false when the dedupe key already exists. */
-async function enqueueRow(env: Env, a: EnqueueArgs): Promise<boolean> {
+/** Insert a queued row. Returns the new id, or null when the dedupe key already exists. */
+async function enqueueRow(env: Env, a: EnqueueArgs): Promise<string | null> {
+  const id = crypto.randomUUID();
   const res = await env.DB.prepare(
     `INSERT OR IGNORE INTO notification_logs (
         id, template_id, trigger_event, recipient_type, recipient_name, recipient_contact,
@@ -232,7 +262,7 @@ async function enqueueRow(env: Env, a: EnqueueArgs): Promise<boolean> {
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, 0, 0, ?, ?, ?, ?, datetime('now'))`,
   )
     .bind(
-      crypto.randomUUID(),
+      id,
       a.template.id,
       a.event,
       a.template.recipient_type,
@@ -250,7 +280,59 @@ async function enqueueRow(env: Env, a: EnqueueArgs): Promise<boolean> {
       a.linkPath,
     )
     .run();
-  return (res.meta?.changes ?? 0) > 0;
+  return (res.meta?.changes ?? 0) > 0 ? id : null;
+}
+
+/**
+ * Kick off immediate dispatch for newly enqueued rows. Prefer waitUntil so
+ * user-facing handlers return before Resend/Twilio round-trips; fall back to
+ * awaiting the attempt when no ExecutionContext is available (so the Worker
+ * does not tear down mid-send).
+ */
+async function scheduleImmediateDispatch(
+  env: Env,
+  ids: string[],
+  exec?: NotifyExec,
+): Promise<void> {
+  const work = dispatchImmediateRows(env, ids).catch((err) => {
+    console.error("[notify] immediate dispatch failed:", (err as Error).message);
+  });
+  if (exec?.waitUntil) {
+    exec.waitUntil(work);
+    return;
+  }
+  await work;
+}
+
+/**
+ * Best-effort send for specific newly-enqueued rows. Failures leave the row
+ * `queued` with retry_count untouched so the every-15-min cron owns retries.
+ */
+async function dispatchImmediateRows(env: Env, ids: string[]): Promise<void> {
+  const now = new Date().toISOString();
+  const stats: ProcessStats = {
+    scanned_enqueued: 0,
+    sent: 0,
+    simulated: 0,
+    failed: 0,
+    deferred: 0,
+    suppressed: 0,
+    dead_lettered: 0,
+    duration_ms: 0,
+  };
+  for (const id of ids) {
+    try {
+      const row = await env.DB.prepare("SELECT * FROM notification_logs WHERE id = ?")
+        .bind(id)
+        .first<LogRow>();
+      if (!row || row.status !== "queued") continue;
+      if (row.scheduled_for && row.scheduled_for > now) continue;
+      await dispatchRow(env, row, stats, { leaveQueuedOnFailure: true });
+    } catch (err) {
+      console.error(`[notify] immediate dispatch ${id} threw:`, (err as Error).message);
+      await releaseClaim(env, id).catch(() => {});
+    }
+  }
 }
 
 function buildDedupeKey(event: string, ctx: TriggerContext, channel: string): string {
@@ -497,6 +579,26 @@ export async function processNotifications(env: Env): Promise<ProcessStats> {
     duration_ms: 0,
   };
 
+  // Recover rows left in 'sending' if a Worker was killed mid-dispatch
+  // (immediate path or prior cron). Claims older than 5 minutes → back to queued.
+  try {
+    const staleBefore = new Date(Date.now() - 5 * 60_000).toISOString();
+    await env.DB.prepare(
+      `UPDATE notification_logs
+          SET status = 'queued', error_message = NULL
+        WHERE status = 'sending'
+          AND (
+            error_message IS NULL
+            OR error_message NOT LIKE 'claim:%'
+            OR substr(error_message, 7) <= ?
+          )`,
+    )
+      .bind(staleBefore)
+      .run();
+  } catch (err) {
+    console.error("[notify] sending-claim recovery failed:", (err as Error).message);
+  }
+
   try {
     stats.scanned_enqueued = await scanScheduledTriggers(env);
   } catch (err) {
@@ -517,6 +619,7 @@ export async function processNotifications(env: Env): Promise<ProcessStats> {
       await dispatchRow(env, row, stats);
     } catch (err) {
       console.error(`[notify] dispatch ${row.id} threw:`, (err as Error).message);
+      await releaseClaim(env, row.id).catch(() => {});
     }
   }
 
@@ -544,8 +647,45 @@ interface LogRow {
   link_path: string | null;
 }
 
+interface DispatchOpts {
+  /**
+   * Immediate-dispatch mode: on provider failure, release back to `queued`
+   * without consuming a retry so the cron owns the retry counter.
+   */
+  leaveQueuedOnFailure?: boolean;
+}
+
+/** Release a mid-flight claim so cron can retry. */
+async function releaseClaim(env: Env, id: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE notification_logs
+        SET status = 'queued'
+      WHERE id = ? AND status = 'sending'`,
+  )
+    .bind(id)
+    .run();
+}
+
 /** Send (or simulate) one due row, applying every send-time business rule. */
-async function dispatchRow(env: Env, row: LogRow, stats: ProcessStats): Promise<void> {
+async function dispatchRow(
+  env: Env,
+  row: LogRow,
+  stats: ProcessStats,
+  opts?: DispatchOpts,
+): Promise<void> {
+  // Atomic claim — prevents immediate dispatch + cron from double-sending.
+  const claimAt = new Date().toISOString();
+  const claim = await env.DB.prepare(
+    `UPDATE notification_logs
+        SET status = 'sending', error_message = ?
+      WHERE id = ? AND status = 'queued'`,
+  )
+    .bind(`claim:${claimAt}`, row.id)
+    .run();
+  if ((claim.meta?.changes ?? 0) === 0) {
+    return;
+  }
+
   // (1) Stop-condition re-check for quote follow-ups (§6.6) — at SEND time.
   if (FOLLOW_UP_EVENTS.has(row.trigger_event)) {
     const stop = await followUpStopReason(env, row.estimate_request_id);
@@ -570,7 +710,7 @@ async function dispatchRow(env: Env, row: LogRow, stats: ProcessStats): Promise<
     if (isOutsideSmsQuietHours()) {
       const nextWindow = nextCentral8amIso();
       await env.DB.prepare(
-        "UPDATE notification_logs SET scheduled_for = ?, error_message = ? WHERE id = ?",
+        "UPDATE notification_logs SET status = 'queued', scheduled_for = ?, error_message = ? WHERE id = ?",
       )
         .bind(nextWindow, "deferred: quiet hours", row.id)
         .run();
@@ -595,7 +735,7 @@ async function dispatchRow(env: Env, row: LogRow, stats: ProcessStats): Promise<
     if (sentToday >= SMS_DAILY_LIMIT) {
       const tomorrow = nextDayMorningIso();
       await env.DB.prepare(
-        "UPDATE notification_logs SET scheduled_for = ?, error_message = ? WHERE id = ?",
+        "UPDATE notification_logs SET status = 'queued', scheduled_for = ?, error_message = ? WHERE id = ?",
       )
         .bind(tomorrow, "deferred: SMS daily limit reached", row.id)
         .run();
@@ -625,6 +765,19 @@ async function dispatchRow(env: Env, row: LogRow, stats: ProcessStats): Promise<
     return;
   }
 
+  // Immediate path: leave queued untouched (no retry burn) for the cron safety net.
+  if (opts?.leaveQueuedOnFailure) {
+    await env.DB.prepare(
+      `UPDATE notification_logs
+          SET status = 'queued', error_message = NULL
+        WHERE id = ? AND status = 'sending'`,
+    )
+      .bind(row.id)
+      .run();
+    stats.failed++;
+    return;
+  }
+
   // Failure → retry with backoff, or dead-letter after MAX_RETRIES.
   const nextCount = row.retry_count + 1;
   if (nextCount >= MAX_RETRIES) {
@@ -641,7 +794,7 @@ async function dispatchRow(env: Env, row: LogRow, stats: ProcessStats): Promise<
     const backoff = BACKOFF_MS[Math.min(nextCount - 1, BACKOFF_MS.length - 1)];
     const nextAt = new Date(Date.now() + backoff).toISOString();
     await env.DB.prepare(
-      "UPDATE notification_logs SET retry_count = ?, next_retry_at = ?, scheduled_for = ?, error_message = ? WHERE id = ?",
+      "UPDATE notification_logs SET status = 'queued', retry_count = ?, next_retry_at = ?, scheduled_for = ?, error_message = ? WHERE id = ?",
     )
       .bind(nextCount, nextAt, nextAt, outcome.error.slice(0, 500), row.id)
       .run();
@@ -1143,17 +1296,23 @@ export async function notifySignatureNeeded(
     signLink: string;
     instanceKey: string;
   },
+  opts?: TriggerOptions,
 ): Promise<TriggerResult> {
-  return triggerNotification(env, "signature_needed", {
-    clientId: args.clientId,
-    estimateId: args.estimateId ?? null,
-    jobId: args.jobId ?? null,
-    instanceKey: args.instanceKey,
-    merge: {
-      document_name: args.documentName,
-      sign_link: args.signLink,
+  return triggerNotification(
+    env,
+    "signature_needed",
+    {
+      clientId: args.clientId,
+      estimateId: args.estimateId ?? null,
+      jobId: args.jobId ?? null,
+      instanceKey: args.instanceKey,
+      merge: {
+        document_name: args.documentName,
+        sign_link: args.signLink,
+      },
     },
-  });
+    opts,
+  );
 }
 
 /** Render a template against sample data (no send, no log) — POST .../preview. */
@@ -1292,7 +1451,7 @@ export async function triggerJobConversionNotifications(env: Env, jobId: string)
  * never blocks the schedule write.
  */
 export async function triggerSubScheduled(env: Env, scheduleEntryId: string): Promise<TriggerResult> {
-  const result: TriggerResult = { enqueued: 0, skipped: 0, reasons: [] };
+  const result: TriggerResult = { enqueued: 0, skipped: 0, reasons: [], enqueuedIds: [] };
   try {
     const entry = await env.DB.prepare(
       `SELECT e.id, e.job_id, e.sub_id, e.scheduled_date, e.trade_or_work, e.start_time, e.end_time, e.notes,
@@ -1549,16 +1708,31 @@ async function scanQuoteFollowUps(env: Env): Promise<number> {
     };
     // Day 3 → follow_up_1; Day 5 → follow_up_2; Day 7 (or expiry) → quote_expiring.
     if (days >= 3) {
-      const res = await triggerNotification(env, "quote_follow_up_1", { ...ctxBase, instanceKey: "follow_up_1" });
+      const res = await triggerNotification(
+        env,
+        "quote_follow_up_1",
+        { ...ctxBase, instanceKey: "follow_up_1" },
+        { skipImmediate: true },
+      );
       n += res.enqueued;
     }
     if (days >= 5) {
-      const res = await triggerNotification(env, "quote_follow_up_2", { ...ctxBase, instanceKey: "follow_up_2" });
+      const res = await triggerNotification(
+        env,
+        "quote_follow_up_2",
+        { ...ctxBase, instanceKey: "follow_up_2" },
+        { skipImmediate: true },
+      );
       n += res.enqueued;
     }
     const expiring = r.expiration_date ? daysUntil(r.expiration_date) <= 0 : days >= 7;
     if (expiring) {
-      const res = await triggerNotification(env, "quote_expiring", { ...ctxBase, instanceKey: "expiring" });
+      const res = await triggerNotification(
+        env,
+        "quote_expiring",
+        { ...ctxBase, instanceKey: "expiring" },
+        { skipImmediate: true },
+      );
       n += res.enqueued;
     }
   }
@@ -1617,12 +1791,17 @@ async function scanWorkStarting(env: Env): Promise<number> {
 
   for (const r of results ?? []) {
     if (!r.client_id) continue;
-    const res = await triggerNotification(env, "work_starting", {
-      clientId: r.client_id,
-      jobId: r.job_id,
-      instanceKey: r.start_date,
-      scheduledFor: new Date().toISOString(),
-    });
+    const res = await triggerNotification(
+      env,
+      "work_starting",
+      {
+        clientId: r.client_id,
+        jobId: r.job_id,
+        instanceKey: r.start_date,
+        scheduledFor: new Date().toISOString(),
+      },
+      { skipImmediate: true },
+    );
     n += res.enqueued;
   }
   return n;

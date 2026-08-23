@@ -310,7 +310,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
         </div>
       </div>
 
-      {sent && <SentStatusCard estimate={e} />}
+      {sent && <SentStatusCard estimate={e} mutate={mutate} />}
 
       {/* Revision chain notices */}
       {e.status === "revised" && (
@@ -1481,12 +1481,20 @@ function ClientPreview({ estimate, reviews }: { estimate: Estimate; reviews: Sav
 
 // ─── Sent status: client link + progress (Sprint 5) ───────────────────────────
 
-function SentStatusCard({ estimate }: { estimate: Estimate }) {
+function SentStatusCard({
+  estimate,
+  mutate,
+}: {
+  estimate: Estimate;
+  mutate: (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+}) {
   const toast = useToast();
   const [copied, setCopied] = useState(false);
+  const [resending, setResending] = useState(false);
   const link = estimate.portal_path
     ? `${window.location.origin}${estimate.portal_path}`
     : null;
+  const clientLabel = estimate.client_name?.trim() || "the client";
 
   const copy = async () => {
     if (!link) return;
@@ -1500,13 +1508,43 @@ function SentStatusCard({ estimate }: { estimate: Estimate }) {
     }
   };
 
-  // Progress: Sent → Viewed → Signed → Deposit Paid (approved).
-  const steps = [
+  const resend = async () => {
+    if (resending) return;
+    if (!window.confirm(`Resend this estimate to ${clientLabel}?`)) return;
+    setResending(true);
+    try {
+      await mutate(
+        () => api.post(`/api/estimates/${estimate.id}/resend`),
+        `Resent to ${clientLabel}`,
+      );
+    } finally {
+      // Brief debounce so a fast double-click can't enqueue two sends.
+      setTimeout(() => setResending(false), 1500);
+    }
+  };
+
+  // Progress: Sent → Resent(s) → Viewed → Signed → Deposit Paid (approved).
+  const steps: Array<{ label: string; done: boolean; when: string | null | undefined }> = [
     { label: "Sent", done: true, when: estimate.sent_at },
-    { label: "Viewed", done: !!estimate.viewed_date || ["viewed", "approved", "signed"].includes(estimate.status), when: estimate.viewed_date },
+  ];
+  const resentDates =
+    estimate.resent_dates && estimate.resent_dates.length > 0
+      ? estimate.resent_dates
+      : estimate.last_resent_at
+        ? [estimate.last_resent_at]
+        : [];
+  for (const when of resentDates) {
+    steps.push({ label: "Resent", done: true, when });
+  }
+  steps.push(
+    {
+      label: "Viewed",
+      done: !!estimate.viewed_date || ["viewed", "approved", "signed"].includes(estimate.status),
+      when: estimate.viewed_date,
+    },
     { label: "Signed", done: estimate.signed, when: estimate.signed_date },
     { label: "Deposit Paid", done: estimate.status === "approved", when: estimate.approved_date },
-  ];
+  );
 
   return (
     <Card title="Client Quote Link">
@@ -1529,10 +1567,13 @@ function SentStatusCard({ estimate }: { estimate: Estimate }) {
           <Button variant="secondary" disabled={!link} onClick={copy}>
             {copied ? "Copied ✓" : "Copy link"}
           </Button>
+          <Button variant="secondary" disabled={resending} onClick={() => void resend()}>
+            {resending ? "Resending…" : "Resend Estimate"}
+          </Button>
         </div>
         <div class="quote-progress">
           {steps.map((s, i) => (
-            <div key={i} class={`quote-progress__step${s.done ? " is-done" : ""}`}>
+            <div key={`${s.label}-${i}`} class={`quote-progress__step${s.done ? " is-done" : ""}`}>
               <span class="quote-progress__dot">{s.done ? "✓" : i + 1}</span>
               <span class="quote-progress__label">
                 {s.label}
@@ -1541,10 +1582,6 @@ function SentStatusCard({ estimate }: { estimate: Estimate }) {
             </div>
           ))}
         </div>
-        <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
-          Automated email/SMS delivery of this link arrives with the Notification engine (Sprint 7).
-          For now, copy and send it to the client.
-        </p>
       </div>
     </Card>
   );
@@ -1761,8 +1798,7 @@ function SendButton({
         </ul>
         <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
           Marks the estimate as sent, freezes the contract text, and makes the secure client quote
-          link live (sign + pay deposit). Copy the link to the client from the card above — automated
-          email/SMS delivery arrives with the Notification engine (Sprint 7).
+          link live (sign + pay deposit). The client will also get email and SMS with the link.
         </p>
       </Modal>
     </>

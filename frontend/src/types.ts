@@ -512,6 +512,9 @@ export interface Estimate {
   revised_from_id: string | null;
   is_current_version: boolean;
   sent_at: string | null;
+  last_resent_at: string | null;
+  /** ISO timestamps of every manual resend (audit trail). */
+  resent_dates?: string[];
   created_at: string | null;
   updated_at: string | null;
   line_items: EstimateLineItem[];

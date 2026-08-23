@@ -328,6 +328,7 @@ import {
   handleEstimateUpdate,
   handleEstimateDelete,
   handleEstimateSend,
+  handleEstimateResend,
   handleEstimateRevise,
   handleEstimateLost,
   handleLineItemList,
@@ -2506,7 +2507,11 @@ export default {
     }
     const estSend = url.pathname.match(/^\/api\/estimates\/([^/]+)\/send$/);
     if (estSend && request.method === "POST") {
-      return handleEstimateSend(request, env, decodeURIComponent(estSend[1]));
+      return handleEstimateSend(request, env, decodeURIComponent(estSend[1]), ctx);
+    }
+    const estResend = url.pathname.match(/^\/api\/estimates\/([^/]+)\/resend$/);
+    if (estResend && request.method === "POST") {
+      return handleEstimateResend(request, env, decodeURIComponent(estResend[1]), ctx);
     }
     const estRevise = url.pathname.match(/^\/api\/estimates\/([^/]+)\/revise$/);
     if (estRevise && request.method === "POST") {

@@ -1210,7 +1210,7 @@ export async function handleOpsNotifySignatureNeededSimulate(
         estimateId: estimate.id,
         instanceKey: `ops-simulate-est-${Date.now()}`,
       })
-    : { enqueued: 0, skipped: 0, reasons: ["no_estimate_for_client"] };
+    : { enqueued: 0, skipped: 0, reasons: ["no_estimate_for_client"], enqueuedIds: [] };
 
   const processed = await processNotifications(env);
 

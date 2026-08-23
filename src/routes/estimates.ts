@@ -18,6 +18,7 @@
  *   PUT    /api/estimates/:id                          update header
  *   DELETE /api/estimates/:id                          cascade delete (guards on linked job)
  *   POST   /api/estimates/:id/send                     send-gate + status flip + WC hook
+ *   POST   /api/estimates/:id/resend                   re-trigger estimate_sent (no status change)
  *   POST   /api/estimates/:id/revise                   clone into a new version
  * Line items (parent — client-facing)
  *   GET    /api/estimates/:id/line-items
@@ -157,6 +158,7 @@ interface EstimateRow {
   revised_from_id: string | null;
   is_current_version: number | null;
   sent_at: string | null;
+  last_resent_at: string | null;
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
@@ -390,6 +392,7 @@ function shapeEstimateHeader(r: EstimateRow, totals: Totals) {
     revised_from_id: r.revised_from_id,
     is_current_version: (r.is_current_version ?? 1) === 1,
     sent_at: r.sent_at,
+    last_resent_at: r.last_resent_at ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
     created_by: r.created_by,
@@ -461,6 +464,17 @@ async function loadFullEstimate(env: Env, id: string) {
     .bind(id)
     .first<{ id: string; job_number: number | null }>();
 
+  // Every manual resend (audit trail for the SentStatusCard timeline).
+  const resentRows = (
+    await env.DB.prepare(
+      `SELECT created_at FROM audit_logs
+       WHERE entity_type = 'estimate' AND entity_id = ? AND action = 'estimate_resent'
+       ORDER BY created_at ASC`,
+    )
+      .bind(id)
+      .all<{ created_at: string }>()
+  ).results ?? [];
+
   return {
     ...shapeEstimateHeader(row, totals),
     linked_job_id: linkedJob?.id ?? null,
@@ -474,6 +488,7 @@ async function loadFullEstimate(env: Env, id: string) {
     property_state: ctx?.property_state ?? null,
     property_zip: ctx?.property_zip ?? null,
     job_type: ctx?.job_type ?? null,
+    resent_dates: resentRows.map((r) => r.created_at),
     line_items: lineItems.map((li) => shapeLineItem(li, subItems)),
     payment_schedule: schedule.map((p) => shapePayment(p, totals.total)),
   };
@@ -984,7 +999,12 @@ export async function handleEstimateUpdate(
 
 // ─── POST /api/estimates/:id/send ───────────────────────────────────────────────
 
-export async function handleEstimateSend(request: Request, env: Env, id: string): Promise<Response> {
+export async function handleEstimateSend(
+  request: Request,
+  env: Env,
+  id: string,
+  exec?: { waitUntil: (p: Promise<unknown>) => void },
+): Promise<Response> {
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
   const { user } = guarded;
@@ -1114,7 +1134,9 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
   // Generate Service Agreement at send time (estimate-phase, not job).
   let contractDocId: string | null = null;
   if ((est.include_contract ?? 1) === 1) {
-    const contractResult = await generateAndSendEstimateContract(env, id, user.email);
+    const contractResult = await generateAndSendEstimateContract(env, id, user.email, {
+      exec,
+    });
     contractDocId = contractResult.docId;
     if (contractResult.reason === "template_not_found") {
       console.error(`[estimate-send] contract generation failed for estimate ${id}`);
@@ -1131,9 +1153,9 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
   // WC quotes-sent hook (count + dollar value; recomputed on next cron tick).
   triggerQuoteSent(env, id, totals.total);
 
-  // Notification: estimate ready (sms+email, immediate) with the portal link
-  // merged ({{estimate_link}}). Enqueues only; the */15 processor sends. Keyed
-  // on the estimate id so re-sending doesn't double-message until a re-send is
+  // Notification: estimate ready (sms+email). Enqueues then immediately
+  // dispatches via waitUntil (cron remains the retry safety net). Keyed on the
+  // estimate id so re-sending doesn't double-message until a re-send is
   // intended (a re-send mints the same token → same key; use revise for a true
   // new send). Needs the client id from the estimate.
   {
@@ -1141,12 +1163,17 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
       .bind(id)
       .first<{ client_id: string | null; request_id: string | null }>();
     if (link?.client_id) {
-      await triggerNotification(env, "estimate_sent", {
-        clientId: link.client_id,
-        estimateId: id,
-        estimateRequestId: link.request_id,
-        instanceKey: now.toISOString().slice(0, 10),
-      });
+      await triggerNotification(
+        env,
+        "estimate_sent",
+        {
+          clientId: link.client_id,
+          estimateId: id,
+          estimateRequestId: link.request_id,
+          instanceKey: now.toISOString().slice(0, 10),
+        },
+        { exec },
+      );
     }
   }
 
@@ -1155,6 +1182,105 @@ export async function handleEstimateSend(request: Request, env: Env, id: string)
   // engine (Sprint 7); for now we surface a copyable link in the app.
   const publicUrl = `/quote/${portalToken}`;
   return json({ estimate, public_url: publicUrl, public_path: publicUrl });
+}
+
+// ─── POST /api/estimates/:id/resend ─────────────────────────────────────────────
+// Manual backup: re-fire the same estimate_sent notification as the original
+// Send, without touching status / viewed / signed / deposit progress. Uses a
+// unique instanceKey so dedupe doesn't block a deliberate re-delivery.
+
+export async function handleEstimateResend(
+  request: Request,
+  env: Env,
+  id: string,
+  exec?: { waitUntil: (p: Promise<unknown>) => void },
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const est = await env.DB.prepare(
+    `SELECT id, client_id, request_id, sent_at, status, viewed_date, signed_date, approved_date
+     FROM estimates WHERE id = ?`,
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      client_id: string | null;
+      request_id: string | null;
+      sent_at: string | null;
+      status: string;
+      viewed_date: string | null;
+      signed_date: string | null;
+      approved_date: string | null;
+    }>();
+  if (!est) return err(404, "not_found", "Estimate not found");
+  if (!est.sent_at) {
+    return err(400, "not_sent", "Estimate must be sent at least once before it can be resent.");
+  }
+  if (!est.client_id) {
+    return err(400, "no_client", "Estimate has no client on file to deliver to.");
+  }
+
+  const client = await env.DB.prepare(
+    `SELECT first_name, last_name, name, email, phone FROM clients WHERE id = ?`,
+  )
+    .bind(est.client_id)
+    .first<{
+      first_name: string | null;
+      last_name: string | null;
+      name: string | null;
+      email: string | null;
+      phone: string | null;
+    }>();
+  const clientName =
+    [client?.first_name, client?.last_name].filter(Boolean).join(" ").trim() ||
+    client?.name ||
+    "the client";
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  // Same trigger + payload shape as handleEstimateSend — only instanceKey differs
+  // (full ISO) so each manual resend bypasses the date-keyed dedupe of the original.
+  // Immediate dispatch runs via waitUntil (shared engine); cron remains the retry net.
+  const notifyResult = await triggerNotification(
+    env,
+    "estimate_sent",
+    {
+      clientId: est.client_id,
+      estimateId: id,
+      estimateRequestId: est.request_id,
+      instanceKey: nowIso,
+    },
+    { exec },
+  );
+
+  await env.DB.prepare(
+    `UPDATE estimates SET last_resent_at = ?, updated_at = ? WHERE id = ?`,
+  )
+    .bind(nowIso, nowIso, id)
+    .run();
+
+  await logAudit(env, user.email, "estimate_resent", "estimate", id, {
+    client_id: est.client_id,
+    client_name: clientName,
+    client_email: client?.email ?? null,
+    client_phone: client?.phone ?? null,
+    notification: notifyResult,
+    // Prove we did not mutate progress fields
+    status_unchanged: est.status,
+    viewed_date_unchanged: est.viewed_date,
+    signed_date_unchanged: est.signed_date,
+    approved_date_unchanged: est.approved_date,
+  });
+
+  const estimate = await loadFullEstimate(env, id);
+  return json({
+    estimate,
+    client_name: clientName,
+    notification: notifyResult,
+  });
 }
 
 // ─── POST /api/estimates/:id/lost ───────────────────────────────────────────────

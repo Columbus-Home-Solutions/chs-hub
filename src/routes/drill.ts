@@ -18,6 +18,7 @@
  */
 
 import type { Env } from "../env.js";
+import { NON_TEST_CLIENT, notTestClientExists } from "../lib/non-test-client.js";
 
 interface DrillResponse {
   tile: string;
@@ -88,6 +89,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          LEFT JOIN jobs j ON j.id = q.job_id
          LEFT JOIN clients c_via_job ON c_via_job.id = j.client_id
          WHERE LOWER(COALESCE(q.status,'')) IN (${placeholders})
+           AND ${notTestClientExists("COALESCE(q.client_id, j.client_id)")}
          ORDER BY q.created_at DESC
          LIMIT ${MAX_ROWS}`,
       )
@@ -137,6 +139,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          LEFT JOIN clients c ON c.id = j.client_id
          WHERE UPPER(COALESCE(inv.status,'')) NOT IN ('PAID', 'BAD_DEBT')
            AND COALESCE(inv.total,0) > COALESCE(inv.payments_total,0)
+           AND ${notTestClientExists("COALESCE(inv.client_id, j.client_id)")}
          ORDER BY inv.issued_date ASC
          LIMIT ${MAX_ROWS}`,
       ).all<{
@@ -192,6 +195,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          WHERE UPPER(COALESCE(inv.status,'')) NOT IN ('PAID', 'BAD_DEBT')
            AND inv.due_date IS NOT NULL
            AND inv.due_date >= ?
+           AND ${notTestClientExists("COALESCE(inv.client_id, j.client_id)")}
          ORDER BY inv.due_date ASC
          LIMIT ${MAX_ROWS}`,
       )
@@ -251,6 +255,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          FROM jobs j
          LEFT JOIN clients c ON c.id = j.client_id
          WHERE LOWER(COALESCE(j.status,'')) IN (${placeholders})
+           AND (${NON_TEST_CLIENT})
          ORDER BY COALESCE(j.start_at, '0000-01-01') DESC, j.created_at DESC
          LIMIT ${MAX_ROWS}`,
       )
@@ -305,6 +310,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
                   COALESCE(SUM(total), 0) AS gross
            FROM invoices
            WHERE issued_date >= ? AND issued_date < ?
+             AND ${notTestClientExists("client_id")}
            GROUP BY ym
          ),
          li_cost AS (
@@ -313,6 +319,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
            FROM line_items li
            JOIN jobs j ON j.id = li.job_id
            WHERE j.created_at >= ? AND j.created_at < ?
+             AND ${notTestClientExists("j.client_id")}
            GROUP BY ym
          ),
          exp_cost AS (
@@ -320,6 +327,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
                   COALESCE(SUM(amount), 0) AS cost
            FROM expenses
            WHERE incurred_at >= ? AND incurred_at < ?
+             AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = expenses.job_id)")}
            GROUP BY ym
          )
          SELECT m.ym,
@@ -413,6 +421,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          LEFT JOIN clients c ON c.id = j.client_id
          WHERE UPPER(COALESCE(inv.status,'')) = 'PAID'
            AND inv.issued_date >= ?
+           AND ${notTestClientExists("COALESCE(inv.client_id, j.client_id)")}
          ORDER BY inv.issued_date DESC
          LIMIT ${MAX_ROWS}`,
       )
@@ -468,6 +477,7 @@ export async function handleDrill(env: Env, url: URL): Promise<DrillResponse> {
          LEFT JOIN clients c ON c.id = j.client_id
          WHERE j.created_at >= ? AND j.created_at < ?
            AND COALESCE(li.unit_cost, 0) = 0
+           AND (${NON_TEST_CLIENT})
          ORDER BY j.created_at DESC, j.job_number DESC
          LIMIT ${MAX_ROWS}`,
       )

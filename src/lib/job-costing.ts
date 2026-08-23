@@ -36,6 +36,7 @@
  */
 
 import type { Env } from "../env.js";
+import { notTestClientExists } from "./non-test-client.js";
 
 export function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -580,20 +581,23 @@ export async function computeYtdOperatingCosts(
     env.DB.prepare(
       `SELECT COALESCE(SUM(amount), 0) AS v FROM expenses
        WHERE COALESCE(incurred_date, incurred_at) >= ?
-         AND COALESCE(is_active, 1) = 1`,
+         AND COALESCE(is_active, 1) = 1
+         AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = expenses.job_id)")}`,
     )
       .bind(yearStartDate)
       .first<{ v: number }>(),
     env.DB.prepare(
       `SELECT COALESCE(SUM(labor_cost), 0) AS v FROM time_entries
        WHERE clock_out IS NOT NULL
-         AND substr(COALESCE(clock_in, ''), 1, 10) >= ?`,
+         AND substr(COALESCE(clock_in, ''), 1, 10) >= ?
+         AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = time_entries.job_id)")}`,
     )
       .bind(yearStartDate)
       .first<{ v: number }>(),
     env.DB.prepare(
       `SELECT COALESCE(SUM(stripe_fee), 0) AS v FROM payments
-       WHERE stripe_fee > 0 AND received_date >= ?`,
+       WHERE stripe_fee > 0 AND received_date >= ?
+         AND ${notTestClientExists("client_id")}`,
     )
       .bind(yearStartDate)
       .first<{ v: number }>(),
@@ -621,7 +625,8 @@ export async function computeYtdEarnedRevenue(env: Env, yearStartDate: string): 
     `SELECT COALESCE(SUM(COALESCE(total_due, amount, 0)), 0) AS v
      FROM invoices
      WHERE status NOT IN ('draft', 'void')
-       AND COALESCE(issued_date, sent_date, created_at) >= ?`,
+       AND COALESCE(issued_date, sent_date, created_at) >= ?
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(yearStartDate)
     .first<{ v: number }>();

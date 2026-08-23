@@ -48,6 +48,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { cascadeDeleteEstimateChildren } from "../lib/cascade-delete.js";
+import { NON_TEST_CLIENT } from "../lib/non-test-client.js";
 import { triggerQuoteSent } from "../lib/wc/triggers.js";
 import { triggerNotification } from "../lib/notification-engine.js";
 import { renderContract } from "../lib/contracts.js";
@@ -58,6 +59,7 @@ import { jobTypeTitleFragment } from "../../shared/job-type-label.js";
 import { allocateNextEstimateNumber } from "../lib/estimate-number.js";
 import { extractSupplierQuote } from "../lib/quote-import.js";
 import { upsertVendorMaterial } from "./vendor-materials.js";
+import { handleEstimateRequestWin } from "./estimate-requests.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -142,6 +144,8 @@ interface EstimateRow {
   deposit_amount: number | null;
   deposit_type: string | null;
   deposit_percentage: number | null;
+  deposit_payment_method: string | null;
+  deposit_method_selected_at: string | null;
   valid_days: number | null;
   expiration_date: string | null;
   portal_token: string | null;
@@ -374,6 +378,8 @@ function shapeEstimateHeader(r: EstimateRow, totals: Totals) {
     deposit_amount: r.deposit_amount,
     deposit_type: r.deposit_type,
     deposit_percentage: r.deposit_percentage,
+    deposit_payment_method: (r as EstimateRow & { deposit_payment_method?: string | null }).deposit_payment_method ?? null,
+    deposit_method_selected_at: (r as EstimateRow & { deposit_method_selected_at?: string | null }).deposit_method_selected_at ?? null,
     valid_days: r.valid_days ?? 7,
     expiration_date: r.expiration_date,
     portal_token: r.portal_token,
@@ -556,7 +562,7 @@ async function defaultDeposit(
 // ─── GET /api/estimates ───────────────────────────────────────────────────────
 
 export async function handleEstimateList(env: Env, url: URL): Promise<Response> {
-  const where: string[] = [];
+  const where: string[] = [NON_TEST_CLIENT];
   const binds: unknown[] = [];
 
   const status = str(url.searchParams.get("status"));
@@ -579,7 +585,7 @@ export async function handleEstimateList(env: Env, url: URL): Promise<Response> 
     SELECT e.id, e.estimate_number, e.request_id, e.client_id, e.title,
            e.estimate_mode, e.billing_model, e.status, e.subtotal, e.total,
            e.margin_percent, e.deposit_amount, e.version, e.sent_at, e.expiration_date,
-           e.created_at, e.updated_at,
+           e.viewed_date, e.signed_date, e.created_at, e.updated_at,
            c.name AS client_name, c.first_name AS c_first, c.last_name AS c_last
     FROM estimates e
     LEFT JOIN clients c ON c.id = e.client_id
@@ -604,6 +610,8 @@ export async function handleEstimateList(env: Env, url: URL): Promise<Response> 
     deposit_amount: r.deposit_amount,
     version: r.version ?? 1,
     sent_at: r.sent_at,
+    viewed_date: r.viewed_date ?? null,
+    signed_date: r.signed_date ?? null,
     expiration_date: r.expiration_date,
     created_at: r.created_at,
     updated_at: r.updated_at,
@@ -1182,6 +1190,33 @@ export async function handleEstimateSend(
   // engine (Sprint 7); for now we surface a copyable link in the app.
   const publicUrl = `/quote/${portalToken}`;
   return json({ estimate, public_url: publicUrl, public_path: publicUrl });
+}
+
+// ─── POST /api/estimates/:id/mark-deposit-received ────────────────────────────
+// Admin confirms cash/check deposit. Reuses the exact convertQuoteToJob path as
+// Stripe webhook + Mark as Won (via estimate-requests/:id/win).
+
+export async function handleEstimateMarkDepositReceived(
+  request: Request,
+  env: Env,
+  id: string,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const est = await env.DB.prepare(
+    "SELECT id, request_id, status FROM estimates WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ id: string; request_id: string | null; status: string }>();
+  if (!est) return err(404, "not_found", "Estimate not found");
+  if (!est.request_id) {
+    return err(
+      400,
+      "no_request",
+      "This estimate has no linked request — open the estimate request and use Mark as Won.",
+    );
+  }
+  // Delegate to the shared win handler (same convertQuoteToJob completion logic).
+  return handleEstimateRequestWin(request, env, est.request_id, ctx);
 }
 
 // ─── POST /api/estimates/:id/resend ─────────────────────────────────────────────

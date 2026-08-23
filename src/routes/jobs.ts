@@ -11,6 +11,7 @@
  */
 
 import type { Env } from "../env.js";
+import { NON_TEST_CLIENT } from "../lib/non-test-client.js";
 
 /** Normalized to lower-case in SQL. Used by `/api/jobs?status=open` and Files “All” to match active jobs only. */
 export const OPEN_JOB_STATUSES = [
@@ -114,7 +115,8 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
          SELECT COUNT(*) FROM photos ph WHERE ph.job_id = j.id
        ) AS photo_count
      FROM jobs j
-     LEFT JOIN clients c ON c.id = j.client_id`,
+     LEFT JOIN clients c ON c.id = j.client_id
+     WHERE ${NON_TEST_CLIENT}`,
   ).all<{
     id: string;
     job_number: number | null;

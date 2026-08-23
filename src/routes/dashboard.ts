@@ -16,6 +16,11 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { buildJobCosting, computeYtdEarnedRevenue, computeYtdOperatingCosts, jobCogsOnly } from "../lib/job-costing.js";
 import { handleDashboardMeetings } from "./google-calendar.js";
+import {
+  NON_TEST_CLIENT,
+  NON_TEST_OR_ORPHAN_CLIENT,
+  notTestClientExists,
+} from "../lib/non-test-client.js";
 
 const DISMISSED_SETTING_KEY = "dashboard_dismissed_action_items";
 const DISMISS_ROLES = ["owner", "office_admin"] as const;
@@ -172,35 +177,41 @@ export async function handleDashboardKpis(env: Env): Promise<Response> {
     ytdEarnedRevenue,
   ] = await Promise.all([
     env.DB.prepare(
-      "SELECT COUNT(*) as cnt, COALESCE(SUM(contract_total), 0) as total FROM jobs WHERE status = 'in_progress'"
+      `SELECT COUNT(*) as cnt, COALESCE(SUM(contract_total), 0) as total FROM jobs
+       WHERE status = 'in_progress' AND ${notTestClientExists("client_id")}`
     ).first<{ cnt: number; total: number }>(),
     env.DB.prepare(
-      "SELECT COUNT(*) as cnt, COALESCE(SUM(total), 0) as total FROM estimates WHERE status = 'sent'"
+      `SELECT COUNT(*) as cnt, COALESCE(SUM(total), 0) as total FROM estimates
+       WHERE status = 'sent' AND ${notTestClientExists("client_id")}`
     ).first<{ cnt: number; total: number }>(),
     env.DB.prepare(
       `SELECT COUNT(*) as cnt,
               COALESCE(SUM(total_due - COALESCE(paid_amount, 0)), 0) as total,
               COUNT(*) FILTER (WHERE status = 'past_due') as past_due_count
-       FROM invoices WHERE status IN ('sent', 'viewed', 'partial', 'past_due')`
+       FROM invoices WHERE status IN ('sent', 'viewed', 'partial', 'past_due')
+         AND ${notTestClientExists("client_id")}`
     ).first<{ cnt: number; total: number; past_due_count: number }>(),
     env.DB.prepare(
       // Exclude payments on voided invoices from revenue KPIs.
       `SELECT COALESCE(SUM(p.amount), 0) as total
          FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id
         WHERE (p.invoice_id IS NULL OR i.status != 'void')
-          AND p.received_date >= ? AND p.received_date < ?`
+          AND p.received_date >= ? AND p.received_date < ?
+          AND ${notTestClientExists("p.client_id")}`
     ).bind(week.start, week.end).first<{ total: number }>(),
     env.DB.prepare(
       `SELECT COALESCE(SUM(p.amount), 0) as total
          FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id
         WHERE (p.invoice_id IS NULL OR i.status != 'void')
-          AND p.received_date >= ? AND p.received_date < ?`
+          AND p.received_date >= ? AND p.received_date < ?
+          AND ${notTestClientExists("p.client_id")}`
     ).bind(week.prevStart, week.prevEnd).first<{ total: number }>(),
     env.DB.prepare(
       `SELECT COALESCE(SUM(p.amount), 0) as revenue
          FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id
         WHERE (p.invoice_id IS NULL OR i.status != 'void')
-          AND p.received_date >= ?`
+          AND p.received_date >= ?
+          AND ${notTestClientExists("p.client_id")}`
     ).bind(ys).first<{ revenue: number }>(),
     computeYtdOperatingCosts(env, ys),
     computeYtdEarnedRevenue(env, ys),
@@ -338,6 +349,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
        FROM invoices i
        JOIN clients c ON i.client_id = c.id
        WHERE i.status = 'past_due'
+         AND (${NON_TEST_CLIENT})
        ORDER BY i.due_date ASC LIMIT 10`
     ).all<{ id: string; job_id: string; due_date: string; balance: number; first_name: string; last_name: string }>(),
 
@@ -349,6 +361,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
        JOIN clients c ON i.client_id = c.id
        WHERE i.status IN ('sent','viewed','partial')
          AND i.due_date = ?
+         AND (${NON_TEST_CLIENT})
        ORDER BY i.due_date ASC LIMIT 10`,
     ).bind(dueSoonDate).all<{ id: string; job_id: string; due_date: string; balance: number; first_name: string; last_name: string }>(),
 
@@ -359,6 +372,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
        JOIN jobs j ON bc.job_id = j.id
        WHERE bc.status = 'active'
          AND bc.period_end <= ?
+         AND ${notTestClientExists("j.client_id")}
        ORDER BY bc.period_end ASC LIMIT 10`,
     ).bind(dueSoonDate).all<{ id: string; job_id: string; period_end: string; job_title: string }>(),
 
@@ -369,6 +383,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
        FROM estimate_requests er
        LEFT JOIN clients c ON er.client_id = c.id
        WHERE er.status = 'follow_up'
+         AND ${NON_TEST_OR_ORPHAN_CLIENT}
        ORDER BY er.created_at ASC LIMIT 10`,
     ).all<{
       id: string;
@@ -392,6 +407,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
        JOIN jobs j ON co.job_id = j.id
        WHERE co.status = 'sent'
          AND co.client_signature IS NULL
+         AND ${notTestClientExists("j.client_id")}
        ORDER BY co.created_at ASC LIMIT 5`,
     ).all<{ id: string; title: string; job_id: string; created_at: string; job_title: string }>(),
 
@@ -402,6 +418,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
        WHERE status = 'complete'
          AND actual_end_date <= date('now', '-335 days')
          AND actual_end_date >= date('now', '-395 days')
+         AND ${notTestClientExists("client_id")}
        ORDER BY actual_end_date ASC LIMIT 5`,
     ).all<{ id: string; title: string; actual_end_date: string }>(),
 
@@ -410,6 +427,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       `SELECT id, title, estimate_id FROM jobs
        WHERE status = 'in_progress'
          AND estimate_id IS NOT NULL
+         AND ${notTestClientExists("client_id")}
        LIMIT 20`,
     ).all<{ id: string; title: string; estimate_id: string }>(),
 
@@ -419,6 +437,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
          FROM client_lien_waivers clw
          JOIN jobs j ON j.id = clw.job_id
         WHERE clw.status = 'sent'
+          AND ${notTestClientExists("j.client_id")}
         ORDER BY clw.sent_at ASC
         LIMIT 10`,
     ).all<{ job_id: string; job_title: string; sent_at: string }>(),
@@ -430,6 +449,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
          JOIN jobs j ON j.id = clw.job_id
         WHERE clw.status = 'signed'
           AND (j.completion_package_sent_at IS NULL OR j.completion_package_sent_at = '')
+          AND ${notTestClientExists("j.client_id")}
         ORDER BY clw.signed_at ASC
         LIMIT 10`,
     ).all<{ job_id: string; job_title: string; signed_at: string }>(),
@@ -725,12 +745,14 @@ export async function handleDashboardPipeline(env: Env): Promise<Response> {
       `SELECT status, COUNT(*) as count
        FROM estimate_requests
        WHERE status NOT IN ('won', 'lost')
+         AND ${notTestClientExists("client_id")}
        GROUP BY status`
     ).all<{ status: string; count: number }>(),
     env.DB.prepare(
       `SELECT status, COUNT(*) as count
        FROM jobs
        WHERE status NOT IN ('closed')
+         AND ${notTestClientExists("client_id")}
        GROUP BY status`
     ).all<{ status: string; count: number }>(),
     env.DB.prepare(
@@ -738,11 +760,13 @@ export async function handleDashboardPipeline(env: Env): Promise<Response> {
          COUNT(*) FILTER (WHERE status = 'won') as converted,
          COUNT(*) as total
        FROM estimate_requests
-       WHERE created_at >= ?`
+       WHERE created_at >= ?
+         AND ${notTestClientExists("client_id")}`
     ).bind(week.start).first<{ converted: number; total: number }>(),
     env.DB.prepare(
       `SELECT COALESCE(SUM(total_due - COALESCE(paid_amount, 0)), 0) as unpaid
-       FROM invoices WHERE status IN ('sent', 'viewed', 'partial', 'past_due')`
+       FROM invoices WHERE status IN ('sent', 'viewed', 'partial', 'past_due')
+         AND ${notTestClientExists("client_id")}`
     ).first<{ unpaid: number }>(),
   ]);
 
@@ -794,6 +818,7 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
        JOIN jobs j ON se.job_id = j.id
        WHERE se.scheduled_date = ?
          AND se.status != 'cancelled'
+         AND ${notTestClientExists("j.client_id")}
        ORDER BY se.start_time ASC`,
     ).bind(today).all<{ id: string; start_time: string; trade_or_work: string; job_title: string; job_id: string; job_number: string }>(),
 
@@ -804,6 +829,7 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
        LEFT JOIN clients c ON er.client_id = c.id
        WHERE DATE(er.appointment_date) = ?
          AND er.status NOT IN ('won', 'lost')
+         AND ${NON_TEST_OR_ORPHAN_CLIENT}
        ORDER BY er.appointment_date ASC`,
     ).bind(today).all<{
       id: string;
@@ -979,6 +1005,7 @@ export async function handleDashboardEstimateRequests(env: Env): Promise<Respons
      WHERE er.status IN ('appointment_set', 'visit_done', 'building', 'sent', 'follow_up')
        AND er.estimate_id IS NULL
        AND er.converted_job_id IS NULL
+       AND ${NON_TEST_OR_ORPHAN_CLIENT}
      ORDER BY
        CASE WHEN er.appointment_date IS NULL THEN 1 ELSE 0 END,
        er.appointment_date ASC,

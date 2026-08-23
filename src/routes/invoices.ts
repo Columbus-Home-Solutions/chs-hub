@@ -34,6 +34,7 @@ import {
 } from "../lib/invoicing.js";
 import { createOffSessionPaymentIntent, getStripeConfig } from "../lib/stripe.js";
 import { recordPayment } from "./payments.js";
+import { notTestClientExists } from "../lib/non-test-client.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const VOID_ROLES = ["owner"] as const;
@@ -105,6 +106,8 @@ export async function handleInvoiceList(env: Env, url: URL): Promise<Response> {
   if (billingModel) (where.push("billing_model = ?"), binds.push(billingModel));
   if (from) (where.push("COALESCE(issued_date, created_at) >= ?"), binds.push(from));
   if (to) (where.push("COALESCE(issued_date, created_at) <= ?"), binds.push(to));
+  // Global list excludes fixture clients; job-scoped lists keep all rows for that job.
+  if (!jobId) where.push(notTestClientExists("client_id"));
 
   const sql = `SELECT ${INVOICE_COLUMNS} FROM invoices${
     where.length ? " WHERE " + where.join(" AND ") : ""

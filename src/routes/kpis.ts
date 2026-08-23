@@ -19,6 +19,7 @@
  */
 
 import type { Env } from "../env.js";
+import { notTestClientExists } from "../lib/non-test-client.js";
 
 type DateRange = { start: string; end: string };
 
@@ -116,13 +117,16 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   const jobsInProgressPlaceholders = OPEN_JOB_STATUSES.map(() => "?").join(",");
   const jobsInProgress = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM jobs
-     WHERE LOWER(COALESCE(status,'')) IN (${jobsInProgressPlaceholders})`,
+     WHERE LOWER(COALESCE(status,'')) IN (${jobsInProgressPlaceholders})
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(...OPEN_JOB_STATUSES)
     .first<{ n: number }>();
 
   const ytdJobs = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM jobs WHERE created_at >= ? AND created_at < ?`,
+    `SELECT COUNT(*) AS n FROM jobs
+     WHERE created_at >= ? AND created_at < ?
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(ranges.year.start, ranges.year.end)
     .first<{ n: number }>();
@@ -136,7 +140,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   // convention — revenue is recognized when billed.
   const ytdRevenueGross = await env.DB.prepare(
     `SELECT COALESCE(SUM(total), 0) AS v FROM invoices
-     WHERE issued_date >= ? AND issued_date < ?`,
+     WHERE issued_date >= ? AND issued_date < ?
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(ranges.year.start.slice(0, 10), ranges.year.end.slice(0, 10))
     .first<{ v: number }>();
@@ -145,7 +150,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
     `SELECT COALESCE(SUM(li.quantity * li.unit_cost), 0) AS v
      FROM line_items li
      JOIN jobs j ON j.id = li.job_id
-     WHERE j.created_at >= ? AND j.created_at < ?`,
+     WHERE j.created_at >= ? AND j.created_at < ?
+       AND ${notTestClientExists("j.client_id")}`,
   )
     .bind(ranges.year.start, ranges.year.end)
     .first<{ v: number }>();
@@ -154,7 +160,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   const ytdExpenseCost = await env.DB.prepare(
     `SELECT COALESCE(SUM(amount), 0) AS v
      FROM expenses
-     WHERE incurred_at >= ? AND incurred_at < ?`,
+     WHERE incurred_at >= ? AND incurred_at < ?
+       AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = expenses.job_id)")}`,
   )
     .bind(ranges.year.start.slice(0, 10), ranges.year.end.slice(0, 10))
     .first<{ v: number }>();
@@ -164,7 +171,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   const ytdCollections = await env.DB.prepare(
     `SELECT COALESCE(SUM(${COLLECTED_EXPR}), 0) AS v
      FROM invoices
-     WHERE issued_date >= ? AND issued_date < ?`,
+     WHERE issued_date >= ? AND issued_date < ?
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(ranges.year.start.slice(0, 10), ranges.year.end.slice(0, 10))
     .first<{ v: number }>();
@@ -172,7 +180,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   const monthlyCollections = await env.DB.prepare(
     `SELECT COALESCE(SUM(${COLLECTED_EXPR}), 0) AS v
      FROM invoices
-     WHERE issued_date >= ? AND issued_date < ?`,
+     WHERE issued_date >= ? AND issued_date < ?
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();
@@ -180,7 +189,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   const weeklyCollections = await env.DB.prepare(
     `SELECT COALESCE(SUM(${COLLECTED_EXPR}), 0) AS v
      FROM invoices
-     WHERE issued_date >= ? AND issued_date < ?`,
+     WHERE issued_date >= ? AND issued_date < ?
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(ranges.week.start.slice(0, 10), ranges.week.end.slice(0, 10))
     .first<{ v: number }>();
@@ -193,7 +203,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
      JOIN jobs j ON j.id = li.job_id
      JOIN invoices inv ON inv.job_id = j.id
      WHERE ${PAID_EXPR.replace(/status/g, "inv.status")}
-       AND inv.issued_date >= ? AND inv.issued_date < ?`,
+       AND inv.issued_date >= ? AND inv.issued_date < ?
+       AND ${notTestClientExists("j.client_id")}`,
   )
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();
@@ -201,7 +212,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   const monthlyExpenseCost = await env.DB.prepare(
     `SELECT COALESCE(SUM(amount), 0) AS v
      FROM expenses
-     WHERE incurred_at >= ? AND incurred_at < ?`,
+     WHERE incurred_at >= ? AND incurred_at < ?
+       AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = expenses.job_id)")}`,
   )
     .bind(ranges.month.start.slice(0, 10), ranges.month.end.slice(0, 10))
     .first<{ v: number }>();
@@ -226,7 +238,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
        COUNT(*) AS n
      FROM invoices
      WHERE UPPER(COALESCE(status,'')) NOT IN ('PAID', 'BAD_DEBT')
-       AND COALESCE(total, 0) > COALESCE(payments_total, 0)`,
+       AND COALESCE(total, 0) > COALESCE(payments_total, 0)
+       AND ${notTestClientExists("client_id")}`,
   ).first<{ v: number; n: number }>();
 
   // Payments Scheduled = unpaid invoices whose due_date is in the future
@@ -239,7 +252,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
      FROM invoices
      WHERE UPPER(COALESCE(status,'')) NOT IN ('PAID', 'BAD_DEBT')
        AND due_date IS NOT NULL
-       AND due_date >= ?`,
+       AND due_date >= ?
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(today)
     .first<{ v: number; n: number }>();
@@ -255,7 +269,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
      FROM line_items li
      JOIN jobs j ON j.id = li.job_id
      WHERE j.created_at >= ? AND j.created_at < ?
-       AND COALESCE(li.unit_cost, 0) = 0`,
+       AND COALESCE(li.unit_cost, 0) = 0
+       AND ${notTestClientExists("j.client_id")}`,
   )
     .bind(ranges.year.start, ranges.year.end)
     .first<{ n: number; v: number }>();
@@ -268,7 +283,8 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
        COALESCE(SUM(COALESCE(subtotal, 0)), 0) AS v,
        COUNT(*) AS n
      FROM quotes
-     WHERE LOWER(COALESCE(status,'')) IN (${pipelinePlaceholders})`,
+     WHERE LOWER(COALESCE(status,'')) IN (${pipelinePlaceholders})
+       AND ${notTestClientExists("client_id")}`,
   )
     .bind(...PIPELINE_QUOTE_STATUSES)
     .first<{ v: number; n: number }>();

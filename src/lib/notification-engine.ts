@@ -45,6 +45,7 @@ export const WIRED_EVENTS = [
   "quote_follow_up_2",
   "quote_expiring",
   "deposit_received",
+  "deposit_method_selected",
   "welcome_portal",
   "work_starting",
 ] as const;
@@ -62,6 +63,7 @@ const TRANSACTIONAL_EVENTS = new Set([
   "estimate_sent",
   "signature_needed",
   "deposit_received",
+  "deposit_method_selected",
   "welcome_portal",
   "work_starting",
   "payment_received",

@@ -18,6 +18,8 @@ interface EstimateRow {
   status: string | null;
   total: number;
   sent_at: string | null;
+  viewed_date: string | null;
+  signed_date: string | null;
   created_at: string;
 }
 
@@ -436,13 +438,27 @@ export function EstimateList(_props: RoutableProps) {
                   dir={sortDir}
                   onSort={toggle}
                 />
+                <SortTh
+                  label="Viewed"
+                  col="viewed_date"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
+                <SortTh
+                  label="Accepted"
+                  col="signed_date"
+                  active={sortKey}
+                  dir={sortDir}
+                  onSort={toggle}
+                />
                 <th />
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={8} class="text--muted">
+                  <td colSpan={10} class="text--muted">
                     No estimates match this filter.
                   </td>
                 </tr>
@@ -468,6 +484,8 @@ export function EstimateList(_props: RoutableProps) {
                   </td>
                   <td>{formatDate(e.created_at)}</td>
                   <td>{e.sent_at ? formatDate(e.sent_at) : "—"}</td>
+                  <td>{e.viewed_date ? formatDate(e.viewed_date) : "—"}</td>
+                  <td>{e.signed_date ? formatDate(e.signed_date) : "—"}</td>
                   <td>
                     <Button size="sm" variant="tertiary" onClick={() => navToEstimate(e)}>
                       View

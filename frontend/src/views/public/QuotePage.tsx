@@ -55,6 +55,8 @@ interface PublicQuote {
   tax_amount: number;
   total: number;
   deposit_amount: number | null;
+  deposit_payment_method: string | null;
+  deposit_method_selected_at: string | null;
   valid_days: number;
   sent_date: string | null;
   viewed_date: string | null;
@@ -701,7 +703,13 @@ function PaySection({
   stepNum: number;
   showSignNote?: boolean;
 }) {
-  const [mode, setMode] = useState<"choose" | "card" | "check">("choose");
+  const existing =
+    quote.deposit_payment_method === "cash" || quote.deposit_payment_method === "check"
+      ? (quote.deposit_payment_method as "cash" | "check")
+      : null;
+  const [mode, setMode] = useState<"choose" | "card" | "cash" | "check">(
+    existing ?? "choose",
+  );
 
   return (
     <div class="quote-step">
@@ -718,8 +726,12 @@ function PaySection({
       {mode === "choose" && (
         <div class="quote-pay-choices">
           <button class="quote-btn quote-btn--primary" onClick={() => setMode("card")}>
-            Pay by Card or Bank
+            Pay Online (Card / Bank)
             <span class="quote-btn__sub">3.5% convenience fee applies</span>
+          </button>
+          <button class="quote-btn quote-btn--secondary" onClick={() => setMode("cash")}>
+            Pay by Cash
+            <span class="quote-btn__sub">No fee — we&apos;ll arrange collection</span>
           </button>
           <button class="quote-btn quote-btn--secondary" onClick={() => setMode("check")}>
             Pay by Check
@@ -729,12 +741,27 @@ function PaySection({
       )}
 
       {mode === "card" && <CardPay quote={quote} reload={reload} onBack={() => setMode("choose")} />}
-      {mode === "check" && <CheckPay quote={quote} onBack={() => setMode("choose")} />}
+      {mode === "cash" && (
+        <OfflinePay quote={quote} method="cash" reload={reload} onBack={() => setMode("choose")} />
+      )}
+      {mode === "check" && (
+        <OfflinePay quote={quote} method="check" reload={reload} onBack={() => setMode("choose")} />
+      )}
     </div>
   );
 }
 
-function CheckPay({ quote, onBack }: { quote: PublicQuote; onBack: () => void }) {
+function OfflinePay({
+  quote,
+  method,
+  reload,
+  onBack,
+}: {
+  quote: PublicQuote;
+  method: "cash" | "check";
+  reload: () => Promise<PublicQuote>;
+  onBack: () => void;
+}) {
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -743,8 +770,13 @@ function CheckPay({ quote, onBack }: { quote: PublicQuote; onBack: () => void })
     setBusy(true);
     setErr(null);
     try {
-      const res = await postJson<any>(`/api/public/quote/${quote.token}/pay/check`);
+      const path =
+        method === "cash"
+          ? `/api/public/quote/${quote.token}/pay/cash`
+          : `/api/public/quote/${quote.token}/pay/check`;
+      const res = await postJson<any>(path, { method });
       setData(res);
+      void reload().catch(() => undefined);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -755,29 +787,43 @@ function CheckPay({ quote, onBack }: { quote: PublicQuote; onBack: () => void })
   useEffect(() => {
     arrange();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [method]);
 
   if (err) return <div class="quote-error">{err}</div>;
-  if (busy || !data) return <div class="quote-muted">Preparing instructions…</div>;
+  if (busy || !data) return <div class="quote-muted">Saving your preference…</div>;
 
   const ins = data.instructions ?? {};
+  const methodLabel = method === "cash" ? "cash" : "check";
   return (
     <div class="quote-check-instructions">
-      <p>Please mail a check for {formatCurrency(data.deposit_amount)} (no fee):</p>
-      <div class="quote-check-box">
-        <div>
-          <strong>Pay to:</strong> {ins.payable_to}
-        </div>
-        {ins.mailing_address && (
-          <div>
-            <strong>Mail to:</strong> {ins.mailing_address}
+      <p class="quote-thanks">
+        {data.message ??
+          `Thanks — we'll follow up to collect your ${methodLabel} deposit and get your job scheduled.`}
+      </p>
+      {method === "check" && (
+        <>
+          <p>Please mail a check for {formatCurrency(data.deposit_amount)} (no fee):</p>
+          <div class="quote-check-box">
+            <div>
+              <strong>Pay to:</strong> {ins.payable_to}
+            </div>
+            {ins.mailing_address && (
+              <div>
+                <strong>Mail to:</strong> {ins.mailing_address}
+              </div>
+            )}
+            <div>
+              <strong>Memo:</strong> {ins.memo}
+            </div>
           </div>
-        )}
-        <div>
-          <strong>Memo:</strong> {ins.memo}
-        </div>
-      </div>
-      <p class="quote-muted">{ins.note}</p>
+        </>
+      )}
+      {method === "cash" && data.deposit_amount != null && (
+        <p>
+          Deposit amount: <strong>{formatCurrency(data.deposit_amount)}</strong> (no fee).
+        </p>
+      )}
+      {ins.note && <p class="quote-muted">{ins.note}</p>}
       <button class="quote-link-btn" onClick={onBack}>
         ← Choose a different method
       </button>

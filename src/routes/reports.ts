@@ -11,6 +11,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { claudeMessages, extractJson } from "../lib/claude.js";
+import { NON_TEST_CLIENT, notTestClientExists } from "../lib/non-test-client.js";
 
 function csvErr(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -74,6 +75,7 @@ async function buildIncomeSection(env: Env, year: string): Promise<string[]> {
               SUM(COALESCE(amount, total_due, 0)) AS invoiced
        FROM invoices
        WHERE strftime('%Y', COALESCE(issued_date, created_at)) = ?
+         AND ${notTestClientExists("client_id")}
        GROUP BY mo
        ORDER BY mo ASC`,
     )
@@ -87,6 +89,7 @@ async function buildIncomeSection(env: Env, year: string): Promise<string[]> {
               SUM(COALESCE(amount, 0)) AS collected
        FROM payments
        WHERE strftime('%Y', COALESCE(received_date, collected_at, created_at)) = ?
+         AND ${notTestClientExists("client_id")}
        GROUP BY mo
        ORDER BY mo ASC`,
     )
@@ -142,6 +145,7 @@ async function buildExpenseSection(env: Env, year: string): Promise<string[]> {
        LEFT JOIN jobs j ON j.id = e.job_id
        WHERE strftime('%Y', COALESCE(e.incurred_date, e.incurred_at, e.created_at)) = ?
          AND (e.is_active IS NULL OR e.is_active != 0)
+         AND ${notTestClientExists("j.client_id")}
        ORDER BY e.expense_type ASC, date_val ASC`,
     )
       .bind(year)
@@ -196,6 +200,7 @@ async function buildSubcontractorSection(env: Env, year: string): Promise<string
        WHERE e.sub_id IS NOT NULL
          AND strftime('%Y', COALESCE(e.incurred_date, e.incurred_at, e.created_at)) = ?
          AND (e.is_active IS NULL OR e.is_active != 0)
+         AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = e.job_id)")}
        GROUP BY e.sub_id
        ORDER BY total_paid DESC`,
     )
@@ -213,6 +218,7 @@ async function buildSubcontractorSection(env: Env, year: string): Promise<string
          AND (e.sub_id IS NULL)
          AND strftime('%Y', COALESCE(e.incurred_date, e.incurred_at, e.created_at)) = ?
          AND (e.is_active IS NULL OR e.is_active != 0)
+         AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = e.job_id)")}
        GROUP BY e.description
        ORDER BY total_paid DESC`,
     )
@@ -324,6 +330,7 @@ async function buildProfitabilitySection(env: Env, year: string): Promise<string
        LEFT JOIN expenses e ON e.job_id = j.id
          AND (e.is_active IS NULL OR e.is_active != 0)
        WHERE strftime('%Y', j.created_at) = ?
+         AND ${notTestClientExists("j.client_id")}
        GROUP BY j.id
        HAVING j.id IN (
          SELECT DISTINCT job_id FROM payments
@@ -437,6 +444,7 @@ export async function handleAgedReceivables(request: Request, env: Env): Promise
        JOIN jobs j ON i.job_id = j.id
        JOIN clients c ON j.client_id = c.id
        WHERE i.status IN ('sent', 'viewed', 'partial', 'past_due')
+         AND (${NON_TEST_CLIENT})
        ORDER BY days_overdue DESC`,
     ).all<{
       id: string;
@@ -506,6 +514,7 @@ export async function handleProjectedIncome(request: Request, env: Env): Promise
        JOIN jobs j ON i.job_id = j.id
        JOIN clients c ON j.client_id = c.id
        WHERE i.status IN ('draft', 'sent', 'viewed', 'partial')
+         AND (${NON_TEST_CLIENT})
        ORDER BY i.due_date ASC`,
     ).all<{
       id: string;
@@ -565,6 +574,7 @@ export async function handleClientReengagement(request: Request, env: Env): Prom
               COALESCE(SUM(CASE WHEN j.status = 'complete' THEN j.contract_total ELSE 0 END), 0) AS total_revenue
        FROM clients c
        LEFT JOIN jobs j ON j.client_id = c.id AND j.status = 'complete'
+       WHERE ${NON_TEST_CLIENT}
        GROUP BY c.id
        HAVING last_job_completed < date('now', '-12 months') OR last_job_completed IS NULL
        ORDER BY last_job_completed DESC`,
@@ -630,6 +640,7 @@ export async function handleJobRevenue(request: Request, env: Env): Promise<Resp
        ) exp ON exp.job_id = j.id
        WHERE j.status != 'closed'
          AND strftime('%Y', j.created_at) = ?
+         AND (${NON_TEST_CLIENT})
        GROUP BY j.id
        ORDER BY j.actual_end_date DESC`,
     )
@@ -735,6 +746,7 @@ export async function handleLineItemVariance(request: Request, env: Env): Promis
          GROUP BY estimate_line_item_id
        ) actual ON actual.estimate_line_item_id = esi.id
        WHERE actual.total_actual IS NOT NULL
+         AND ${notTestClientExists("e_job.client_id")}
        GROUP BY esi.description
        HAVING job_count >= 1
        ORDER BY ABS(variance_amount) DESC`,
@@ -839,6 +851,7 @@ export async function handlePricingIntelligence(request: Request, env: Env, url:
      WHERE j.status = 'closed'
        AND j.contract_total IS NOT NULL
        AND j.contract_total > 0
+       AND ${notTestClientExists("j.client_id")}
      ORDER BY j.actual_end_date DESC
      LIMIT 100`,
   ).all<{

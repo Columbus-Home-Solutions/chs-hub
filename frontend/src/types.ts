@@ -492,6 +492,9 @@ export interface Estimate {
   deposit_amount: number | null;
   deposit_type: string | null;
   deposit_percentage: number | null;
+  /** Client-selected deposit method (cash/check/card) — intent until confirmed. */
+  deposit_payment_method: string | null;
+  deposit_method_selected_at: string | null;
   valid_days: number;
   expiration_date: string | null;
   portal_token: string | null;

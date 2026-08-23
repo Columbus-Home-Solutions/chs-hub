@@ -1,0 +1,83 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+ ⛅️ wrangler 4.85.0 (update available 4.125.0)
+──────────────────────────────────────────────
+Resource location: remote 
+
+🌀 Executing on remote database chs-hub-db (bfcb169f-04ec-48d4-a07a-37a8d6f561e4):
+🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+🚣 Executed 1 command in 1.51ms
+[
+  {
+    "results": [
+      {
+        "kind": "client",
+        "id": "0cd69c8e-d74d-4f84-b624-9cf6fc88093e",
+        "label": "ZZTEST DocGuide"
+      },
+      {
+        "kind": "client",
+        "id": "7c4a1f2e-8b3d-4e91-a5c6-2d8f9e1a3b4c",
+        "label": "ZZTEST-PRELAUNCH E2E"
+      },
+      {
+        "kind": "client",
+        "id": "b1000001-0000-4000-8000-000000000001",
+        "label": "ZZTEST-JOBDETAIL Review Client"
+      },
+      {
+        "kind": "estimate",
+        "id": "eb1266d9-ef5b-4fd3-94a5-83ddc93acd68",
+        "label": "9077"
+      },
+      {
+        "kind": "estimate",
+        "id": "d2b4ca00-c00d-4c90-a121-473d44c0b6ce",
+        "label": "9078"
+      },
+      {
+        "kind": "estimate",
+        "id": "4a9dd12c-ca52-4953-ae96-80dbdc33740d",
+        "label": "284"
+      },
+      {
+        "kind": "notif",
+        "id": "2fb0afee-0dec-4484-bc7c-070716dec0aa",
+        "label": "signature_needed"
+      },
+      {
+        "kind": "notif",
+        "id": "1fa0ec44-64a3-40bf-84a9-00129443a7cc",
+        "label": "signature_needed"
+      },
+      {
+        "kind": "doc",
+        "id": "a2c618ce-ed52-4bc9-8eef-47a91d5e11c5",
+        "label": "service-agreement-EST-284-2026-08-23.docx"
+      },
+      {
+        "kind": "doc",
+        "id": "0a600495-f8c7-412a-ab85-1863a943756f",
+        "label": "Material Selections Approval — E2E BoldSign Fresh EST-284 — 2026-08-23T19:15"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "ENAM",
+      "served_by_colo": "ORD",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 1.5078
+      },
+      "duration": 1.5078,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 7081984,
+      "rows_read": 917,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

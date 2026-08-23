@@ -25,6 +25,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { cascadeDeleteClient } from "../lib/cascade-delete.js";
+import { NON_TEST_CLIENT } from "../lib/non-test-client.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -167,7 +168,7 @@ export async function handleClientList(env: Env, url: URL): Promise<Response> {
   const filter = (url.searchParams.get("filter") ?? "all").toLowerCase();
   const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "500", 10) || 500, 2000);
 
-  const where: string[] = [];
+  const where: string[] = [NON_TEST_CLIENT];
   const binds: unknown[] = [...ACTIVE_JOB_STATUSES];
 
   if (leadSource) {

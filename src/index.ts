@@ -329,6 +329,7 @@ import {
   handleEstimateDelete,
   handleEstimateSend,
   handleEstimateResend,
+  handleEstimateMarkDepositReceived,
   handleEstimateRevise,
   handleEstimateLost,
   handleLineItemList,
@@ -374,6 +375,7 @@ import {
   handlePublicQuoteRequestChanges,
   handlePublicQuotePayIntent,
   handlePublicQuotePayCheck,
+  handlePublicQuotePayCash,
   handlePublicQuoteSignLink,
   handleStripeWebhook,
 } from "./routes/public-quote.js";
@@ -818,7 +820,11 @@ export default {
     }
     const pqPayCheck = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/pay\/check$/);
     if (pqPayCheck && request.method === "POST") {
-      return handlePublicQuotePayCheck(request, env, decodeURIComponent(pqPayCheck[1]));
+      return handlePublicQuotePayCheck(request, env, decodeURIComponent(pqPayCheck[1]), ctx);
+    }
+    const pqPayCash = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/pay\/cash$/);
+    if (pqPayCash && request.method === "POST") {
+      return handlePublicQuotePayCash(request, env, decodeURIComponent(pqPayCash[1]), ctx);
     }
     const pqSelectionsSignLink = url.pathname.match(/^\/api\/public\/quote\/([^/]+)\/selections\/sign-link$/);
     if (pqSelectionsSignLink && request.method === "GET") {
@@ -2512,6 +2518,15 @@ export default {
     const estResend = url.pathname.match(/^\/api\/estimates\/([^/]+)\/resend$/);
     if (estResend && request.method === "POST") {
       return handleEstimateResend(request, env, decodeURIComponent(estResend[1]), ctx);
+    }
+    const estMarkDeposit = url.pathname.match(/^\/api\/estimates\/([^/]+)\/mark-deposit-received$/);
+    if (estMarkDeposit && request.method === "POST") {
+      return handleEstimateMarkDepositReceived(
+        request,
+        env,
+        decodeURIComponent(estMarkDeposit[1]),
+        ctx,
+      );
     }
     const estRevise = url.pathname.match(/^\/api\/estimates\/([^/]+)\/revise$/);
     if (estRevise && request.method === "POST") {

@@ -303,7 +303,11 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
                 }
               }}
             >
-              {wonLoading ? "Loading…" : "Record Deposit & Convert to Job"}
+              {wonLoading
+                ? "Loading…"
+                : e.deposit_payment_method === "cash" || e.deposit_payment_method === "check"
+                  ? "Mark Deposit Received"
+                  : "Record Deposit & Convert to Job"}
             </Button>
           )}
           {canDeleteEstimate(e) && <DeleteEstimateButton estimate={e} />}
@@ -468,6 +472,18 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
 
       <MarkWonModal
         request={wonRequest}
+        estimateId={e.id}
+        preferredMethod={e.deposit_payment_method}
+        title={
+          e.deposit_payment_method === "cash" || e.deposit_payment_method === "check"
+            ? "Mark Deposit Received"
+            : "Mark as Won"
+        }
+        confirmLabel={
+          e.deposit_payment_method === "cash" || e.deposit_payment_method === "check"
+            ? "Confirm — Deposit Received"
+            : "Confirm — Mark as Won"
+        }
         onClose={() => setWonRequest(null)}
         onWon={(_jobId) => {
           setWonRequest(null);
@@ -1549,6 +1565,23 @@ function SentStatusCard({
   return (
     <Card title="Client Quote Link">
       <div class="stack">
+        {estimate.deposit_payment_method &&
+          (estimate.deposit_payment_method === "cash" ||
+            estimate.deposit_payment_method === "check") &&
+          estimate.status !== "approved" &&
+          !estimate.linked_job_id && (
+            <div class="notice notice--info">
+              Client selected:{" "}
+              <strong>
+                {estimate.deposit_payment_method === "cash" ? "Cash" : "Check"}
+              </strong>
+              , awaiting confirmation
+              {estimate.deposit_method_selected_at
+                ? ` (${new Date(estimate.deposit_method_selected_at).toLocaleString()})`
+                : ""}
+              . Use <strong>Mark Deposit Received</strong> when you have the funds.
+            </div>
+          )}
         <div class="flex items-center gap-sm" style={{ flexWrap: "wrap" }}>
           <input
             class="form-input"

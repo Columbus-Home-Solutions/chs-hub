@@ -29,6 +29,7 @@ import { scheduleWorkingAgreementGeneration } from "../lib/working-agreement.js"
 import { cascadeDeleteEstimateRequest } from "../lib/cascade-delete.js";
 import { triggerPostVisitFollowUp } from "../lib/new-lead-outreach.js";
 import { parseStoredScopeDraft } from "../lib/scope-draft.js";
+import { NON_TEST_OR_ORPHAN_CLIENT } from "../lib/non-test-client.js";
 
 // Write roles match the app-wide convention (clients/subs): owner, PM, and
 // office_admin — office_admin managing the pipeline is the realistic workflow.
@@ -298,7 +299,7 @@ function validateTransition(current: string, next: string): string | null {
 export async function handleEstimateRequestList(env: Env, url: URL): Promise<Response> {
   await repairOrphanedEstimateRequests(env);
 
-  const where: string[] = [];
+  const where: string[] = [NON_TEST_OR_ORPHAN_CLIENT];
   const binds: unknown[] = [];
 
   const status = str(url.searchParams.get("status"));
@@ -329,7 +330,7 @@ export async function handleEstimateRequestList(env: Env, url: URL): Promise<Res
   }
 
   const sql = `${SELECT}
-    ${where.length ? "WHERE " + where.join(" AND ") : ""}
+    WHERE ${where.join(" AND ")}
     ORDER BY er.created_at DESC
     LIMIT 1000`;
   const { results } = await env.DB.prepare(sql).bind(...binds).all<RequestRow>();
@@ -344,7 +345,7 @@ export async function handleEstimateRequestPipeline(env: Env): Promise<Response>
     await repairOrphanedEstimateRequests(env);
 
     const { results } = await env.DB.prepare(
-      `${SELECT} ORDER BY er.updated_at DESC`,
+      `${SELECT} WHERE ${NON_TEST_OR_ORPHAN_CLIENT} ORDER BY er.updated_at DESC`,
     ).all<RequestRow>();
     const rows = (results ?? []).map(shape);
 

@@ -44,6 +44,7 @@ import {
   buildFixedPriceFinalInvoiceCheck,
   type EligibilityCheck,
 } from "../lib/close-eligibility.js";
+import { NON_TEST_CLIENT } from "../lib/non-test-client.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const REVERSE_ROLES = ["owner"] as const;
@@ -160,7 +161,7 @@ const JOB_SELECT = `
          ), j.created_at) AS status_since
   FROM jobs j
   LEFT JOIN clients c ON c.id = j.client_id
-  WHERE ${NATIVE_JOB_WHERE}`;
+  WHERE ${NATIVE_JOB_WHERE} AND (${NON_TEST_CLIENT})`;
 
 function daysSince(iso: string | null): number {
   if (!iso) return 0;
@@ -280,7 +281,10 @@ export async function handleJobPipeline(env: Env): Promise<Response> {
 
 export async function handleJobDetail(env: Env, id: string): Promise<Response> {
   const row = await env.DB.prepare(
-    `${JOB_SELECT.replace(`WHERE ${NATIVE_JOB_WHERE}`, `WHERE j.id = ? AND ${NATIVE_JOB_WHERE}`)}`,
+    `${JOB_SELECT.replace(
+      `WHERE ${NATIVE_JOB_WHERE} AND (${NON_TEST_CLIENT})`,
+      `WHERE j.id = ? AND ${NATIVE_JOB_WHERE}`,
+    )}`,
   )
     .bind(id)
     .first<JobListRow & { client_name: string | null }>();
@@ -1218,6 +1222,7 @@ export async function handleJobMap(request: Request, env: Env): Promise<Response
        FROM jobs j
        LEFT JOIN clients c ON c.id = j.client_id
        WHERE j.status NOT IN ('closed')
+         AND (${NON_TEST_CLIENT})
        ORDER BY j.created_at DESC`,
     ).all<MapJobRow>()
   ).results ?? [];

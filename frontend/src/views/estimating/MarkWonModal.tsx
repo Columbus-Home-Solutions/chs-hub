@@ -12,22 +12,26 @@ import {
 } from "../../types";
 
 /**
- * "Mark as Won" confirmation modal (Module-Spec §4.10). Captures the deposit
- * payment (amount pre-filled from the estimate, method, optional reference) and
- * fires the quote-to-job conversion via POST /api/estimate-requests/:id/win.
- * Used by both the pipeline (drag-to-Won) and the request detail view.
- *
- * The modal is the gate: when the estimate hasn't been sent, the confirm button
- * is disabled and the reason is shown — there is no way to win an unsent quote.
+ * Confirm deposit received → quote-to-job conversion (same path as Stripe webhook).
+ * Used from pipeline (Mark as Won) and Estimate Builder (Mark Deposit Received).
  */
 export function MarkWonModal({
   request,
   onClose,
   onWon,
+  preferredMethod,
+  title = "Mark as Won",
+  confirmLabel = "Confirm — Mark as Won",
+  estimateId,
 }: {
   request: EstimateRequest | null;
   onClose: () => void;
   onWon: (jobId?: string, jobNumber?: number) => void;
+  preferredMethod?: string | null;
+  title?: string;
+  confirmLabel?: string;
+  /** When set, posts to /api/estimates/:id/mark-deposit-received (same completion logic). */
+  estimateId?: string | null;
 }) {
   const toast = useToast();
   const [amount, setAmount] = useState("");
@@ -40,11 +44,16 @@ export function MarkWonModal({
   useEffect(() => {
     if (request) {
       setAmount(request.estimate_deposit != null ? String(request.estimate_deposit) : "");
-      setMethod("check");
+      const pref = (preferredMethod ?? "").toLowerCase();
+      setMethod(
+        pref === "cash" || pref === "check" || pref === "venmo" || pref === "zelle" || pref === "other"
+          ? pref
+          : "check",
+      );
       setReference("");
       setSaving(false);
     }
-  }, [request?.id]);
+  }, [request?.id, preferredMethod]);
 
   const amountNum = Number(amount);
   const amountValid = Number.isFinite(amountNum) && amountNum > 0;
@@ -53,11 +62,21 @@ export function MarkWonModal({
     if (!request || !canWin || !amountValid || saving) return;
     setSaving(true);
     try {
-      const res = await api.post<{ job_id?: string; job_number?: number }>(
-        `/api/estimate-requests/${request.id}/win`,
-        { deposit_amount: amountNum, payment_method: method, reference: reference || null },
-      );
-      toast.push("success", "Marked as won — job created");
+      const body = {
+        deposit_amount: amountNum,
+        payment_method: method,
+        reference: reference || null,
+      };
+      const res = estimateId
+        ? await api.post<{ job_id?: string; job_number?: number }>(
+            `/api/estimates/${estimateId}/mark-deposit-received`,
+            body,
+          )
+        : await api.post<{ job_id?: string; job_number?: number }>(
+            `/api/estimate-requests/${request.id}/win`,
+            body,
+          );
+      toast.push("success", "Deposit recorded — job created");
       onWon(res.job_id, res.job_number);
       if (res.job_id) go(`/jobs/${res.job_id}`);
     } catch (err) {
@@ -69,7 +88,7 @@ export function MarkWonModal({
   return (
     <Modal
       open={!!request}
-      title="Mark as Won"
+      title={title}
       onClose={onClose}
       footer={
         <>
@@ -82,7 +101,7 @@ export function MarkWonModal({
               disabled={!canWin || !amountValid || saving}
               onClick={confirm}
             >
-              {saving ? "Converting…" : "Confirm — Mark as Won"}
+              {saving ? "Converting…" : confirmLabel}
             </button>
           </span>
         </>
@@ -94,6 +113,12 @@ export function MarkWonModal({
             <strong>{request.client_name}</strong> · REQ-
             {String(request.request_number).padStart(3, "0")}
           </p>
+          {preferredMethod && (preferredMethod === "cash" || preferredMethod === "check") && (
+            <p class="won-confirm__note">
+              Client selected: <strong>{preferredMethod === "cash" ? "Cash" : "Check"}</strong> —
+              awaiting your confirmation.
+            </p>
+          )}
 
           {canWin ? (
             <>
@@ -125,7 +150,7 @@ export function MarkWonModal({
               </FormField>
               <p class="won-confirm__note">
                 Confirming records the deposit, creates the job at “Deposit Paid,” and closes this
-                request. Won is terminal — it can’t be moved back on the estimating board.
+                request. This is the same conversion path as an online Stripe payment.
               </p>
             </>
           ) : (

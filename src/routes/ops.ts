@@ -446,7 +446,7 @@ export async function handleOpsResendSelectionApproval(
   return resendCombinedSelectionApprovalForEstimate(env, estimateId, origin);
 }
 
-const E2E_CLIENT_ID = "7c4a1f2e-8b3d-4e91-a5c6-2d8f9e1a3b4c"; // ZZTEST-PRELAUNCH
+const E2E_CLIENT_ID = "b1000001-0000-4000-8000-000000000001"; // ZZTEST-JOBDETAIL (is_test)
 
 /**
  * POST /api/ops/e2e-fresh-estimate-setup

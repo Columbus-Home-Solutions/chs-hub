@@ -543,6 +543,13 @@
 .content__inner:has(.view--pipeline) {
   max-width: none;
 }
+/* List view only. Header and table share this cap; the board stays full width. */
+.view--pipeline.view--list {
+  max-width: 1400px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
 
 /* ─── View header ─── */
 .view-header {

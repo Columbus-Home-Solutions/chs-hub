@@ -4,7 +4,7 @@
  * supports drag-to-update via PATCH /api/estimate-requests/:id/stage (optimistic),
  * and includes the "New Lead" quick-entry modal.
  */
-import { useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
@@ -29,6 +29,9 @@ import {
 } from "../../types";
 
 // Sprint 23 stage labels for the CHS Leads Kanban.
+/** Never persisted. Cleared on load in case an older build stored it. */
+const CLOSED_TOGGLE_KEY = "chs_leads_show_closed";
+
 const CHS_LEAD_STAGES: { key: EstimateRequestStatus; label: string; color: string }[] = [
   { key: "new_request", label: "New Lead", color: "var(--pipeline-new-request)" },
   { key: "contacted", label: "Contacted", color: "var(--pipeline-contacted)" },
@@ -40,6 +43,12 @@ const CHS_LEAD_STAGES: { key: EstimateRequestStatus; label: string; color: strin
   { key: "won", label: "Won", color: "var(--pipeline-won)" },
   { key: "lost", label: "Lost", color: "var(--pipeline-lost)" },
 ];
+
+function stagesForClosed(showClosed: boolean) {
+  return showClosed
+    ? CHS_LEAD_STAGES
+    : CHS_LEAD_STAGES.filter((s) => s.key !== "won" && s.key !== "lost");
+}
 
 interface PipelineResponse {
   as_of: string;
@@ -195,7 +204,18 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
   const [overStage, setOverStage] = useState<EstimateRequestStatus | null>(null);
   const [activeStage, setActiveStage] = useState<EstimateRequestStatus>("new_request");
   const [wonTarget, setWonTarget] = useState<EstimateRequest | null>(null);
-  const [showClosed, setShowClosed] = useState(false);
+  // Independent for the visit. Kanban opens with Won/Lost; List opens without them.
+  const [kanbanShowClosed, setKanbanShowClosed] = useState(true);
+  const [listShowClosed, setListShowClosed] = useState(false);
+  const showClosed = viewMode === "kanban" ? kanbanShowClosed : listShowClosed;
+
+  useEffect(() => {
+    try {
+      localStorage.removeItem(CLOSED_TOGGLE_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, []);
   const [showQuickLead, setShowQuickLead] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -268,15 +288,12 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
     }
   };
 
-  // List view data.
-  const visibleStages = showClosed
-    ? CHS_LEAD_STAGES
-    : CHS_LEAD_STAGES.filter((s) => s.key !== "won" && s.key !== "lost");
+  const kanbanStages = stagesForClosed(kanbanShowClosed);
 
   const allRequests = useMemo(() => {
     if (!data) return [];
-    return visibleStages.flatMap((s) => data.pipeline[s.key] ?? []);
-  }, [data, showClosed]);
+    return stagesForClosed(listShowClosed).flatMap((s) => data.pipeline[s.key] ?? []);
+  }, [data, listShowClosed]);
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(allRequests, "created_at", "desc");
   const visibleNewRequests = useMemo(
@@ -371,7 +388,14 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
           </p>
         </div>
         <div class="view-header__right flex gap-sm items-center">
-          <Button variant="secondary" size="sm" onClick={() => setShowClosed((v) => !v)}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              if (viewMode === "kanban") setKanbanShowClosed((v) => !v);
+              else setListShowClosed((v) => !v);
+            }}
+          >
             {showClosed ? "Hide closed" : "Show closed"}
           </Button>
           <ViewToggle
@@ -513,7 +537,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
         <>
           {/* Mobile stage selector */}
           <div class="pipeline-tabs">
-            {visibleStages.map((s) => (
+            {kanbanStages.map((s) => (
               <button
                 key={s.key}
                 class={`pipeline-tab${activeStage === s.key ? " pipeline-tab--active" : ""}`}
@@ -526,7 +550,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
           </div>
 
           <div class="pipeline-board">
-            {visibleStages.map((s) => {
+            {kanbanStages.map((s) => {
               const cards = pipeline[s.key] ?? [];
               const isOver = overStage === s.key;
               return (

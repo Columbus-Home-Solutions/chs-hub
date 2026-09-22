@@ -21,6 +21,7 @@
 
 import type { Env } from "../env.js";
 import { getTwilioConfig, verifyTwilioSignature, phoneDigits } from "../lib/twilio.js";
+import { stopOutreachForClient } from "../lib/lead-stage.js";
 import { createOwnerInApp, triggerNotification } from "../lib/notification-engine.js";
 import {
   INTAKE_PROMPT,
@@ -247,6 +248,8 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
     } catch {
       // Column may not exist yet if migration hasn't run — safe to skip.
     }
+
+    await stopOutreachForClient(env, client.id);
 
     await createOwnerInApp(env, {
       message: `New text from ${name}: ${body.slice(0, 120)}`,

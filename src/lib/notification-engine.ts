@@ -500,7 +500,8 @@ async function resolveRecipient(
       return c.phone ? { name, contact: c.phone, userId: null } : null;
     }
     if (tpl.channel === "email") {
-      return c.email ? { name, contact: c.email, userId: null } : null;
+      if (!c.email || c.email.endsWith(".placeholder")) return null;
+      return { name, contact: c.email, userId: null };
     }
     return { name, contact: c.email ?? c.phone ?? "", userId: null };
   }

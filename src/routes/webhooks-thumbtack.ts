@@ -13,7 +13,8 @@
 
 import type { Env } from "../env.js";
 import { findClientByPhone } from "../lib/client-dedup.js";
-import { createOwnerInApp } from "../lib/notification-engine.js";
+import { nextCentralSendInstant } from "../lib/central-send-window.js";
+import { createOwnerInApp, triggerNotification } from "../lib/notification-engine.js";
 import { triggerLeadCreated } from "../lib/wc/triggers.js";
 
 export const THUMBTACK_WEBHOOK_SECRET_KEY = "thumbtack_webhook_secret";
@@ -227,6 +228,13 @@ async function processNegotiationCreated(
   });
 
   triggerLeadCreated(env, requestId);
+
+  await triggerNotification(env, "lead_created", {
+    clientId,
+    estimateRequestId: requestId,
+    instanceKey: "lead",
+    scheduledFor: nextCentralSendInstant().toISOString(),
+  });
 
   return { ok: true, request_id: requestId, client_id: clientId, deduped: false };
 }

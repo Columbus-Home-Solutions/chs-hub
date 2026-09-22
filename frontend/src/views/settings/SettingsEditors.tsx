@@ -649,8 +649,8 @@ export function LeadOutreachTab() {
     <div>
       <Card title="Lead Outreach">
         <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-lg)" }}>
-          When a new lead comes in with no appointment set, the system automatically texts them on Days 1, 2, and 3.
-          The sequence stops the moment an appointment is scheduled or the lead is marked lost.
+          Sends when a lead is moved to Contacted. Days 1, 2, and 3 go out between 9:00 AM and 7:00 PM Central.
+          The sequence stops when they reply, an appointment is scheduled, or the lead leaves Contacted.
           Edit the SMS templates below. Changes are saved immediately and audit-logged.
         </p>
 

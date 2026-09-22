@@ -23,7 +23,7 @@ interface HLPipeline {
 export const HL_STAGE_MAP: Record<string, string> = {
   // Main pipeline
   "New Lead": "New Lead",
-  "Contacted / Follow Up": "Contacted / Follow Up",
+  "Contacted | Follow Up": "Contacted | Follow Up",
   "Appointment Set": "Appointment Set",
   "Estimate Sent": "Estimate Sent",
   // Lead Nurture Campaign stages → Nurture column
@@ -41,7 +41,7 @@ export const HL_STAGE_MAP: Record<string, string> = {
 // HL stages to show in the condensed Kanban (subset of full pipeline).
 const DISPLAY_STAGES = [
   "New Lead",
-  "Contacted / Follow Up",
+  "Contacted | Follow Up",
   "Appointment Set",
   "Estimate Sent",
   "Nurture",

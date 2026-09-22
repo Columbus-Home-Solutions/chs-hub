@@ -63,8 +63,21 @@ export function shouldDeleteOrphanClient(counts: {
   requests: number;
   estimates: number;
   jobs: number;
+  /** Legacy Jobber quotes, files, reviews, or an SMS thread mean the client is real. */
+  quotes?: number;
+  documents?: number;
+  reviews?: number;
+  smsStates?: number;
 }): boolean {
-  return counts.requests === 0 && counts.estimates === 0 && counts.jobs === 0;
+  return (
+    counts.requests === 0 &&
+    counts.estimates === 0 &&
+    counts.jobs === 0 &&
+    (counts.quotes ?? 0) === 0 &&
+    (counts.documents ?? 0) === 0 &&
+    (counts.reviews ?? 0) === 0 &&
+    (counts.smsStates ?? 0) === 0
+  );
 }
 
 function displayName(row: EstimateRequestDeleteRow): string {
@@ -128,26 +141,42 @@ export async function loadEstimateRequestForDelete(
   };
 }
 
+async function countWhere(
+  env: Env,
+  sql: string,
+  clientId: string,
+): Promise<number> {
+  try {
+    const row = await env.DB.prepare(sql).bind(clientId).first<{ n: number }>();
+    return Number(row?.n ?? 0);
+  } catch {
+    // Missing table/column on an older local DB: keep the client rather than 500.
+    return 1;
+  }
+}
+
 export async function countClientAttachedRecords(
   env: Env,
   clientId: string,
-): Promise<{ requests: number; estimates: number; jobs: number }> {
-  const requests = await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM estimate_requests WHERE client_id = ?",
-  )
-    .bind(clientId)
-    .first<{ n: number }>();
-  const estimates = await env.DB.prepare("SELECT COUNT(*) AS n FROM estimates WHERE client_id = ?")
-    .bind(clientId)
-    .first<{ n: number }>();
-  const jobs = await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE client_id = ?")
-    .bind(clientId)
-    .first<{ n: number }>();
-  return {
-    requests: Number(requests?.n ?? 0),
-    estimates: Number(estimates?.n ?? 0),
-    jobs: Number(jobs?.n ?? 0),
-  };
+): Promise<{
+  requests: number;
+  estimates: number;
+  jobs: number;
+  quotes: number;
+  documents: number;
+  reviews: number;
+  smsStates: number;
+}> {
+  const [requests, estimates, jobs, quotes, documents, reviews, smsStates] = await Promise.all([
+    countWhere(env, "SELECT COUNT(*) AS n FROM estimate_requests WHERE client_id = ?", clientId),
+    countWhere(env, "SELECT COUNT(*) AS n FROM estimates WHERE client_id = ?", clientId),
+    countWhere(env, "SELECT COUNT(*) AS n FROM jobs WHERE client_id = ?", clientId),
+    countWhere(env, "SELECT COUNT(*) AS n FROM quotes WHERE client_id = ?", clientId),
+    countWhere(env, "SELECT COUNT(*) AS n FROM documents WHERE client_id = ?", clientId),
+    countWhere(env, "SELECT COUNT(*) AS n FROM google_reviews WHERE matched_client_id = ?", clientId),
+    countWhere(env, "SELECT COUNT(*) AS n FROM sms_conversation_state WHERE client_id = ?", clientId),
+  ]);
+  return { requests, estimates, jobs, quotes, documents, reviews, smsStates };
 }
 
 /** Delete the client when nothing real remains attached. Caller already deleted the request. */
@@ -178,16 +207,25 @@ export async function maybeDeleteOrphanClient(
     client.name ||
     "(unnamed)";
 
-  const { jobs_removed, estimates_removed } = await cascadeDeleteClient(env, clientId);
+  try {
+    const { jobs_removed, estimates_removed } = await cascadeDeleteClient(env, clientId);
 
-  await writeAudit(env, userEmail, "client_deleted", "client", clientId, {
-    name,
-    email: client.email,
-    phone: client.phone,
-    jobs_removed,
-    estimates_removed,
-    via: "orphan_after_estimate_request_delete",
-  });
+    await writeAudit(env, userEmail, "client_deleted", "client", clientId, {
+      name,
+      email: client.email,
+      phone: client.phone,
+      jobs_removed,
+      estimates_removed,
+      via: "orphan_after_estimate_request_delete",
+    });
+  } catch (err) {
+    // A leftover FK (quote, document, review) must not fail the lead delete.
+    console.error(
+      `[estimate_request_delete] kept client ${clientId} after orphan cleanup failed:`,
+      (err as Error).message,
+    );
+    return false;
+  }
 
   return true;
 }
@@ -267,14 +305,24 @@ export async function deleteNewRequestLeads(
       continue;
     }
 
-    const result = await performEstimateRequestDelete(env, row, userEmail);
-    deleted.push({
-      ok: true,
-      id,
-      client_deleted: result.client_deleted,
-      client_id: row.client_id,
-      estimates_removed: result.estimates_removed,
-    });
+    try {
+      const result = await performEstimateRequestDelete(env, row, userEmail);
+      deleted.push({
+        ok: true,
+        id,
+        client_deleted: result.client_deleted,
+        client_id: row.client_id,
+        estimates_removed: result.estimates_removed,
+      });
+    } catch (err) {
+      skipped.push({
+        ok: false,
+        id,
+        status: 500,
+        error: "delete_failed",
+        message: (err as Error).message || "Delete failed",
+      });
+    }
   }
 
   return { deleted, skipped };

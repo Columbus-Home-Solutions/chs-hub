@@ -244,6 +244,7 @@ export const COMM_CHANNELS = [
 
 export type EstimateRequestStatus =
   | "new_request"
+  | "contacted"
   | "appointment_set"
   | "visit_done"
   | "building"
@@ -286,6 +287,7 @@ export interface EstimateRequest {
   client_phone: string | null;
   client_email: string | null;
   is_repeat_client: boolean;
+  existing_client: boolean;
   property_address: string;
   property_city: string;
   property_state: string | null;
@@ -323,6 +325,7 @@ export interface EstimateRequest {
   lead_outreach_count: number;
   last_outreach_date: string | null;
   lead_outreach_completed_at: string | null;
+  contacted_at: string | null;
   days_in_stage: number;
   age_days: number;
   created_at: string | null;
@@ -362,6 +365,7 @@ export const ESTIMATE_SENT_TOOLTIP =
 // Pipeline stage columns, left → right (matches the API status order).
 export const PIPELINE_STAGES: { key: EstimateRequestStatus; label: string }[] = [
   { key: "new_request", label: "New Request" },
+  { key: "contacted", label: "Contacted" },
   { key: "appointment_set", label: "Appointment Set" },
   { key: "visit_done", label: "Estimate Visit Done" },
   { key: "building", label: "Estimate Building" },

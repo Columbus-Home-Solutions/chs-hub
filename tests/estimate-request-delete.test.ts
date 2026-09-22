@@ -44,6 +44,11 @@ interface JobRow {
   estimate_id: string | null;
 }
 
+interface QuoteRow {
+  id: string;
+  client_id: string;
+}
+
 interface AuditRow {
   action: string;
   entity_type: string;
@@ -57,11 +62,15 @@ function makeEnv(seed: {
   requests?: RequestRow[];
   estimates?: EstimateRow[];
   jobs?: JobRow[];
+  quotes?: QuoteRow[];
+  failRequestIds?: string[];
 }) {
   const clients = [...(seed.clients ?? [])];
   const requests = [...(seed.requests ?? [])];
   const estimates = [...(seed.estimates ?? [])];
   const jobs = [...(seed.jobs ?? [])];
+  const quotes = [...(seed.quotes ?? [])];
+  const failRequestIds = new Set(seed.failRequestIds ?? []);
   const auditLogs: AuditRow[] = [];
 
   const db = {
@@ -85,6 +94,10 @@ function makeEnv(seed: {
           if (norm.includes("COUNT(*)") && norm.includes("FROM jobs")) {
             const clientId = this._args[0] as string;
             return { n: jobs.filter((j) => j.client_id === clientId).length };
+          }
+          if (norm.includes("COUNT(*)") && norm.includes("FROM quotes")) {
+            const clientId = this._args[0] as string;
+            return { n: quotes.filter((q) => q.client_id === clientId).length };
           }
           if (norm.includes("FROM estimate_requests er") && norm.includes("LEFT JOIN clients")) {
             const id = this._args[0] as string;
@@ -150,6 +163,9 @@ function makeEnv(seed: {
           }
           if (norm.startsWith("DELETE FROM estimate_requests WHERE id")) {
             const id = this._args[0] as string;
+            if (failRequestIds.has(id)) {
+              throw new Error("D1_ERROR: FOREIGN KEY constraint failed");
+            }
             const idx = requests.findIndex((r) => r.id === id);
             if (idx >= 0) requests.splice(idx, 1);
           }
@@ -238,6 +254,7 @@ describe("new_request delete guard", () => {
   it("allows new_request and blocks every other stage", () => {
     expect(activeLeadDeleteError("new_request")).toBeNull();
     for (const status of [
+      "contacted",
       "appointment_set",
       "visit_done",
       "building",
@@ -257,6 +274,10 @@ describe("new_request delete guard", () => {
     expect(shouldDeleteOrphanClient({ requests: 1, estimates: 0, jobs: 0 })).toBe(false);
     expect(shouldDeleteOrphanClient({ requests: 0, estimates: 1, jobs: 0 })).toBe(false);
     expect(shouldDeleteOrphanClient({ requests: 0, estimates: 0, jobs: 1 })).toBe(false);
+    expect(shouldDeleteOrphanClient({ requests: 0, estimates: 0, jobs: 0, quotes: 1 })).toBe(false);
+    expect(shouldDeleteOrphanClient({ requests: 0, estimates: 0, jobs: 0, documents: 1 })).toBe(false);
+    expect(shouldDeleteOrphanClient({ requests: 0, estimates: 0, jobs: 0, reviews: 1 })).toBe(false);
+    expect(shouldDeleteOrphanClient({ requests: 0, estimates: 0, jobs: 0, smsStates: 1 })).toBe(false);
   });
 });
 
@@ -303,6 +324,24 @@ describe("orphan client cleanup", () => {
     expect(requests.find((r) => r.id === "er-extra")).toBeUndefined();
     expect(clients.find((c) => c.id === "c-real")).toBeTruthy();
     expect(jobs.find((j) => j.id === "job-1")).toBeTruthy();
+  });
+
+  it("keeps the client when a legacy quote still references them", async () => {
+    const { env, clients, requests } = makeEnv({
+      clients: [junkClient({ id: "c-quoted", first_name: "Pat", last_name: "Jones" })],
+      requests: [junkRequest({ id: "er-quoted", client_id: "c-quoted" })],
+      quotes: [{ id: "q-1", client_id: "c-quoted" }],
+    });
+
+    const result = await performEstimateRequestDelete(
+      env,
+      asDeleteRow(junkRequest({ id: "er-quoted", client_id: "c-quoted" })),
+      "tony@chs.local",
+    );
+
+    expect(requests.find((r) => r.id === "er-quoted")).toBeUndefined();
+    expect(clients.find((c) => c.id === "c-quoted")).toBeTruthy();
+    expect(result.client_deleted).toBe(false);
   });
 
   it("keeps the client when they have another estimate_request", async () => {
@@ -386,5 +425,29 @@ describe("bulk-delete New Request only", () => {
     const second = await deleteNewRequestLeads(env, ["er-b"], "tony@chs.local");
     expect(second.deleted[0].client_deleted).toBe(true);
     expect(clients.find((c) => c.id === "c-junk")).toBeUndefined();
+  });
+
+  it("skips a row that throws and still deletes the rest", async () => {
+    const { env, requests } = makeEnv({
+      clients: [junkClient({ id: "c-ok" }), junkClient({ id: "c-bad" })],
+      requests: [
+        junkRequest({ id: "er-ok", client_id: "c-ok" }),
+        junkRequest({ id: "er-bad", client_id: "c-bad", request_number: 89 }),
+      ],
+      failRequestIds: ["er-bad"],
+    });
+
+    const result = await deleteNewRequestLeads(env, ["er-bad", "er-ok"], "tony@chs.local");
+
+    expect(result.deleted.map((d) => d.id)).toEqual(["er-ok"]);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        id: "er-bad",
+        status: 500,
+        error: "delete_failed",
+      }),
+    ]);
+    expect(requests.find((r) => r.id === "er-ok")).toBeUndefined();
+    expect(requests.find((r) => r.id === "er-bad")).toBeTruthy();
   });
 });

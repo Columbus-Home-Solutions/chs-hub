@@ -6,18 +6,20 @@
  * errors are caught so co-tenant cron jobs are not disrupted.
  *
  * Outreach sequence logic (SMS only — no email):
- *   lead_outreach_count 0 → Day 1 touch  (days_since_created >= 0 AND 45-min
- *                           buffer from created_at; same Central calendar day
- *                           when possible — see isDay1BufferSatisfied)
- *   lead_outreach_count 1 → Day 2 touch  (days_since_created >= 1)
- *   lead_outreach_count 2 → Day 3 touch  (days_since_created >= 2)
- *   lead_outreach_count 3 → sequence complete (all touches sent)
+ *   Clock is contacted_at for status=contacted. In-flight new_request rows
+ *   that already have sequence_active=1 keep using created_at until they finish.
+ *   lead_outreach_count 0 → Day 1 (days >= 0, next 15-minute tick inside 9am–7pm Central)
+ *   lead_outreach_count 1 → Day 2 (days >= 1, same window)
+ *   lead_outreach_count 2 → Day 3 (days >= 2, same window)
+ *   lead_outreach_count 3 → sequence complete
+ *
+ * New sequences start only when a lead enters Contacted (applyLeadStageChange).
+ * No new sequences start on new_request.
  *
  * Stops automatically when:
- *   - appointment_date is set (auto-stop hook in estimate-requests.ts)
- *   - lead is marked lost (auto-stop hook in estimate-requests.ts)
- *   - 3 touches sent (sequence exhausted)
- *   - days_elapsed > 3 and count = 0 (lead too old to start)
+ *   - the lead leaves Contacted, an appointment is set, or it is marked lost
+ *   - the customer replies (inbound SMS)
+ *   - 3 touches sent
  *
  * triggerPostVisitFollowUp() fires a single dual-channel (SMS + email) message
  * when a request moves to visit_done. Called inline from the status-update handler.
@@ -28,14 +30,13 @@
  */
 
 import type { Env } from "../env.js";
+import { isWithinCentralSendWindow } from "./central-send-window.js";
 import { sendSms, getTwilioConfig, isConfigured as twilioConfigured } from "./twilio.js";
 import { renderTemplateText } from "./merge-render.js";
 
 // ─── touch schedule ───────────────────────────────────────────────────────────
 
-/** Rolling buffer before Day 1 (all sources). Not applied to Day 2/3. */
-export const DAY1_BUFFER_MINUTES = 45;
-export const CHS_TIMEZONE = "America/Chicago";
+export { CHS_TIMEZONE } from "./central-send-window.js";
 
 const OUTREACH_TOUCHES: Array<{
   dayThreshold: number;
@@ -64,7 +65,7 @@ interface OutreachRow {
   client_id: string;
   job_type: string;
   property_address: string;
-  created_at: string;
+  outreach_clock: string;
   lead_outreach_count: number;
   lead_outreach_sequence_active: number;
   first_name: string | null;
@@ -73,19 +74,24 @@ interface OutreachRow {
   sms_opt_out: number | null;
 }
 
-/** INNER JOIN clients — estimate_requests without a client_id never enter the sequence. */
-export const LEAD_OUTREACH_CANDIDATE_SQL = `SELECT er.id, er.client_id, er.job_type, er.property_address, er.created_at,
+/**
+ * Contacted rows with an active sequence, plus in-flight new_request sequences
+ * started before the Contacted cutover. INNER JOIN clients — no client, no text.
+ */
+export const LEAD_OUTREACH_CANDIDATE_SQL = `SELECT er.id, er.client_id, er.job_type, er.property_address,
+            CASE WHEN er.status = 'contacted' THEN er.contacted_at ELSE er.created_at END AS outreach_clock,
             COALESCE(er.lead_outreach_count, 0) AS lead_outreach_count,
             COALESCE(er.lead_outreach_sequence_active, 0) AS lead_outreach_sequence_active,
             c.first_name, c.phone, c.email, c.sms_opt_out
      FROM estimate_requests er
      JOIN clients c ON c.id = er.client_id
-     WHERE er.status = 'new_request'
-       AND er.appointment_date IS NULL
+     WHERE er.appointment_date IS NULL
        AND COALESCE(er.appointment_completed, 0) = 0
+       AND er.lead_outreach_sequence_active = 1
+       AND er.lead_outreach_completed_at IS NULL
        AND (
-         er.lead_outreach_sequence_active = 1
-         OR (COALESCE(er.lead_outreach_count, 0) = 0 AND er.created_at IS NOT NULL)
+         (er.status = 'contacted' AND er.contacted_at IS NOT NULL)
+         OR er.status = 'new_request'
        )
      LIMIT 20`;
 
@@ -93,7 +99,7 @@ export const LEAD_OUTREACH_CANDIDATE_SQL = `SELECT er.id, er.client_id, er.job_t
 
 /**
  * Main entry point — called from runNotificationProcessor() every 15 min.
- * Processes up to 20 new_request records with no appointment date set.
+ * Processes up to 20 contacted (or in-flight new_request) records with no appointment.
  */
 export async function processNewLeadOutreach(env: Env): Promise<OutreachStats> {
   const started = Date.now();
@@ -140,15 +146,9 @@ async function processOneOutreach(
   env: Env,
   row: OutreachRow,
 ): Promise<true | false | null> {
-  const daysElapsed = calcDaysSince(row.created_at);
+  const daysElapsed = calcDaysSince(row.outreach_clock);
 
   if (daysElapsed < 0) return null;
-
-  // Lead too old to start — mark complete without sending.
-  if (daysElapsed > 3 && row.lead_outreach_count === 0 && row.lead_outreach_sequence_active === 0) {
-    await markOutreachComplete(env, row.id);
-    return false;
-  }
 
   // All touches already sent.
   if (row.lead_outreach_count >= OUTREACH_TOUCHES.length) {
@@ -161,11 +161,8 @@ async function processOneOutreach(
   // Not yet at the day threshold — nothing to do this tick.
   if (daysElapsed < touch.dayThreshold) return null;
 
-  // Day 1 only: wait 45 minutes so Tony can log an appointment after a live call.
-  // Day 2/3 thresholds are unchanged.
-  if (row.lead_outreach_count === 0 && !isDay1BufferSatisfied(row.created_at)) {
-    return null;
-  }
+  // 9:00 AM–7:00 PM Central. A lead moved at 11 PM texts at 9 AM.
+  if (!isWithinCentralSendWindow()) return null;
 
   // Load SMS template.
   const smsSetting = await env.DB.prepare(
@@ -479,52 +476,6 @@ export async function triggerPostVisitFollowUp(requestId: string, env: Env): Pro
 function parseCreatedAt(iso: string): Date | null {
   const t = new Date(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z");
   return Number.isNaN(t.getTime()) ? null : t;
-}
-
-function centralYmd(d: Date): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: CHS_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-}
-
-function minutesUntilCentralMidnight(now: Date): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: CHS_TIMEZONE,
-    hour: "numeric",
-    minute: "numeric",
-    hourCycle: "h23",
-  }).formatToParts(now);
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  return 24 * 60 - (hour * 60 + minute);
-}
-
-/**
- * Day 1 eligibility clock. Day 2/3 do not call this.
- *
- * - Default: created_at must be at least 45 minutes ago.
- * - Same Central calendar day is preferred. If waiting the full 45 minutes
- *   would cross midnight America/Chicago, send on the last stretch of that
- *   Central day (shortened buffer) so Day 1 is not silently skipped.
- * - If the buffer already crossed midnight (next cron is next Central day)
- *   and the lead is still under 45 minutes old, send anyway — do not skip.
- */
-export function isDay1BufferSatisfied(createdAt: string, now: Date = new Date()): boolean {
-  const created = parseCreatedAt(createdAt);
-  if (!created) return false;
-  const minutesOld = (now.getTime() - created.getTime()) / 60_000;
-  if (minutesOld >= DAY1_BUFFER_MINUTES) return true;
-  if (minutesOld < 0) return false;
-
-  const sameCentralDay = centralYmd(created) === centralYmd(now);
-  if (sameCentralDay && minutesUntilCentralMidnight(now) < DAY1_BUFFER_MINUTES) {
-    return true;
-  }
-  if (!sameCentralDay) return true;
-  return false;
 }
 
 export function calcDaysSince(iso: string, now: Date = new Date()): number {

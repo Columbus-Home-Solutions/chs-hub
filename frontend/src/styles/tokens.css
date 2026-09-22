@@ -55,6 +55,7 @@
 
   /* ─── Estimate Pipeline Colors ─── */
   --pipeline-new-request: #8b5cf6;
+  --pipeline-contacted: #6366f1;
   --pipeline-appointment-set: #3b82f6;
   --pipeline-visit-done: #0ea5e9;
   --pipeline-building: #f59e0b;

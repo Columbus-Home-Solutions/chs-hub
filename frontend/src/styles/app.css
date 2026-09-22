@@ -771,6 +771,7 @@
   border-top: 3px solid var(--col-accent, var(--color-border-hover));
 }
 .pipeline-col--new_request { --col-accent: var(--pipeline-new-request); }
+.pipeline-col--contacted { --col-accent: var(--pipeline-contacted); }
 .pipeline-col--appointment_set { --col-accent: var(--pipeline-appointment-set); }
 .pipeline-col--visit_done { --col-accent: var(--pipeline-visit-done); }
 .pipeline-col--building { --col-accent: var(--pipeline-building); }

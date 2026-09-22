@@ -12,6 +12,7 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { formatDateTime, formatStatus } from "../../lib/format";
+import { outreachLabel } from "../../lib/outreach-label";
 import { jobTypeDisplayLabel } from "@chs/shared/job-type-label";
 import { formatCurrency } from "../../lib/format";
 import { ClientForm } from "../clients/ClientForm";
@@ -349,6 +350,7 @@ interface DetailProps extends RoutableProps {
 function forwardTargets(status: EstimateRequestStatus): EstimateRequestStatus[] {
   const order: EstimateRequestStatus[] = [
     "new_request",
+    "contacted",
     "appointment_set",
     "visit_done",
     "building",
@@ -889,6 +891,10 @@ export function EstimateRequestDetail({ id }: DetailProps) {
               ) : r.client_name}
             </h1>
             <span class={`er-status pipeline-col--${r.status}`}>{formatStatus(r.status)}</span>
+            {outreachLabel(r) && (
+              <Badge tone={outreachLabel(r) === "No response" ? "warning" : "info"}>{outreachLabel(r)}</Badge>
+            )}
+            {r.existing_client && <Badge tone="info">Existing client</Badge>}
             {r.is_repeat_client && <Badge tone="brand">Repeat</Badge>}
           </div>
           <p class="view-subtitle">

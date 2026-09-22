@@ -15,6 +15,8 @@
 
 import type { Env } from "../env.js";
 import { findClientByPhone } from "./client-dedup.js";
+import { HL_MIRROR_STAGE_IDS, HL_MIRROR_STAGE_TO_CHS, isFreshHlStageChange, type MirroredLeadStatus } from "./hl-stages.js";
+import { applyLeadStageChange } from "./lead-stage.js";
 import { createOwnerInApp } from "./notification-engine.js";
 import { triggerLeadCreated } from "./wc/triggers.js";
 
@@ -23,11 +25,13 @@ const JOB_ERROR = "hl_lead_mirror_error";
 
 export interface HlOpportunityLite {
   id: string;
-  name: string;
+  name: string | null;
   phone: string | null;
   email: string | null;
   source: string | null;
   status: string | null;
+  pipelineStageId: string | null;
+  lastStageChangeAt: string | null;
   address: string | null;
   city: string | null;
   state: string | null;
@@ -99,6 +103,16 @@ function pickEmail(opp: Record<string, unknown>): string | null {
 }
 
 /** Google LSA often puts the dialed number in the opportunity name. */
+function isInventedLeadName(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return n === "unknown lead" || n === "google lsa" || n === "google lsa lead";
+}
+
+/** An email address, or a title that is only an email plus a label, is not a person's name. */
+function looksLikeEmailName(name: string): boolean {
+  return name.includes("@");
+}
+
 function looksLikePhoneName(name: string): boolean {
   const digits = name.replace(/\D/g, "");
   if (digits.length < 7) return false;
@@ -135,12 +149,14 @@ function normalizeOpportunity(raw: Record<string, unknown>): HlOpportunityLite |
       .filter(Boolean)
       .join(" ")
       .trim() || str(contact.name);
-  const rawName = str(raw.name) ?? contactName ?? "Unknown Lead";
+  const titled = str(raw.name) ?? contactName;
   // Prefer a real contact name when the opportunity title is just a phone number.
-  const name =
-    looksLikePhoneName(rawName) && contactName && !looksLikePhoneName(contactName)
+  // Blank stays blank — never invent "Unknown Lead" or "Google LSA".
+  const name = titled
+    ? looksLikePhoneName(titled) && contactName && !looksLikePhoneName(contactName)
       ? contactName
-      : rawName;
+      : titled
+    : null;
   const addr = pickAddress(raw);
   const notesBits = [str(raw.name), str(raw.source) ? `HL source: ${raw.source}` : null].filter(Boolean);
   return {
@@ -150,6 +166,8 @@ function normalizeOpportunity(raw: Record<string, unknown>): HlOpportunityLite |
     email: pickEmail(raw),
     source: str(raw.source),
     status: str(raw.status),
+    pipelineStageId: str(raw.pipelineStageId),
+    lastStageChangeAt: str(raw.lastStageChangeAt),
     address: addr.address,
     city: addr.city,
     state: addr.state,
@@ -159,54 +177,90 @@ function normalizeOpportunity(raw: Record<string, unknown>): HlOpportunityLite |
 }
 
 /**
- * Fetch current open HL opportunities. Same endpoint the HL Kanban reads
- * through /api/hl/opportunities/search (Kanban uses limit=50).
- *
- * Single page only — this is a bridge for *current* leads, not a historical
- * HL backfill. Deep pagination previously re-fetched duplicates and flooded
- * the tick.
+ * One page per mirrorable stage ID. Not the status=open firehose — New, Dead,
+ * Job Completed, and the nurture pipeline never come back from these queries.
+ * Still read-only. Still not a historical backfill (limit 100 per stage).
  */
-export async function fetchOpenHlOpportunities(env: Env): Promise<HlOpportunityLite[]> {
+export async function fetchMirrorableHlOpportunities(env: Env): Promise<HlOpportunityLite[]> {
   const locationId = (env.HL_LOCATION_ID ?? "").trim();
   if (!locationId) throw new Error("HL_LOCATION_ID not configured");
 
-  const params = new URLSearchParams({
-    location_id: locationId,
-    status: "open",
-    limit: "100",
-  });
-
-  const result = await hlGet(env, `/opportunities/search?${params.toString()}`);
-  if (!result.ok) {
-    throw new Error(
-      `HL opportunities/search failed (${result.status}): ${JSON.stringify(result.json).slice(0, 300)}`,
-    );
-  }
-
-  const data = result.json as { opportunities?: Record<string, unknown>[] };
   const seen = new Set<string>();
   const out: HlOpportunityLite[] = [];
-  for (const raw of data.opportunities ?? []) {
-    const opp = normalizeOpportunity(raw);
-    if (!opp || seen.has(opp.id)) continue;
-    seen.add(opp.id);
-    out.push(opp);
+  for (const stageId of HL_MIRROR_STAGE_IDS) {
+    const params = new URLSearchParams({
+      location_id: locationId,
+      pipeline_stage_id: stageId,
+      limit: "100",
+    });
+    const result = await hlGet(env, `/opportunities/search?${params.toString()}`);
+    if (!result.ok) {
+      throw new Error(
+        `HL opportunities/search stage=${stageId} failed (${result.status}): ${JSON.stringify(result.json).slice(0, 300)}`,
+      );
+    }
+    const data = result.json as { opportunities?: Record<string, unknown>[] };
+    for (const raw of data.opportunities ?? []) {
+      const opp = normalizeOpportunity(raw);
+      if (!opp || seen.has(opp.id)) continue;
+      if (!opp.pipelineStageId || !HL_MIRROR_STAGE_TO_CHS[opp.pipelineStageId]) continue;
+      seen.add(opp.id);
+      out.push(opp);
+    }
   }
   return out;
 }
 
-function splitName(full: string, phone: string | null): { first: string; last: string } {
-  if (looksLikePhoneName(full)) {
-    return { first: "Google LSA", last: phone ?? "Lead" };
+/** @deprecated Use fetchMirrorableHlOpportunities. Kept so older callers compile. */
+export async function fetchOpenHlOpportunities(env: Env): Promise<HlOpportunityLite[]> {
+  return fetchMirrorableHlOpportunities(env);
+}
+
+/** Real name only. A phone-number title or an empty name stays blank. */
+export function splitRealName(full: string | null): { first: string | null; last: string | null } {
+  if (!full || looksLikePhoneName(full) || looksLikeEmailName(full) || isInventedLeadName(full)) {
+    return { first: null, last: null };
   }
-  const cleaned = full.replace(/\s+[—\-–]\s+.*$/, "").trim(); // drop " - Category" tails
+  const withoutLsa = full.replace(/^google lsa\b/i, "").trim();
+  if (!withoutLsa || looksLikePhoneName(withoutLsa) || looksLikeEmailName(withoutLsa)) {
+    return { first: null, last: null };
+  }
+  const cleaned = withoutLsa.replace(/\s+[—\-–]\s+.*$/, "").trim();
+  if (!cleaned || looksLikePhoneName(cleaned)) return { first: null, last: null };
   const parts = cleaned.split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return { first: "Unknown", last: "Lead" };
-  if (parts.length === 1) return { first: parts[0], last: "Lead" };
+  if (parts.length === 0) return { first: null, last: null };
+  if (parts.length === 1) return { first: parts[0], last: null };
   return { first: parts[0], last: parts.slice(1).join(" ") };
 }
 
+async function createHlClient(
+  env: Env,
+  opp: HlOpportunityLite,
+): Promise<string> {
+  const { first, last } = splitRealName(opp.name);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO clients (
+       id, first_name, last_name, email, phone, lead_source, synced_at, created_at, updated_at, created_by
+     ) VALUES (?, ?, ?, ?, ?, 'google_lsa', datetime('now'), ?, ?, 'hl_lead_mirror')`,
+  )
+    .bind(id, first, last, opp.email, opp.phone, now, now)
+    .run();
+  return id;
+}
+
+function stageLabel(status: MirroredLeadStatus): string {
+  if (status === "contacted") return "Contacted";
+  if (status === "appointment_set") return "Appointment Set";
+  if (status === "building") return "Create Estimate";
+  return "Estimate Sent";
+}
+
 async function mirrorOne(env: Env, opp: HlOpportunityLite): Promise<"created" | "skipped"> {
+  const chsStatus = opp.pipelineStageId ? HL_MIRROR_STAGE_TO_CHS[opp.pipelineStageId] : undefined;
+  if (!chsStatus) return "skipped";
+
   const existing = await env.DB.prepare(
     "SELECT id FROM estimate_requests WHERE high_level_opportunity_id = ?",
   )
@@ -214,15 +268,18 @@ async function mirrorOne(env: Env, opp: HlOpportunityLite): Promise<"created" | 
     .first<{ id: string }>();
   if (existing) return "skipped";
 
-  const { first, last } = splitName(opp.name, opp.phone);
-  const contactName = `${first} ${last}`.trim();
+  const { first, last } = splitRealName(opp.name);
+  const contactName = [first, last].filter(Boolean).join(" ").trim() || null;
   const now = new Date().toISOString();
 
-  // Link only when phone matches a real existing client — never fabricate placeholders.
   const matched = opp.phone ? await findClientByPhone(env, opp.phone) : null;
-  const clientId = matched?.id ?? null;
+  const clientId = matched?.id ?? (await createHlClient(env, opp));
   const contactPhone = opp.phone && opp.phone !== "unknown" ? opp.phone : null;
   const contactEmail = opp.email?.trim() || null;
+  const isContacted = chsStatus === "contacted";
+  const freshContacted = isContacted && isFreshHlStageChange(opp.lastStageChangeAt);
+  // Stale Contacted leads are stored with the sequence already finished so Day 1 never sends.
+  const completedAt = isContacted && !freshContacted ? now : null;
 
   const max = await env.DB.prepare(
     "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
@@ -237,14 +294,17 @@ async function mirrorOne(env: Env, opp: HlOpportunityLite): Promise<"created" | 
        property_address, property_city, property_state, property_zip,
        job_type, lead_source, source, visit_notes,
        high_level_opportunity_id,
+       contacted_at,
+       lead_outreach_sequence_active, lead_outreach_count, lead_outreach_completed_at,
        created_at, updated_at, created_by
-     ) VALUES (?, ?, 'new_request', ?, ?, ?, ?, ?, ?, ?, ?, 'other', 'google_lsa', 'high_level', ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'other', 'google_lsa', 'high_level', ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
   )
     .bind(
       requestId,
       requestNumber,
+      chsStatus,
       clientId,
-      contactName || null,
+      contactName,
       contactPhone,
       contactEmail,
       opp.address ?? "Unknown",
@@ -253,14 +313,21 @@ async function mirrorOne(env: Env, opp: HlOpportunityLite): Promise<"created" | 
       opp.zip ?? "00000",
       opp.notes,
       opp.id,
+      isContacted ? now : null,
+      completedAt,
       now,
       now,
       "hl_lead_mirror",
     )
     .run();
 
+  if (freshContacted) {
+    await applyLeadStageChange(env, requestId, null, "contacted");
+  }
+
+  const displayName = contactName || contactPhone || "a lead";
   await createOwnerInApp(env, {
-    message: `New lead from Google LSA (via HighLevel): ${contactName}`.trim(),
+    message: `Lead moved to ${stageLabel(chsStatus)} in HighLevel: ${displayName}`,
     linkPath: `/app/estimating/${requestId}`,
     clientId,
     dedupe: `hl_mirror:${opp.id}`,
@@ -276,7 +343,7 @@ export async function runHlLeadMirror(env: Env): Promise<{
   skipped: number;
   errors: number;
 }> {
-  const opps = await fetchOpenHlOpportunities(env);
+  const opps = await fetchMirrorableHlOpportunities(env);
   let created = 0;
   let skipped = 0;
   let errors = 0;

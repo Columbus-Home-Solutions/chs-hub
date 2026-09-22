@@ -21,6 +21,7 @@ import { go } from "../../lib/nav";
 import { loadStoredView, storeView, truncate, useClientSort } from "../../lib/list-view";
 import { jobTypeDisplayLabel } from "@chs/shared/job-type-label";
 import { formatDate, formatStatus } from "../../lib/format";
+import { outreachLabel } from "../../lib/outreach-label";
 import {
   type EstimateRequest,
   type EstimateRequestStatus,
@@ -29,6 +30,7 @@ import {
 // Sprint 23 stage labels for the CHS Leads Kanban.
 const CHS_LEAD_STAGES: { key: EstimateRequestStatus; label: string; color: string }[] = [
   { key: "new_request", label: "New Lead", color: "var(--pipeline-new-request)" },
+  { key: "contacted", label: "Contacted", color: "var(--pipeline-contacted)" },
   { key: "appointment_set", label: "Appt Scheduled", color: "var(--pipeline-appointment-set)" },
   { key: "visit_done", label: "Visit Done", color: "var(--pipeline-visit-done)" },
   { key: "building", label: "Building Estimate", color: "var(--pipeline-building)" },
@@ -83,6 +85,7 @@ interface LeadCardProps {
 
 function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete, onMessage }: LeadCardProps) {
   const isSmsSrc = request.source === "inbound_sms";
+  const outreach = outreachLabel(request);
 
   return (
     <article
@@ -128,7 +131,11 @@ function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete,
         {request.source !== "manual" && (
           <span class="badge badge--source">{formatSource(request.source)}</span>
         )}
+        {request.existing_client && <Badge tone="info">Existing client</Badge>}
         {request.is_repeat_client && <Badge tone="brand">Repeat</Badge>}
+        {outreach && (
+          <Badge tone={outreach === "No response" ? "warning" : "info"}>{outreach}</Badge>
+        )}
         {request.appointment_date && (
           <span class="er-card__appt">📅 {formatDate(request.appointment_date)}</span>
         )}
@@ -173,6 +180,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
   const [overStage, setOverStage] = useState<EstimateRequestStatus | null>(null);
   const [activeStage, setActiveStage] = useState<EstimateRequestStatus>("new_request");
   const [wonTarget, setWonTarget] = useState<EstimateRequest | null>(null);
+  const [showClosed, setShowClosed] = useState(false);
   const [showQuickLead, setShowQuickLead] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -246,10 +254,14 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
   };
 
   // List view data.
+  const visibleStages = showClosed
+    ? CHS_LEAD_STAGES
+    : CHS_LEAD_STAGES.filter((s) => s.key !== "won" && s.key !== "lost");
+
   const allRequests = useMemo(() => {
     if (!data) return [];
-    return CHS_LEAD_STAGES.flatMap((s) => data.pipeline[s.key] ?? []);
-  }, [data]);
+    return visibleStages.flatMap((s) => data.pipeline[s.key] ?? []);
+  }, [data, showClosed]);
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(allRequests, "created_at", "desc");
   const visibleNewRequests = useMemo(
@@ -344,6 +356,9 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
           </p>
         </div>
         <div class="view-header__right flex gap-sm items-center">
+          <Button variant="secondary" size="sm" onClick={() => setShowClosed((v) => !v)}>
+            {showClosed ? "Hide closed" : "Show closed"}
+          </Button>
           <ViewToggle
             value={viewMode}
             onChange={(mode) => {
@@ -429,6 +444,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                 </td>
                 <td>
                   {r.client_name}
+                  {r.existing_client && <Badge tone="info">Existing client</Badge>}
                   {r.source === "inbound_sms" && (
                     <span class="badge badge--sms" style={{ marginLeft: "0.4rem" }}>💬 SMS</span>
                   )}
@@ -441,7 +457,12 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                   )}
                 </td>
                 <td>{truncate(jobTypeDisplayLabel(r.job_type, r.job_type_detail))}</td>
-                <td><Badge status={r.status}>{formatStatus(r.status)}</Badge></td>
+                <td>
+                  <Badge status={r.status}>{formatStatus(r.status)}</Badge>
+                  {outreachLabel(r) && (
+                    <Badge tone={outreachLabel(r) === "No response" ? "warning" : "info"}>{outreachLabel(r)}</Badge>
+                  )}
+                </td>
                 <td><span class="text--muted">{formatSource(r.lead_source || r.source)}</span></td>
                 <td>{ageDays(r.created_at)}</td>
                 <td>{r.appointment_date ? formatDate(r.appointment_date) : "—"}</td>
@@ -450,8 +471,18 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                     {!selectMode && canDeleteRequest(r) && (
                       <DeleteRequestButton request={r} size="sm" onDeleted={refetch} />
                     )}
-                    <Button size="sm" variant="tertiary" onClick={() => go(`/estimating/${r.id}`)}>
-                      View
+                    <Button
+                      size="sm"
+                      variant="tertiary"
+                      onClick={() =>
+                        go(
+                          r.status === "won" && r.converted_job_id
+                            ? `/jobs/${r.converted_job_id}`
+                            : `/estimating/${r.id}`,
+                        )
+                      }
+                    >
+                      {r.status === "won" && r.converted_job_id ? "Job" : "View"}
                     </Button>
                   </div>
                 </td>
@@ -467,7 +498,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
         <>
           {/* Mobile stage selector */}
           <div class="pipeline-tabs">
-            {CHS_LEAD_STAGES.map((s) => (
+            {visibleStages.map((s) => (
               <button
                 key={s.key}
                 class={`pipeline-tab${activeStage === s.key ? " pipeline-tab--active" : ""}`}
@@ -480,7 +511,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
           </div>
 
           <div class="pipeline-board">
-            {CHS_LEAD_STAGES.map((s) => {
+            {visibleStages.map((s) => {
               const cards = pipeline[s.key] ?? [];
               const isOver = overStage === s.key;
               return (
@@ -528,7 +559,13 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                           setDraggingId(null);
                           setOverStage(null);
                         }}
-                        onOpen={() => go(`/estimating/${r.id}`)}
+                        onOpen={() =>
+                          go(
+                            r.status === "won" && r.converted_job_id
+                              ? `/jobs/${r.converted_job_id}`
+                              : `/estimating/${r.id}`,
+                          )
+                        }
                         onDelete={() => refetch()}
                         onMessage={(clientId) => openMessageCenter(clientId)}
                       />

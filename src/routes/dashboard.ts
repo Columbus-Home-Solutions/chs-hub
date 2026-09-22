@@ -68,6 +68,8 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
       return "/social?tab=queue";
     case "follow_up_due":
       return "/estimating?status=follow_up";
+    case "lead_no_response":
+      return meta.requestId ? `/estimating/${meta.requestId}` : "/estimating?tab=chs&stage=contacted";
     case "cost_plus_cycle":
     case "job_budget_alert":
     case "change_order_pending":
@@ -335,6 +337,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     dueSoonInvoices,
     endingCycles,
     followUpLeads,
+    noResponseLeads,
     pendingSocial,
     pendingChangOrders,
     warrantyJobs,
@@ -393,6 +396,26 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       last_name: string | null;
       contact_name: string | null;
       created_at: string;
+    }>(),
+
+    // MEDIUM: still Contacted 24h after the Day 3 text
+    env.DB.prepare(
+      `SELECT er.id, er.last_outreach_date,
+              c.first_name, c.last_name, er.contact_name
+       FROM estimate_requests er
+       LEFT JOIN clients c ON er.client_id = c.id
+       WHERE er.status = 'contacted'
+         AND COALESCE(er.lead_outreach_count, 0) >= 3
+         AND er.last_outreach_date IS NOT NULL
+         AND er.last_outreach_date <= datetime('now', '-1 day')
+         AND ${NON_TEST_OR_ORPHAN_CLIENT}
+       ORDER BY er.last_outreach_date ASC LIMIT 10`,
+    ).all<{
+      id: string;
+      first_name: string | null;
+      last_name: string | null;
+      contact_name: string | null;
+      last_outreach_date: string;
     }>(),
 
     // LOW: social posts pending approval
@@ -540,6 +563,22 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       meta: { requestId: lead.id },
       link: actionItemLink("follow_up_due", {}),
       createdAt: lead.created_at,
+    });
+  }
+
+  for (const lead of noResponseLeads.results ?? []) {
+    const clientName =
+      `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() ||
+      lead.contact_name?.trim() ||
+      "Lead";
+    items.push({
+      id: `no_response_${lead.id}`,
+      priority: "medium",
+      type: "lead_no_response",
+      title: `No response from ${clientName} after 3 texts — call or mark Lost`,
+      meta: { requestId: lead.id },
+      link: `/estimating/${lead.id}`,
+      createdAt: lead.last_outreach_date,
     });
   }
 
@@ -719,6 +758,7 @@ export async function handleDashboardActionItemDismiss(
 
 const LEAD_STATUS_LABELS: Record<string, string> = {
   new_request: "New Leads",
+  contacted: "Contacted",
   appointment_set: "Appt Set",
   visit_done: "Visit Done",
   building: "Building",
@@ -777,7 +817,7 @@ export async function handleDashboardPipeline(env: Env): Promise<Response> {
   ]);
 
   // Map lead stages in order.
-  const leadOrder = ["new_request", "appointment_set", "visit_done", "building", "sent", "follow_up"];
+  const leadOrder = ["new_request", "contacted", "appointment_set", "visit_done", "building", "sent", "follow_up"];
   const leadCountMap = new Map((leadRows.results ?? []).map((r) => [r.status, r.count]));
   const leads: PipelineStage[] = leadOrder
     .filter((s) => LEAD_STATUS_LABELS[s])

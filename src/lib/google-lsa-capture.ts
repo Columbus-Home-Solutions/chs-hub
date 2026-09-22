@@ -9,7 +9,8 @@
 
 import type { Env } from "../env.js";
 import { createPhoneOnlyClient, findClientByPhone, phoneLast10 } from "./client-dedup.js";
-import { createOwnerInApp } from "./notification-engine.js";
+import { nextCentralSendInstant } from "./central-send-window.js";
+import { createOwnerInApp, triggerNotification } from "./notification-engine.js";
 import { triggerLeadCreated } from "./wc/triggers.js";
 
 export const GOOGLE_LSA_TRACKING_SETTING = "google_lsa_tracking_number";
@@ -137,6 +138,13 @@ export async function captureGoogleLsaLead(
     dedupe: `google_lsa:${requestId}`,
   });
   triggerLeadCreated(env, requestId);
+
+  await triggerNotification(env, "lead_created", {
+    clientId,
+    estimateRequestId: requestId,
+    instanceKey: "lead",
+    scheduledFor: nextCentralSendInstant().toISOString(),
+  });
 
   return { kind: "created", requestId, clientId };
 }

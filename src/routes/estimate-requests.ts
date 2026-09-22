@@ -32,6 +32,7 @@ import {
   loadEstimateRequestForDelete,
   performEstimateRequestDelete,
 } from "../lib/estimate-request-delete.js";
+import { applyLeadStageChange } from "../lib/lead-stage.js";
 import { triggerPostVisitFollowUp } from "../lib/new-lead-outreach.js";
 import { parseStoredScopeDraft } from "../lib/scope-draft.js";
 import { NON_TEST_OR_ORPHAN_CLIENT } from "../lib/non-test-client.js";
@@ -48,6 +49,7 @@ const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 //     conversion will set it automatically via the same path in Sprint 5)
 const PROGRESSION = [
   "new_request",
+  "contacted",
   "appointment_set",
   "visit_done",
   "building",
@@ -151,6 +153,7 @@ interface RequestRow {
   lead_outreach_count: number | null;
   last_outreach_date: string | null;
   lead_outreach_completed_at: string | null;
+  contacted_at: string | null;
   // joined client fields
   c_first: string | null;
   c_last: string | null;
@@ -158,6 +161,7 @@ interface RequestRow {
   c_phone: string | null;
   c_email: string | null;
   c_is_repeat: number | null;
+  c_created: string | null;
   // joined estimate fields
   e_status: string | null;
   e_sent_at: string | null;
@@ -169,11 +173,25 @@ const SELECT = `
     c.first_name AS c_first, c.last_name AS c_last, c.name AS c_name,
     c.phone AS c_phone, c.email AS c_email,
     COALESCE(c.is_repeat_client, 0) AS c_is_repeat,
+    c.created_at AS c_created,
     e.status AS e_status, e.sent_at AS e_sent_at, e.deposit_amount AS e_deposit
   FROM estimate_requests er
   LEFT JOIN clients c ON c.id = er.client_id
   LEFT JOIN estimates e ON e.id = er.estimate_id
 `;
+
+function parseTs(iso: string | null): number {
+  if (!iso) return NaN;
+  return new Date(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z").getTime();
+}
+
+/** True when this lead was attached to a client that already existed. */
+function clientPredatesRequest(clientCreated: string | null, requestCreated: string): boolean {
+  const clientAt = parseTs(clientCreated);
+  const requestAt = parseTs(requestCreated);
+  if (Number.isNaN(clientAt) || Number.isNaN(requestAt)) return false;
+  return requestAt - clientAt > 60_000;
+}
 
 function clientName(row: RequestRow): string {
   const parts = [row.c_first, row.c_last].filter(Boolean).join(" ").trim();
@@ -224,6 +242,7 @@ function shape(row: RequestRow) {
     client_phone: row.c_phone ?? row.contact_phone ?? null,
     client_email: row.c_email ?? row.contact_email ?? null,
     is_repeat_client: (row.c_is_repeat ?? 0) === 1,
+    existing_client: clientPredatesRequest(row.c_created, row.created_at),
     property_address: row.property_address,
     property_city: row.property_city,
     property_state: row.property_state,
@@ -268,6 +287,7 @@ function shape(row: RequestRow) {
     lead_outreach_count: row.lead_outreach_count ?? 0,
     last_outreach_date: row.last_outreach_date ?? null,
     lead_outreach_completed_at: row.lead_outreach_completed_at ?? null,
+    contacted_at: row.contacted_at ?? null,
   };
 }
 
@@ -282,7 +302,8 @@ async function repairOrphanedEstimateRequests(env: Env): Promise<void> {
             last_follow_up_date = NULL,
             updated_at = ?
       WHERE estimate_id IS NULL
-        AND status IN ('building', 'sent', 'follow_up')`,
+        AND status IN ('building', 'sent', 'follow_up')
+        AND COALESCE(source, '') != 'high_level'`,
   )
     .bind(now)
     .run();
@@ -673,7 +694,11 @@ export async function handleEstimateRequestUpdate(
     const appt = str(body.appointment_date);
     updates.push("appointment_date = ?");
     binds.push(appt);
-    if (appt && existing.status === "new_request" && nextStatus === null) {
+    if (
+      appt &&
+      (existing.status === "new_request" || existing.status === "contacted") &&
+      nextStatus === null
+    ) {
       nextStatus = "appointment_set";
       triggerAppointment = true;
     }
@@ -742,17 +767,8 @@ export async function handleEstimateRequestUpdate(
 
   if (triggerAppointment) triggerAppointmentSet(env, id);
 
-  // Stop outreach sequence when appointment is set via generic update.
-  if (triggerAppointment) {
-    await env.DB.prepare(
-      `UPDATE estimate_requests SET
-         lead_outreach_sequence_active = 0,
-         lead_outreach_completed_at = datetime('now'),
-         updated_at = datetime('now')
-       WHERE id = ?`,
-    )
-      .bind(id)
-      .run();
+  if (nextStatus) {
+    await applyLeadStageChange(env, id, existing.status, nextStatus);
   }
 
   const updated = await loadShaped(env, id);
@@ -811,7 +827,7 @@ export async function handleEstimateRequestAppointment(
     const appt = str(body.appointment_date);
     updates.push("appointment_date = ?");
     binds.push(appt);
-    if (appt && existing.status === "new_request") {
+    if (appt && (existing.status === "new_request" || existing.status === "contacted")) {
       updates.push("status = ?");
       binds.push("appointment_set");
       triggerAppointment = true;
@@ -845,17 +861,8 @@ export async function handleEstimateRequestAppointment(
 
   if (triggerAppointment) triggerAppointmentSet(env, id);
 
-  // Stop outreach sequence — appointment has been set.
   if (triggerAppointment) {
-    await env.DB.prepare(
-      `UPDATE estimate_requests SET
-         lead_outreach_sequence_active = 0,
-         lead_outreach_completed_at = datetime('now'),
-         updated_at = datetime('now')
-       WHERE id = ?`,
-    )
-      .bind(id)
-      .run();
+    await applyLeadStageChange(env, id, existing.status, "appointment_set");
   }
 
   const updated = await loadShaped(env, id);
@@ -895,12 +902,13 @@ export async function handleEstimateRequestLost(
   await env.DB.prepare(
     `UPDATE estimate_requests
      SET status = 'lost', lost_reason = ?, lost_notes = ?, updated_at = ?,
-         follow_up_sequence_active = 0, follow_up_completed_at = datetime('now'),
-         lead_outreach_sequence_active = 0, lead_outreach_completed_at = datetime('now')
+         follow_up_sequence_active = 0, follow_up_completed_at = datetime('now')
      WHERE id = ?`,
   )
     .bind(str(body.lost_reason), str(body.lost_notes), new Date().toISOString(), id)
     .run();
+
+  await applyLeadStageChange(env, id, existing.status, "lost");
 
   await logAudit(env, user.email, "estimate_request_lost", id, {
     status_from: existing.status,
@@ -1206,6 +1214,7 @@ export async function handleEstimateRequestQuickLead(
 // Won is excluded — use the /win endpoint instead. Lost is allowed.
 
 const STAGE_ALLOWED: ReadonlySet<string> = new Set([
+  "contacted",
   "appointment_set",
   "visit_done",
   "building",
@@ -1269,6 +1278,8 @@ export async function handleEstimateRequestStage(
   await env.DB.prepare(`UPDATE estimate_requests SET ${updates.join(", ")} WHERE id = ?`)
     .bind(...binds)
     .run();
+
+  await applyLeadStageChange(env, id, existing.status, target);
 
   await logAudit(env, user.email, "estimate_request_stage_moved", id, {
     status_from: existing.status,

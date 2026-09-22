@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
-import {
-  calcDaysSince,
-  DAY1_BUFFER_MINUTES,
-  isDay1BufferSatisfied,
-  LEAD_OUTREACH_CANDIDATE_SQL,
-} from "../src/lib/new-lead-outreach.js";
+import { isWithinCentralSendWindow, nextCentralSendInstant } from "../src/lib/central-send-window.js";
+import { calcDaysSince, LEAD_OUTREACH_CANDIDATE_SQL } from "../src/lib/new-lead-outreach.js";
 
 describe("LEAD_OUTREACH_CANDIDATE_SQL", () => {
   it("still drops scheduled leads immediately (appointment_date IS NULL)", () => {
     expect(LEAD_OUTREACH_CANDIDATE_SQL).toMatch(/er\.appointment_date IS NULL/);
   });
 
-  it("does not special-case lead source — buffer applies to every candidate", () => {
+  it("does not special-case lead source", () => {
     expect(LEAD_OUTREACH_CANDIDATE_SQL).not.toMatch(/google_lsa|thumbtack|high_level|source/);
+  });
+
+  it("starts from Contacted, and only finishes in-flight new_request sequences", () => {
+    expect(LEAD_OUTREACH_CANDIDATE_SQL).toMatch(/er\.status = 'contacted'/);
+    expect(LEAD_OUTREACH_CANDIDATE_SQL).toMatch(/er\.contacted_at/);
+    expect(LEAD_OUTREACH_CANDIDATE_SQL).toMatch(/er\.lead_outreach_sequence_active = 1/);
+    expect(LEAD_OUTREACH_CANDIDATE_SQL).not.toMatch(/lead_outreach_count, 0\) = 0/);
   });
 });
 
@@ -30,48 +33,24 @@ describe("calcDaysSince — Day 2/3 timing unchanged", () => {
   });
 });
 
-describe("isDay1BufferSatisfied — 45-minute rolling buffer", () => {
-  it("uses a 45-minute buffer", () => {
-    expect(DAY1_BUFFER_MINUTES).toBe(45);
+describe("Central send window", () => {
+  it("11 PM Central waits until 9 AM", () => {
+    // 11:00pm CDT Sep 22 = 04:00 UTC Sep 23
+    const night = new Date("2026-09-23T04:00:00.000Z");
+    expect(isWithinCentralSendWindow(night)).toBe(false);
+    const next = nextCentralSendInstant(night);
+    expect(isWithinCentralSendWindow(next)).toBe(true);
+    expect(next.getTime()).toBeGreaterThan(night.getTime());
   });
 
-  it("a lead created at T is not Day-1 eligible before T+45", () => {
-    const created = "2026-08-30T19:00:00.000Z"; // 2:00pm CDT
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-30T19:00:00.000Z"))).toBe(false);
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-30T19:14:00.000Z"))).toBe(false);
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-30T19:44:59.000Z"))).toBe(false);
+  it("2 PM Central sends now", () => {
+    const afternoon = new Date("2026-09-22T19:00:00.000Z"); // 2:00pm CDT
+    expect(isWithinCentralSendWindow(afternoon)).toBe(true);
+    expect(nextCentralSendInstant(afternoon).toISOString()).toBe(afternoon.toISOString());
   });
 
-  it("a lead created at T is Day-1 eligible at T+45", () => {
-    const created = "2026-08-30T19:00:00.000Z";
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-30T19:45:00.000Z"))).toBe(true);
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-30T20:00:00.000Z"))).toBe(true);
-  });
-
-  it("accepts SQLite datetime('now') space format the same as ISO", () => {
-    expect(isDay1BufferSatisfied("2026-08-30 19:00:00", new Date("2026-08-30T19:45:00.000Z"))).toBe(
-      true,
-    );
-    expect(isDay1BufferSatisfied("2026-08-30 19:00:00", new Date("2026-08-30T19:10:00.000Z"))).toBe(
-      false,
-    );
-  });
-
-  it("late-evening Central lead (10pm) still waits the full 45 minutes same day", () => {
-    // 10:00pm CDT Aug 30 = 03:00 UTC Aug 31; T+45 = 10:45pm CDT
-    const created = "2026-08-31T03:00:00.000Z";
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-31T03:20:00.000Z"))).toBe(false);
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-31T03:45:00.000Z"))).toBe(true);
-  });
-
-  it("11:50pm Central: 45 min would cross midnight — send on the last stretch of that Central day", () => {
-    // 11:50pm CDT Aug 30 = 04:50 UTC Aug 31; midnight CDT = 05:00 UTC
-    const created = "2026-08-31T04:50:00.000Z";
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-31T04:55:00.000Z"))).toBe(true);
-  });
-
-  it("if the next cron is already the next Central day, Day 1 still sends (does not skip)", () => {
-    const created = "2026-08-31T04:50:00.000Z"; // 11:50pm CDT
-    expect(isDay1BufferSatisfied(created, new Date("2026-08-31T05:10:00.000Z"))).toBe(true);
+  it("7:00 PM Central is outside the window", () => {
+    // 7:00pm CDT = 00:00 UTC next day
+    expect(isWithinCentralSendWindow(new Date("2026-09-23T00:00:00.000Z"))).toBe(false);
   });
 });

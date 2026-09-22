@@ -7,6 +7,7 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
+import { allocateNextInvoiceNumber } from "../lib/number-counters.js";
 import {
   computeTotalDue,
   INVOICE_COLUMNS,
@@ -251,41 +252,32 @@ export async function handleLineItemInvoiceCreate(
   const lineItemIdsCsv = lineItemIds.join(",");
   const totalDue = computeTotalDue(amount, 0, 0, 0);
   const title = `Line Item Completion — ${lineItemIds.length} item(s)`;
+  const invoiceNumber = await allocateNextInvoiceNumber(env);
 
-  const insertSql = `INSERT INTO invoices (
+  await env.DB.prepare(
+    `INSERT INTO invoices (
       id, invoice_number, job_id, client_id, billing_model, invoice_type, title,
       amount, tax_amount, late_fee_amount, credits_applied, total_due, status,
       payment_token, line_item_ids, payer_id, notes, synced_at, created_at, created_by
+    ) VALUES (?, ?, ?, ?, 'per_line_item', 'line_item_completion', ?, ?, 0, 0, 0, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      invoiceId,
+      invoiceNumber,
+      jobId,
+      job.client_id,
+      title,
+      amount,
+      totalDue,
+      paymentToken,
+      lineItemIdsCsv,
+      job.payer_id,
+      notes,
+      nowIso,
+      nowIso,
+      user.email,
     )
-    SELECT ?, COALESCE((SELECT MAX(invoice_number) FROM invoices), 0) + 1, ?, ?, 'per_line_item',
-           'line_item_completion', ?, ?, 0, 0, 0, ?, 'draft', ?, ?, ?, ?, ?, ?, ?`;
-
-  let inserted = false;
-  for (let attempt = 0; attempt < 3 && !inserted; attempt++) {
-    try {
-      await env.DB.prepare(insertSql)
-        .bind(
-          invoiceId,
-          jobId,
-          job.client_id,
-          title,
-          amount,
-          totalDue,
-          paymentToken,
-          lineItemIdsCsv,
-          job.payer_id,
-          notes,
-          nowIso,
-          nowIso,
-          user.email,
-        )
-        .run();
-      inserted = true;
-    } catch (e) {
-      const msg = (e as Error).message ?? "";
-      if (!msg.includes("UNIQUE") || attempt === 2) throw e;
-    }
-  }
+    .run();
 
   for (const id of lineItemIds) {
     await env.DB.prepare(

@@ -10,6 +10,7 @@
 import type { Env } from "../env.js";
 import { createPhoneOnlyClient, findClientByPhone, phoneLast10 } from "./client-dedup.js";
 import { nextCentralSendInstant } from "./central-send-window.js";
+import { allocateNextRequestNumber } from "./number-counters.js";
 import { createOwnerInApp, triggerNotification } from "./notification-engine.js";
 import { triggerLeadCreated } from "./wc/triggers.js";
 
@@ -96,10 +97,7 @@ export async function captureGoogleLsaLead(
     ? [matched.first_name, matched.last_name].filter(Boolean).join(" ").trim() || null
     : GOOGLE_LSA_UNMATCHED_CONTACT_NAME;
 
-  const max = await env.DB.prepare(
-    "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
-  ).first<{ n: number }>();
-  const requestNumber = (max?.n ?? 0) + 1;
+  const requestNumber = await allocateNextRequestNumber(env);
   const requestId = crypto.randomUUID();
   const now = new Date().toISOString();
   const notes = [

@@ -15,6 +15,7 @@
  */
 
 import type { Env } from "../env.js";
+import { allocateNextInvoiceNumber } from "../lib/number-counters.js";
 import { guard } from "../middleware/guard.js";
 import { nativeJobSourceWhere } from "../lib/native-jobs.js";
 import { triggerInvoiceSent } from "../lib/notification-engine.js";
@@ -229,19 +230,19 @@ export async function handleInvoiceCreate(request: Request, env: Env): Promise<R
   const id = crypto.randomUUID();
   const paymentToken = crypto.randomUUID().replace(/-/g, "");
   const nowIso = new Date().toISOString();
+  const invoiceNumber = await allocateNextInvoiceNumber(env);
 
-  // invoice_number is allocated INSIDE the INSERT via COALESCE(MAX)+1, backed by
-  // the UNIQUE index idx_invoices_invoice_number. A concurrent racer that picks
-  // the same number fails the UNIQUE constraint cleanly; we retry a few times.
-  const insertSql = `INSERT INTO invoices (
+  // invoice_number from durable counter (never MAX+1 — deletes must not reuse).
+  await env.DB.prepare(
+    `INSERT INTO invoices (
       id, invoice_number, job_id, client_id, billing_model, invoice_type, title, description,
       amount, tax_amount, late_fee_amount, credits_applied, total_due, status, due_date,
       payment_token, portal_link, milestone_number, trade_line_item_id, cost_plus_cycle_id,
       notes, synced_at, created_at, created_by
-    )
-    SELECT ?, COALESCE((SELECT MAX(invoice_number) FROM invoices), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'draft', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?`;
-  const binds = [
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'draft', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
     id,
+    invoiceNumber,
     jobId,
     job.client_id,
     job.billing_model,
@@ -261,23 +262,7 @@ export async function handleInvoiceCreate(request: Request, env: Env): Promise<R
     nowIso,
     nowIso,
     user.email,
-  ];
-
-  let attempts = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    try {
-      await env.DB.prepare(insertSql).bind(...binds).run();
-      break;
-    } catch (e) {
-      const msg = (e as Error).message ?? "";
-      if (/UNIQUE/i.test(msg) && msg.includes("invoice_number") && attempts < 4) {
-        attempts++;
-        continue; // collision → re-run MAX()+1 (allocates the next free number)
-      }
-      throw e;
-    }
-  }
+  ).run();
 
   // Link the originating billing_schedule row so suggestions don't re-offer it.
   if (billingScheduleId) {

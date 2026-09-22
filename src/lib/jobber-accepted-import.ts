@@ -7,6 +7,7 @@
 
 import type { Env } from "../env.js";
 import { JOBBER_ACCEPTED_IMPORT } from "../../shared/jobber-accepted-import.js";
+import { allocateNextRequestNumber } from "./number-counters.js";
 
 export {
   JOBBER_ACCEPTED_IMPORT,
@@ -109,10 +110,7 @@ export async function ensureEstimateRequestForConversion(
   if (est.request_id) return { requestId: est.request_id, created: false };
   if (!est.client_id) throw new Error("estimate has no client");
 
-  const max = await env.DB.prepare(
-    "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
-  ).first<{ n: number }>();
-  const requestNumber = (max?.n ?? 0) + 1;
+  const requestNumber = await allocateNextRequestNumber(env);
   const requestId = crypto.randomUUID();
   const now = new Date().toISOString();
   const jobType = property.jobType || "Remodel";

@@ -17,6 +17,7 @@ import type { Env } from "../env.js";
 import { findClientByPhone } from "./client-dedup.js";
 import { HL_MIRROR_STAGE_IDS, HL_MIRROR_STAGE_TO_CHS, isFreshHlStageChange, type MirroredLeadStatus } from "./hl-stages.js";
 import { applyLeadStageChange } from "./lead-stage.js";
+import { allocateNextRequestNumber } from "./number-counters.js";
 import { createOwnerInApp } from "./notification-engine.js";
 import { triggerLeadCreated } from "./wc/triggers.js";
 
@@ -281,10 +282,7 @@ async function mirrorOne(env: Env, opp: HlOpportunityLite): Promise<"created" | 
   // Stale Contacted leads are stored with the sequence already finished so Day 1 never sends.
   const completedAt = isContacted && !freshContacted ? now : null;
 
-  const max = await env.DB.prepare(
-    "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
-  ).first<{ n: number }>();
-  const requestNumber = (max?.n ?? 0) + 1;
+  const requestNumber = await allocateNextRequestNumber(env);
   const requestId = crypto.randomUUID();
 
   await env.DB.prepare(

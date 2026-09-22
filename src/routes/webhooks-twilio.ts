@@ -22,6 +22,7 @@
 import type { Env } from "../env.js";
 import { getTwilioConfig, verifyTwilioSignature, phoneDigits } from "../lib/twilio.js";
 import { stopOutreachForClient } from "../lib/lead-stage.js";
+import { allocateNextRequestNumber } from "../lib/number-counters.js";
 import { createOwnerInApp, triggerNotification } from "../lib/notification-engine.js";
 import {
   INTAKE_PROMPT,
@@ -309,12 +310,9 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
     // 2. Generate request_number for the new estimate_request.
     let requestNumber = 9001;
     try {
-      const max = await env.DB.prepare(
-        "SELECT COALESCE(MAX(request_number), 0) AS n FROM estimate_requests",
-      ).first<{ n: number }>();
-      requestNumber = (max?.n ?? 0) + 1;
+      requestNumber = await allocateNextRequestNumber(env);
     } catch {
-      // Use fallback — estimate_requests may not exist yet locally.
+      // Use fallback — counter / estimate_requests may not exist yet locally.
     }
 
     // 3. Create estimate_requests record.

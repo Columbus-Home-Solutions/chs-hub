@@ -44,6 +44,7 @@
 
 import type { Env } from "../env.js";
 import { jobTypeTitleFragment } from "../../shared/job-type-label.js";
+import { allocateNextJobNumber } from "./number-counters.js";
 
 /**
  * Attach visit photos (estimate_request_id) onto the new job so the job gallery
@@ -311,14 +312,10 @@ export async function convertQuoteToJob(
   const title =
     row.e_title || `${typeFrag} — ${row.property_address}`;
 
-  // job_number hardening (Sprint 6 deviation 2): allocate INSIDE the INSERT via
-  // COALESCE(MAX(job_number),0)+1, backed by the UNIQUE index idx_jobs_job_number.
-  // No more read-then-write race (the old `MAX()+1` read outside the batch) and a
-  // concurrent racer that picks the same number now fails the UNIQUE constraint
-  // cleanly instead of silently colliding. The number is read back after the batch.
-  //
+  // job_number from durable counter (never MAX+1 — deletes must not reuse).
   // jobs.synced_at is NOT NULL (legacy Jobber-sync column); native rows set it to
   // creation time so the column stays satisfied without pretending it was synced.
+  const jobNumber = await allocateNextJobNumber(env);
   const createJob = env.DB.prepare(
     `INSERT INTO jobs (
        id, job_number, title, status, client_id, source, total,
@@ -327,10 +324,10 @@ export async function convertQuoteToJob(
        lat, lon,
        job_type, job_type_detail, lead_source, estimate_id, contract_total, deposit_amount, deposit_paid,
        portal_token, portal_type, conversion_complete, payer_id
-     )
-     SELECT ?, COALESCE((SELECT MAX(job_number) FROM jobs), 0) + 1, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?`,
+     ) VALUES (?, ?, ?, 'deposit_paid', ?, 'estimate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?)`,
   ).bind(
     jobId,
+    jobNumber,
     title,
     row.client_id,
     total,
@@ -429,12 +426,7 @@ export async function convertQuoteToJob(
 
   await attachVisitPhotosToJob(env, requestId, jobId);
 
-  // Read back the in-transaction-allocated job_number.
-  const jobNumberRow = await env.DB.prepare("SELECT job_number FROM jobs WHERE id = ?")
-    .bind(jobId)
-    .first<{ job_number: number }>();
-  const jobNumber = jobNumberRow?.job_number ?? 0;
-
+  // Number already allocated from the counter before the batch.
   return {
     ok: true,
     jobId,

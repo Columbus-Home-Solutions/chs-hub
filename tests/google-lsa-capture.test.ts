@@ -38,6 +38,7 @@ function last10(phone: string | null | undefined): string {
 function makeCaptureEnv(seed?: { clients?: ClientRow[]; requests?: EstimateRequestRow[] }) {
   const clients: ClientRow[] = [...(seed?.clients ?? [])];
   const requests: EstimateRequestRow[] = [...(seed?.requests ?? [])];
+  const settings = new Map<string, string>([["next_request_number", "100"]]);
 
   const db = {
     prepare(sql: string) {
@@ -68,6 +69,13 @@ function makeCaptureEnv(seed?: { clients?: ClientRow[]; requests?: EstimateReque
             const c = clients.find((cl) => last10(cl.phone) === phone10);
             return c ? { id: c.id, first_name: c.first_name, last_name: c.last_name } : null;
           }
+          if (sql.includes("UPDATE system_settings") && sql.includes("RETURNING")) {
+            const key = this._args[0] as string;
+            const cur = Number.parseInt(settings.get(key) ?? "", 10);
+            if (!Number.isFinite(cur) || cur < 1) return null;
+            settings.set(key, String(cur + 1));
+            return { n: cur };
+          }
           if (sql.includes("MAX(request_number)")) {
             return { n: requests.reduce((m, r) => Math.max(m, r.request_number), 0) };
           }
@@ -75,6 +83,12 @@ function makeCaptureEnv(seed?: { clients?: ClientRow[]; requests?: EstimateReque
           return null;
         },
         async run() {
+          if (sql.includes("INSERT OR IGNORE INTO system_settings")) {
+            const key = this._args[0] as string;
+            const value = String(this._args[1]);
+            if (!settings.has(key)) settings.set(key, value);
+            return { success: true, meta: {} };
+          }
           if (sql.includes("INSERT INTO clients")) {
             clients.push({
               id: this._args[0] as string,

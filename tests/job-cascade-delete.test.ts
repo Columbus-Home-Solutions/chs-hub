@@ -4,6 +4,7 @@ import {
   CascadeStepError,
   DELETABLE_JOB_STATUSES,
 } from "../src/lib/cascade-delete.js";
+import { handleJobDelete } from "../src/routes/jobs-api.js";
 import type { Env } from "../src/env.js";
 
 type Row = Record<string, unknown>;
@@ -12,7 +13,7 @@ type Row = Record<string, unknown>;
  * In-memory fake D1 that applies DELETE/UPDATE for job cascade tables.
  * Records SQL and mutates row stores so assertions can prove children are gone.
  */
-function makeJobCascadeEnv(jobId: string) {
+function makeJobCascadeEnv(jobId: string, opts?: { clientIsTest?: boolean }) {
   const tables: Record<string, Row[]> = {
     notification_logs: [
       { id: "nl1", job_id: jobId },
@@ -56,8 +57,28 @@ function makeJobCascadeEnv(jobId: string) {
     receipt_photos: [],
     expense_line_items: [],
     estimate_requests: [{ id: "er1", converted_job_id: jobId }],
-    users: [{ id: "u1", current_job_id: jobId }],
-    jobs: [{ id: jobId, created_by: "u1", status: "closed" }],
+    users: [
+      { id: "u1", current_job_id: jobId },
+      {
+        id: "owner",
+        email: "tony@homesolutionsar.com",
+        first_name: "Tony",
+        last_name: "Columbus",
+        role: "owner",
+        is_active: 1,
+      },
+    ],
+    clients: [{ id: "client-1", is_test: opts?.clientIsTest ? 1 : 0 }],
+    jobs: [{
+      id: jobId,
+      created_by: "u1",
+      status: "closed",
+      source: "estimate",
+      job_number: 100,
+      title: "Kitchen",
+      client_id: "client-1",
+      estimate_id: null,
+    }],
     bid_requests: [{ id: "br1", job_id: jobId }],
     selections: [{ id: "sel1", job_id: jobId }],
     quotes: [{ id: "q1", job_id: jobId }],
@@ -123,6 +144,21 @@ function makeJobCascadeEnv(jobId: string) {
               deleteWhere("audit_logs", (r) => r.entity_id === id);
               return { success: true, meta: { changes: 1 } };
             }
+            if (norm.startsWith("INSERT INTO audit_logs")) {
+              tables.audit_logs.push({
+                id: this._binds[0],
+                user_email: this._binds[1],
+                action: this._binds[2],
+                entity_type: this._binds[3],
+                entity_id: this._binds[4],
+                details: this._binds[5],
+              });
+              return { success: true, meta: { changes: 1 } };
+            }
+            if (norm.startsWith("DELETE FROM jobs WHERE id")) {
+              deleteWhere("jobs", (r) => r.id === id);
+              return { success: true, meta: { changes: 1 } };
+            }
             if (norm.startsWith("DELETE FROM ")) {
               const m = norm.match(/^DELETE FROM (\w+) WHERE job_id/);
               if (m) {
@@ -172,6 +208,31 @@ function makeJobCascadeEnv(jobId: string) {
             return { success: true, meta: { changes: 0 } };
           },
           async first() {
+            if (norm.includes("FROM users WHERE email")) {
+              return (
+                tables.users.find((u) => u.email === this._binds[0] && u.is_active === 1) ?? null
+              );
+            }
+            if (norm.includes("FROM jobs WHERE id")) {
+              const job = tables.jobs.find((j) => j.id === this._binds[0]);
+              if (!job) return null;
+              if (norm.includes("source IN") && job.source !== "estimate" && job.source !== "quick_job") {
+                return null;
+              }
+              return job;
+            }
+            if (norm.includes("FROM clients WHERE id")) {
+              return tables.clients.find((c) => c.id === this._binds[0]) ?? null;
+            }
+            if (norm.includes("open_invoices")) {
+              const jid = this._binds[0];
+              return {
+                open_invoices: tables.invoices.filter(
+                  (i) => i.job_id === jid && i.status !== "void",
+                ).length,
+                payments: tables.payments.filter((p) => p.job_id === jid).length,
+              };
+            }
             return null;
           },
           async all() {
@@ -210,7 +271,8 @@ describe("cascadeDeleteJob", () => {
     expect(tables.payments).toHaveLength(0);
     expect(tables.daily_logs).toHaveLength(0);
     expect(tables.jobs).toHaveLength(0);
-    expect(tables.audit_logs).toHaveLength(0);
+    expect(tables.audit_logs).toHaveLength(1);
+    expect(statements.some((s) => s.sql.includes("DELETE FROM audit_logs"))).toBe(false);
 
     expect(tables.users[0]?.current_job_id).toBeNull();
     expect(tables.bid_requests[0]?.job_id).toBeNull();
@@ -253,5 +315,54 @@ describe("cascadeDeleteJob", () => {
     expect(caught).toBeInstanceOf(CascadeStepError);
     expect((caught as CascadeStepError).table).toBe("punch_lists");
     expect((caught as CascadeStepError).message).toContain("punch_lists");
+  });
+
+  it("refuses a real-client closed job that has a payment and deletes nothing", async () => {
+    const jobId = "job-real";
+    const { env, tables, statements } = makeJobCascadeEnv(jobId, { clientIsTest: false });
+    const before = JSON.stringify(tables);
+
+    const res = await handleJobDelete(
+      new Request("https://app.example/api/jobs/" + jobId, {
+        method: "DELETE",
+        headers: { "Cf-Access-Authenticated-User-Email": "tony@homesolutionsar.com" },
+      }),
+      env,
+      jobId,
+    );
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as { message?: string };
+    expect(body.message).toBe("Job has invoices/payments; void them first or keep the job");
+    expect(JSON.stringify(tables)).toBe(before);
+    expect(statements.some((s) => s.sql.startsWith("DELETE"))).toBe(false);
+    expect(tables.audit_logs.some((a) => a.action === "job_deleted")).toBe(false);
+  });
+
+  it("fully cascades a test-client job and keeps prior audit rows", async () => {
+    const jobId = "job-test-client";
+    const { env, tables } = makeJobCascadeEnv(jobId, { clientIsTest: true });
+
+    const res = await handleJobDelete(
+      new Request("https://app.example/api/jobs/" + jobId, {
+        method: "DELETE",
+        headers: { "Cf-Access-Authenticated-User-Email": "tony@homesolutionsar.com" },
+      }),
+      env,
+      jobId,
+    );
+
+    expect(res.status).toBe(200);
+    expect(tables.jobs).toHaveLength(0);
+    expect(tables.payments).toHaveLength(0);
+    expect(tables.communications).toHaveLength(0);
+    expect(tables.tasks).toHaveLength(0);
+    expect(tables.punch_lists).toHaveLength(0);
+    expect(tables.job_documents).toHaveLength(0);
+    const prior = tables.audit_logs.find((a) => a.id === "a1");
+    expect(prior).toBeTruthy();
+    const written = tables.audit_logs.find((a) => a.action === "job_deleted");
+    expect(written?.entity_id).toBe(jobId);
+    expect(String(written?.details)).toContain("Kitchen");
   });
 });

@@ -200,15 +200,47 @@ export async function cascadeDeleteJobChildren(env: Env, jobId: string): Promise
   await runDeleteRequired(env, "files", "DELETE FROM files WHERE job_id = ?", jobId);
 }
 
-/** Full job cascade: children, unlink FKs, audit log — caller deletes the job row. */
+/**
+ * Real clients with live money cannot be hard-deleted.
+ * Returns the 409 message, or null when the delete may proceed.
+ * Test clients (is_test = 1) always proceed, including invoices and payments.
+ * Void invoices alone do not block. Any payment does.
+ */
+export async function jobFinancialDeleteBlock(
+  env: Env,
+  jobId: string,
+  clientId: string | null,
+): Promise<string | null> {
+  if (clientId) {
+    const client = await env.DB.prepare(
+      "SELECT COALESCE(is_test, 0) AS is_test FROM clients WHERE id = ?",
+    )
+      .bind(clientId)
+      .first<{ is_test: number }>();
+    if (client && Number(client.is_test) === 1) return null;
+  }
+
+  const row = await env.DB.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM invoices
+         WHERE job_id = ? AND COALESCE(status, '') != 'void') AS open_invoices,
+       (SELECT COUNT(*) FROM payments
+         WHERE job_id = ?
+            OR invoice_id IN (SELECT id FROM invoices WHERE job_id = ?)) AS payments`,
+  )
+    .bind(jobId, jobId, jobId)
+    .first<{ open_invoices: number; payments: number }>();
+
+  if ((row?.open_invoices ?? 0) > 0 || (row?.payments ?? 0) > 0) {
+    return "Job has invoices/payments; void them first or keep the job";
+  }
+  return null;
+}
+
+/** Full job cascade: children and unlink FKs. Does not touch audit_logs. Caller deletes the job row and writes job_deleted. */
 export async function cascadeDeleteJob(env: Env, jobId: string): Promise<void> {
   await cascadeDeleteJobChildren(env, jobId);
   await unlinkJobForDelete(env, jobId);
-  try {
-    await env.DB.prepare("DELETE FROM audit_logs WHERE entity_id = ?").bind(jobId).run();
-  } catch (e) {
-    throw new CascadeStepError("audit_logs", e);
-  }
 }
 
 /** Notification + comms rows that reference a client — run before estimate_requests. */

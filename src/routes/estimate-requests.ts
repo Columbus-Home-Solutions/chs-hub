@@ -162,7 +162,7 @@ interface RequestRow {
   c_phone: string | null;
   c_email: string | null;
   c_is_repeat: number | null;
-  c_created: string | null;
+  client_has_job: number | null;
   // joined estimate fields
   e_status: string | null;
   e_sent_at: string | null;
@@ -174,25 +174,14 @@ const SELECT = `
     c.first_name AS c_first, c.last_name AS c_last, c.name AS c_name,
     c.phone AS c_phone, c.email AS c_email,
     COALESCE(c.is_repeat_client, 0) AS c_is_repeat,
-    c.created_at AS c_created,
+    CASE WHEN EXISTS (
+      SELECT 1 FROM jobs j WHERE j.client_id = er.client_id
+    ) THEN 1 ELSE 0 END AS client_has_job,
     e.status AS e_status, e.sent_at AS e_sent_at, e.deposit_amount AS e_deposit
   FROM estimate_requests er
   LEFT JOIN clients c ON c.id = er.client_id
   LEFT JOIN estimates e ON e.id = er.estimate_id
 `;
-
-function parseTs(iso: string | null): number {
-  if (!iso) return NaN;
-  return new Date(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z").getTime();
-}
-
-/** True when this lead was attached to a client that already existed. */
-function clientPredatesRequest(clientCreated: string | null, requestCreated: string): boolean {
-  const clientAt = parseTs(clientCreated);
-  const requestAt = parseTs(requestCreated);
-  if (Number.isNaN(clientAt) || Number.isNaN(requestAt)) return false;
-  return requestAt - clientAt > 60_000;
-}
 
 function clientName(row: RequestRow): string {
   const parts = [row.c_first, row.c_last].filter(Boolean).join(" ").trim();
@@ -243,7 +232,7 @@ function shape(row: RequestRow) {
     client_phone: row.c_phone ?? row.contact_phone ?? null,
     client_email: row.c_email ?? row.contact_email ?? null,
     is_repeat_client: (row.c_is_repeat ?? 0) === 1,
-    existing_client: clientPredatesRequest(row.c_created, row.created_at),
+    existing_client: (row.client_has_job ?? 0) === 1,
     property_address: row.property_address,
     property_city: row.property_city,
     property_state: row.property_state,

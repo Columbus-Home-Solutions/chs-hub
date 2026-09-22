@@ -287,6 +287,7 @@ export interface EstimateRequest {
   client_phone: string | null;
   client_email: string | null;
   is_repeat_client: boolean;
+  /** True when this lead's client already has at least one job. */
   existing_client: boolean;
   property_address: string;
   property_city: string;

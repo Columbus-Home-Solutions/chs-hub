@@ -61,8 +61,12 @@ describe("building widget copy", () => {
   it("flags only after more than 5 days", () => {
     const start = "2026-09-01 12:00:00";
     const t = Date.parse("2026-09-01T12:00:00Z");
+    // Exactly 5.0 days (and a few seconds past) still shows "5 days" — not amber.
     expect(buildingIsStale(start, t + BUILDING_STALE_MS)).toBe(false);
-    expect(buildingIsStale(start, t + BUILDING_STALE_MS + 1)).toBe(true);
+    expect(buildingIsStale(start, t + BUILDING_STALE_MS + 1)).toBe(false);
+    expect(daysInBuilding(start, t + BUILDING_STALE_MS + 1)).toBe(5);
+    // Amber once the floored day count is 6+.
+    expect(buildingIsStale(start, t + 6 * 24 * 60 * 60 * 1000)).toBe(true);
     expect(daysInBuilding(start, t + 6 * 24 * 60 * 60 * 1000)).toBe(6);
   });
 });
@@ -139,13 +143,24 @@ describe("estimates in progress wiring", () => {
   it("keeps the widget on every device and opens the builder or the pre-fill form", () => {
     expect(home).toContain("const showEstimateRequests = true");
     expect(home).toContain("isPhone && showEstimateRequests");
+    expect(home).toContain("EstimateRequestsWidget");
     expect(widget).toContain("Estimates in Progress");
     expect(widget).toContain("No estimates in progress.");
     expect(widget).toContain("/estimating?tab=chs&stage=building");
     expect(widget).toContain("/estimating/${item.id}/estimate");
     expect(widget).toContain("/estimating/new?request_id=${item.id}&autostart=1");
-    expect(widget).toContain("VISIBLE = 5");
+    expect(widget).toContain("COLLAPSED = 5");
+    expect(widget).toContain("EXPANDED = 10");
+    expect(widget).toContain("setExpanded");
+    expect(widget).toContain("+{hiddenCollapsed} more");
+    expect(widget).toContain("+{hiddenExpanded} more — View all");
+    expect(widget).toContain("Show less");
+    expect(widget).toContain("Draft ${formatCurrency(total)}");
+    expect(widget).toContain("Not priced yet");
     expect(widget).toContain("job-health-widget__row--stale");
+    expect(widget).not.toContain("place_label");
+    expect(widget).not.toContain("job_type");
+    expect(widget).not.toContain("formatStatus");
     expect(widget).not.toContain("Unknown");
   });
 });

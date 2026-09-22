@@ -4,15 +4,14 @@
  * new-estimate form when no draft exists yet.
  */
 
+import { useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { go } from "../../lib/nav";
-import { formatCurrency, formatStatus } from "../../lib/format";
+import { formatCurrency } from "../../lib/format";
 
 interface EstimateRequestItem {
   id: string;
   client_name: string;
-  job_type: string | null;
-  place_label: string | null;
   estimate_id: string | null;
   estimate_total: number | null;
   building_at: string | null;
@@ -24,12 +23,19 @@ interface EstimateRequestsResponse {
   requests: EstimateRequestItem[];
 }
 
-const VISIBLE = 5;
+const COLLAPSED = 5;
+const EXPANDED = 10;
+const BUILDING_HREF = "/estimating?tab=chs&stage=building";
 
 function daysLabel(days: number): string {
   if (days <= 0) return "Today";
   if (days === 1) return "1 day";
   return `${days} days`;
+}
+
+function draftLabel(total: number | null): string {
+  if (total != null && total > 0) return `Draft ${formatCurrency(total)}`;
+  return "Not priced yet";
 }
 
 function openEstimate(item: EstimateRequestItem): void {
@@ -42,10 +48,13 @@ function openEstimate(item: EstimateRequestItem): void {
 
 export function EstimateRequestsWidget() {
   const { data, loading } = useApi<EstimateRequestsResponse>("/api/dashboard/estimate-requests");
+  const [expanded, setExpanded] = useState(false);
 
   const items = data?.requests ?? [];
-  const displayed = items.slice(0, VISIBLE);
-  const extra = items.length - displayed.length;
+  const limit = expanded ? EXPANDED : COLLAPSED;
+  const displayed = items.slice(0, limit);
+  const hiddenCollapsed = Math.max(0, items.length - COLLAPSED);
+  const hiddenExpanded = Math.max(0, items.length - EXPANDED);
 
   return (
     <div class="quick-actions">
@@ -58,7 +67,7 @@ export function EstimateRequestsWidget() {
           type="button"
           class="link-btn"
           style={{ fontSize: "var(--text-xs)", fontWeight: "var(--weight-normal)" }}
-          onClick={() => go("/estimating?tab=chs&stage=building")}
+          onClick={() => go(BUILDING_HREF)}
         >
           View all
         </button>
@@ -92,25 +101,47 @@ export function EstimateRequestsWidget() {
                 class="job-health-widget__dot"
                 style={{ background: item.stale ? "var(--color-warning)" : "#3b82f6" }}
               />
-              <span class="job-health-widget__title">
-                {item.client_name}
-                {item.place_label ? ` · ${item.place_label}` : ""}
-              </span>
-              <span class="job-health-widget__quiet">
-                {item.job_type ? `${formatStatus(item.job_type)} · ` : ""}
+              <span class="job-health-widget__title">{item.client_name}</span>
+              <span
+                class="job-health-widget__quiet"
+                style={item.stale ? { color: "var(--color-warning)" } : undefined}
+              >
                 {daysLabel(item.days_in_building)}
-                {item.estimate_total != null ? ` · ${formatCurrency(item.estimate_total)}` : ""}
               </span>
+              <span class="job-health-widget__quiet">{draftLabel(item.estimate_total)}</span>
             </button>
           ))}
-          {extra > 0 && (
+
+          {!expanded && hiddenCollapsed > 0 && (
             <button
               type="button"
               class="link-btn"
               style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-xs)" }}
-              onClick={() => go("/estimating?tab=chs&stage=building")}
+              onClick={() => setExpanded(true)}
             >
-              +{extra} more — View all
+              +{hiddenCollapsed} more
+            </button>
+          )}
+
+          {expanded && hiddenExpanded > 0 && (
+            <button
+              type="button"
+              class="link-btn"
+              style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-xs)" }}
+              onClick={() => go(BUILDING_HREF)}
+            >
+              +{hiddenExpanded} more — View all
+            </button>
+          )}
+
+          {expanded && (
+            <button
+              type="button"
+              class="link-btn"
+              style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-xs)" }}
+              onClick={() => setExpanded(false)}
+            >
+              Show less
             </button>
           )}
         </div>

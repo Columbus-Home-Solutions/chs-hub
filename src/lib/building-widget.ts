@@ -32,9 +32,8 @@ export function daysInBuilding(buildingAt: string | null | undefined, now = Date
 }
 
 export function buildingIsStale(buildingAt: string | null | undefined, now = Date.now()): boolean {
-  const t = parseTimestamp(buildingAt);
-  if (t == null) return false;
-  return now - t > BUILDING_STALE_MS;
+  // Match the floored "N days" label: amber only when that count is > 5.
+  return daysInBuilding(buildingAt, now) > 5;
 }
 
 export function buildingPlace(parts: {

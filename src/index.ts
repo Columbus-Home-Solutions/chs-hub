@@ -90,11 +90,13 @@ import {
   handleDriveMirrorStatus,
   handleHeartbeatCheck,
   handleHlLeadMirrorRun,
+  handleOpsProvisionLsaNumber,
   handleOpsEstimatePipelineDiagnose,
   handleOpsAutogenDocument,
   handleOpsBoldsignGhostProof,
   handleOpsE2eFreshEstimateSetup,
   handleOpsResendSelectionApproval,
+  handleOpsRegenerateEstimateContract,
   handleOpsQboVoidErroneousPayments,
   handleOpsQboResolveErroneousInvoice,
   handleOpsResendEmailLookup,
@@ -256,6 +258,7 @@ import {
   handleGoogleReviewReply,
   handleGoogleReviewMatch,
   handleGoogleReviewFeature,
+  handleGoogleReviewSocialPost,
 } from "./routes/google-reviews.js";
 import {
   handleTemplateList as handleNotifTemplateList,
@@ -271,12 +274,15 @@ import {
 } from "./routes/notifications.js";
 import {
   handleCallWhisper,
+  handleCallIntake,
+  handleCallStatus,
   handleTwilioInbound,
   handleTwilioStatus,
   handleTwilioVoice,
+  handleTwilioVoiceLsa,
 } from "./routes/webhooks-twilio.js";
 import { handleThumbtackLeadsWebhook } from "./routes/webhooks-thumbtack.js";
-import { handleSmsThread, handleSmsReply, handleSmsConversations } from "./routes/sms.js";
+import { handleSmsThread, handleSmsReply, handleSmsConversations, handleSmsConversationState } from "./routes/sms.js";
 import { processNotifications } from "./lib/notification-engine.js";
 import { processQuoteFollowUps } from "./lib/quote-follow-up.js";
 import { processNewLeadOutreach } from "./lib/new-lead-outreach.js";
@@ -284,6 +290,8 @@ import { processProposalReviewReminders } from "./lib/proposal-reminders.js";
 import { processReviewFollowUps } from "./lib/review-followups.js";
 import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
 import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
+import { runImageGenSelfTest } from "./lib/image-gen-probe.js";
+import { runSocialTokenHealth } from "./lib/social-token-health.js";
 import {
   handleSubcontractorCreate,
   handleSubcontractorGet,
@@ -302,6 +310,7 @@ import {
   handleEstimateRequestLost,
   handleEstimateRequestWin,
   handleEstimateRequestDelete,
+  handleEstimateRequestBulkDelete,
   handleEstimateRequestQuickLead,
   handleEstimateRequestStage,
 } from "./routes/estimate-requests.js";
@@ -330,6 +339,8 @@ import {
   handleEstimateSend,
   handleEstimateResend,
   handleEstimateMarkDepositReceived,
+  handleEstimateMarkImportedSigned,
+  handleEstimateMarkExternalDeposit,
   handleEstimateRevise,
   handleEstimateLost,
   handleLineItemList,
@@ -388,6 +399,7 @@ import {
   handleInvoiceSend,
   handleInvoiceVoid,
   handleInvoiceChargeOnFile,
+  handleInvoiceHistoricalPayment,
   handleJobInvoices,
 } from "./routes/invoices.js";
 import { handlePaymentList, handlePaymentCreate, handleJobPayments } from "./routes/payments.js";
@@ -715,6 +727,9 @@ export default {
         p.startsWith("/api/packet/") ||
         p === "/api/webhooks/stripe" ||
         p === "/api/webhooks/twilio/call-whisper" ||
+        p === "/api/webhooks/twilio/call-intake" ||
+        p === "/api/webhooks/twilio/call-status" ||
+        p === "/api/webhooks/twilio/voice-lsa" ||
         p === "/api/integrations/boldsign/webhook" ||
         // Legal pages — required on custom domain for A2P 10DLC compliance (unauthenticated).
         p === "/privacy-policy" ||
@@ -752,13 +767,28 @@ export default {
       return handleBoldSignWebhook(request, env, ctx);
     }
 
-    // Twilio call whisper — PUBLIC; Twilio fetches this URL during Dial bridging.
-    // Twilio defaults to POST for <Number url="..."> unless method="GET" is set.
+    // Twilio call whisper / intake / dial-status — PUBLIC; Twilio fetches these
+    // during Dial bridging. Must stay before RBAC (Access-gating hotfix).
     if (
       url.pathname === "/api/webhooks/twilio/call-whisper" &&
       (request.method === "GET" || request.method === "POST")
     ) {
       return handleCallWhisper(request);
+    }
+    if (
+      url.pathname === "/api/webhooks/twilio/call-intake" &&
+      (request.method === "GET" || request.method === "POST")
+    ) {
+      return handleCallIntake(request, env);
+    }
+    if (
+      url.pathname === "/api/webhooks/twilio/call-status" &&
+      (request.method === "GET" || request.method === "POST")
+    ) {
+      return handleCallStatus(request, env);
+    }
+    if (url.pathname === "/api/webhooks/twilio/voice-lsa" && request.method === "POST") {
+      return handleTwilioVoiceLsa(request, env, ctx);
     }
 
     // ── RBAC enforcement gate (Sprint 17) ────────────────────────────────
@@ -1200,6 +1230,12 @@ export default {
     if (url.pathname === "/api/ops/hl-lead-mirror" && request.method === "POST") {
       return handleHlLeadMirrorRun(request, env);
     }
+    if (
+      url.pathname === "/api/ops/provision-lsa-number" &&
+      (request.method === "GET" || request.method === "POST")
+    ) {
+      return handleOpsProvisionLsaNumber(request, env);
+    }
     if (url.pathname === "/api/ops/estimate-pipeline-diagnose" && request.method === "GET") {
       return handleOpsEstimatePipelineDiagnose(request, env);
     }
@@ -1250,6 +1286,9 @@ export default {
     }
     if (url.pathname === "/api/ops/resend-selection-approval" && request.method === "POST") {
       return handleOpsResendSelectionApproval(request, env);
+    }
+    if (url.pathname === "/api/ops/regenerate-estimate-contract" && request.method === "POST") {
+      return handleOpsRegenerateEstimateContract(request, env);
     }
     if (url.pathname === "/api/ops/e2e-fresh-estimate-setup" && request.method === "POST") {
       return handleOpsE2eFreshEstimateSetup(request, env);
@@ -1594,6 +1633,10 @@ export default {
     const invoiceChargeOnFile = url.pathname.match(/^\/api\/invoices\/([^/]+)\/charge-on-file$/);
     if (invoiceChargeOnFile && request.method === "POST") {
       return handleInvoiceChargeOnFile(request, env, decodeURIComponent(invoiceChargeOnFile[1]), ctx);
+    }
+    const invoiceHistorical = url.pathname.match(/^\/api\/invoices\/([^/]+)\/record-historical-payment$/);
+    if (invoiceHistorical && request.method === "POST") {
+      return handleInvoiceHistoricalPayment(request, env, decodeURIComponent(invoiceHistorical[1]));
     }
     const invoiceById = url.pathname.match(/^\/api\/invoices\/([^/]+)$/);
     if (invoiceById) {
@@ -2188,10 +2231,18 @@ export default {
     if (grFeature && request.method === "POST") {
       return handleGoogleReviewFeature(request, env, decodeURIComponent(grFeature[1]));
     }
+    const grSocialPost = url.pathname.match(/^\/api\/google-reviews\/([^/]+)\/social-post$/);
+    if (grSocialPost && request.method === "POST") {
+      return handleGoogleReviewSocialPost(request, env, decodeURIComponent(grSocialPost[1]));
+    }
 
     // ── SMS / Message Center (Sprint 24) ─────────────────────────────
     if (url.pathname === "/api/sms/conversations" && request.method === "GET") {
       return handleSmsConversations(env, url);
+    }
+    const smsConvState = url.pathname.match(/^\/api\/sms\/conversations\/([^/]+)$/);
+    if (smsConvState && request.method === "PATCH") {
+      return handleSmsConversationState(request, env, decodeURIComponent(smsConvState[1]));
     }
     if (url.pathname === "/api/sms/reply" && request.method === "POST") {
       return handleSmsReply(request, env);
@@ -2363,6 +2414,9 @@ export default {
     if (url.pathname === "/api/estimate-requests/quick-lead" && request.method === "POST") {
       return handleEstimateRequestQuickLead(request, env);
     }
+    if (url.pathname === "/api/estimate-requests/bulk-delete" && request.method === "POST") {
+      return handleEstimateRequestBulkDelete(request, env);
+    }
     const erStage = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/stage$/);
     if (erStage && request.method === "PATCH") {
       return handleEstimateRequestStage(request, env, decodeURIComponent(erStage[1]));
@@ -2525,6 +2579,19 @@ export default {
         request,
         env,
         decodeURIComponent(estMarkDeposit[1]),
+        ctx,
+      );
+    }
+    const estMarkImported = url.pathname.match(/^\/api\/estimates\/([^/]+)\/mark-imported-signed$/);
+    if (estMarkImported && request.method === "POST") {
+      return handleEstimateMarkImportedSigned(request, env, decodeURIComponent(estMarkImported[1]));
+    }
+    const estMarkExternal = url.pathname.match(/^\/api\/estimates\/([^/]+)\/mark-external-deposit$/);
+    if (estMarkExternal && request.method === "POST") {
+      return handleEstimateMarkExternalDeposit(
+        request,
+        env,
+        decodeURIComponent(estMarkExternal[1]),
         ctx,
       );
     }
@@ -2850,6 +2917,31 @@ async function runInvoiceBilling(env: Env): Promise<void> {
     await runWeeklyPhotoSummary(env);
   } catch (err) {
     console.error("[cron 15 7 * * *] weekly_photo_summary failed:", (err as Error).message);
+  }
+
+  // Image-gen liveness (Monday only, inside this function). Same nightly
+  // trigger — the account is capped at 5 crons. Non-fatal.
+  try {
+    const probe = await runImageGenSelfTest(env);
+    if (probe.ran) {
+      console.log(
+        `[cron 15 7 * * *] image_gen_probe: ok=${probe.ok} notified=${probe.notified}`,
+      );
+    }
+  } catch (err) {
+    console.error("[cron 15 7 * * *] image_gen_probe failed:", (err as Error).message);
+  }
+
+  // Facebook/Instagram token health — every night, same trigger. Non-fatal.
+  try {
+    const tokenHealth = await runSocialTokenHealth(env);
+    if (tokenHealth.ran) {
+      console.log(
+        `[cron 15 7 * * *] social_token_health: health=${tokenHealth.health} notified=${tokenHealth.notified}`,
+      );
+    }
+  } catch (err) {
+    console.error("[cron 15 7 * * *] social_token_health failed:", (err as Error).message);
   }
 }
 

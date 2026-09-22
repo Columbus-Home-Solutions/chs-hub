@@ -7,6 +7,7 @@
  *   PUT  /api/invoices/:id           update (draft/sent only)
  *   POST /api/invoices/:id/send      generate payment link, status='sent', enqueue send notification
  *   POST /api/invoices/:id/void      O only — status='void', preserved for audit
+ *   POST /api/invoices/:id/record-historical-payment  O only — mark paid externally (no send/Stripe/email)
  *   GET  /api/jobs/:id/invoices      invoices for a job (+ summary + generation suggestions)
  *
  * Roles: invoices O/PM/OA; void O only. Reads stay open (dashboard host is
@@ -30,11 +31,19 @@ import {
   paymentLink,
   round2,
   shapeInvoice,
+  recomputeInvoiceStatus,
   type InvoiceRow,
 } from "../lib/invoicing.js";
 import { createOffSessionPaymentIntent, getStripeConfig } from "../lib/stripe.js";
 import { recordPayment } from "./payments.js";
+import { checkAndFireLienWaiver } from "../lib/completion-triggers.js";
 import { notTestClientExists } from "../lib/non-test-client.js";
+import {
+  HISTORICAL_NOTE_MARKER,
+  additionalHistoricalAmount,
+  appendHistoricalNote,
+  isHistoricalPaymentMethod,
+} from "../lib/historical-payment.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const VOID_ROLES = ["owner"] as const;
@@ -588,4 +597,133 @@ export async function handleInvoiceChargeOnFile(
 
   const updated = await loadInvoice(env, id);
   return json({ invoice: updated ? shapeInvoice(updated) : null, charged: balance, convenience_fee: fee });
+}
+
+// ─── POST /api/invoices/:id/record-historical-payment (O only) ───────────────
+
+/**
+ * Record an external/historical payment (Jobber, Venmo, Zelle, check/cash)
+ * without sending the invoice, exposing a payment link, charging Stripe, or
+ * firing payment-received notifications. After the invoice is paid, the shared
+ * lien-waiver trigger runs with skipNotifications (generate, never email).
+ */
+export async function handleInvoiceHistoricalPayment(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...VOID_ROLES]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const inv = await loadInvoice(env, id);
+  if (!inv) return err(404, "not_found", "Invoice not found.");
+  if (inv.status === "void") return err(409, "invoice_void", "Cannot record a payment against a voided invoice.");
+  if (inv.status === "paid") return err(409, "invoice_paid", "This invoice is already paid.");
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+
+  const method = str(body.payment_method) ?? "jobber";
+  if (!isHistoricalPaymentMethod(method)) {
+    return err(400, "bad_request", "payment_method must be check, cash, venmo, zelle, other, or jobber.");
+  }
+
+  const note = str(body.notes) ?? str(body.reference);
+  const receivedDate = str(body.received_date);
+
+  const linkedAgg = await env.DB.prepare(
+    "SELECT COALESCE(SUM(amount), 0) AS paid FROM payments WHERE invoice_id = ?",
+  )
+    .bind(id)
+    .first<{ paid: number }>();
+  const linkedPaid = round2(linkedAgg?.paid ?? 0);
+
+  const unlinkedRows =
+    inv.job_id
+      ? (
+          await env.DB.prepare(
+            "SELECT id, amount FROM payments WHERE job_id = ? AND invoice_id IS NULL",
+          )
+            .bind(inv.job_id)
+            .all<{ id: string; amount: number }>()
+        ).results ?? []
+      : [];
+  const unlinkedPaid = round2(unlinkedRows.reduce((s, p) => s + (p.amount ?? 0), 0));
+  const totalDue = round2(inv.total_due ?? inv.amount ?? 0);
+  const requested = num(body.amount);
+  const additional = additionalHistoricalAmount(
+    totalDue,
+    linkedPaid,
+    unlinkedPaid,
+    requested ?? totalDue,
+  );
+
+  const appliedUnlinkedIds: string[] = [];
+  for (const row of unlinkedRows) {
+    await env.DB.prepare(
+      `UPDATE payments SET invoice_id = ?, notes = CASE
+         WHEN notes IS NULL OR notes = '' THEN ?
+         WHEN instr(notes, ?) > 0 THEN notes
+         ELSE notes || ' ' || ?
+       END WHERE id = ?`,
+    )
+      .bind(id, HISTORICAL_NOTE_MARKER, HISTORICAL_NOTE_MARKER, HISTORICAL_NOTE_MARKER, row.id)
+      .run();
+    appliedUnlinkedIds.push(row.id);
+  }
+
+  let paymentId: string | null = null;
+  if (additional > 0) {
+    const result = await recordPayment(env, {
+      jobId: inv.job_id,
+      invoiceId: id,
+      clientId: inv.client_id,
+      amount: additional,
+      method,
+      receivedDate,
+      notes: appendHistoricalNote(null, note),
+      skipNotifications: true,
+    });
+    paymentId = result.paymentId;
+  } else {
+    await recomputeInvoiceStatus(env, id);
+  }
+
+  const stampedNotes = appendHistoricalNote(inv.notes, note);
+  await env.DB.prepare(
+    `UPDATE invoices
+        SET notes = ?, portal_link = NULL, payment_token = NULL
+      WHERE id = ?`,
+  )
+    .bind(stampedNotes, id)
+    .run();
+
+  const after = await loadInvoice(env, id);
+  if (after?.status === "paid" && inv.job_id) {
+    await checkAndFireLienWaiver({
+      jobId: inv.job_id,
+      invoiceId: id,
+      env,
+      skipNotifications: true,
+    });
+  }
+  await logAudit(env, user.email, "invoice_historical_payment_recorded", id, {
+    invoice_number: inv.invoice_number,
+    payment_id: paymentId,
+    amount: additional,
+    method,
+    applied_unlinked_payment_ids: appliedUnlinkedIds,
+    invoice_status: after?.status,
+  });
+
+  return json(
+    {
+      invoice: after ? shapeInvoice(after) : null,
+      payment_id: paymentId,
+      amount_recorded: additional,
+      applied_unlinked_payment_ids: appliedUnlinkedIds,
+    },
+    { status: 201 },
+  );
 }

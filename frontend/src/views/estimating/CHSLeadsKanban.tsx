@@ -9,6 +9,7 @@ import { useApi } from "../../hooks/useApi";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { Button } from "../../components/ui/Button";
+import { Modal } from "../../components/ui/Modal";
 import { ViewToggle } from "../../components/ViewToggle";
 import { MarkWonModal } from "./MarkWonModal";
 import { canDeleteRequest, DeleteRequestButton } from "./DeleteRequestButton";
@@ -64,6 +65,7 @@ function formatSource(source: string): string {
     inbound_sms: "SMS",
     high_level: "HL",
     website_form: "Web Form",
+    google_lsa: "Google LSA",
     thumbtack: "Thumbtack",
   };
   return map[source] ?? source;
@@ -172,6 +174,10 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
   const [activeStage, setActiveStage] = useState<EstimateRequestStatus>("new_request");
   const [wonTarget, setWonTarget] = useState<EstimateRequest | null>(null);
   const [showQuickLead, setShowQuickLead] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Optimistic pipeline state — starts from API data, updated on successful drags.
   const [optimisticPipeline, setOptimisticPipeline] = useState<
@@ -246,6 +252,75 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
   }, [data]);
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(allRequests, "created_at", "desc");
+  const visibleNewRequests = useMemo(
+    () => sorted.filter((r) => r.status === "new_request"),
+    [sorted],
+  );
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+    setConfirmDelete(false);
+  };
+
+  const enterSelectMode = () => {
+    setView("list");
+    setSelectMode(true);
+    setSelectedIds(new Set());
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const allVisibleSelected =
+    visibleNewRequests.length > 0 && visibleNewRequests.every((r) => selectedIds.has(r.id));
+
+  const toggleSelectAll = () => {
+    if (allVisibleSelected) setSelectedIds(new Set());
+    else setSelectedIds(new Set(visibleNewRequests.map((r) => r.id)));
+  };
+
+  const runBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const result = await api.post<{
+        deleted: { id: string }[];
+        skipped: { id: string; error: string; message: string }[];
+        deleted_count: number;
+        skipped_count: number;
+      }>("/api/estimate-requests/bulk-delete", { ids: [...selectedIds] });
+
+      const deleted = result.deleted_count;
+      const skipped = result.skipped_count;
+      if (skipped === 0) {
+        toast.push("success", `${deleted} lead${deleted === 1 ? "" : "s"} deleted`);
+      } else {
+        const progressed = result.skipped.filter((s) => s.error === "cannot_delete_active_lead");
+        const why =
+          progressed.length === skipped
+            ? "already had an appointment set"
+            : result.skipped[0]?.message ?? "not eligible";
+        toast.push(
+          deleted > 0 ? "success" : "error",
+          `${deleted} deleted, ${skipped} skipped — ${why}`,
+        );
+      }
+      exitSelectMode();
+      refetch();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBulkBusy(false);
+      setConfirmDelete(false);
+    }
+  };
 
   if (loading) return <Spinner center />;
   if (error) {
@@ -269,7 +344,22 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
           </p>
         </div>
         <div class="view-header__right flex gap-sm items-center">
-          <ViewToggle value={viewMode} onChange={setView} />
+          <ViewToggle
+            value={viewMode}
+            onChange={(mode) => {
+              setView(mode);
+              if (mode === "kanban") exitSelectMode();
+            }}
+          />
+          {visibleNewRequests.length > 0 && (
+            <Button
+              variant={selectMode ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => (selectMode ? exitSelectMode() : enterSelectMode())}
+            >
+              {selectMode ? "✕ Cancel Select" : "☑ Select"}
+            </Button>
+          )}
           <button class="btn btn--secondary" onClick={() => go("/estimating/templates")}>
             Templates
           </button>
@@ -280,26 +370,58 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
       </div>
 
       {viewMode === "list" && (
+        <div class={`table-container${selectMode ? " leads-list--selecting" : ""}`}>
         <table class="data-table">
           <thead>
             <tr>
+              {selectMode && (
+                <th class="data-table__check-col">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    disabled={visibleNewRequests.length === 0}
+                    onChange={toggleSelectAll}
+                    aria-label="Select all New Request leads"
+                  />
+                </th>
+              )}
               <SortTh label="Request #" col="request_number" active={sortKey} dir={sortDir} onSort={toggle} />
               <SortTh label="Client" col="client_name" active={sortKey} dir={sortDir} onSort={toggle} />
-              <SortTh label="Description" col="job_type" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Phone" col="client_phone" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Job type" col="job_type" active={sortKey} dir={sortDir} onSort={toggle} />
               <SortTh label="Status" col="status" active={sortKey} dir={sortDir} onSort={toggle} />
               <SortTh label="Source" col="source" active={sortKey} dir={sortDir} onSort={toggle} />
-              <SortTh label="Created" col="created_at" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Age" col="age_days" active={sortKey} dir={sortDir} onSort={toggle} />
+              <SortTh label="Appointment" col="appointment_date" active={sortKey} dir={sortDir} onSort={toggle} />
               <th />
             </tr>
           </thead>
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={7} class="text--muted">No leads in the pipeline.</td>
+                <td colSpan={selectMode ? 10 : 9} class="text--muted">No leads in the pipeline.</td>
               </tr>
             )}
-            {sorted.map((r) => (
-              <tr key={r.id}>
+            {sorted.map((r) => {
+              const isNewRequest = r.status === "new_request";
+              const selected = selectedIds.has(r.id);
+              return (
+              <tr
+                key={r.id}
+                class={selectMode && selected ? "data-table__row--selected" : undefined}
+              >
+                {selectMode && (
+                  <td class="data-table__check-col">
+                    {isNewRequest ? (
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleSelect(r.id)}
+                        aria-label={`Select ${r.client_name}`}
+                      />
+                    ) : null}
+                  </td>
+                )}
                 <td>
                   <button type="button" class="link-btn" onClick={() => go(`/estimating/${r.id}`)}>
                     REQ-{String(r.request_number).padStart(3, "0")}
@@ -311,13 +433,21 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                     <span class="badge badge--sms" style={{ marginLeft: "0.4rem" }}>💬 SMS</span>
                   )}
                 </td>
-                <td>{truncate(`${jobTypeDisplayLabel(r.job_type, r.job_type_detail)} — ${r.property_city}`)}</td>
+                <td>
+                  {r.client_phone ? (
+                    <a href={`tel:${r.client_phone}`} class="er-card__tel">{r.client_phone}</a>
+                  ) : (
+                    <span class="text--muted">—</span>
+                  )}
+                </td>
+                <td>{truncate(jobTypeDisplayLabel(r.job_type, r.job_type_detail))}</td>
                 <td><Badge status={r.status}>{formatStatus(r.status)}</Badge></td>
-                <td><span class="text--muted">{formatSource(r.source)}</span></td>
-                <td>{r.created_at ? formatDate(r.created_at) : "—"}</td>
+                <td><span class="text--muted">{formatSource(r.lead_source || r.source)}</span></td>
+                <td>{ageDays(r.created_at)}</td>
+                <td>{r.appointment_date ? formatDate(r.appointment_date) : "—"}</td>
                 <td>
                   <div class="flex items-center gap-sm" style={{ justifyContent: "flex-end" }}>
-                    {canDeleteRequest(r) && (
+                    {!selectMode && canDeleteRequest(r) && (
                       <DeleteRequestButton request={r} size="sm" onDeleted={refetch} />
                     )}
                     <Button size="sm" variant="tertiary" onClick={() => go(`/estimating/${r.id}`)}>
@@ -326,9 +456,11 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
+        </div>
       )}
 
       {viewMode === "kanban" && pipeline && (
@@ -360,7 +492,18 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                     <span class="pipeline-col__title" style={{ color: s.color }}>
                       {s.label}
                     </span>
-                    <span class="pipeline-col__count">{cards.length}</span>
+                    <span class="pipeline-col__actions">
+                      {s.key === "new_request" && cards.length > 0 && (
+                        <button
+                          type="button"
+                          class="btn btn--ghost btn--sm"
+                          onClick={enterSelectMode}
+                        >
+                          ☑ Select
+                        </button>
+                      )}
+                      <span class="pipeline-col__count">{cards.length}</span>
+                    </span>
                   </header>
                   <div
                     class={`pipeline-col__body${isOver ? " pipeline-col__body--over" : ""}`}
@@ -421,6 +564,46 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
           }}
         />
       )}
+
+      {selectMode && (
+        <div class="leads-bulk-bar" role="status">
+          <span class="leads-bulk-bar__count">{selectedIds.size} selected</span>
+          <Button variant="tertiary" size="sm" onClick={toggleSelectAll}>
+            {allVisibleSelected ? "Clear All" : "Select All"}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            disabled={bulkBusy || selectedIds.size === 0}
+            onClick={() => setConfirmDelete(true)}
+          >
+            Delete Selected
+          </Button>
+          <Button variant="tertiary" size="sm" onClick={exitSelectMode}>
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      <Modal
+        open={confirmDelete}
+        title="Delete leads"
+        onClose={() => setConfirmDelete(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" disabled={bulkBusy} onClick={() => void runBulkDelete()}>
+              {bulkBusy ? "Deleting…" : "Yes, delete"}
+            </Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>
+          Delete {selectedIds.size} lead{selectedIds.size === 1 ? "" : "s"}? This cannot be undone.
+        </p>
+      </Modal>
     </div>
   );
 }

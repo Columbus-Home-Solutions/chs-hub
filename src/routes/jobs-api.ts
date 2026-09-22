@@ -45,6 +45,7 @@ import {
   type EligibilityCheck,
 } from "../lib/close-eligibility.js";
 import { NON_TEST_CLIENT } from "../lib/non-test-client.js";
+import { loadScheduleSeedState, syncOverviewStartDate } from "../lib/overview-schedule-seed.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const REVERSE_ROLES = ["owner"] as const;
@@ -389,6 +390,8 @@ export async function handleJobDetail(env: Env, id: string): Promise<Response> {
       );
   }
 
+  const scheduleState = await loadScheduleSeedState(env, id);
+
   const assignmentRow = await env.DB.prepare("SELECT assigned_to FROM jobs WHERE id = ?")
     .bind(id)
     .first<{ assigned_to: string | null }>();
@@ -438,6 +441,8 @@ export async function handleJobDetail(env: Env, id: string): Promise<Response> {
       reversal_reason: reversal?.reversal_reason ?? null,
       reversed_at: reversal?.reversed_at ?? null,
       portal_url: portalUrl,
+      schedule_entry_count: scheduleState.schedule_entry_count,
+      has_detailed_schedule: scheduleState.has_detailed_schedule,
     },
     financial: {
       contract_total: card.contract_total,
@@ -469,10 +474,10 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
   }
 
   const job = await env.DB.prepare(
-    `SELECT id FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
+    `SELECT id, title, job_number, start_date FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
   )
     .bind(id)
-    .first<{ id: string }>();
+    .first<{ id: string; title: string | null; job_number: number | null; start_date: string | null }>();
   if (!job) return err(404, "not_found", "Job not found.");
 
   const sets: string[] = [];
@@ -531,6 +536,13 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
       ...("review_enabled" in body ? ["review_enabled"] : []),
     ],
   });
+
+  // Overview start date is a convenience that seeds schedule_entries so the
+  // calendar/dashboard (which never read jobs.start_date) show the job.
+  if ("start_date" in body) {
+    const nextTitle = "title" in body ? str(body.title) : job.title;
+    await syncOverviewStartDate(env, id, str(body.start_date), nextTitle, job.job_number);
+  }
 
   return handleJobDetail(env, id);
 }

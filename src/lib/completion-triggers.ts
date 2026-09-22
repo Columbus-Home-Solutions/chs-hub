@@ -14,7 +14,12 @@ import { triggerNotification } from "./notification-engine.js";
 import { round2 } from "./invoicing.js";
 import { generateAndStoreDocument } from "../routes/job-documents.js";
 
-async function runLienWaiverCheck(jobId: string, invoiceId: string, env: Env): Promise<void> {
+async function runLienWaiverCheck(
+  jobId: string,
+  invoiceId: string,
+  env: Env,
+  skipNotifications = false,
+): Promise<void> {
   try {
     const job = await env.DB.prepare(
       `SELECT id, status, contract_total, client_id FROM jobs WHERE id = ?`,
@@ -23,7 +28,7 @@ async function runLienWaiverCheck(jobId: string, invoiceId: string, env: Env): P
       .first<{ id: string; status: string; contract_total: number; client_id: string }>();
 
     // Allow complete or closed — punch-list auto-complete may race with final payment.
-    if (!job || (job.status !== "complete" && job.status !== "closed")) return;
+    if (!job || !lienWaiverJobStatusAllowsGeneration(job.status)) return;
 
     // All non-void invoices must be paid
     const unpaid = await env.DB.prepare(
@@ -54,10 +59,10 @@ async function runLienWaiverCheck(jobId: string, invoiceId: string, env: Env): P
     const existingDoc = await env.DB.prepare(
       `SELECT id FROM job_documents
         WHERE job_id = ? AND template_type = 'lien_waiver_conditional'
-          AND review_status IN ('pending_review', 'approved', 'discarded', 'manual')
+          AND review_status IN (${LIEN_WAIVER_READY_REVIEW.map(() => "?").join(", ")})
         LIMIT 1`,
     )
-      .bind(jobId)
+      .bind(jobId, ...LIEN_WAIVER_READY_REVIEW)
       .first<{ id: string }>();
 
     if (existingDoc) {
@@ -93,18 +98,81 @@ async function runLienWaiverCheck(jobId: string, invoiceId: string, env: Env): P
       },
     );
 
-    await triggerNotification(env, "lien_waiver_generated", {
-      jobId,
-      clientId: job.client_id,
-      linkPath: `/app/jobs/${jobId}/completion-package`,
-      instanceKey: result.docId,
-    });
+    if (!skipNotifications) {
+      await triggerNotification(env, "lien_waiver_generated", {
+        jobId,
+        clientId: job.client_id,
+        linkPath: `/app/jobs/${jobId}/completion-package`,
+        instanceKey: result.docId,
+      });
+    }
 
     console.log(`[CompletionTrigger] Lien waiver generated for job ${jobId}: doc ${result.docId}`);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[CompletionTrigger] Lien waiver generation failed for job ${jobId}:`, errMsg);
+    try {
+      await recordLienWaiverGenerationFailure(env, jobId, invoiceId, errMsg);
+    } catch (persistErr) {
+      console.error(
+        `[CompletionTrigger] Failed to persist lien-waiver error for job ${jobId}:`,
+        persistErr instanceof Error ? persistErr.message : persistErr,
+      );
+    }
   }
+}
+
+export const LIEN_WAIVER_READY_REVIEW = [
+  "pending_review",
+  "approved",
+  "discarded",
+  "manual",
+] as const;
+
+export const LIEN_WAIVER_FAILED_REVIEW = "failed";
+
+export function lienWaiverJobStatusAllowsGeneration(status: string | null | undefined): boolean {
+  return status === "complete" || status === "closed";
+}
+
+export async function recordLienWaiverGenerationFailure(
+  env: Env,
+  jobId: string,
+  invoiceId: string | null,
+  errMsg: string,
+): Promise<void> {
+  const existing = await env.DB.prepare(
+    `SELECT id FROM job_documents
+      WHERE job_id = ? AND template_type = 'lien_waiver_conditional' AND review_status = ?
+      LIMIT 1`,
+  )
+    .bind(jobId, LIEN_WAIVER_FAILED_REVIEW)
+    .first<{ id: string }>();
+  if (existing) {
+    await env.DB.prepare(
+      `UPDATE job_documents SET notes = ?, related_record_id = ?, generated_at = datetime('now')
+        WHERE id = ?`,
+    )
+      .bind(errMsg.slice(0, 2000), invoiceId, existing.id)
+      .run();
+    return;
+  }
+  await env.DB.prepare(
+    `INSERT INTO job_documents
+       (id, job_id, template_type, filename, r2_key, generated_at, generated_by,
+        auto_generated, trigger_event, related_record_id, review_status, notes, signature_status)
+     VALUES (?, ?, 'lien_waiver_conditional', 'lien-waiver-generation-failed', ?, datetime('now'),
+             'system', 1, 'client_payment', ?, ?, ?, 'none')`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      jobId,
+      `documents/generated/${jobId}/lien-waiver-generation-failed`,
+      invoiceId,
+      LIEN_WAIVER_FAILED_REVIEW,
+      errMsg.slice(0, 2000),
+    )
+    .run();
 }
 
 export async function checkAndFireLienWaiver({
@@ -112,16 +180,20 @@ export async function checkAndFireLienWaiver({
   invoiceId,
   env,
   ctx,
+  skipNotifications,
 }: {
   jobId: string;
   invoiceId: string;
   env: Env;
   ctx?: ExecutionContext;
+  /** Historical/external payments generate the waiver but never notify the client. */
+  skipNotifications?: boolean;
 }): Promise<void> {
+  const run = () => runLienWaiverCheck(jobId, invoiceId, env, skipNotifications === true);
   if (ctx) {
-    ctx.waitUntil(runLienWaiverCheck(jobId, invoiceId, env));
+    ctx.waitUntil(run());
   } else {
-    await runLienWaiverCheck(jobId, invoiceId, env);
+    await run();
   }
 }
 

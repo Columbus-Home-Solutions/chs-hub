@@ -5,7 +5,12 @@
  * client-side (the Worker can't resize without Cloudflare Images), then upload
  * the full image + thumb to POST /api/photos. GPS is best-effort and optional
  * (business rule #1).
+ *
+ * HEIC/HEIF is converted to JPEG here — before makeThumb or the upload —
+ * so every caller (camera, library picker, Capacitor) lands a renderable file.
  */
+
+import { preparePhotoForUpload } from "./heic";
 
 const THUMB_MAX_EDGE = 800;
 const THUMB_QUALITY = 0.85;
@@ -67,9 +72,10 @@ export async function uploadPhoto(
   meta: CaptureMeta,
   opts: { withGps?: boolean } = {},
 ): Promise<UploadResult> {
-  const thumb = await makeThumb(file);
+  const prepared = await preparePhotoForUpload(file);
+  const thumb = await makeThumb(prepared.file);
   const form = new FormData();
-  form.append("image", file, "capture.jpg");
+  form.append("image", prepared.file, "capture.jpg");
   form.append("thumb", thumb, "thumb.jpg");
   if (meta.job_id) form.append("job_id", meta.job_id);
   if (meta.estimate_request_id) form.append("estimate_request_id", meta.estimate_request_id);
@@ -80,11 +86,14 @@ export async function uploadPhoto(
   if (meta.caption) form.append("caption", meta.caption);
   if (meta.task_id) form.append("task_id", meta.task_id);
   if (meta.daily_log_id) form.append("daily_log_id", meta.daily_log_id);
-  form.append("taken_at", new Date().toISOString());
+  form.append("taken_at", prepared.takenAt ?? new Date().toISOString());
   form.append("entered_via", "web");
   form.append("capture_uuid", crypto.randomUUID());
 
-  if (opts.withGps) {
+  if (prepared.latitude != null && prepared.longitude != null) {
+    form.append("latitude", String(prepared.latitude));
+    form.append("longitude", String(prepared.longitude));
+  } else if (opts.withGps) {
     const pos = await getPosition();
     if (pos) {
       form.append("latitude", String(pos.coords.latitude));
@@ -104,10 +113,11 @@ export async function uploadReceipt(
   file: Blob,
   meta: CaptureMeta,
 ): Promise<{ photo: UploadResult; receipt: ReceiptResult }> {
+  const prepared = await preparePhotoForUpload(file);
   const form = new FormData();
-  form.append("image", file, "receipt.jpg");
+  form.append("image", prepared.file, "receipt.jpg");
   if (meta.job_id) form.append("job_id", meta.job_id);
-  form.append("taken_at", new Date().toISOString());
+  form.append("taken_at", prepared.takenAt ?? new Date().toISOString());
   form.append("entered_via", "web");
   const res = await fetch("/api/photos/receipt", { method: "POST", body: form });
   if (!res.ok) throw new Error(`receipt upload failed: ${res.status}`);

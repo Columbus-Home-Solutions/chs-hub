@@ -146,6 +146,8 @@ const ROUTE_RULES: RouteRule[] = [
   { method: "*", pattern: /^\/api\/kpis$/, roles: O },
 
   // ── Estimating — OWNER + PM (field crew / office admin 403) ────────────────
+  { method: "POST", pattern: /^\/api\/estimates\/[^/]+\/mark-imported-signed$/, roles: O },
+  { method: "POST", pattern: /^\/api\/estimates\/[^/]+\/mark-external-deposit$/, roles: O },
   { method: "*", pattern: /^\/api\/estimates(\/.*)?$/, roles: O_PM },
   { method: "*", pattern: /^\/api\/estimate-templates(\/.*)?$/, roles: O_PM },
   { method: "*", pattern: /^\/api\/estimate-requests(\/.*)?$/, roles: O_PM },

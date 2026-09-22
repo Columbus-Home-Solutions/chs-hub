@@ -6,7 +6,9 @@
  * errors are caught so co-tenant cron jobs are not disrupted.
  *
  * Outreach sequence logic (SMS only — no email):
- *   lead_outreach_count 0 → Day 1 touch  (days_since_created >= 0, same day)
+ *   lead_outreach_count 0 → Day 1 touch  (days_since_created >= 0 AND 45-min
+ *                           buffer from created_at; same Central calendar day
+ *                           when possible — see isDay1BufferSatisfied)
  *   lead_outreach_count 1 → Day 2 touch  (days_since_created >= 1)
  *   lead_outreach_count 2 → Day 3 touch  (days_since_created >= 2)
  *   lead_outreach_count 3 → sequence complete (all touches sent)
@@ -27,8 +29,13 @@
 
 import type { Env } from "../env.js";
 import { sendSms, getTwilioConfig, isConfigured as twilioConfigured } from "./twilio.js";
+import { renderTemplateText } from "./merge-render.js";
 
 // ─── touch schedule ───────────────────────────────────────────────────────────
+
+/** Rolling buffer before Day 1 (all sources). Not applied to Day 2/3. */
+export const DAY1_BUFFER_MINUTES = 45;
+export const CHS_TIMEZONE = "America/Chicago";
 
 const OUTREACH_TOUCHES: Array<{
   dayThreshold: number;
@@ -66,6 +73,22 @@ interface OutreachRow {
   sms_opt_out: number | null;
 }
 
+/** INNER JOIN clients — estimate_requests without a client_id never enter the sequence. */
+export const LEAD_OUTREACH_CANDIDATE_SQL = `SELECT er.id, er.client_id, er.job_type, er.property_address, er.created_at,
+            COALESCE(er.lead_outreach_count, 0) AS lead_outreach_count,
+            COALESCE(er.lead_outreach_sequence_active, 0) AS lead_outreach_sequence_active,
+            c.first_name, c.phone, c.email, c.sms_opt_out
+     FROM estimate_requests er
+     JOIN clients c ON c.id = er.client_id
+     WHERE er.status = 'new_request'
+       AND er.appointment_date IS NULL
+       AND COALESCE(er.appointment_completed, 0) = 0
+       AND (
+         er.lead_outreach_sequence_active = 1
+         OR (COALESCE(er.lead_outreach_count, 0) = 0 AND er.created_at IS NOT NULL)
+       )
+     LIMIT 20`;
+
 // ─── processNewLeadOutreach ───────────────────────────────────────────────────
 
 /**
@@ -83,22 +106,7 @@ export async function processNewLeadOutreach(env: Env): Promise<OutreachStats> {
     duration_ms: 0,
   };
 
-  const { results } = await env.DB.prepare(
-    `SELECT er.id, er.client_id, er.job_type, er.property_address, er.created_at,
-            COALESCE(er.lead_outreach_count, 0) AS lead_outreach_count,
-            COALESCE(er.lead_outreach_sequence_active, 0) AS lead_outreach_sequence_active,
-            c.first_name, c.phone, c.email, c.sms_opt_out
-     FROM estimate_requests er
-     JOIN clients c ON c.id = er.client_id
-     WHERE er.status = 'new_request'
-       AND er.appointment_date IS NULL
-       AND COALESCE(er.appointment_completed, 0) = 0
-       AND (
-         er.lead_outreach_sequence_active = 1
-         OR (COALESCE(er.lead_outreach_count, 0) = 0 AND er.created_at IS NOT NULL)
-       )
-     LIMIT 20`,
-  ).all<OutreachRow>();
+  const { results } = await env.DB.prepare(LEAD_OUTREACH_CANDIDATE_SQL).all<OutreachRow>();
 
   const rows = results ?? [];
   stats.scanned = rows.length;
@@ -152,6 +160,12 @@ async function processOneOutreach(
 
   // Not yet at the day threshold — nothing to do this tick.
   if (daysElapsed < touch.dayThreshold) return null;
+
+  // Day 1 only: wait 45 minutes so Tony can log an appointment after a live call.
+  // Day 2/3 thresholds are unchanged.
+  if (row.lead_outreach_count === 0 && !isDay1BufferSatisfied(row.created_at)) {
+    return null;
+  }
 
   // Load SMS template.
   const smsSetting = await env.DB.prepare(
@@ -462,10 +476,61 @@ export async function triggerPostVisitFollowUp(requestId: string, env: Env): Pro
 
 // ─── shared helpers ───────────────────────────────────────────────────────────
 
-function calcDaysSince(iso: string): number {
-  const t = new Date(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z").getTime();
-  if (Number.isNaN(t)) return 0;
-  return Math.floor((Date.now() - t) / 86_400_000);
+function parseCreatedAt(iso: string): Date | null {
+  const t = new Date(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z");
+  return Number.isNaN(t.getTime()) ? null : t;
+}
+
+function centralYmd(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHS_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+function minutesUntilCentralMidnight(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHS_TIMEZONE,
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  return 24 * 60 - (hour * 60 + minute);
+}
+
+/**
+ * Day 1 eligibility clock. Day 2/3 do not call this.
+ *
+ * - Default: created_at must be at least 45 minutes ago.
+ * - Same Central calendar day is preferred. If waiting the full 45 minutes
+ *   would cross midnight America/Chicago, send on the last stretch of that
+ *   Central day (shortened buffer) so Day 1 is not silently skipped.
+ * - If the buffer already crossed midnight (next cron is next Central day)
+ *   and the lead is still under 45 minutes old, send anyway — do not skip.
+ */
+export function isDay1BufferSatisfied(createdAt: string, now: Date = new Date()): boolean {
+  const created = parseCreatedAt(createdAt);
+  if (!created) return false;
+  const minutesOld = (now.getTime() - created.getTime()) / 60_000;
+  if (minutesOld >= DAY1_BUFFER_MINUTES) return true;
+  if (minutesOld < 0) return false;
+
+  const sameCentralDay = centralYmd(created) === centralYmd(now);
+  if (sameCentralDay && minutesUntilCentralMidnight(now) < DAY1_BUFFER_MINUTES) {
+    return true;
+  }
+  if (!sameCentralDay) return true;
+  return false;
+}
+
+export function calcDaysSince(iso: string, now: Date = new Date()): number {
+  const created = parseCreatedAt(iso);
+  if (!created) return 0;
+  return Math.floor((now.getTime() - created.getTime()) / 86_400_000);
 }
 
 function titleCase(s: string): string {
@@ -473,7 +538,7 @@ function titleCase(s: string): string {
 }
 
 function renderTemplate(template: string, ctx: Record<string, string>): string {
-  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => ctx[key] ?? "");
+  return renderTemplateText(template, ctx);
 }
 
 function buildMergeContext(row: { first_name: string | null; job_type: string; property_address: string }): Record<string, string> {

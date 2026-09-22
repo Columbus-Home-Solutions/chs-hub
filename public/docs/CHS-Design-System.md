@@ -81,6 +81,12 @@ Save as `public/css/tokens.css` — loaded before all other stylesheets.
   --pipeline-won: #22C55E;
   --pipeline-lost: #64748B;
 
+  /* ─── Schedule Entry Types ─── */
+  --type-proposal-review: #EC4899;   /* pink */
+  --type-permit-inspection: #6366F1; /* indigo */
+  --type-deadline: #EF4444;          /* same as --color-error */
+  --type-warranty-call: #14B8A6;     /* teal — not brand amber */
+
   /* ─── Priority Tags ─── */
   --priority-core-bg: rgba(34, 197, 94, 0.12);
   --priority-core-text: #22C55E;

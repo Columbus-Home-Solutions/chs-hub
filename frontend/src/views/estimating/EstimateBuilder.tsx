@@ -31,6 +31,9 @@ import {
 } from "../../lib/estimate-milestones";
 import { canDeleteEstimate, DeleteEstimateButton } from "./DeleteEstimateButton";
 import { MarkWonModal } from "./MarkWonModal";
+import { JobberImportActions } from "./JobberImportActions";
+import { EstimateStatusBadge } from "../../components/EstimateStatusBadge";
+import { isJobberAcceptedImport } from "@chs/shared/jobber-accepted-import";
 import { LineItemRow } from "./LineItemRow";
 import { SelectionFormModal, type EditChoiceValues, type EditSelectionValues } from "./SelectionFormModal";
 import {
@@ -278,9 +281,7 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
               EST-{String(e.estimate_number ?? 0).padStart(3, "0")}
               {e.version > 1 ? ` · v${e.version}` : ""}
             </h1>
-            <Badge tone={e.status === "sent" || e.status === "viewed" ? "info" : e.status === "approved" || e.status === "signed" ? "success" : "neutral"}>
-              {formatStatus(e.status)}
-            </Badge>
+            <EstimateStatusBadge status={e.status} dataSource={e.data_source} />
             {saving && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>Saving…</span>}
           </div>
           <p class="view-subtitle">
@@ -328,15 +329,15 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
               Go to Job {e.linked_job_number != null ? `#${e.linked_job_number}` : ""} →
             </Button>
           )}
-          {sent && (
+          {sent && !isJobberAcceptedImport(e.data_source) && (
             <Button variant="danger" onClick={() => mutate(() => api.post(`/api/estimates/${e.id}/revise`).then((r: any) => r.estimate.request_id ? go(`/estimating/${r.estimate.request_id}/estimate`) : go(`/estimates/${r.estimate.id}`)), "Revision created")}>
               Revise
             </Button>
           )}
-          {sent && e.status !== "approved" && (
+          {sent && e.status !== "approved" && !isJobberAcceptedImport(e.data_source) && (
             <MarkLostButton estimate={e} mutate={mutate} />
           )}
-          {sent && e.request_id && !e.linked_job_id && (
+          {sent && e.request_id && !e.linked_job_id && !isJobberAcceptedImport(e.data_source) && (
             <Button
               variant="primary"
               disabled={wonLoading}
@@ -362,10 +363,19 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
             </Button>
           )}
           {canDeleteEstimate(e) && <DeleteEstimateButton estimate={e} />}
+          <JobberImportActions estimate={e} onReload={reload} />
         </div>
       </div>
 
-      {sent && <SentStatusCard estimate={e} mutate={mutate} />}
+      {isJobberAcceptedImport(e.data_source) && (
+        <div class="notice notice--warning" style={{ marginBottom: "var(--space-4)" }}>
+          <strong>Imported — Signed via Jobber.</strong>
+          {e.imported_signed_note ? ` ${e.imported_signed_note}` : ""}
+          {" "}This is not a CHS BoldSign signature. No envelope was created in CHS.
+        </div>
+      )}
+
+      {sent && !isJobberAcceptedImport(e.data_source) && <SentStatusCard estimate={e} mutate={mutate} />}
 
       {/* Revision chain notices */}
       {e.status === "revised" && (
@@ -517,7 +527,9 @@ export function EstimateBuilder({ requestId, estimateId }: BuilderProps) {
           <Button variant="secondary" onClick={() => toast.push("success", "Draft saved")}>
             Save Draft
           </Button>
-          <SendButton estimate={e} mutate={mutate} toast={toast} />
+          {!isJobberAcceptedImport(e.data_source) && (
+            <SendButton estimate={e} mutate={mutate} toast={toast} />
+          )}
         </div>
       </div>
 

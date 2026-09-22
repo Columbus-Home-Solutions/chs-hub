@@ -21,6 +21,8 @@ import {
   resolveReceiptPhotoId,
 } from "../financial/ReceiptMatchReview";
 import { RecordPaymentModal } from "../financial/RecordPaymentModal";
+import { RecordHistoricalPaymentModal } from "../financial/RecordHistoricalPaymentModal";
+import { HISTORICAL_INVOICE_BADGE } from "../../types";
 import { CycleManager } from "./CycleManager";
 import { LineItemBilling } from "./LineItemBilling";
 import { go } from "../../lib/nav";
@@ -52,6 +54,8 @@ interface InvoiceRow {
   payment_token: string | null;
   line_item_ids?: string | null;
   payer_id?: string | null;
+  notes?: string | null;
+  is_historical?: boolean;
 }
 interface MilestoneSuggestion {
   billing_schedule_id: string;
@@ -214,7 +218,9 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [prefill, setPrefill] = useState<Prefill | null>(null);
   const [payFor, setPayFor] = useState<InvoiceRow | null>(null);
+  const [historicalFor, setHistoricalFor] = useState<InvoiceRow | null>(null);
   const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(null);
+  const canRecordHistorical = user?.role === "owner";
 
   if (loading) return <Spinner center />;
   if (error || !data) {
@@ -431,6 +437,9 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                     <Badge tone={STATUS_TONE[inv.status ?? "draft"] ?? "neutral"}>
                       {formatStatus(inv.status)}
                     </Badge>
+                    {inv.is_historical && (
+                      <Badge tone="info">{HISTORICAL_INVOICE_BADGE}</Badge>
+                    )}
                   </div>
                   <div class="invoice-row__meta">
                     {inv.title ?? formatStatus(inv.invoice_type)}
@@ -455,7 +464,7 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                       Send
                     </Button>
                   )}
-                  {inv.payment_token && inv.status !== "draft" && inv.status !== "void" && (
+                  {inv.payment_token && !inv.is_historical && inv.status !== "draft" && inv.status !== "void" && (
                     <Button
                       size="sm"
                       variant="tertiary"
@@ -467,7 +476,7 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                       Open ↗
                     </Button>
                   )}
-                  {inv.payment_token && inv.status !== "draft" && inv.status !== "void" && (
+                  {inv.payment_token && !inv.is_historical && inv.status !== "draft" && inv.status !== "void" && (
                     <Button size="sm" variant="tertiary" onClick={() => copyLink(inv)}>
                       Copy link
                     </Button>
@@ -475,6 +484,11 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                   {inv.status !== "void" && inv.status !== "paid" && (
                     <Button size="sm" variant="secondary" onClick={() => setPayFor(inv)}>
                       Record payment
+                    </Button>
+                  )}
+                  {canRecordHistorical && inv.status !== "void" && inv.status !== "paid" && (
+                    <Button size="sm" variant="secondary" onClick={() => setHistoricalFor(inv)}>
+                      Record historical
                     </Button>
                   )}
                   {inv.status !== "void" && (
@@ -540,6 +554,18 @@ export function FinancialTab({ jobId }: { jobId: string }) {
           onClose={() => setPayFor(null)}
           onRecorded={() => {
             setPayFor(null);
+            refetch();
+          }}
+          toast={toast}
+        />
+      )}
+
+      {historicalFor && (
+        <RecordHistoricalPaymentModal
+          invoice={historicalFor}
+          onClose={() => setHistoricalFor(null)}
+          onRecorded={() => {
+            setHistoricalFor(null);
             refetch();
           }}
           toast={toast}
@@ -1535,7 +1561,13 @@ function InvoiceDetailModal({
       <dl class="kv">
         <div class="kv__row"><dt>Type</dt><dd>{formatStatus(inv.invoice_type)}</dd></div>
         <div class="kv__row"><dt>Status</dt><dd>{formatStatus(inv.status)}</dd></div>
+        {inv.is_historical && (
+          <div class="kv__row"><dt>Record</dt><dd>{HISTORICAL_INVOICE_BADGE}</dd></div>
+        )}
         <div class="kv__row"><dt>Amount</dt><dd>{formatCurrency(inv.total_due)}</dd></div>
+        {inv.notes && (
+          <div class="kv__row"><dt>Notes</dt><dd>{inv.notes}</dd></div>
+        )}
         {data.payer && (
           <div class="kv__row">
             <dt>Bill to</dt>

@@ -9,6 +9,7 @@ import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
 import { formatDate } from "../../lib/format";
+import { ensureJpegPhoto } from "../../lib/heic";
 import {
   PunchPublicError,
   PunchPublicFooter,
@@ -73,8 +74,9 @@ async function markItemDone(
   note: string | null,
   photo: File,
 ): Promise<void> {
+  const jpeg = await ensureJpegPhoto(photo);
   const form = new FormData();
-  form.append("photo", photo, photo.name || "completion.jpg");
+  form.append("photo", jpeg, jpeg.name || "completion.jpg");
   if (note) form.append("note", note);
 
   const res = await fetch(

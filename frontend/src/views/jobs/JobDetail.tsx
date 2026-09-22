@@ -278,7 +278,7 @@ export function JobDetail({ id }: DetailProps) {
           refetchJob={refetch}
         />
       )}
-      {tab === "schedule" && id && <ScheduleTab jobId={id} />}
+      {tab === "schedule" && id && <ScheduleTab jobId={id} onDatesChanged={refetch} />}
       {tab === "financial" && id && <FinancialTab jobId={id} />}
       {tab === "change_orders" && id && (
         <ChangeOrdersTab jobId={id} portalToken={data.job.portal_token} />
@@ -820,6 +820,11 @@ function DatesCard({
             onBlur={() => save("start_date", start)}
           />
         </FormField>
+        {job.has_detailed_schedule && (
+          <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+            Detailed schedule set on the Schedule tab
+          </div>
+        )}
         <FormField label="Target end date">
           <input
             class="form-input"

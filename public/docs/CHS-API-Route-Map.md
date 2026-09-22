@@ -168,6 +168,8 @@ Role checks are documented per endpoint:
 | PUT | `/api/estimate-requests/:id` | O/PM | Update request (status change triggers WC sync, notifications) |
 | PUT | `/api/estimate-requests/:id/appointment` | O/PM | Set/update appointment date (triggers confirmation notification) |
 | PUT | `/api/estimate-requests/:id/lost` | O/PM | Mark as lost with reason |
+| DELETE | `/api/estimate-requests/:id` | O/PM/OA | Hard-delete a request (blocked if won/converted/approved). Orphan client cleaned up when nothing else remains. |
+| POST | `/api/estimate-requests/bulk-delete` | O/PM/OA | Body `{ ids }`. New Request only; ineligible ids are skipped with an error, not aborting the batch. |
 
 ### Estimates
 
@@ -237,7 +239,7 @@ Role checks are documented per endpoint:
 | GET | `/api/jobs` | O/PM/OA (FC: assigned only) | List jobs. Filters: `?status=xxx&job_type=xxx&client_id=xxx&billing_model=xxx` |
 | GET | `/api/jobs/pipeline` | O/PM | Pipeline board data: jobs grouped by status |
 | GET | `/api/jobs/:id` | O/PM/OA (FC: assigned only) | Job detail with all tabs data |
-| PUT | `/api/jobs/:id` | O/PM | Update job (status changes enforce business rules, trigger notifications/WC sync) |
+| PUT | `/api/jobs/:id` | O/PM | Update job (status changes enforce business rules, trigger notifications/WC sync). Setting `start_date` seeds a `schedule_entries` row when the job has none yet (or updates the Overview-seeded row); existing Schedule-tab entries are left alone. |
 | PUT | `/api/jobs/:id/status` | O/PM | Dedicated status change endpoint (validates transitions, triggers side effects) |
 
 *Note: No POST for jobs — created exclusively via quote-to-job conversion.*
@@ -281,9 +283,10 @@ Client approval is **not** an internal route — it happens when the client sign
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| GET | `/api/jobs/:id/schedule` | O/PM | Schedule entries for a job |
-| GET | `/api/schedule` | O/PM | Cross-job calendar feed. Filters: `?from=date&to=date` |
-| POST | `/api/jobs/:id/schedule` | O/PM | Create schedule entry (fires `sub_scheduled` once if a sub is assigned) |
+| GET | `/api/jobs/:id/schedule` | O/PM | Schedule entries for a job (`entry_type` is `job_task` or `deadline`) |
+| GET | `/api/schedule` | O/PM | Cross-job `schedule_entries` list. Filters: `?from=date&to=date` |
+| GET | `/api/calendar/events` | O/PM | Merged Overall Schedule feed: job tasks, deadlines, warranty calls, estimate visits, proposal reviews, permit inspections (`status=inspection_scheduled`), Google Meet. Also returns `jobs[]` with RAG for Timeline / month bands. Filters: `?from=date&to=date` |
+| POST | `/api/jobs/:id/schedule` | O/PM | Create schedule entry (optional `entry_type: deadline`; fires `sub_scheduled` once if a sub is assigned) |
 | PUT | `/api/schedule/:id` | O/PM | Update / drag-to-reschedule entry (fires `sub_scheduled` once if a sub becomes assigned) |
 | DELETE | `/api/schedule/:id` | O/PM | Delete schedule entry |
 
@@ -318,6 +321,7 @@ Client approval is **not** an internal route — it happens when the client sign
 | PUT | `/api/invoices/:id` | O/PM/OA | Update invoice |
 | POST | `/api/invoices/:id/send` | O/PM/OA | Send invoice to client (email + SMS with payment link) |
 | POST | `/api/invoices/:id/void` | O | Void invoice (preserved for audit) |
+| POST | `/api/invoices/:id/record-historical-payment` | O | Record external/historical payment (Jobber, Venmo, Zelle, check/cash). Marks invoice paid without Send, payment link, Stripe, or client notification. |
 | GET | `/api/jobs/:id/invoices` | O/PM/OA | Invoices for a specific job |
 
 ### Payments

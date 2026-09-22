@@ -4,11 +4,19 @@ import {
   buildCaptionUserPrompt,
   buildHashtagPrompt,
   parseCaptions,
+  parseGeneratedCopy,
   parseHashtags,
   parseHashtagsForPlatform,
   buildImagePrompt,
   fallbackHashtags,
+  assembleHashtags,
+  locationHashtags,
+  captionWithHeadline,
 } from "../src/lib/social-ai";
+import { shouldRegenerateOnReject } from "../src/routes/social-posts";
+import { createReviewHighlightPost, shouldAutoDraftReview } from "../src/lib/social-review-post";
+import { postTypeUsesAiImage } from "../src/lib/social-image-attach";
+import type { Env } from "../src/env";
 import { DEFAULT_BRAND_VOICE } from "../src/lib/social";
 import { planSchedule, seasonForMonth } from "../src/lib/content-schedule";
 import {
@@ -68,6 +76,15 @@ describe("social-ai caption generation (Sprint 16)", () => {
     expect(opts[0]).toBe("Option one here.");
   });
 
+  it("repairs a missing quote on a trade tag instead of storing the raw JSON", () => {
+    const text =
+      '{"captions":["Hello from the crew."],"headline":"Five stars","trade_tags":["#generalcontractor", #homerenovation"]}';
+    const parsed = parseGeneratedCopy(text);
+    expect(parsed.captions[0]).toBe("Hello from the crew.");
+    expect(parsed.headline).toBe("Five stars");
+    expect(parsed.tradeTags).toEqual(["#generalcontractor", "#homerenovation"]);
+  });
+
   it("falls back to line-splitting when JSON is absent", () => {
     const text =
       "Here is a great caption about your new kitchen remodel project.\n\nAnother distinct caption option for the same project here.";
@@ -75,33 +92,125 @@ describe("social-ai caption generation (Sprint 16)", () => {
     expect(opts.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("hashtag prompt without pool instructs variety + mix of local/trade/general", () => {
+  it("hashtag prompt asks for exactly two trade tags and not the brand tag", () => {
     const p = buildHashtagPrompt({ kind: "tips_tricks", topic: "budgeting a remodel" });
-    expect(p).toMatch(/VARY/);
-    expect(p).toContain("#LittleRock");
+    expect(p).toContain("exactly 2");
+    expect(p).toContain("#homerenovation");
+    expect(p).not.toContain("#HomeSolutionsAR");
   });
 
-  it("hashtag prompt with pool instructs brand + local picks", () => {
-    const pool = {
-      brand: ["#ColumbusHomeSolutions"],
-      local: ["#LittleRock"],
-      general: ["#HomeRemodel"],
-    };
-    const p = buildHashtagPrompt(
-      { kind: "tips_tricks", topic: "budgeting a remodel" },
-      "both",
-      pool,
-    );
-    expect(p).toContain("2-3 brand tags");
-    expect(p).toContain("ColumbusHomeSolutions");
-    expect(p).toContain("facebook_hashtags");
-  });
-
-  it("parseHashtagsForPlatform prefers instagram set for both", () => {
-    const text =
-      '{"facebook_hashtags":["#A","#B","#C"],"instagram_hashtags":["#A","#B","#C","#D","#E","#F","#G","#H","#I"]}';
+  it("parseHashtagsForPlatform keeps only vetted trade tags", () => {
+    const text = '{"trade_tags":["#homerenovation","#homeimprovement","#contractorlife"]}';
     const tags = parseHashtagsForPlatform(text, "both");
-    expect(tags.length).toBe(9);
+    expect(tags).toEqual(["#homerenovation", "#contractorlife"]);
+  });
+
+  it("assembleHashtags is exactly 5, with Sherwood mapped to north little rock", () => {
+    const seasonal = assembleHashtags(null, ["#homerenovation", "#beforeandafter"], "seed-a");
+    expect(seasonal).toEqual([
+      "#HomeSolutionsAR",
+      "#littlerock",
+      "#littlerockarkansas",
+      "#homerenovation",
+      "#beforeandafter",
+    ]);
+    expect(locationHashtags("Sherwood")).toEqual(["#littlerock", "#northlittlerock"]);
+    expect(locationHashtags("Jacksonville, AR")).toEqual(["#littlerock", "#northlittlerock"]);
+    expect(locationHashtags("North Little Rock")).toEqual(["#littlerock", "#northlittlerock"]);
+    expect(locationHashtags("Little Rock")).toEqual(["#littlerock", "#littlerockarkansas"]);
+    const job = assembleHashtags("Sherwood", ["#generalcontractor", "#arkansas"], "job-1");
+    expect(job.slice(0, 4)).toEqual([
+      "#HomeSolutionsAR",
+      "#littlerock",
+      "#northlittlerock",
+      "#generalcontractor",
+    ]);
+    expect(job).toHaveLength(5);
+    expect(job).not.toContain("#sherwood");
+    expect(job).not.toContain("#arkansas");
+  });
+
+  it("reject regenerates job and seasonal posts, and clears a review highlight", () => {
+    expect(shouldRegenerateOnReject("job_completion")).toBe(true);
+    expect(shouldRegenerateOnReject("seasonal_tips")).toBe(true);
+    expect(shouldRegenerateOnReject("tips_tricks")).toBe(true);
+    expect(shouldRegenerateOnReject("promotion")).toBe(true);
+    expect(shouldRegenerateOnReject("review_highlight")).toBe(false);
+    expect(shouldRegenerateOnReject("manual")).toBe(false);
+  });
+
+  it("only seasonal, tips, and promotion posts get an AI image", () => {
+    expect(postTypeUsesAiImage("seasonal_tips")).toBe(true);
+    expect(postTypeUsesAiImage("tips_tricks")).toBe(true);
+    expect(postTypeUsesAiImage("promotion")).toBe(true);
+    expect(postTypeUsesAiImage("job_completion")).toBe(false);
+    expect(postTypeUsesAiImage("review_highlight")).toBe(false);
+  });
+
+  it("a 5-star review auto-drafts one pending review-highlight post", async () => {
+    expect(shouldAutoDraftReview(5)).toBe(true);
+    expect(shouldAutoDraftReview(4)).toBe(false);
+    const posts: { id: string; hashtags: string; generatedBy: string; engagement: string }[] = [];
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              async first() {
+                if (sql.includes("social_posts")) {
+                  const needle = String(args[0]).replace(/%/g, "");
+                  const hit = posts.find((p) => p.engagement.includes(needle));
+                  return hit ? { id: hit.id } : null;
+                }
+                return null;
+              },
+              async run() {
+                if (sql.includes("INSERT INTO social_posts")) {
+                  posts.push({
+                    id: String(args[0]),
+                    hashtags: String(args[2]),
+                    engagement: String(args[3]),
+                    generatedBy: String(args[4]),
+                  });
+                }
+              },
+            };
+          },
+        };
+      },
+    };
+    const env = { DB: db, ANTHROPIC_API_KEY: "" } as unknown as Env;
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new Error("offline");
+    };
+    const review = {
+      id: "rev-5-star",
+      reviewer_name: "Ada Homeowner",
+      comment_text: "They rebuilt our kitchen and left the place cleaner than they found it.",
+      star_rating: 5,
+    };
+    try {
+      const first = await createReviewHighlightPost(env, review, "ai_schedule");
+      const second = await createReviewHighlightPost(env, review, "ai_schedule");
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(false);
+      expect(second.id).toBe(first.id);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.generatedBy).toBe("ai_schedule");
+      const tags = JSON.parse(posts[0]!.hashtags) as string[];
+      expect(tags).toHaveLength(5);
+      expect(tags[0]).toBe("#HomeSolutionsAR");
+      expect(tags.slice(1, 3)).toEqual(["#littlerock", "#littlerockarkansas"]);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it("caption headline is a short first line, not a second copy of the body", () => {
+    expect(captionWithHeadline("Beat the heat", "Seal the attic before August.")).toBe(
+      "Beat the heat\n\nSeal the attic before August.",
+    );
   });
 
   it("image prompt includes subject angle by variation index", () => {
@@ -117,14 +226,14 @@ describe("social-ai caption generation (Sprint 16)", () => {
     expect(tags).toContain("#HomeRemodel");
   });
 
-  it("fallback hashtags return 10–15 varied tags that differ per seed (#8)", () => {
-    const a = fallbackHashtags("post-a", "garage_conversion");
-    const b = fallbackHashtags("post-b", "garage_conversion");
-    expect(a.length).toBeGreaterThanOrEqual(10);
-    expect(a.length).toBeLessThanOrEqual(15);
-    // Different seeds vary the selection so the feed isn't spammy.
-    expect(a.join(",")).not.toBe(b.join(","));
-    // All start with '#' and are unique.
+  it("fallback hashtags are exactly 5 vetted tags and vary the trade pair by seed", () => {
+    const a = fallbackHashtags("post-a", "Sherwood");
+    const b = fallbackHashtags("post-b", "Little Rock");
+    expect(a).toHaveLength(5);
+    expect(b).toHaveLength(5);
+    expect(a[0]).toBe("#HomeSolutionsAR");
+    expect(a.slice(1, 3)).toEqual(["#littlerock", "#northlittlerock"]);
+    expect(b.slice(1, 3)).toEqual(["#littlerock", "#littlerockarkansas"]);
     expect(a.every((t) => t.startsWith("#"))).toBe(true);
     expect(new Set(a).size).toBe(a.length);
   });
@@ -330,10 +439,10 @@ describe("social-publish state machine (Sprint 16)", () => {
     expect(scheduledDateForCompare("2026-06-05 22:35:40")).toBe("2026-06-05T22:35:40Z");
   });
 
-  it("pickHashtagsForPlatform caps facebook at 5 and instagram at 15", () => {
+  it("pickHashtagsForPlatform caps facebook and instagram at 5", () => {
     const tags = Array.from({ length: 20 }, (_, i) => `#Tag${i}`);
     expect(pickHashtagsForPlatform(tags, "facebook").length).toBe(5);
-    expect(pickHashtagsForPlatform(tags, "instagram").length).toBe(15);
+    expect(pickHashtagsForPlatform(tags, "instagram").length).toBe(5);
   });
 
   it("builds the documented Graph request shapes (IG two-step + FB cross-post flag)", () => {

@@ -54,8 +54,12 @@ export function buildCaptionSystemPrompt(brandVoice: string): string {
     "city or neighborhood only.\n" +
     "- Keep captions to 1–3 short paragraphs suitable for Facebook and Instagram.\n" +
     "- Sound like a proud local craftsman, not a marketer.\n" +
-    'Respond ONLY with JSON of the shape {"captions": ["option one", "option two", "option three"]}. ' +
-    "Provide 2–3 distinct options."
+    'Respond ONLY with JSON of the shape {"captions": ["option one", "option two", "option three"], ' +
+    '"headline": "six words max", "trade_tags": ["#tagone", "#tagtwo"]}. ' +
+    "Provide 2–3 distinct caption options. headline is a short overlay title, not a hashtag. " +
+    "trade_tags must be exactly 2 tags chosen only from this pool: " +
+    "#contractorsofinsta, #remodelingideas, #generalcontractor, #homerenovation, #beforeandafter, #contractorlife. " +
+    "Do not include #HomeSolutionsAR or any city tag — those are added in code."
   );
 }
 
@@ -66,6 +70,9 @@ export function buildCaptionUserPrompt(ctx: CaptionContext): string {
       ctx.jobType ? `Project type: ${ctx.jobType}.` : "",
       ctx.scope ? `Scope of work: ${ctx.scope}.` : "",
       ctx.city ? `Location (city/neighborhood only): ${ctx.city}.` : "",
+      ctx.city && /sherwood|jacksonville/i.test(ctx.city)
+        ? `Name ${ctx.city} in the caption itself. Do not invent a hashtag for that city.`
+        : "",
       ctx.beforeDescription ? `Before photo: ${ctx.beforeDescription}.` : "",
       ctx.afterDescription ? `After photo: ${ctx.afterDescription}.` : "",
       `End every option with a call to action like "${CTA}".`,
@@ -86,13 +93,39 @@ export function buildCaptionUserPrompt(ctx: CaptionContext): string {
   return lines.filter(Boolean).join("\n");
 }
 
+/** Claude sometimes emits `#tag"` without the opening quote. Repair that before parse. */
+function repairLooseHashtagJson(text: string): string {
+  return text.replace(/,\s*#([A-Za-z0-9_]+)"/g, ', "#$1"');
+}
+
+/** Pull caption options, the overlay headline, and trade tags from one Claude reply. */
+export function parseGeneratedCopy(text: string | null): {
+  captions: string[];
+  headline: string | null;
+  tradeTags: string[];
+} {
+  const obj = extractJson<{ captions?: unknown; headline?: unknown; trade_tags?: unknown }>(
+    text ? repairLooseHashtagJson(text) : text,
+  );
+  const captions = parseCaptions(text);
+  let headline: string | null = null;
+  if (obj && typeof obj.headline === "string") {
+    const h = obj.headline.replace(/#/g, "").replace(/\s+/g, " ").trim();
+    if (h) headline = h.split(" ").slice(0, 8).join(" ");
+  }
+  const tradeTags = normalizeHashtagList(obj?.trade_tags, 8).filter((t) => isVettedTradeTag(t)).slice(0, 2);
+  return { captions, headline, tradeTags };
+}
+
 /** Pull caption options out of a Claude reply, tolerating prose/format drift. */
 export function parseCaptions(text: string | null): string[] {
-  const obj = extractJson<{ captions?: unknown }>(text);
+  const obj = extractJson<{ captions?: unknown }>(text ? repairLooseHashtagJson(text) : text);
   if (obj && Array.isArray(obj.captions)) {
     const opts = obj.captions.map((c) => String(c).trim()).filter(Boolean);
     if (opts.length > 0) return opts.slice(0, 3);
   }
+  // A raw JSON blob is not a caption. Callers fall back to a plain sentence.
+  if (text && /```|"captions"\s*:/.test(text)) return [];
   // Fallback: split a plain reply into non-empty lines (drop list markers).
   if (text) {
     const lines = text
@@ -127,60 +160,76 @@ export async function loadHashtagPool(env: Env): Promise<HashtagPool | null> {
   }
 }
 
-export const LOCAL_HASHTAGS = [
-  "#LittleRock",
-  "#NorthLittleRock",
-  "#CentralArkansas",
-  "#Conway",
-  "#ArkansasHomes",
-  "#LittleRockContractor",
-  "#ARremodel",
-];
-export const TRADE_HASHTAGS = [
-  "#HomeRemodel",
-  "#GarageConversion",
-  "#BeforeAndAfter",
-  "#KitchenRemodel",
-  "#BathroomRemodel",
-  "#HomeRenovation",
-  "#HomeImprovement",
-  "#Craftsmanship",
-  "#GeneralContractor",
-];
-export const GENERAL_HASHTAGS = [
-  "#ContractorLife",
-  "#DreamHome",
-  "#HomeGoals",
-  "#QualityWork",
-  "#LocallyOwned",
-  "#SupportLocal",
-  "#HomeSweetHome",
-];
+/** Always appended in code. Never left to the model. */
+export const BRAND_HASHTAG = "#HomeSolutionsAR";
+
+/** Trade tags with real mid-size search volume. Mega-tags stay out. */
+export const TRADE_TAG_POOL = [
+  "#contractorsofinsta",
+  "#remodelingideas",
+  "#generalcontractor",
+  "#homerenovation",
+  "#beforeandafter",
+  "#contractorlife",
+] as const;
+
+export function isVettedTradeTag(tag: string): boolean {
+  const n = tag.trim().toLowerCase();
+  return TRADE_TAG_POOL.some((t) => t === n);
+}
 
 /**
- * Deterministic-but-varied fallback hashtag set (10–15). Rotating `seed` (e.g. a
- * post id or an incrementing index) shifts the selection so two posts don't get
- * the same tags — business rule #8 without needing the AI to be reachable.
+ * Two location tags from the job city. Sherwood and Jacksonville have no
+ * established home-services tag, so they share the North Little Rock metro tag.
+ * No city (seasonal / tips / promotion) uses the Little Rock pair.
  */
-export function fallbackHashtags(seed: string, jobType?: string | null): string[] {
-  const h = hashSeed(seed);
-  const rot = <T>(arr: T[], by: number, take: number): T[] => {
-    const out: T[] = [];
-    for (let i = 0; i < take && i < arr.length; i++) out.push(arr[(by + i) % arr.length]);
-    return out;
-  };
-  const tags = [
-    ...rot(LOCAL_HASHTAGS, h % LOCAL_HASHTAGS.length, 4),
-    ...rot(TRADE_HASHTAGS, (h >> 2) % TRADE_HASHTAGS.length, 5),
-    ...rot(GENERAL_HASHTAGS, (h >> 4) % GENERAL_HASHTAGS.length, 3),
-  ];
-  if (jobType) {
-    const jt = "#" + jobType.replace(/[^a-z0-9]+/gi, "");
-    if (jt.length > 1 && !tags.includes(jt)) tags.unshift(jt);
+export function locationHashtags(city: string | null | undefined): [string, string] {
+  const raw = (city ?? "").toLowerCase();
+  const compact = raw.replace(/[^a-z]/g, "");
+  if (
+    compact.includes("northlittlerock") ||
+    /\bnlr\b/.test(raw) ||
+    compact.includes("sherwood") ||
+    compact.includes("jacksonville")
+  ) {
+    return ["#littlerock", "#northlittlerock"];
   }
-  // De-dupe, clamp to 10–15.
-  const unique = [...new Set(tags)];
-  return unique.slice(0, Math.max(10, Math.min(15, unique.length)));
+  return ["#littlerock", "#littlerockarkansas"];
+}
+
+export function cityFromContext(ctx: CaptionContext): string | null {
+  return ctx.kind === "job_completion" ? (ctx.city ?? null) : null;
+}
+
+/** Exactly 5 tags: brand + 2 location + 2 vetted trade tags. */
+export function assembleHashtags(
+  city: string | null | undefined,
+  tradeTags: string[],
+  seed: string,
+): string[] {
+  return [BRAND_HASHTAG, ...locationHashtags(city), ...pickTradeTags(tradeTags, seed)];
+}
+
+export function pickTradeTags(raw: string[], seed: string): [string, string] {
+  const chosen: string[] = [];
+  for (const tag of raw) {
+    const canon = TRADE_TAG_POOL.find((p) => p === tag.trim().toLowerCase());
+    if (canon && !chosen.includes(canon)) chosen.push(canon);
+    if (chosen.length === 2) break;
+  }
+  const h = hashSeed(seed);
+  let i = 0;
+  while (chosen.length < 2) {
+    const next = TRADE_TAG_POOL[(h + i) % TRADE_TAG_POOL.length]!;
+    i += 1;
+    if (!chosen.includes(next)) chosen.push(next);
+  }
+  return [chosen[0]!, chosen[1]!];
+}
+
+/** Fallback when Claude is down: still exactly 5, still the vetted set. */
+export function fallbackHashtags(seed: string, city?: string | null): string[] {
+  return assembleHashtags(city ?? null, [], seed);
 }
 
 function hashSeed(s: string): number {
@@ -191,45 +240,19 @@ function hashSeed(s: string): number {
 
 export function buildHashtagPrompt(
   ctx: CaptionContext,
-  platform: Platform = "both",
-  pool?: HashtagPool | null,
+  _platform: Platform = "both",
+  _pool?: HashtagPool | null,
 ): string {
   const topic =
     ctx.kind === "job_completion"
       ? `a completed ${ctx.jobType ?? "home improvement"} project`
       : (ctx as TopicCaptionContext).topic;
 
-  if (!pool) {
-    return (
-      `Generate 10–15 social hashtags for ${topic}. ` +
-      "Mix local central-Arkansas tags (#LittleRock, #NorthLittleRock, #CentralArkansas), " +
-      "trade-specific tags (#HomeRemodel, #GarageConversion, #BeforeAndAfter), and general tags " +
-      "(#ContractorLife). VARY the selection so repeated posts don't look identical. " +
-      'Respond ONLY with JSON of the shape {"hashtags": ["#Tag1", "#Tag2", ...]}.'
-    );
-  }
-
-  const platformLine =
-    platform === "facebook_only"
-      ? "For Facebook: use only 3-5 hashtags total (less is more on Facebook)."
-      : platform === "instagram_only"
-        ? "For Instagram: use 10-15 hashtags."
-        : 'For platform "both": respond with {"facebook_hashtags": [...3-5 tags...], "instagram_hashtags": [...10-15 tags...]}.';
-
   return (
-    `Select hashtags for this post about ${topic}.\n\n` +
-    `ALWAYS include:\n` +
-    `- 2-3 brand tags\n` +
-    `- 2-3 local tags\n\n` +
-    `THEN pick from:\n` +
-    `- 3-4 general home improvement tags\n` +
-    `- 2-3 craftsmanship tags\n` +
-    `- 1-2 trade-specific tags ONLY if they match the post content (e.g. don't use #Flooring for a painting post)\n` +
-    `- 1-2 trust tags if appropriate\n\n` +
-    `${platformLine}\n\n` +
-    `Hashtag pool:\n${JSON.stringify(pool, null, 2)}\n\n` +
-    "Return hashtags as JSON. Do not invent hashtags outside the pool unless the post topic has a " +
-    "highly specific trade keyword not covered (e.g. #ConcreteRepair, #DrywallRepair)."
+    `Pick exactly 2 trade hashtags for a post about ${topic}. ` +
+    `Choose only from this pool: ${TRADE_TAG_POOL.join(", ")}. ` +
+    "Do not add a brand tag or a city tag. " +
+    'Respond ONLY with JSON {"trade_tags": ["#one", "#two"]}.'
   );
 }
 
@@ -243,38 +266,14 @@ function normalizeHashtagList(raw: unknown, max: number): string[] {
   return [...new Set(normalized)].slice(0, max);
 }
 
-/** Parse Claude hashtag JSON with platform-aware limits. */
-export function parseHashtagsForPlatform(text: string | null, platform: Platform): string[] {
-  const obj = extractJson<{
-    hashtags?: unknown;
-    facebook_hashtags?: unknown;
-    instagram_hashtags?: unknown;
-  }>(text);
-
-  if (platform === "both") {
-    if (obj && Array.isArray(obj.instagram_hashtags)) {
-      const ig = normalizeHashtagList(obj.instagram_hashtags, 15);
-      if (ig.length >= 8) return ig;
-    }
-    if (obj && Array.isArray(obj.facebook_hashtags)) {
-      const fb = normalizeHashtagList(obj.facebook_hashtags, 5);
-      if (fb.length >= 3) return fb;
-    }
-  }
-  if (platform === "facebook_only" && obj && Array.isArray(obj.facebook_hashtags)) {
-    const fb = normalizeHashtagList(obj.facebook_hashtags, 5);
-    if (fb.length >= 3) return fb;
-  }
-  if (platform === "instagram_only" && obj && Array.isArray(obj.instagram_hashtags)) {
-    const ig = normalizeHashtagList(obj.instagram_hashtags, 15);
-    if (ig.length >= 8) return ig;
-  }
-
-  const max = platform === "facebook_only" ? 5 : 15;
-  const min = platform === "facebook_only" ? 3 : 8;
-  const tags = parseHashtags(text);
-  if (tags.length >= min) return tags.slice(0, max);
-  return tags;
+/** Pull the two trade tags Claude was asked for. Brand and city tags are not parsed here. */
+export function parseHashtagsForPlatform(text: string | null, _platform: Platform): string[] {
+  const obj = extractJson<{ trade_tags?: unknown; hashtags?: unknown }>(
+    text ? repairLooseHashtagJson(text) : text,
+  );
+  const fromTrade = normalizeHashtagList(obj?.trade_tags, 8).filter((t) => isVettedTradeTag(t)).slice(0, 2);
+  if (fromTrade.length > 0) return fromTrade;
+  return normalizeHashtagList(obj?.hashtags, 8).filter((t) => isVettedTradeTag(t)).slice(0, 2);
 }
 
 export function parseHashtags(text: string | null): string[] {
@@ -289,7 +288,7 @@ export function parseHashtags(text: string | null): string[] {
     .map((t) => t.trim())
     .map((t) => (t.startsWith("#") ? t : `#${t}`))
     .filter((t) => t.length > 1);
-  return [...new Set(normalized)].slice(0, 15);
+  return [...new Set(normalized)].slice(0, 5);
 }
 
 // ─── public generation entry points ───────────────────────────────────────────
@@ -297,8 +296,20 @@ export function parseHashtags(text: string | null): string[] {
 export interface CaptionResult {
   ok: boolean;
   options: string[];
+  /** Short overlay title from the same Claude call. Null when the model omitted it. */
+  headline: string | null;
+  /** Up to 2 vetted trade tags from the same Claude call. May be empty. */
+  tradeTags: string[];
   unavailable: boolean;
   error: string | null;
+}
+
+export function captionWithHeadline(headline: string | null, body: string): string {
+  const h = (headline ?? "").replace(/\s+/g, " ").trim();
+  const b = body.trim();
+  if (!h) return b;
+  if (b.toLowerCase().startsWith(h.toLowerCase())) return b;
+  return `${h}\n\n${b}`;
 }
 
 export async function generateCaptions(env: Env, ctx: CaptionContext): Promise<CaptionResult> {
@@ -309,13 +320,20 @@ export async function generateCaptions(env: Env, ctx: CaptionContext): Promise<C
     maxTokens: 900,
   });
   if (!res.ok) {
-    return { ok: false, options: [], unavailable: true, error: res.error };
+    return { ok: false, options: [], headline: null, tradeTags: [], unavailable: true, error: res.error };
   }
-  const options = parseCaptions(res.text);
-  if (options.length === 0) {
-    return { ok: false, options: [], unavailable: true, error: "no_captions_parsed" };
+  const parsed = parseGeneratedCopy(res.text);
+  if (parsed.captions.length === 0) {
+    return { ok: false, options: [], headline: null, tradeTags: [], unavailable: true, error: "no_captions_parsed" };
   }
-  return { ok: true, options, unavailable: false, error: null };
+  return {
+    ok: true,
+    options: parsed.captions,
+    headline: parsed.headline,
+    tradeTags: parsed.tradeTags,
+    unavailable: false,
+    error: null,
+  };
 }
 
 export interface HashtagResult {
@@ -333,17 +351,16 @@ export async function generateHashtags(
 ): Promise<HashtagResult> {
   const pool = await loadHashtagPool(env);
   const res = await claudeMessages(env, {
-    system: "You generate social media hashtags. Respond ONLY with JSON.",
+    system: "You pick two trade hashtags from a fixed pool. Respond ONLY with JSON.",
     messages: [{ role: "user", content: buildHashtagPrompt(ctx, platform, pool) }],
-    maxTokens: 400,
+    maxTokens: 200,
   });
-  if (res.ok) {
-    const tags = parseHashtagsForPlatform(res.text, platform);
-    const min = platform === "facebook_only" ? 3 : 8;
-    if (tags.length >= min) return { ok: true, hashtags: tags, fallback: false };
-  }
-  const jobType = ctx.kind === "job_completion" ? ctx.jobType : null;
-  return { ok: true, hashtags: fallbackHashtags(seed, jobType), fallback: true };
+  const trade = res.ok ? parseHashtagsForPlatform(res.text, platform) : [];
+  return {
+    ok: true,
+    hashtags: assembleHashtags(cityFromContext(ctx), trade, seed),
+    fallback: !res.ok || trade.length < 2,
+  };
 }
 
 // ─── image subject prompts (Imagen) ───────────────────────────────────────────

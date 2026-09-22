@@ -22,6 +22,7 @@
 
 import type { Env } from "../env.js";
 import { sendSms, getTwilioConfig, isConfigured as twilioConfigured } from "./twilio.js";
+import { renderTemplateText } from "./merge-render.js";
 
 // Single hardcoded constant for v1 — not per-job, not configurable in UI.
 export const GOOGLE_REVIEW_LINK = "https://g.page/r/CQ_gM4-vOzjFEBM/review";
@@ -389,7 +390,7 @@ function isSmsOptOut(notificationPrefs: string | null): boolean {
 }
 
 function renderMergeFields(template: string, ctx: Record<string, string>): string {
-  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => ctx[key] ?? "");
+  return renderTemplateText(template, ctx);
 }
 
 async function renderTemplate(

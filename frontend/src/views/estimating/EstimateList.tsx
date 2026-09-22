@@ -2,12 +2,12 @@ import type { RoutableProps } from "preact-router";
 import { useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { useUrlTab } from "../../hooks/useUrlTab";
-import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { Button } from "../../components/ui/Button";
 import { go } from "../../lib/nav";
 import { truncate, useClientSort } from "../../lib/list-view";
-import { formatDate, formatStatus } from "../../lib/format";
+import { EstimateStatusBadge } from "../../components/EstimateStatusBadge";
+import { formatDate } from "../../lib/format";
 
 interface EstimateRow {
   id: string;
@@ -21,6 +21,7 @@ interface EstimateRow {
   viewed_date: string | null;
   signed_date: string | null;
   created_at: string;
+  data_source?: string | null;
 }
 
 interface EstimateListResponse {
@@ -480,7 +481,7 @@ export function EstimateList(_props: RoutableProps) {
                   <td>{truncate(e.title)}</td>
                   <td>{e.total != null ? `$${e.total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : "—"}</td>
                   <td>
-                    <Badge status={e.status ?? ""}>{formatStatus(e.status)}</Badge>
+                    <EstimateStatusBadge status={e.status} dataSource={e.data_source} />
                   </td>
                   <td>{formatDate(e.created_at)}</td>
                   <td>{e.sent_at ? formatDate(e.sent_at) : "—"}</td>

@@ -5,7 +5,8 @@ import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatStatus } from "../../lib/format";
-import { SOCIAL_POST_TYPES, SOCIAL_TYPE_COLORS, type SocialPost } from "../../types";
+import { SOCIAL_POST_TYPES, SOCIAL_TYPE_COLORS, type SocialPost, type SocialPostType } from "../../types";
+import { PhotoTile, postTypeLabel } from "./PhotoTile";
 
 interface Props {
   onEdit: (id: string) => void;
@@ -18,6 +19,14 @@ const MONTHS = [
   "July", "August", "September", "October", "November", "December",
 ];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const CHIP_LABEL: Record<SocialPostType, string> = {
+  job_completion: "Job",
+  seasonal_tips: "Season",
+  tips_tricks: "Tips",
+  promotion: "Promo",
+  review_highlight: "Review",
+  manual: "Manual",
+};
 
 /** Content calendar (spec §5.2): month grid, colour-coded by post type, with
  *  an owner-only "Generate monthly schedule" action. */
@@ -29,6 +38,7 @@ export function ContentCalendar({ onEdit, refreshKey, onChanged }: Props) {
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -72,12 +82,14 @@ export function ContentCalendar({ onEdit, refreshKey, onChanged }: Props) {
   };
 
   const prev = () => {
+    setSelectedDay(null);
     if (month === 1) {
       setMonth(12);
       setYear((y) => y - 1);
     } else setMonth((m) => m - 1);
   };
   const next = () => {
+    setSelectedDay(null);
     if (month === 12) {
       setMonth(1);
       setYear((y) => y + 1);
@@ -147,23 +159,55 @@ export function ContentCalendar({ onEdit, refreshKey, onChanged }: Props) {
               day == null ? (
                 <div key={`e${i}`} class="social-cal__cell social-cal__cell--empty" />
               ) : (
-                <div key={day} class="social-cal__cell">
+                <div
+                  key={day}
+                  class={`social-cal__cell${selectedDay === day ? " social-cal__cell--selected" : ""}`}
+                  onClick={() => setSelectedDay(day)}
+                >
                   <div class="social-cal__daynum">{day}</div>
                   {(byDay.get(day) ?? []).map((p) => (
                     <button
                       key={p.id}
-                      class="social-cal__post"
+                      class="cal-chip"
                       title={`${formatStatus(p.post_type)} — ${formatStatus(p.status)}`}
-                      onClick={() => onEdit(p.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedDay(day);
+                      }}
                     >
                       <span class="social-dot" style={{ background: SOCIAL_TYPE_COLORS[p.post_type] }} />
-                      <span class="social-cal__post-label">{p.caption || formatStatus(p.post_type)}</span>
+                      <span class="cal-chip__label">{CHIP_LABEL[p.post_type] ?? formatStatus(p.post_type)}</span>
                     </button>
                   ))}
                 </div>
               ),
             )}
           </div>
+          {selectedDay != null && (
+            <div class="agenda">
+              <strong>
+                {MONTHS[month - 1]} {selectedDay}
+              </strong>
+              {(byDay.get(selectedDay) ?? []).length === 0 && (
+                <div class="text--muted">Nothing scheduled this day.</div>
+              )}
+              {(byDay.get(selectedDay) ?? []).map((p) => (
+                <button key={p.id} class="agenda__row" onClick={() => onEdit(p.id)}>
+                  <PhotoTile post={p} size="sm" />
+                  <div class="agenda__copy">
+                    <div class="flex gap-sm items-center">
+                      <span class="social-dot" style={{ background: SOCIAL_TYPE_COLORS[p.post_type] }} />
+                      <strong>{postTypeLabel(p.post_type)}</strong>
+                      <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
+                        {formatStatus(p.status)}
+                      </span>
+                    </div>
+                    <div class="agenda__caption">{p.caption || "No caption"}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </>
       )}
     </Card>

@@ -16,7 +16,7 @@
 
 import type { Env } from "../env.js";
 import { createOwnerInApp } from "./notification-engine.js";
-import { fallbackHashtags, generateCaptions, generateHashtags } from "./social-ai.js";
+import { assembleHashtags, captionWithHeadline, generateCaptions } from "./social-ai.js";
 import { logSocialAudit } from "./social.js";
 
 interface JobRow {
@@ -132,15 +132,11 @@ export async function maybeGenerateJobCompletionPost(
     };
 
     const captionRes = await generateCaptions(env, ctx);
-    const caption = captionRes.ok
-      ? captionRes.options[0]
+    const body = captionRes.ok
+      ? captionRes.options[0]!
       : `Another ${job.job_type ?? "project"} complete${job.property_city ? ` in ${job.property_city}` : ""}! Free estimates — call us!`;
-
-    const hashRes = await generateHashtags(env, ctx, jobId, "both").catch(() => ({
-      ok: true,
-      hashtags: fallbackHashtags(jobId, job.job_type),
-      fallback: true,
-    }));
+    const caption = captionWithHeadline(captionRes.headline, body);
+    const hashtags = assembleHashtags(job.property_city, captionRes.tradeTags, jobId);
 
     const id = crypto.randomUUID();
     // Suggest a near-future slot (tomorrow 6 PM) — owner reschedules freely.
@@ -155,7 +151,7 @@ export async function maybeGenerateJobCompletionPost(
       .bind(
         id,
         caption,
-        JSON.stringify(hashRes.hashtags),
+        JSON.stringify(hashtags),
         scheduled.toISOString(),
         jobId,
         JSON.stringify(photoIds),

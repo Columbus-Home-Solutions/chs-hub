@@ -7,6 +7,7 @@
 import { useRef, useState } from "preact/hooks";
 import { getJson, portalToken } from "./portalApi";
 import { useApi } from "../../hooks/useApi";
+import { ensureJpegPhoto } from "../../lib/heic";
 
 interface WarrantyClaim {
   id: string;
@@ -66,7 +67,10 @@ export function WarrantyClaimsTab() {
     try {
       const form = new FormData();
       form.append("description", description.trim());
-      if (photoFile) form.append("photo", photoFile, photoFile.name);
+      if (photoFile) {
+        const jpeg = await ensureJpegPhoto(photoFile);
+        form.append("photo", jpeg, jpeg.name);
+      }
 
       const res = await fetch(
         `/api/portal/${encodeURIComponent(token)}/warranty-claims`,

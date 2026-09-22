@@ -49,7 +49,7 @@ import {
   suggestClientMatches,
   suggestVendorMatches,
 } from "../lib/qbo-sync.js";
-import { resolveGoogleServiceAccount } from "../lib/image-gen.js";
+import { ensureImageGenModelSetting, resolveGoogleServiceAccount } from "../lib/image-gen.js";
 import { getSetting, SETTING_IMAGE_GEN_ENABLED } from "../lib/social.js";
 import { GCAL_SERVICE } from "../lib/google-calendar-auth.js";
 import {
@@ -94,7 +94,7 @@ export async function handleIntegrationsList(request: Request, env: Env): Promis
   return json({ integrations: results ?? [] });
 }
 
-/** GET /api/integrations/image-gen/status — Imagen credentials + toggle state (O). */
+/** GET /api/integrations/image-gen/status — Gemini image credentials + toggle state (O). */
 export async function handleImageGenStatus(request: Request, env: Env): Promise<Response> {
   const denied = await requireOwner(request, env);
   if (denied) return denied;
@@ -102,11 +102,13 @@ export async function handleImageGenStatus(request: Request, env: Env): Promise<
   const credentialsPresent = resolveGoogleServiceAccount(env) !== null;
   const raw = (await getSetting(env, SETTING_IMAGE_GEN_ENABLED))?.trim().toLowerCase();
   const enabled = raw !== "false" && raw !== "0";
+  const modelId = await ensureImageGenModelSetting(env);
 
   return json({
     credentials_present: credentialsPresent,
     enabled,
     configured: credentialsPresent,
+    model_id: modelId,
   });
 }
 

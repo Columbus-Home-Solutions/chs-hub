@@ -18,7 +18,7 @@
  *   PUT    /api/estimates/:id                          update header
  *   DELETE /api/estimates/:id                          cascade delete (guards on linked job)
  *   POST   /api/estimates/:id/send                     send-gate + status flip + WC hook
- *   POST   /api/estimates/:id/resend                   re-trigger estimate_sent (no status change)
+ *   POST   /api/estimates/:id/resend                   re-fire estimate_sent + regenerate unsigned contract
  *   POST   /api/estimates/:id/revise                   clone into a new version
  * Line items (parent — client-facing)
  *   GET    /api/estimates/:id/line-items
@@ -51,15 +51,29 @@ import { cascadeDeleteEstimateChildren } from "../lib/cascade-delete.js";
 import { NON_TEST_CLIENT } from "../lib/non-test-client.js";
 import { triggerQuoteSent } from "../lib/wc/triggers.js";
 import { triggerNotification } from "../lib/notification-engine.js";
-import { renderContract } from "../lib/contracts.js";
 import { depositFromSchedule, isPerLineItemBilling } from "../lib/deposit-from-schedule.js";
-import { generateAndSendEstimateContract } from "../lib/estimate-contract-document.js";
+import {
+  generateAndSendEstimateContract,
+  loadEstimateContractDoc,
+  estimateSignatureComplete,
+  parseSignatureMeta,
+  renderEstimateContractText,
+} from "../lib/estimate-contract-document.js";
 import { createEstimateSubItem, SubItemValidationError } from "../lib/estimate-sub-items.js";
 import { jobTypeTitleFragment } from "../../shared/job-type-label.js";
 import { allocateNextEstimateNumber } from "../lib/estimate-number.js";
 import { extractSupplierQuote } from "../lib/quote-import.js";
 import { upsertVendorMaterial } from "./vendor-materials.js";
 import { handleEstimateRequestWin } from "./estimate-requests.js";
+import {
+  JOBBER_ACCEPTED_IMPORT,
+  JOBBER_IMPORT,
+  ensureEstimateRequestForConversion,
+  isJobberAcceptedImport,
+  loadClientPropertyForImport,
+  resolveImportProperty,
+  shouldSkipBoldSignForEstimate,
+} from "../lib/jobber-accepted-import.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -104,11 +118,6 @@ function bool01(v: unknown, fallback = 0): number {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
-}
-
-function formatUsd(n: number | null | undefined): string {
-  if (n == null) return "$0.00";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 }
 
 async function logAudit(
@@ -166,6 +175,9 @@ interface EstimateRow {
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
+  data_source: string | null;
+  imported_signed_at: string | null;
+  imported_signed_note: string | null;
 }
 
 interface LineItemRow {
@@ -402,6 +414,9 @@ function shapeEstimateHeader(r: EstimateRow, totals: Totals) {
     created_at: r.created_at,
     updated_at: r.updated_at,
     created_by: r.created_by,
+    data_source: r.data_source ?? null,
+    imported_signed_at: r.imported_signed_at ?? null,
+    imported_signed_note: r.imported_signed_note ?? null,
   };
 }
 
@@ -587,6 +602,7 @@ export async function handleEstimateList(env: Env, url: URL): Promise<Response> 
            e.estimate_mode, e.billing_model, e.status, e.subtotal, e.total,
            e.margin_percent, e.deposit_amount, e.version, e.sent_at, e.expiration_date,
            e.viewed_date, e.signed_date, e.created_at, e.updated_at,
+           e.data_source, e.imported_signed_at, e.imported_signed_note,
            c.name AS client_name, c.first_name AS c_first, c.last_name AS c_last
     FROM estimates e
     LEFT JOIN clients c ON c.id = e.client_id
@@ -616,6 +632,9 @@ export async function handleEstimateList(env: Env, url: URL): Promise<Response> 
     expiration_date: r.expiration_date,
     created_at: r.created_at,
     updated_at: r.updated_at,
+    data_source: (r.data_source as string | null) ?? null,
+    imported_signed_at: (r.imported_signed_at as string | null) ?? null,
+    imported_signed_note: (r.imported_signed_note as string | null) ?? null,
   }));
   return json({ as_of: new Date().toISOString(), total: rows.length, estimates: rows });
 }
@@ -1029,6 +1048,13 @@ export async function handleEstimateSend(
     .bind(id)
     .first<EstimateRow>();
   if (!est) return err(404, "not_found", "Estimate not found");
+  if (shouldSkipBoldSignForEstimate(est.data_source)) {
+    return err(
+      400,
+      "imported_estimate",
+      "This estimate was signed in Jobber. Do not send it through CHS e-sign — use Mark as Imported — Signed via Jobber, then record the external deposit.",
+    );
+  }
 
   // Send gate (business rules 1 + 8).
   const lineCount = await env.DB.prepare(
@@ -1071,46 +1097,11 @@ export async function handleEstimateSend(
   const expiration = new Date(now.getTime() + validDays * 86_400_000);
   const portalToken = est.portal_token ?? crypto.randomUUID().replace(/-/g, "");
 
-  // Freeze the contract text from the right template so the public page and the
-  // signature both reference the exact words agreed to (legal review pending).
-  let contractText: string | null = null;
-  if ((est.include_contract ?? 1) === 1) {
-    const ctx = await env.DB.prepare(
-      `SELECT c.name AS client_name, c.first_name AS c_first, c.last_name AS c_last,
-              er.property_address, er.property_city, er.property_state, er.property_zip
-       FROM estimates e
-       LEFT JOIN clients c ON c.id = e.client_id
-       LEFT JOIN estimate_requests er ON er.id = e.request_id
-       WHERE e.id = ?`,
-    )
-      .bind(id)
-      .first<Record<string, unknown>>();
-    const clientName =
-      [ctx?.c_first, ctx?.c_last].filter(Boolean).join(" ").trim() ||
-      (ctx?.client_name as string) ||
-      null;
-    const propertyAddress =
-      [ctx?.property_address, ctx?.property_city, ctx?.property_state, ctx?.property_zip]
-        .filter(Boolean)
-        .join(", ") || null;
-    const scheduleLines = schedule
-      .sort((a, b) => a.sort_order - b.sort_order)
-      .map((p) => {
-        const amt = shapePayment(p, totals.total).amount;
-        const pct = p.percentage != null && p.fixed_amount == null ? ` (${p.percentage}%)` : "";
-        const dep = (p.is_deposit ?? 0) === 1 ? " — deposit" : "";
-        return `${p.description}: ${formatUsd(amt)}${pct}${dep}`;
-      });
-    contractText = await renderContract(env, {
-      client_name: clientName,
-      property_address: propertyAddress,
-      job_title: est.title,
-      total: totals.total,
-      deposit_amount: est.deposit_amount,
-      billing_model: est.billing_model,
-      payment_schedule_lines: scheduleLines,
-    });
-  }
+  // Render contract text from current client data so the public page and the
+  // BoldSign document stay aligned (legal review pending). Unsigned resend
+  // re-renders this same path — the freeze is "as of last send/resend", not forever.
+  const contractText =
+    (est.include_contract ?? 1) === 1 ? await renderEstimateContractText(env, id) : null;
 
   await env.DB.prepare(
     `UPDATE estimates
@@ -1220,10 +1211,241 @@ export async function handleEstimateMarkDepositReceived(
   return handleEstimateRequestWin(request, env, est.request_id, ctx);
 }
 
+// ─── POST /api/estimates/:id/mark-imported-signed ─────────────────────────────
+// Owner-only: honest "signed in Jobber" state. Does not create a BoldSign
+// envelope, does not set client_signature, does not send the quote.
+
+export async function handleEstimateMarkImportedSigned(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+  const note = str(body.note) ?? str(body.imported_signed_note);
+  if (!note) {
+    return err(
+      400,
+      "note_required",
+      "A paper-trail note is required (Jobber quote number, who signed, and when).",
+    );
+  }
+
+  const est = await env.DB.prepare(
+    `SELECT id, client_id, request_id, status, data_source, title FROM estimates WHERE id = ?`,
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      client_id: string | null;
+      request_id: string | null;
+      status: string;
+      data_source: string | null;
+      title: string | null;
+    }>();
+  if (!est) return err(404, "not_found", "Estimate not found");
+  if (!est.client_id) return err(400, "no_client", "Estimate has no client.");
+  if (est.status === "approved") {
+    return err(409, "already_converted", "This estimate is already converted to a job.");
+  }
+  if (est.status === "revised" || est.status === "lost") {
+    return err(409, "invalid_state", `Cannot import-sign an estimate with status '${est.status}'.`);
+  }
+
+  const linkedJob = await env.DB.prepare("SELECT id FROM jobs WHERE estimate_id = ? LIMIT 1")
+    .bind(id)
+    .first<{ id: string }>();
+  if (linkedJob) {
+    return err(409, "already_converted", "This estimate already has a job.");
+  }
+
+  const contractDoc = await loadEstimateContractDoc(env, id);
+  if (contractDoc) {
+    const meta = parseSignatureMeta(contractDoc.signature_data);
+    if (meta.boldsign_document_id) {
+      return err(
+        409,
+        "boldsign_exists",
+        "This estimate already has a CHS BoldSign envelope. Do not mark it as a Jobber import.",
+      );
+    }
+  }
+
+  const existingCtx = await env.DB.prepare(
+    `SELECT er.property_address, er.property_city, er.property_state, er.property_zip,
+            er.job_type, er.property_id
+       FROM estimates e
+       LEFT JOIN estimate_requests er ON er.id = e.request_id
+      WHERE e.id = ?`,
+  )
+    .bind(id)
+    .first<{
+      property_address: string | null;
+      property_city: string | null;
+      property_state: string | null;
+      property_zip: string | null;
+      job_type: string | null;
+      property_id: string | null;
+    }>();
+
+  const clientBits = await loadClientPropertyForImport(env, est.client_id);
+  const property = resolveImportProperty({
+    bodyAddress: str(body.property_address),
+    bodyCity: str(body.property_city),
+    bodyState: str(body.property_state),
+    bodyZip: str(body.property_zip),
+    bodyJobType: str(body.job_type),
+    existing: existingCtx,
+    clientProperty: clientBits.property,
+    clientMailing: clientBits.mailing,
+  });
+  if ("error" in property) return err(400, "property_required", property.error);
+  property.jobTypeDetail = est.title;
+
+  const ensured = await ensureEstimateRequestForConversion(env, id, property, user.email);
+
+  const now = new Date().toISOString();
+  const signedDay = (str(body.signed_date) ?? now).slice(0, 10);
+
+  await env.DB.prepare(
+    `UPDATE estimates
+        SET data_source = ?,
+            imported_signed_at = ?,
+            imported_signed_note = ?,
+            status = 'signed',
+            signed_date = COALESCE(signed_date, ?),
+            include_contract = 0,
+            updated_at = ?
+      WHERE id = ?`,
+  )
+    .bind(JOBBER_ACCEPTED_IMPORT, now, note, signedDay, now, id)
+    .run();
+
+  await logAudit(env, user.email, "estimate_imported_signed_via_jobber", "estimate", id, {
+    note,
+    imported_signed_at: now,
+    signed_date: signedDay,
+    request_id: ensured.requestId,
+    request_created: ensured.created,
+    previous_data_source: est.data_source,
+  });
+
+  const estimate = await loadFullEstimate(env, id);
+  return json({ estimate, request_id: ensured.requestId });
+}
+
+// ─── POST /api/estimates/:id/mark-external-deposit ────────────────────────────
+// Owner-only: record a deposit already collected outside CHS (Jobber processor)
+// and run the unmodified quote-to-job conversion. No Stripe charge.
+
+export async function handleEstimateMarkExternalDeposit(
+  request: Request,
+  env: Env,
+  id: string,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+
+  const est = await env.DB.prepare(
+    "SELECT id, request_id, status, data_source, client_id FROM estimates WHERE id = ?",
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      request_id: string | null;
+      status: string;
+      data_source: string | null;
+      client_id: string | null;
+    }>();
+  if (!est) return err(404, "not_found", "Estimate not found");
+  if (!isJobberAcceptedImport(est.data_source)) {
+    return err(
+      400,
+      "not_imported",
+      "Mark this estimate as Imported — Signed via Jobber before recording an external deposit.",
+    );
+  }
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+  const amount = Number(body.deposit_amount ?? body.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return err(400, "bad_request", "A deposit amount greater than zero is required.");
+  }
+  const receivedDate = str(body.received_date) ?? str(body.date);
+  if (!receivedDate || !/^\d{4}-\d{2}-\d{2}/.test(receivedDate)) {
+    return err(400, "bad_request", "received_date is required (YYYY-MM-DD).");
+  }
+
+  let requestId = est.request_id;
+  if (!requestId) {
+    if (!est.client_id) return err(400, "no_client", "Estimate has no client.");
+    const existingCtx = await env.DB.prepare(
+      `SELECT er.property_address, er.property_city, er.property_state, er.property_zip,
+              er.job_type, er.property_id
+         FROM estimates e
+         LEFT JOIN estimate_requests er ON er.id = e.request_id
+        WHERE e.id = ?`,
+    )
+      .bind(id)
+      .first<{
+        property_address: string | null;
+        property_city: string | null;
+        property_state: string | null;
+        property_zip: string | null;
+        job_type: string | null;
+        property_id: string | null;
+      }>();
+    const clientBits = await loadClientPropertyForImport(env, est.client_id);
+    const property = resolveImportProperty({
+      bodyAddress: str(body.property_address),
+      bodyCity: str(body.property_city),
+      bodyState: str(body.property_state),
+      bodyZip: str(body.property_zip),
+      bodyJobType: str(body.job_type),
+      existing: existingCtx,
+      clientProperty: clientBits.property,
+      clientMailing: clientBits.mailing,
+    });
+    if ("error" in property) return err(400, "property_required", property.error);
+    const owner = (request as Request & { user?: { email: string } }).user;
+    const ensured = await ensureEstimateRequestForConversion(
+      env,
+      id,
+      property,
+      owner?.email ?? "owner",
+    );
+    requestId = ensured.requestId;
+  }
+
+  const cloned = new Request(request.url, {
+    method: "POST",
+    headers: request.headers,
+    body: JSON.stringify({
+      deposit_amount: amount,
+      payment_method: "other",
+      reference: str(body.reference) ?? "Deposit received via Jobber (external — not charged in CHS)",
+      received_date: receivedDate.slice(0, 10),
+      payment_source: JOBBER_IMPORT,
+      data_source: JOBBER_IMPORT,
+    }),
+  });
+  (cloned as Request & { user?: unknown }).user = (request as Request & { user?: unknown }).user;
+
+  return handleEstimateRequestWin(cloned, env, requestId, ctx);
+}
+
 // ─── POST /api/estimates/:id/resend ─────────────────────────────────────────────
-// Manual backup: re-fire the same estimate_sent notification as the original
-// Send, without touching status / viewed / signed / deposit progress. Uses a
-// unique instanceKey so dedupe doesn't block a deliberate re-delivery.
+// Re-fire estimate_sent AND regenerate the unsigned contract from current
+// client data (name/email/phone corrections must land on the paperwork, not
+// just the notification). Does not change status / viewed / signed / deposit
+// progress. Signed contracts are left untouched. Uses a unique instanceKey so
+// dedupe doesn't block a deliberate re-delivery.
 
 export async function handleEstimateResend(
   request: Request,
@@ -1236,7 +1458,8 @@ export async function handleEstimateResend(
   const { user } = guarded;
 
   const est = await env.DB.prepare(
-    `SELECT id, client_id, request_id, sent_at, status, viewed_date, signed_date, approved_date
+    `SELECT id, client_id, request_id, sent_at, status, viewed_date, signed_date, approved_date,
+            include_contract, client_signature, data_source
      FROM estimates WHERE id = ?`,
   )
     .bind(id)
@@ -1249,8 +1472,18 @@ export async function handleEstimateResend(
       viewed_date: string | null;
       signed_date: string | null;
       approved_date: string | null;
+      include_contract: number | null;
+      client_signature: string | null;
+      data_source: string | null;
     }>();
   if (!est) return err(404, "not_found", "Estimate not found");
+  if (shouldSkipBoldSignForEstimate(est.data_source)) {
+    return err(
+      400,
+      "imported_estimate",
+      "This estimate was signed in Jobber and is not resent through CHS e-sign.",
+    );
+  }
   if (!est.sent_at) {
     return err(400, "not_sent", "Estimate must be sent at least once before it can be resent.");
   }
@@ -1276,6 +1509,35 @@ export async function handleEstimateResend(
 
   const now = new Date();
   const nowIso = now.toISOString();
+
+  // Unsigned contracts must re-resolve merge fields from the current clients row.
+  // Resend used to only re-share the portal link, leaving a stale BoldSign envelope.
+  let contractRegen: {
+    skipped: boolean;
+    reason?: string;
+    boldsign_sent?: boolean;
+    signer_name?: string;
+    revoked_document_ids?: string[];
+  } | null = null;
+  if ((est.include_contract ?? 1) === 1) {
+    const existingDoc = await loadEstimateContractDoc(env, id);
+    const alreadySigned = estimateSignatureComplete(
+      true,
+      est.client_signature,
+      existingDoc,
+    );
+    if (!alreadySigned) {
+      const contractText = await renderEstimateContractText(env, id);
+      if (contractText != null) {
+        await env.DB.prepare(
+          `UPDATE estimates SET contract_text = ?, updated_at = ? WHERE id = ?`,
+        )
+          .bind(contractText, nowIso, id)
+          .run();
+      }
+      contractRegen = await generateAndSendEstimateContract(env, id, user.email, { exec });
+    }
+  }
 
   // Same trigger + payload shape as handleEstimateSend — only instanceKey differs
   // (full ISO) so each manual resend bypasses the date-keyed dedupe of the original.
@@ -1304,6 +1566,7 @@ export async function handleEstimateResend(
     client_email: client?.email ?? null,
     client_phone: client?.phone ?? null,
     notification: notifyResult,
+    contract_regenerated: contractRegen,
     // Prove we did not mutate progress fields
     status_unchanged: est.status,
     viewed_date_unchanged: est.viewed_date,
@@ -1316,6 +1579,7 @@ export async function handleEstimateResend(
     estimate,
     client_name: clientName,
     notification: notifyResult,
+    contract_regenerated: contractRegen,
   });
 }
 

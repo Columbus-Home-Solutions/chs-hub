@@ -102,11 +102,11 @@ export async function handleAssignableUsers(request: Request, env: Env): Promise
   if (guarded instanceof Response) return guarded;
 
   const { results } = await env.DB.prepare(
-    `SELECT id, first_name, last_name, name, email, role
+    `SELECT id, first_name, last_name, name, email, role, calendar_color
        FROM users
       WHERE is_active = 1 AND role IN ('owner', 'project_manager')
       ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, first_name, last_name, email`,
-  ).all<AssignableRow>();
+  ).all<AssignableRow & { calendar_color: string | null }>();
 
   const users = (results ?? []).map((u) => {
     const full = [u.first_name, u.last_name].filter(Boolean).join(" ").trim();
@@ -115,6 +115,7 @@ export async function handleAssignableUsers(request: Request, env: Env): Promise
       name: full || (u.name ?? "").trim() || u.email,
       email: u.email,
       role: u.role,
+      calendar_color: u.calendar_color ?? "#3B82F6",
     };
   });
 

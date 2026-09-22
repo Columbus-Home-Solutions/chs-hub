@@ -22,6 +22,7 @@ import {
   type GbpConfiguration,
 } from "./gbp-auth.js";
 import { recordDeadLetter } from "./ops/dlq.js";
+import { createReviewHighlightPost, shouldAutoDraftReview } from "./social-review-post.js";
 
 const GBP_V4_BASE = "https://mybusiness.googleapis.com/v4";
 
@@ -349,6 +350,23 @@ async function upsertGbpReview(env: Env, review: GbpReview): Promise<UpsertResul
       match?.confidence ?? null,
     )
     .run();
+
+  if (shouldAutoDraftReview(starRating)) {
+    try {
+      await createReviewHighlightPost(
+        env,
+        {
+          id,
+          reviewer_name: reviewerName,
+          comment_text: commentText,
+          star_rating: starRating,
+        },
+        "ai_schedule",
+      );
+    } catch (err) {
+      console.error("[gbp_reviews_sync] review-highlight draft failed:", (err as Error).message);
+    }
+  }
 
   return "inserted";
 }

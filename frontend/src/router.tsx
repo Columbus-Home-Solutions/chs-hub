@@ -36,6 +36,7 @@ import { PhotoLibrary } from "./views/photos/PhotoLibrary";
 import { Placeholder } from "./views/Placeholder";
 import { VoiceNoteCapture } from "./views/voice/VoiceNoteCapture";
 import { UnmatchedVoiceNotes } from "./views/voice/UnmatchedVoiceNotes";
+import { Messages } from "./views/people/Messages";
 
 export function AppRouter() {
   return (
@@ -78,6 +79,7 @@ export function AppRouter() {
       <ReviewsPage path={`${BASE}/social/reviews`} />
       <VoiceNoteCapture path={`${BASE}/voice-note`} />
       <UnmatchedVoiceNotes path={`${BASE}/voice-notes/unmatched`} />
+      <Messages path={`${BASE}/people/messages`} />
       <NotFound default />
     </Router>
   );

@@ -550,6 +550,11 @@ function PhotoDetailModal({
   const [showAnnotated, setShowAnnotated] = useState(true);
   const [pairing, setPairing] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  const [socialReady, setSocialReady] = useState(Boolean(p.is_social_ready));
+
+  useEffect(() => {
+    setSocialReady(Boolean(p.is_social_ready));
+  }, [p.id, p.is_social_ready]);
 
   const prev = () => { setZoomed(false); if (index > 0) onIndex(index - 1); };
   const next = () => { setZoomed(false); if (index < photos.length - 1) onIndex(index + 1); };
@@ -595,6 +600,22 @@ function PhotoDetailModal({
       toast.push("success", "Pair removed");
       onChanged();
     } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleSocialReady = async () => {
+    const next = !socialReady;
+    setSocialReady(next);
+    setBusy(true);
+    try {
+      await api.put(`/api/photos/${p.id}`, { is_social_ready: next });
+      toast.push("success", next ? "Marked social ready" : "Cleared social ready");
+      onChanged();
+    } catch (err) {
+      setSocialReady(!next);
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
       setBusy(false);
@@ -716,6 +737,17 @@ function PhotoDetailModal({
             ) : (
               <Button variant="secondary" size="sm" onClick={() => setPairing((v) => !v)}>
                 ↔️ Before/After
+              </Button>
+            )}
+            {p.photo_type !== "receipt" && (
+              <Button
+                variant={socialReady ? "primary" : "secondary"}
+                size="sm"
+                disabled={busy}
+                aria-pressed={socialReady}
+                onClick={() => void toggleSocialReady()}
+              >
+                {socialReady ? "★ Social Ready" : "Social Ready"}
               </Button>
             )}
           </div>

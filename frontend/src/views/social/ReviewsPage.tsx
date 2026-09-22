@@ -347,7 +347,20 @@ function ReviewCard({
   const toast = useToast();
   const [replyOpen, setReplyOpen] = useState(false);
   const [featureBusy, setFeatureBusy] = useState(false);
+  const [socialBusy, setSocialBusy] = useState(false);
   const [featured, setFeatured] = useState(false);
+
+  const featureAsSocial = async () => {
+    setSocialBusy(true);
+    try {
+      await api.post(`/api/google-reviews/${review.id}/social-post`, {});
+      toast.push("success", "Draft added to the approval queue.");
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setSocialBusy(false);
+    }
+  };
 
   const toggleFeature = async () => {
     setFeatureBusy(true);
@@ -431,6 +444,15 @@ function ReviewCard({
             title="Feature this review on estimate quote pages"
           >
             {featured ? "★ Featured" : "☆ Feature"}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={socialBusy}
+            onClick={() => void featureAsSocial()}
+            title="Draft a review-highlight post for the approval queue"
+          >
+            {socialBusy ? "Drafting…" : "Feature as social post"}
           </Button>
         </div>
       </div>

@@ -12,6 +12,7 @@ import { Select } from "../../components/ui/Select";
 import { Timeline } from "../../components/Timeline";
 import { ClientForm } from "./ClientForm";
 import { useToast } from "../../store/toast";
+import { EstimateStatusBadge } from "../../components/EstimateStatusBadge";
 import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
 import { go } from "../../lib/nav";
 import {
@@ -47,6 +48,9 @@ interface EstimateLite {
   viewed_date: string | null;
   sent_at: string | null;
   created_at: string;
+  data_source?: string | null;
+  imported_signed_at?: string | null;
+  imported_signed_note?: string | null;
 }
 
 interface InvoiceLite {
@@ -502,7 +506,7 @@ function QuotesCard({ quotes }: { quotes: EstimateLite[] }) {
                   {(q.total ?? q.subtotal) != null && (
                     <span>{formatCurrency((q.total ?? q.subtotal)!)}</span>
                   )}
-                  <Badge status={quoteStatus(q)}>{formatStatus(quoteStatus(q))}</Badge>
+                  <EstimateStatusBadge status={quoteStatus(q)} dataSource={q.data_source} />
                 </span>
               </div>
             ))}

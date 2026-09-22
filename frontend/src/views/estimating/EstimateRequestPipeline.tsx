@@ -4,30 +4,20 @@
  *   Tab 1: "HL Pipeline"  — existing HighLevel Kanban (zero changes to HL code)
  *   Tab 2: "CHS Leads"    — native estimate_requests pipeline (CHSLeadsKanban)
  *
- * Tab selection is persisted in localStorage so it survives navigation.
- * The CHS Leads tab shows a badge with the count of new_request stage leads.
+ * CHS Leads is the hard default on every mount. Manual HL clicks last only for
+ * this visit; they are not written to localStorage or the URL. An explicit
+ * `?tab=hl` / `?tab=chs` (dashboard stage taps) still wins.
  */
 import type { RoutableProps } from "preact-router";
 import { useRouter } from "preact-router";
 import { useEffect, useState } from "preact/hooks";
-import { useUrlTab } from "../../hooks/useUrlTab";
+import { parseQueryParam } from "../../hooks/useUrlTab";
 import { LeadPipeline } from "../dashboard/LeadPipeline";
 import { CHSLeadsKanban } from "./CHSLeadsKanban";
 import { useApi } from "../../hooks/useApi";
 
-const TAB_STORAGE_KEY = "chs_pipeline_active_tab";
-
 type PipelineTab = "hl" | "chs";
-
-function storedTab(): PipelineTab {
-  try {
-    const v = localStorage.getItem(TAB_STORAGE_KEY);
-    if (v === "chs" || v === "hl") return v;
-  } catch {
-    // ignore
-  }
-  return "hl";
-}
+const TABS = new Set<PipelineTab>(["hl", "chs"]);
 
 interface CountResponse {
   counts?: Record<string, number>;
@@ -36,8 +26,9 @@ interface CountResponse {
 export function EstimateRequestPipeline(_props: RoutableProps) {
   const [{ url }] = useRouter();
   const currentSearch = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const urlTab = parseQueryParam(currentSearch, "tab", TABS, "chs");
 
-  const [activeTab, setActiveTab] = useUrlTab(["hl", "chs"] as const, "hl");
+  const [sessionTab, setSessionTab] = useState<PipelineTab | null>(null);
   const [newRequestCount, setNewRequestCount] = useState(0);
   const [highlightStage, setHighlightStage] = useState<string | null>(null);
 
@@ -57,14 +48,13 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
     if (stageParam) setHighlightStage(stageParam);
   }, [currentSearch]);
 
-  const switchTab = (tab: PipelineTab) => {
-    setActiveTab(tab);
-    try {
-      localStorage.setItem(TAB_STORAGE_KEY, tab);
-    } catch {
-      // ignore
-    }
-  };
+  // Incoming navigation (dashboard ?tab=, sidebar, back to /estimating) wins
+  // over a same-visit manual click.
+  useEffect(() => {
+    setSessionTab(null);
+  }, [url]);
+
+  const activeTab = sessionTab ?? urlTab;
 
   return (
     <div>
@@ -73,14 +63,14 @@ export function EstimateRequestPipeline(_props: RoutableProps) {
         <button
           type="button"
           class={`pipeline-tab-bar__tab${activeTab === "hl" ? " pipeline-tab-bar__tab--active" : ""}`}
-          onClick={() => switchTab("hl")}
+          onClick={() => setSessionTab("hl")}
         >
           HL Pipeline
         </button>
         <button
           type="button"
           class={`pipeline-tab-bar__tab${activeTab === "chs" ? " pipeline-tab-bar__tab--active" : ""}`}
-          onClick={() => switchTab("chs")}
+          onClick={() => setSessionTab("chs")}
         >
           CHS Leads
           {newRequestCount > 0 && (

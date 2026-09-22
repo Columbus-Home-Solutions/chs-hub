@@ -6,7 +6,8 @@ import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatStatus, formatDateTime } from "../../lib/format";
-import { SOCIAL_POST_TYPES, SOCIAL_TYPE_COLORS, type SocialPost } from "../../types";
+import { SOCIAL_TYPE_COLORS, type SocialPost } from "../../types";
+import { PhotoTile, postTypeLabel } from "./PhotoTile";
 
 interface Props {
   onEdit: (id: string) => void;
@@ -64,60 +65,53 @@ export function PublishedHistory({ onEdit, refreshKey }: Props) {
       )}
 
       {!loading && posts.length > 0 && (
-        <div class="table-container">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Caption</th>
-                <th>Status</th>
-                <th>Date</th>
-                <th>Links</th>
-              </tr>
-            </thead>
-            <tbody>
-              {posts.map((p) => (
-                <tr key={p.id} style={{ cursor: "pointer" }} onClick={() => onEdit(p.id)}>
-                  <td>
-                    <span class="flex gap-sm items-center">
-                      <span class="social-dot" style={{ background: SOCIAL_TYPE_COLORS[p.post_type] }} />
-                      {labelFor(p.post_type)}
-                    </span>
-                  </td>
-                  <td style={{ maxWidth: 360 }}>
-                    <span class="social-cal__post-label" style={{ display: "block" }}>
-                      {p.caption}
-                    </span>
-                  </td>
-                  <td>
-                    <Badge status={p.status}>{formatStatus(p.status)}</Badge>
-                  </td>
-                  <td>{formatDateTime(p.published_date ?? p.scheduled_date)}</td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <span class="flex gap-sm">
-                      {p.facebook_url && (
-                        <a href={p.facebook_url} target="_blank" rel="noreferrer">
-                          FB↗
-                        </a>
-                      )}
-                      {p.instagram_url && (
-                        <a href={p.instagram_url} target="_blank" rel="noreferrer">
-                          IG↗
-                        </a>
-                      )}
-                      {!p.facebook_url && !p.instagram_url && <span class="text--muted">—</span>}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div>
+          {posts.map((p) => (
+            <div key={p.id} class="history-row" onClick={() => onEdit(p.id)}>
+              <PhotoTile post={p} size="sm" />
+              <div class="history-row__copy">
+                <div class="flex gap-sm items-center flex-wrap">
+                  <span class="social-dot" style={{ background: SOCIAL_TYPE_COLORS[p.post_type] }} />
+                  <strong>{postTypeLabel(p.post_type)}</strong>
+                  <Badge status={p.status}>{formatStatus(p.status)}</Badge>
+                  <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
+                    {formatDateTime(p.published_date ?? p.scheduled_date)}
+                  </span>
+                </div>
+                <div class="social-cal__post-label">{p.caption}</div>
+              </div>
+              <div onClick={(e) => e.stopPropagation()}>
+                <PlatformPills post={p} />
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </Card>
   );
 }
 
-function labelFor(type: string): string {
-  return SOCIAL_POST_TYPES.find((t) => t.value === type)?.label ?? formatStatus(type);
+function PlatformPills({ post }: { post: SocialPost }) {
+  const showFb = post.platform !== "instagram_only";
+  const showIg = post.platform !== "facebook_only";
+  return (
+    <span class="flex gap-sm flex-wrap">
+      {showFb &&
+        (post.facebook_url ? (
+          <a class="platform-pill platform-pill--fb" href={post.facebook_url} target="_blank" rel="noreferrer">
+            Facebook
+          </a>
+        ) : (
+          <span class="platform-pill platform-pill--fb platform-pill--off">Facebook</span>
+        ))}
+      {showIg &&
+        (post.instagram_url ? (
+          <a class="platform-pill platform-pill--ig" href={post.instagram_url} target="_blank" rel="noreferrer">
+            Instagram
+          </a>
+        ) : (
+          <span class="platform-pill platform-pill--ig platform-pill--off">Instagram</span>
+        ))}
+    </span>
+  );
 }

@@ -36,6 +36,7 @@
 
 import type { Env } from "../env.js";
 import { sendSms, getTwilioConfig, isConfigured as twilioConfigured } from "./twilio.js";
+import { renderTemplateText } from "./merge-render.js";
 
 // ─── touch schedule ───────────────────────────────────────────────────────────
 
@@ -431,9 +432,7 @@ function isSmsOptOut(notificationPrefs: string | null): boolean {
 }
 
 function renderTemplate(template: string, ctx: Record<string, string>): string {
-  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => {
-    return ctx[key] ?? "";
-  });
+  return renderTemplateText(template, ctx);
 }
 
 function buildMergeContext(

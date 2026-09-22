@@ -1,13 +1,12 @@
 /**
  * Contract text generation (Sprint 5 — Quote Delivery).
  *
- * On send, an estimate's contract text is rendered from the appropriate
- * template — the Service Agreement (fixed-price / trade-by-trade) or the
- * Cost-Plus Billing Agreement (cost-plus billing model) — with the merge
- * fields populated from the estimate, client, property, payment schedule, and
- * company settings. The rendered text is frozen onto the estimate so the public
- * quote page and the captured signature both reference the exact same words the
- * client agreed to.
+ * On send (and on unsigned resend), an estimate's contract text is rendered
+ * from the appropriate template with merge fields populated from the current
+ * client, property, payment schedule, and company settings. The rendered text
+ * is stored on the estimate so the public quote page matches the paperwork.
+ * Unsigned resend re-renders from live `clients` data so a name/contact
+ * correction is not trapped in the original send-time freeze.
  *
  * The templates live here as code (not parsed from the .docx files at runtime —
  * Workers can't read .docx) and mirror the wording in:

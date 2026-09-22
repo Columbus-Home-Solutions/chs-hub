@@ -31,6 +31,9 @@
 
 import type { Env } from "../env.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "./twilio.js";
+import { renderTemplate } from "./merge-render.js";
+
+export { renderTemplate } from "./merge-render.js";
 
 // ─── events ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +85,8 @@ const TRANSACTIONAL_EVENTS = new Set([
   "sub_scheduled",
   "sub_schedule_change",
   "sub_schedule_cancelled",
+  "missed_call_client",
+  "missed_call_unknown",
 ]);
 
 /** Quote-follow-up family — re-checked against stop conditions at send time. */
@@ -111,6 +116,9 @@ export interface TriggerContext {
   merge?: Record<string, string | number | null | undefined>;
   /** Deep-link target for in_app rows (app path, e.g. /app/jobs/<id>). */
   linkPath?: string | null;
+  /** Direct SMS target when there is no clients row (unknown missed-call). */
+  recipientPhone?: string | null;
+  recipientName?: string | null;
 }
 
 interface TemplateRow {
@@ -357,23 +365,7 @@ function computeScheduledFor(tpl: TemplateRow, ctx: TriggerContext): string {
 }
 
 // ─── merge rendering ──────────────────────────────────────────────────────────
-
-/** Replace {{token}} tokens; unknown tokens render empty and are reported. */
-export function renderTemplate(
-  template: string,
-  ctx: Record<string, string>,
-): { text: string; missing: string[] } {
-  const missing: string[] = [];
-  const text = template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => {
-    const v = ctx[key];
-    if (v === undefined || v === null || v === "") {
-      missing.push(key);
-      return "";
-    }
-    return String(v);
-  });
-  return { text, missing };
-}
+// Shared in src/lib/merge-render.ts — {{client_first_name}} falls back to "there".
 
 /**
  * Assemble the merge context from whatever records the trigger references.
@@ -488,6 +480,14 @@ async function resolveRecipient(
   merge: Record<string, string>,
 ): Promise<Recipient | null> {
   if (tpl.recipient_type === "client") {
+    if (ctx.recipientPhone && !ctx.clientId) {
+      if (tpl.channel !== "sms") return null;
+      return {
+        name: (ctx.recipientName ?? "Caller").trim() || "Caller",
+        contact: ctx.recipientPhone,
+        userId: null,
+      };
+    }
     if (!ctx.clientId) return null;
     const c = await env.DB.prepare(
       "SELECT first_name, last_name, name, email, phone FROM clients WHERE id = ?",
@@ -1221,20 +1221,28 @@ async function alertOwnerFailure(env: Env, row: LogRow, error: string): Promise<
  */
 export async function createOwnerInApp(
   env: Env,
-  opts: { message: string; linkPath?: string | null; dedupe?: string | null; clientId?: string | null },
+  opts: {
+    message: string;
+    linkPath?: string | null;
+    dedupe?: string | null;
+    clientId?: string | null;
+    triggerEvent?: string;
+  },
 ): Promise<void> {
   const owner = await resolveOwner(env);
   if (!owner) return;
   const name = [owner.first_name, owner.last_name].filter(Boolean).join(" ").trim() || owner.email;
+  const event = opts.triggerEvent ?? "system_alert";
   await env.DB.prepare(
     `INSERT OR IGNORE INTO notification_logs (
         id, template_id, trigger_event, recipient_type, recipient_name, recipient_contact,
         recipient_user_id, channel, body, status, is_read, retry_count, client_id,
         link_path, dedupe_key, sent_at, created_at
-     ) VALUES (?, 'tmpl-system-alert', 'system_alert', 'owner', ?, ?, ?, 'in_app', ?, 'delivered', 0, 0, ?, ?, ?, datetime('now'), datetime('now'))`,
+     ) VALUES (?, 'tmpl-system-alert', ?, 'owner', ?, ?, ?, 'in_app', ?, 'delivered', 0, 0, ?, ?, ?, datetime('now'), datetime('now'))`,
   )
     .bind(
       crypto.randomUUID(),
+      event,
       name,
       owner.email,
       owner.id,

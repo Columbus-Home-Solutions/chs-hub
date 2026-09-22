@@ -1,7 +1,7 @@
 /**
  * Visit-note audio transcription via Gemini on Vertex AI.
  *
- * Reuses the same service-account OAuth flow as Imagen (`google-auth.ts` +
+ * Reuses the same service-account OAuth flow as Gemini image gen (`google-auth.ts` +
  * `resolveGoogleServiceAccount`). Inline base64 audio (Vertex/Gemini inline
  * request ceiling ~20 MB — fine for short field voice notes).
  */

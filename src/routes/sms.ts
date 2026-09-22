@@ -4,6 +4,7 @@
  *   GET  /api/clients/:id/sms-thread      — full SMS thread for one client
  *   POST /api/sms/reply                   — send outbound SMS (Opus-reviewed path)
  *   GET  /api/sms/conversations           — SMS inbox: most recent message per client
+ *   PATCH /api/sms/conversations/:id      — archive / flag / pin / mark unread (non-destructive)
  *
  * All routes are authenticated (Cloudflare Access). The reply route is the
  * correctness-critical path: it checks opt-out, respects NOTIFICATIONS_DISPATCH_MODE,
@@ -13,6 +14,14 @@
 
 import type { Env } from "../env.js";
 import { getTwilioConfig, sendSms, phoneDigits } from "../lib/twilio.js";
+import {
+  clearUnreadOverride,
+  conversationUnreadContribution,
+  loadConversationState,
+  parseConversationStatePatch,
+  unarchiveAndClearUnread,
+  upsertConversationState,
+} from "../lib/sms-conversation-state.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -90,6 +99,14 @@ export async function handleSmsThread(env: Env, clientId: string): Promise<Respo
   }));
 
   const clientName = [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || "Unknown";
+  const state = await loadConversationState(env, clientId);
+
+  // Opening the thread clears a manual mark-unread, same as "I've looked at this."
+  // Genuine inbound unread (unanswered since last outbound) is unchanged.
+  if (state?.unread_override_at) {
+    await clearUnreadOverride(env, clientId);
+    state.unread_override_at = null;
+  }
 
   return json({
     client_id: clientId,
@@ -97,6 +114,10 @@ export async function handleSmsThread(env: Env, clientId: string): Promise<Respo
     client_phone: client.phone,
     sms_opt_out: client.sms_opt_out === 1,
     messages,
+    archived_at: state?.archived_at ?? null,
+    flagged_at: state?.flagged_at ?? null,
+    pinned_at: state?.pinned_at ?? null,
+    unread_override: false,
   });
 }
 
@@ -176,6 +197,8 @@ export async function handleSmsReply(request: Request, env: Env): Promise<Respon
       .bind(clientId)
       .run();
 
+    await unarchiveAndClearUnread(env, clientId);
+
     return json({ simulated: true, message_id: null, comm_id: commId });
   }
 
@@ -214,7 +237,43 @@ export async function handleSmsReply(request: Request, env: Env): Promise<Respon
     .bind(clientId)
     .run();
 
+  await unarchiveAndClearUnread(env, clientId);
+
   return json({ simulated: false, message_id: result.sid, comm_id: commId });
+}
+
+// ─── PATCH /api/sms/conversations/:clientId ──────────────────────────────────
+//
+// Lazy-create sms_conversation_state. Never deletes communications rows.
+
+export async function handleSmsConversationState(
+  request: Request,
+  env: Env,
+  clientId: string,
+): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const parsed = parseConversationStatePatch(body);
+  if (!parsed.ok) return json({ error: parsed.error }, { status: 400 });
+
+  const client = await env.DB.prepare(`SELECT id FROM clients WHERE id = ?`)
+    .bind(clientId)
+    .first<{ id: string }>();
+  if (!client) return json({ error: "Client not found" }, { status: 404 });
+
+  const state = await upsertConversationState(env, clientId, parsed.patch);
+  return json({
+    client_id: clientId,
+    archived_at: state.archived_at,
+    flagged_at: state.flagged_at,
+    pinned_at: state.pinned_at,
+    unread_override: Boolean(state.unread_override_at),
+  });
 }
 
 // ─── GET /api/sms/conversations ───────────────────────────────────────────────
@@ -227,27 +286,8 @@ export async function handleSmsReply(request: Request, env: Env): Promise<Respon
 //   "inbound messages after the most recent outbound message in that thread"
 // If there is no outbound message at all, all inbound messages count as unread.
 
-export async function handleSmsConversations(env: Env, url: URL): Promise<Response> {
-  // The core query:
-  // 1. Find the most recent SMS per client.
-  // 2. Count inbound messages since last outbound (subquery).
-  // 3. Join client info + open estimate_request for "Lead" badge.
-  const { results } = await env.DB.prepare(
-    `SELECT
-       cl.id                          AS client_id,
-       cl.first_name,
-       cl.last_name,
-       cl.phone                       AS client_phone,
-       cl.sms_opt_out,
-       latest.last_message_body,
-       latest.last_message_at,
-       latest.last_message_direction,
-       COALESCE(unread.cnt, 0)        AS unread_count,
-       er.id                          AS lead_request_id,
-       er.request_number              AS lead_request_number,
-       er.status                      AS lead_status
+const CONVERSATION_JOINS = `
      FROM clients cl
-     -- Latest SMS message per client
      INNER JOIN (
        SELECT
          client_id,
@@ -271,7 +311,6 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
            LIMIT 1
          )
      ) latest ON latest.client_id = cl.id
-     -- Unread count: inbound messages after last outbound
      LEFT JOIN (
        SELECT
          client_id,
@@ -291,7 +330,6 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
          )
        GROUP BY client_id
      ) unread ON unread.client_id = cl.id
-     -- Open estimate request (for Lead badge)
      LEFT JOIN estimate_requests er
        ON er.client_id = cl.id
        AND er.status NOT IN ('won', 'lost')
@@ -300,7 +338,35 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
          WHERE client_id = cl.id AND status NOT IN ('won', 'lost')
          ORDER BY created_at DESC LIMIT 1
        )
-     ORDER BY latest.last_message_at DESC
+     LEFT JOIN sms_conversation_state cs ON cs.client_id = cl.id
+`;
+
+export async function handleSmsConversations(env: Env, url: URL): Promise<Response> {
+  const showArchived = url.searchParams.get("archived") === "1";
+  const archiveClause = showArchived ? "cs.archived_at IS NOT NULL" : "cs.archived_at IS NULL";
+
+  const { results } = await env.DB.prepare(
+    `SELECT
+       cl.id                          AS client_id,
+       cl.first_name,
+       cl.last_name,
+       cl.phone                       AS client_phone,
+       cl.sms_opt_out,
+       latest.last_message_body,
+       latest.last_message_at,
+       latest.last_message_direction,
+       COALESCE(unread.cnt, 0)        AS unread_count,
+       er.id                          AS lead_request_id,
+       er.request_number              AS lead_request_number,
+       er.status                      AS lead_status,
+       cs.archived_at,
+       cs.flagged_at,
+       cs.pinned_at,
+       cs.unread_override_at
+     ${CONVERSATION_JOINS}
+     WHERE ${archiveClause}
+     ORDER BY CASE WHEN cs.pinned_at IS NOT NULL THEN 0 ELSE 1 END,
+              latest.last_message_at DESC
      LIMIT 200`,
   ).all<{
     client_id: string;
@@ -315,6 +381,10 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
     lead_request_id: string | null;
     lead_request_number: number | null;
     lead_status: string | null;
+    archived_at: string | null;
+    flagged_at: string | null;
+    pinned_at: string | null;
+    unread_override_at: string | null;
   }>();
 
   const conversations = (results ?? []).map((r) => ({
@@ -329,7 +399,58 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
     lead_request_id: r.lead_request_id,
     lead_request_number: r.lead_request_number,
     lead_status: r.lead_status,
+    archived_at: r.archived_at,
+    flagged_at: r.flagged_at,
+    pinned_at: r.pinned_at,
+    unread_override: Boolean(r.unread_override_at),
   }));
 
-  return json({ conversations });
+  // Badge totals ignore the archived filter — archiving hides from the list, not the badge.
+  const totals = await env.DB.prepare(
+    `SELECT
+       COALESCE(unread.cnt, 0) AS unread_count,
+       cs.archived_at,
+       cs.unread_override_at
+     FROM clients cl
+     INNER JOIN (
+       SELECT DISTINCT client_id FROM communications WHERE channel = 'text_sms'
+     ) sms ON sms.client_id = cl.id
+     LEFT JOIN (
+       SELECT
+         client_id,
+         COUNT(*) AS cnt
+       FROM communications
+       WHERE channel = 'text_sms'
+         AND direction = 'inbound'
+         AND created_at > COALESCE(
+           (
+             SELECT MAX(c_out.created_at)
+             FROM communications c_out
+             WHERE c_out.client_id = communications.client_id
+               AND c_out.channel = 'text_sms'
+               AND c_out.direction = 'outbound'
+           ),
+           '1970-01-01T00:00:00Z'
+         )
+       GROUP BY client_id
+     ) unread ON unread.client_id = cl.id
+     LEFT JOIN sms_conversation_state cs ON cs.client_id = cl.id`,
+  ).all<{
+    unread_count: number;
+    archived_at: string | null;
+    unread_override_at: string | null;
+  }>();
+
+  const unread_total = (totals.results ?? []).reduce(
+    (sum, r) =>
+      sum +
+      conversationUnreadContribution({
+        unread_count: r.unread_count,
+        unread_override: Boolean(r.unread_override_at),
+      }),
+    0,
+  );
+  const archived_count = (totals.results ?? []).filter((r) => r.archived_at != null).length;
+
+  return json({ conversations, unread_total, archived_count });
 }

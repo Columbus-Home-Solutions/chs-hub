@@ -218,6 +218,22 @@ describe("enforceRbac — the §3 matrix end-to-end", () => {
     expect(await status(env, "oa@chs.local", "POST", "/api/payments")).toBe(200);
   });
 
+  it("Jobber-accepted import actions are owner-only", async () => {
+    const imported = "/api/estimates/abc/mark-imported-signed";
+    const deposit = "/api/estimates/abc/mark-external-deposit";
+    expect(await status(env, "owner@chs.local", "POST", imported)).toBe(200);
+    expect(await status(env, "owner@chs.local", "POST", deposit)).toBe(200);
+    expect(await status(env, "pm@chs.local", "POST", imported)).toBe(403);
+    expect(await status(env, "pm@chs.local", "POST", deposit)).toBe(403);
+    expect(await status(env, "oa@chs.local", "POST", imported)).toBe(403);
+    expect(await status(env, "fc@chs.local", "POST", deposit)).toBe(403);
+    expect(resolveRequiredRoles("POST", imported)).toEqual(["owner"]);
+    expect(resolveRequiredRoles("POST", "/api/estimates/abc/send")).toEqual([
+      "owner",
+      "project_manager",
+    ]);
+  });
+
   it("PUBLIC token routes are unaffected (no role gate, reachable without identity)", async () => {
     expect(await status(env, null, "GET", "/api/public/quote/tok")).toBe(200);
     expect(await status(env, null, "POST", "/api/webhooks/stripe")).toBe(200);

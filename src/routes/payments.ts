@@ -67,6 +67,11 @@ export interface RecordPaymentArgs {
   notes?: string | null;
   /** When set, enables non-blocking completion-package triggers after invoice paid. */
   ctx?: ExecutionContext;
+  /**
+   * Historical / external payments skip client receipts. Lien-waiver generation
+   * is invoked separately by the historical-payment invoice route.
+   */
+  skipNotifications?: boolean;
 }
 
 export interface RecordPaymentResult {
@@ -145,17 +150,20 @@ export async function recordPayment(env: Env, a: RecordPaymentArgs): Promise<Rec
     invoiceStatus = res?.status;
   }
 
-  // Payment-receipt notification (simulated) — once per real payment.
-  await triggerPaymentReceived(env, id);
+  // Payment-receipt notification — once per real (non-historical) payment.
+  // Historical/Jobber recordings must never email, SMS, or enqueue a receipt.
+  if (!a.skipNotifications) {
+    await triggerPaymentReceived(env, id);
 
-  // Sprint 32 — auto-send client lien waiver when final invoice is paid on a complete job.
-  if (a.ctx && a.invoiceId && a.jobId && invoiceStatus === "paid") {
-    await checkAndFireLienWaiver({
-      jobId: a.jobId,
-      invoiceId: a.invoiceId,
-      env,
-      ctx: a.ctx,
-    });
+    // Sprint 32 — auto-send client lien waiver when final invoice is paid on a complete job.
+    if (a.ctx && a.invoiceId && a.jobId && invoiceStatus === "paid") {
+      await checkAndFireLienWaiver({
+        jobId: a.jobId,
+        invoiceId: a.invoiceId,
+        env,
+        ctx: a.ctx,
+      });
+    }
   }
 
   return { created: true, paymentId: id, invoiceStatus };

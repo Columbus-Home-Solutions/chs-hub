@@ -71,6 +71,12 @@
   --job-complete: #22c55e;
   --job-closed: #64748b;
 
+  /* ─── Schedule entry types ─── */
+  --type-proposal-review: #ec4899;
+  --type-permit-inspection: #6366f1;
+  --type-deadline: #ef4444;
+  --type-warranty-call: #14b8a6;
+
   /* ─── Typography ─── */
   --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", monospace;

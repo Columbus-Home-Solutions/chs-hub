@@ -187,6 +187,7 @@ export function shapeInvoice(r: InvoiceRow) {
     line_item_ids: r.line_item_ids,
     payer_id: r.payer_id,
     notes: r.notes,
+    is_historical: (r.notes ?? "").includes("[historical]"),
     created_at: r.created_at,
     created_by: r.created_by,
   };

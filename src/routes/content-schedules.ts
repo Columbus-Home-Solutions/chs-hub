@@ -17,11 +17,13 @@ import { guard } from "../middleware/guard.js";
 import { createOwnerInApp } from "../lib/notification-engine.js";
 import { planSchedule, type PlannedPost, type SchedulableJob } from "../lib/content-schedule.js";
 import {
-  fallbackHashtags,
+  assembleHashtags,
+  captionWithHeadline,
+  cityFromContext,
   generateCaptions,
-  generateHashtags,
   type CaptionContext,
 } from "../lib/social-ai.js";
+import { attachAiImageIfNeeded } from "../lib/social-image-attach.js";
 import { err, json, logSocialAudit, readJson, shapeSocialPost, type SocialPostRow } from "../lib/social.js";
 
 const OWNER_ONLY = ["owner"] as const;
@@ -247,16 +249,13 @@ async function draftAndInsert(
 
     const id = crypto.randomUUID();
     const captionRes = await generateCaptions(env, ctx);
-    const caption = captionRes.ok
-      ? captionRes.options[0]
+    const body = captionRes.ok
+      ? captionRes.options[0]!
       : ctx.kind === "job_completion"
         ? `Another project complete! Free estimates — call us!`
         : `${planned.topic ?? "Home tips"} — from your central-Arkansas remodeling team.`;
-    const hashRes = await generateHashtags(env, ctx, `${id}`, "both").catch(() => ({
-      ok: true,
-      hashtags: fallbackHashtags(id),
-      fallback: true,
-    }));
+    const caption = captionWithHeadline(captionRes.headline, body);
+    const hashtags = assembleHashtags(cityFromContext(ctx), captionRes.tradeTags, id);
 
     await env.DB.prepare(
       `INSERT INTO social_posts
@@ -268,12 +267,13 @@ async function draftAndInsert(
         id,
         planned.post_type,
         caption,
-        JSON.stringify(hashRes.hashtags),
+        JSON.stringify(hashtags),
         planned.scheduled_date,
         jobId,
         photoIds.length ? JSON.stringify(photoIds) : null,
       )
       .run();
+    await attachAiImageIfNeeded(env, id, planned.post_type, ctx);
     return id;
   } catch (err) {
     console.error("[content-schedules] draftAndInsert failed:", (err as Error).message);

@@ -131,16 +131,17 @@ export async function handleVoiceNoteUnmatchedList(env: Env, request: Request): 
   if (guarded instanceof Response) return guarded;
 
   const { results } = await env.DB.prepare(
-    `SELECT id, raw_content, entered_via, created_at, processing_status
+    `SELECT id, raw_content, entered_via, callback_phone, created_at, processing_status
        FROM smart_notes
       WHERE job_id IS NULL
-        AND entered_via IN ('siri', 'quick_capture')
+        AND entered_via IN ('siri', 'quick_capture', 'missed_call')
       ORDER BY created_at DESC
       LIMIT 100`,
   ).all<{
     id: string;
     raw_content: string;
     entered_via: string;
+    callback_phone: string | null;
     created_at: string;
     processing_status: string | null;
   }>();

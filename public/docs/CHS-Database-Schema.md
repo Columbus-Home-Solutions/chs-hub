@@ -182,6 +182,19 @@ Informational cost/renewal tracker for SaaS vendors and subscriptions. Distinct 
 | logged_by | TEXT | | User or "system" |
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 
+### sms_conversation_state
+
+Lazy-created organizational state for SMS inbox conversations (one row per `client_id`). Conversations themselves remain derived by grouping `communications` (`channel = 'text_sms'`) — this table never stores message history and no action here deletes `communications` rows. Archive hides a thread from the default Clients list; Flag and Pin are manual/visual only.
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| client_id | TEXT | PRIMARY KEY REFERENCES clients(id) | One row per client conversation |
+| archived_at | TEXT | | Null = in default list; set = hidden unless "Show archived" |
+| flagged_at | TEXT | | Null = unflagged; set = needs-follow-up indicator |
+| pinned_at | TEXT | | Null = unpinned; set = sort to top of list |
+| unread_override_at | TEXT | | Null = no override; set = unread styling until thread is opened |
+| updated_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
+
 ---
 
 ## 3. Estimating Tables
@@ -244,6 +257,9 @@ Informational cost/renewal tracker for SaaS vendors and subscriptions. Distinct 
 | contract_template_id | TEXT | REFERENCES document_templates(id) | |
 | client_signature | TEXT | | |
 | signed_date | TEXT | | |
+| data_source | TEXT | | Existing column. Historical Jobber CSV rows = `jobber_import`. Native CHS rows are NULL. Live recreations of a quote signed in Jobber (not CHS BoldSign) = `jobber_accepted_import` (`0122`). |
+| imported_signed_at | TEXT | | **Added in `0122`.** When the owner marked the estimate imported-signed. |
+| imported_signed_note | TEXT | | **Added in `0122`.** Paper trail (Jobber quote #, who/when). |
 | notes | TEXT | | |
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 | updated_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
@@ -446,6 +462,7 @@ Internal cost breakdown — NOT visible to client.
 | notification_sent | INTEGER | DEFAULT 0 | |
 | status | TEXT | NOT NULL, CHECK(status IN ('scheduled','in_progress','completed','cancelled','weather_delay')) | |
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
+| entry_type | TEXT | DEFAULT 'job_task' | `job_task` or `deadline`. Permit inspections are not stored here — they merge from `permits`. |
 
 ### permits
 
@@ -980,6 +997,7 @@ CREATE INDEX idx_clients_high_level_contact_id ON clients(high_level_contact_id)
 CREATE INDEX idx_communications_client_id ON communications(client_id);
 CREATE INDEX idx_communications_job_id ON communications(job_id);
 CREATE INDEX idx_communications_created_at ON communications(created_at);
+CREATE INDEX idx_sms_conversation_state_archived ON sms_conversation_state(archived_at);
 
 -- Notifications
 CREATE INDEX idx_notification_logs_job_id ON notification_logs(job_id);
@@ -1083,6 +1101,7 @@ GROUP BY cs.id;
 | 5 | clients | Client | Growing | Seed from Jobber imports |
 | 6 | properties | Client | Growing | Multi-property support |
 | 7 | communications | Client | High volume | All comms logged |
+| 7a | sms_conversation_state | Client | Low volume | Archive/flag/pin/unread — lazy, one row per client |
 | 8 | estimate_requests | Estimating | Growing | Full pre-job pipeline |
 | 9 | estimates | Estimating | Growing | One per request |
 | 10 | estimate_line_items | Estimating | Med volume | Client-facing |

@@ -17,6 +17,10 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerSubScheduled } from "../lib/notification-engine.js";
+import {
+  isScheduleEntryType,
+  normalizeScheduleEntryType,
+} from "../lib/schedule-entry-type.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -61,11 +65,12 @@ interface EntryRow {
   notes: string | null;
   notification_sent: number | null;
   status: string | null;
+  entry_type: string | null;
   created_at: string | null;
 }
 
 const ENTRY_COLUMNS = `id, job_id, scheduled_date, trade_or_work, sub_id, start_time, end_time,
-  notes, notification_sent, status, created_at`;
+  notes, notification_sent, status, entry_type, created_at`;
 
 function shape(e: EntryRow & { sub_name?: string | null; job_title?: string | null; job_number?: number | null }) {
   return {
@@ -81,6 +86,7 @@ function shape(e: EntryRow & { sub_name?: string | null; job_title?: string | nu
     end_time: e.end_time,
     notes: e.notes,
     status: e.status ?? "scheduled",
+    entry_type: normalizeScheduleEntryType(e.entry_type),
     sub_notified: (e.notification_sent ?? 0) === 1,
     created_at: e.created_at,
   };
@@ -176,6 +182,8 @@ export async function handleScheduleCreate(request: Request, env: Env, jobId: st
   if (!scheduledDate) return err(400, "bad_request", "scheduled_date is required.");
   const tradeOrWork = str(body.trade_or_work);
   if (!tradeOrWork) return err(400, "bad_request", "trade_or_work is required.");
+  const entryType = str(body.entry_type) ?? "job_task";
+  if (!isScheduleEntryType(entryType)) return err(400, "bad_request", "Invalid entry_type.");
   const subId = str(body.sub_id);
   const status = str(body.status) ?? "scheduled";
   if (!ENTRY_STATUSES.has(status)) return err(400, "bad_request", "Invalid schedule status.");
@@ -188,8 +196,8 @@ export async function handleScheduleCreate(request: Request, env: Env, jobId: st
   const id = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO schedule_entries
-       (id, job_id, scheduled_date, trade_or_work, sub_id, start_time, end_time, notes, notification_sent, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'))`,
+       (id, job_id, scheduled_date, trade_or_work, sub_id, start_time, end_time, notes, notification_sent, status, entry_type, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, datetime('now'))`,
   )
     .bind(
       id,
@@ -201,6 +209,7 @@ export async function handleScheduleCreate(request: Request, env: Env, jobId: st
       str(body.end_time),
       str(body.notes),
       status,
+      entryType,
     )
     .run();
 
@@ -224,6 +233,12 @@ export async function handleScheduleUpdate(request: Request, env: Env, id: strin
 
   const sets: string[] = [];
   const binds: unknown[] = [];
+  if ("entry_type" in body) {
+    const t = str(body.entry_type);
+    if (!t || !isScheduleEntryType(t)) return err(400, "bad_request", "Invalid entry_type.");
+    sets.push("entry_type = ?");
+    binds.push(t);
+  }
   const strFields = ["scheduled_date", "trade_or_work", "start_time", "end_time", "notes"];
   for (const f of strFields) {
     if (f in body) {

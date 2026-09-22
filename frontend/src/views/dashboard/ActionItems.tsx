@@ -27,6 +27,7 @@ const PRIORITY_ICON: Record<string, string> = {
   punch_list_item_done: "✅",
   punch_list_complete: "🎉",
   voice_note_unmatched: "🎤",
+  missed_call: "📞",
   ai_extraction_failure: "🤖",
 };
 

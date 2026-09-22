@@ -282,7 +282,8 @@ export async function handleClientGet(env: Env, id: string): Promise<Response> {
       .all(),
     // Quotes = estimates table (the client-facing quote built from a request).
     env.DB.prepare(
-      `SELECT id, estimate_number, title, status, total, subtotal, client_signature, viewed_date, sent_at, created_at
+      `SELECT id, estimate_number, title, status, total, subtotal, client_signature, viewed_date, sent_at, created_at,
+              data_source, imported_signed_at, imported_signed_note
        FROM estimates WHERE client_id = ? ORDER BY created_at DESC LIMIT 100`,
     )
       .bind(id)

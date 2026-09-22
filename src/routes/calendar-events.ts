@@ -5,7 +5,15 @@
  */
 
 import type { Env } from "../env.js";
-import { type CalendarEvent, datePart, timePart } from "../lib/calendar-colors.js";
+import {
+  type CalendarEvent,
+  type ScheduleJob,
+  datePart,
+  timePart,
+} from "../lib/calendar-colors.js";
+import { nativeJobSourceWhereAliased } from "../lib/native-jobs.js";
+import { ACTIVE_SCHEDULE_JOB_STATUSES, computeJobRag } from "../lib/schedule-rag.js";
+import { normalizeScheduleEntryType } from "../lib/schedule-entry-type.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -23,12 +31,29 @@ function titleCaseJobType(s: string): string {
   return s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+export function calendarFeedFailure(err: unknown): { error: string; details: string } {
+  return {
+    error: "calendar_feed_failed",
+    details: err instanceof Error ? err.message : String(err),
+  };
+}
+
 export async function handleCalendarEvents(env: Env, url: URL): Promise<Response> {
+  try {
+    return await assembleCalendarEvents(env, url);
+  } catch (err) {
+    const body = calendarFeedFailure(err);
+    console.error("[calendar/events] feed query failed:", body.details);
+    return json(body, { status: 500 });
+  }
+}
+
+async function assembleCalendarEvents(env: Env, url: URL): Promise<Response> {
   const from = str(url.searchParams.get("from"));
   const to = str(url.searchParams.get("to"));
   const events: CalendarEvent[] = [];
 
-  // Job schedule entries
+  // Job schedule entries (job_task + deadline)
   {
     const where: string[] = ["e.status != 'cancelled'"];
     const binds: unknown[] = [];
@@ -44,12 +69,15 @@ export async function handleCalendarEvents(env: Env, url: URL): Promise<Response
       (
         await env.DB.prepare(
           `SELECT e.id, e.job_id, e.scheduled_date, e.trade_or_work, e.start_time, e.end_time,
-                  e.sub_id, e.status,
-                  j.job_number, j.title AS job_title,
+                  e.sub_id, e.status, e.entry_type,
+                  j.job_number, j.title AS job_title, j.assigned_to,
+                  TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS user_name,
+                  u.calendar_color AS user_color,
                   COALESCE(s.company_name, s.company) AS sub_name,
                   s.calendar_color AS sub_color
              FROM schedule_entries e
              JOIN jobs j ON j.id = e.job_id
+             LEFT JOIN users u ON u.id = j.assigned_to
              LEFT JOIN subcontractors s ON s.id = e.sub_id
             WHERE ${where.join(" AND ")}
             ORDER BY e.scheduled_date ASC, e.start_time ASC`,
@@ -64,8 +92,12 @@ export async function handleCalendarEvents(env: Env, url: URL): Promise<Response
             end_time: string | null;
             sub_id: string | null;
             status: string | null;
+            entry_type: string | null;
             job_number: number | null;
             job_title: string | null;
+            assigned_to: string | null;
+            user_name: string | null;
+            user_color: string | null;
             sub_name: string | null;
             sub_color: string | null;
           }>()
@@ -74,23 +106,24 @@ export async function handleCalendarEvents(env: Env, url: URL): Promise<Response
     for (const r of rows) {
       const date = datePart(r.scheduled_date);
       if (!date) continue;
+      const isDeadline = normalizeScheduleEntryType(r.entry_type) === "deadline";
       events.push({
         id: r.id,
-        type: "job_appointment",
-        title: r.trade_or_work ?? "Scheduled work",
+        type: isDeadline ? "deadline" : "job_appointment",
+        title: r.trade_or_work ?? (isDeadline ? "Deadline" : "Scheduled work"),
         date,
         start_time: r.start_time ?? timePart(r.scheduled_date),
         end_time: r.end_time,
-        assigned_user_id: null,
-        assigned_user_name: null,
-        assigned_user_color: null,
+        assigned_user_id: r.assigned_to,
+        assigned_user_name: r.user_name || null,
+        assigned_user_color: r.user_color,
         assigned_sub_id: r.sub_id,
         assigned_sub_name: r.sub_name,
         assigned_sub_color: r.sub_color,
         job_id: r.job_id,
         job_number: r.job_number,
         job_title: r.job_title,
-        link_path: `/jobs/${r.job_id}`,
+        link_path: `/jobs/${r.job_id}?tab=schedule`,
         meet_link: null,
         description: null,
         status: r.status,
@@ -276,6 +309,65 @@ export async function handleCalendarEvents(env: Env, url: URL): Promise<Response
     }
   }
 
+  // Permit inspections (scheduled, not yet passed/failed)
+  {
+    const where: string[] = ["p.inspection_date IS NOT NULL", "p.status = 'inspection_scheduled'"];
+    const binds: unknown[] = [];
+    if (from) {
+      where.push("substr(p.inspection_date, 1, 10) >= ?");
+      binds.push(from);
+    }
+    if (to) {
+      where.push("substr(p.inspection_date, 1, 10) <= ?");
+      binds.push(to);
+    }
+    const rows =
+      (
+        await env.DB.prepare(
+          `SELECT p.id, p.job_id, p.permit_type, p.inspection_date, p.status,
+                  j.job_number, j.title AS job_title, j.assigned_to,
+                  TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS user_name,
+                  u.calendar_color AS user_color
+             FROM permits p
+             JOIN jobs j ON j.id = p.job_id
+             LEFT JOIN users u ON u.id = j.assigned_to
+            WHERE ${where.join(" AND ")}
+            ORDER BY p.inspection_date ASC`,
+        )
+          .bind(...binds)
+          .all<Record<string, unknown>>()
+      ).results ?? [];
+
+    for (const r of rows) {
+      const when = String(r.inspection_date ?? "");
+      const date = datePart(when);
+      if (!date) continue;
+      const permitType = String(r.permit_type ?? "permit");
+      const jobTitle = String(r.job_title ?? "Job");
+      events.push({
+        id: String(r.id),
+        type: "permit_inspection",
+        title: `Inspection — ${permitType}, ${jobTitle}`,
+        date,
+        start_time: timePart(when),
+        end_time: null,
+        assigned_user_id: (r.assigned_to as string | null) ?? null,
+        assigned_user_name: (r.user_name as string | null) || null,
+        assigned_user_color: (r.user_color as string | null) ?? null,
+        assigned_sub_id: null,
+        assigned_sub_name: null,
+        assigned_sub_color: null,
+        job_id: String(r.job_id),
+        job_number: (r.job_number as number | null) ?? null,
+        job_title: (r.job_title as string | null) ?? null,
+        link_path: `/jobs/${r.job_id}?tab=permits`,
+        meet_link: null,
+        description: null,
+        status: String(r.status ?? ""),
+      });
+    }
+  }
+
   // Google Meet events (cached)
   {
     const where: string[] = ["meet_link IS NOT NULL"];
@@ -334,5 +426,76 @@ export async function handleCalendarEvents(env: Env, url: URL): Promise<Response
     return (a.start_time ?? "").localeCompare(b.start_time ?? "");
   });
 
-  return json({ from, to, events });
+  const today = new Date().toISOString().slice(0, 10);
+  const statusList = ACTIVE_SCHEDULE_JOB_STATUSES.map((s) => `'${s}'`).join(", ");
+  const jobRows =
+    (
+      await env.DB.prepare(
+        `SELECT j.id, j.job_number, j.title, j.status, j.start_date, j.target_end_date, j.assigned_to,
+                TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS assigned_name,
+                COALESCE(u.name, '') AS assigned_fallback,
+                u.calendar_color AS assigned_color
+           FROM jobs j
+           LEFT JOIN users u ON u.id = j.assigned_to
+          WHERE ${nativeJobSourceWhereAliased("j")}
+            AND j.status IN (${statusList})
+          ORDER BY j.start_date ASC, j.job_number ASC`,
+      ).all<{
+        id: string;
+        job_number: number | null;
+        title: string | null;
+        status: string | null;
+        start_date: string | null;
+        target_end_date: string | null;
+        assigned_to: string | null;
+        assigned_name: string | null;
+        assigned_fallback: string | null;
+        assigned_color: string | null;
+      }>()
+    ).results ?? [];
+
+  const permitJobs = new Set(
+    (
+      (
+        await env.DB.prepare(
+          `SELECT DISTINCT job_id FROM permits WHERE status = 'inspection_scheduled'`,
+        ).all<{ job_id: string }>()
+      ).results ?? []
+    ).map((r) => r.job_id),
+  );
+  const oorJobs = new Set(
+    (
+      (
+        await env.DB.prepare(
+          `SELECT DISTINCT e.job_id
+             FROM schedule_entries e
+             JOIN jobs j ON j.id = e.job_id
+            WHERE j.target_end_date IS NOT NULL
+              AND e.scheduled_date > j.target_end_date
+              AND e.status != 'cancelled'`,
+        ).all<{ job_id: string }>()
+      ).results ?? []
+    ).map((r) => r.job_id),
+  );
+
+  const jobs: ScheduleJob[] = jobRows.map((r) => ({
+    id: r.id,
+    job_number: r.job_number,
+    title: r.title,
+    status: r.status,
+    start_date: r.start_date,
+    target_end_date: r.target_end_date,
+    assigned_to: r.assigned_to,
+    assigned_to_name: (r.assigned_name || "").trim() || (r.assigned_fallback || "").trim() || null,
+    assigned_to_color: r.assigned_color,
+    rag: computeJobRag({
+      status: r.status,
+      targetEndDate: r.target_end_date,
+      today,
+      hasIncompletePermitInspection: permitJobs.has(r.id),
+      hasOutOfRangeEntry: oorJobs.has(r.id),
+    }),
+  }));
+
+  return json({ from, to, events, jobs });
 }

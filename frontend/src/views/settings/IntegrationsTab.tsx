@@ -44,7 +44,9 @@ export function IntegrationsTab() {
   const [imageGen, setImageGen] = useState<{
     credentials_present: boolean;
     enabled: boolean;
+    model_id: string;
   } | null>(null);
+  const [imageModelDraft, setImageModelDraft] = useState("");
   const [social, setSocial] = useState<{
     connected: boolean;
     publish_mode: "live" | "simulate";
@@ -53,6 +55,8 @@ export function IntegrationsTab() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [imageGenBusy, setImageGenBusy] = useState(false);
+  const [missedCallIntake, setMissedCallIntake] = useState(false);
+  const [missedCallBusy, setMissedCallBusy] = useState(false);
   const [socialTestBusy, setSocialTestBusy] = useState(false);
   const [gcal, setGcal] = useState<{
     connected: boolean;
@@ -88,7 +92,9 @@ export function IntegrationsTab() {
     try {
       const results = await Promise.allSettled([
         api.get<{ integrations: Connection[] }>("/api/integrations"),
-        api.get<{ credentials_present: boolean; enabled: boolean }>("/api/integrations/image-gen/status"),
+        api.get<{ credentials_present: boolean; enabled: boolean; model_id?: string }>(
+          "/api/integrations/image-gen/status",
+        ),
         api.get<{ connected: boolean; publish_mode: "live" | "simulate"; page_label: string }>(
           "/api/social/status",
         ),
@@ -123,7 +129,7 @@ export function IntegrationsTab() {
         results[i]?.status === "fulfilled" ? (results[i] as PromiseFulfilledResult<T>).value : fallback;
 
       const integrations = pick(0, { integrations: [] as Connection[] });
-      const status = pick(1, { credentials_present: false, enabled: false });
+      const status = pick(1, { credentials_present: false, enabled: false, model_id: "" });
       const socialStatus = pick(2, { connected: false, publish_mode: "simulate" as const, page_label: "" });
       const settings = pick(3, { settings: [] as Array<{ key: string; value: string; value_type: string }> });
       const gcalStatus = pick(4, {
@@ -159,10 +165,18 @@ export function IntegrationsTab() {
 
       setConnections(integrations.integrations);
       const setting = settings.settings.find((s) => s.key === "image_gen_enabled");
+      const modelId =
+        status.model_id ||
+        settings.settings.find((s) => s.key === "image_gen_model_id")?.value ||
+        "gemini-2.5-flash-image";
       setImageGen({
         credentials_present: status.credentials_present,
         enabled: setting ? setting.value === "true" || setting.value === "1" : status.enabled,
+        model_id: modelId,
       });
+      setImageModelDraft(modelId);
+      const missedSetting = settings.settings.find((s) => s.key === "missed_call_intake_enabled");
+      setMissedCallIntake(missedSetting ? missedSetting.value === "true" || missedSetting.value === "1" : false);
       setSocial({
         connected: socialStatus.connected,
         publish_mode: socialStatus.publish_mode,
@@ -348,6 +362,45 @@ export function IntegrationsTab() {
     }
   };
 
+  const saveImageModel = async () => {
+    if (!imageGen) return;
+    const next = imageModelDraft.trim();
+    if (!next) {
+      toast.push("error", "Model ID cannot be blank");
+      return;
+    }
+    setImageGenBusy(true);
+    try {
+      await api.put("/api/settings/image_gen_model_id", { value: next });
+      setImageGen({ ...imageGen, model_id: next });
+      setImageModelDraft(next);
+      toast.push("success", "Image model updated");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setImageGenBusy(false);
+    }
+  };
+
+  const toggleMissedCallIntake = async () => {
+    setMissedCallBusy(true);
+    const next = !missedCallIntake;
+    try {
+      await api.put("/api/settings/missed_call_intake_enabled", { value: next });
+      setMissedCallIntake(next);
+      toast.push(
+        "success",
+        next
+          ? "Missed-call intake on — unknown callers hear a prompt; unanswered calls get an auto-text"
+          : "Missed-call intake off — whisper-only, no auto-text",
+      );
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setMissedCallBusy(false);
+    }
+  };
+
   if (loading) return <Spinner center />;
 
   return (
@@ -397,7 +450,7 @@ export function IntegrationsTab() {
           <div class="flex items-center gap-sm" style={{ justifyContent: "space-between" }}>
             <div class="flex items-center gap-sm">
               <span style={{ fontSize: "1.4rem" }}>🖼️</span>
-              <strong>AI Image Generation (Imagen)</strong>
+              <strong>AI Image Generation (Gemini)</strong>
             </div>
             <Badge tone={imageGen?.credentials_present ? "success" : "neutral"}>
               {imageGen?.credentials_present ? "Connected" : "Not configured"}
@@ -417,6 +470,60 @@ export function IntegrationsTab() {
               onChange={() => void toggleImageGen()}
             />
             {imageGenBusy && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>Saving…</span>}
+          </div>
+          <label class="form-label" style={{ marginTop: "var(--space-sm)" }}>
+            Model ID
+          </label>
+          <p class="text--muted" style={{ fontSize: "var(--text-xs)", margin: "0 0 var(--space-xs)" }}>
+            Vertex model used for new images. Change this when Google retires the current model. A new request shape still needs a code change.
+          </p>
+          <div class="flex items-center gap-sm">
+            <input
+              class="form-input"
+              type="text"
+              value={imageModelDraft}
+              disabled={imageGenBusy || !imageGen}
+              onInput={(e) => setImageModelDraft((e.currentTarget as HTMLInputElement).value)}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={imageGenBusy || !imageGen || imageModelDraft.trim() === (imageGen?.model_id ?? "")}
+              onClick={() => void saveImageModel()}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style={{ marginBottom: "var(--space-md)" }}>
+        <div class="card__body">
+          <div class="flex items-center gap-sm" style={{ justifyContent: "space-between" }}>
+            <div class="flex items-center gap-sm">
+              <span style={{ fontSize: "1.4rem" }}>📞</span>
+              <strong>Missed-call intake + auto-text</strong>
+            </div>
+            <Badge tone={missedCallIntake ? "success" : "neutral"}>
+              {missedCallIntake ? "On" : "Off"}
+            </Badge>
+          </div>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
+            Unknown callers hear a short name/reason prompt before the phone rings (up to ~8 seconds).
+            Known clients skip the prompt. Unanswered calls get an auto-text; silent unknown callers
+            do not. Stays off until the first-contact SMS question is confirmed with counsel.
+          </p>
+          <div class="flex items-center gap-sm">
+            <label class="form-label" style={{ margin: 0 }}>
+              Enabled
+            </label>
+            <input
+              type="checkbox"
+              checked={missedCallIntake}
+              disabled={missedCallBusy}
+              onChange={() => void toggleMissedCallIntake()}
+            />
+            {missedCallBusy && <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>Saving…</span>}
           </div>
         </div>
       </div>

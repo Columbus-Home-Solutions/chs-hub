@@ -90,7 +90,7 @@ export const SIDEBAR_NAV: NavSection[] = [
         label: "Leads",
         href: to("/estimating") + "?tab=chs",
         activeTest: (p, s) =>
-          p === to("/estimating") && new URLSearchParams(s).get("tab") === "chs",
+          p === to("/estimating") && new URLSearchParams(s).get("tab") !== "hl",
       },
       {
         label: "Estimates",
@@ -245,6 +245,13 @@ export const SIDEBAR_NAV: NavSection[] = [
         href: to("/labor"),
         activeTest: (p) =>
           p === to("/labor") || p.startsWith(to("/labor") + "/"),
+      },
+      {
+        label: "Messages",
+        href: to("/people/messages"),
+        activeTest: (p) =>
+          p === to("/people/messages") ||
+          p.startsWith(to("/people/messages") + "/"),
       },
     ],
   },

@@ -359,11 +359,9 @@ export function buildFacebookPageFeedUrl(args: {
   return `${FACEBOOK_GRAPH_BASE}/${args.pageId}/feed?${params.toString()}`;
 }
 
-/** Trim hashtags for the target network (stored set is the full Instagram-scale list). */
-export function pickHashtagsForPlatform(tags: string[], platform: "facebook" | "instagram"): string[] {
-  const clean = tags.filter(Boolean);
-  if (platform === "facebook") return clean.slice(0, 5);
-  return clean.slice(0, 15);
+/** Instagram capped hashtags at 5 (Dec 2025). Both networks publish at most 5. */
+export function pickHashtagsForPlatform(tags: string[], _platform: "facebook" | "instagram"): string[] {
+  return tags.filter(Boolean).slice(0, 5);
 }
 
 /** Compose the full caption (caption + hashtags) sent to the platforms. */

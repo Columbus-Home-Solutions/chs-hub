@@ -31,7 +31,10 @@ import {
 } from "./selections.js";
 import {
   generateAndSendEstimateContract,
+  loadEstimateContractDoc,
+  estimateSignatureComplete,
   parseSignatureMeta,
+  renderEstimateContractText,
 } from "../lib/estimate-contract-document.js";
 import { runHlLeadMirror } from "../lib/hl-lead-mirror.js";
 import { handleEstimateRequestPipeline } from "./estimate-requests.js";
@@ -42,6 +45,14 @@ import {
   sendOwnerTest,
 } from "../lib/notification-engine.js";
 import { getTwilioConfig, isConfigured as twilioConfigured } from "../lib/twilio.js";
+import {
+  configureExistingLsaNumber,
+  inspectLsaVoice,
+  lsaVoiceUrl,
+  purchaseLsaNumber,
+  searchLsaNumbers,
+} from "../lib/twilio-lsa-number.js";
+import { loadLsaTrackingNumber } from "../lib/google-lsa-capture.js";
 
 function requireSecret(request: Request, env: Env): Response | null {
   const url = new URL(request.url);
@@ -444,6 +455,80 @@ export async function handleOpsResendSelectionApproval(
   if (!estimateId) return jsonOk({ error: "estimate_id required" }, 400);
   const origin = new URL(request.url).origin;
   return resendCombinedSelectionApprovalForEstimate(env, estimateId, origin);
+}
+
+/**
+ * POST /api/ops/regenerate-estimate-contract?estimate_id=
+ * Void the live BoldSign envelope (if unsigned) and regenerate the contract
+ * from current client data. Does not send another estimate_sent email and
+ * does not change estimate status / viewed / signed / deposit progress.
+ */
+export async function handleOpsRegenerateEstimateContract(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+  const estimateId = new URL(request.url).searchParams.get("estimate_id")?.trim();
+  if (!estimateId) return jsonOk({ error: "estimate_id required" }, 400);
+
+  const est = await env.DB.prepare(
+    `SELECT id, estimate_number, client_signature, signed_date, include_contract,
+            portal_token, status
+       FROM estimates WHERE id = ?`,
+  )
+    .bind(estimateId)
+    .first<{
+      id: string;
+      estimate_number: number | null;
+      client_signature: string | null;
+      signed_date: string | null;
+      include_contract: number | null;
+      portal_token: string | null;
+      status: string;
+    }>();
+  if (!est) return jsonOk({ error: "not_found" }, 404);
+
+  const includeContract = (est.include_contract ?? 1) === 1;
+  const existingDoc = includeContract ? await loadEstimateContractDoc(env, estimateId) : null;
+  if (estimateSignatureComplete(includeContract, est.client_signature, existingDoc)) {
+    return jsonOk(
+      { error: "already_signed", estimate_number: est.estimate_number },
+      409,
+    );
+  }
+
+  const contractText = await renderEstimateContractText(env, estimateId);
+  if (contractText != null) {
+    await env.DB.prepare(
+      `UPDATE estimates SET contract_text = ?, updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(contractText, estimateId)
+      .run();
+  }
+
+  const result = await generateAndSendEstimateContract(
+    env,
+    estimateId,
+    "ops-regenerate-estimate-contract",
+  );
+  const newDoc = await loadEstimateContractDoc(env, estimateId);
+  const meta = parseSignatureMeta(newDoc?.signature_data);
+  const clientLine = contractText?.split("\n").find((l) => l.startsWith("Client:")) ?? null;
+
+  return jsonOk({
+    ok: !result.skipped && !!result.boldsign_sent,
+    estimate_id: estimateId,
+    estimate_number: est.estimate_number,
+    portal_token: est.portal_token,
+    status_unchanged: est.status,
+    contract_text_client_line: clientLine,
+    ...result,
+    signer_name: meta.signer_name ?? result.signer_name ?? null,
+    signer_email: meta.signer_email ?? null,
+    boldsign_document_id: meta.boldsign_document_id ?? null,
+    signature_status: meta.signature_status ?? null,
+  });
 }
 
 const E2E_CLIENT_ID = "b1000001-0000-4000-8000-000000000001"; // ZZTEST-JOBDETAIL (is_test)
@@ -1309,3 +1394,79 @@ export async function handleOpsNotifySignatureGapSimulate(
     dispatch_mode: env.NOTIFICATIONS_DISPATCH_MODE ?? null,
   });
 }
+
+/**
+ * GET  /api/ops/provision-lsa-number?secret=   — search 501 numbers close to 263-2050
+ * POST /api/ops/provision-lsa-number?secret=   — buy the closest (or ?phone=+1…)
+ *
+ * Idempotent: if google_lsa_tracking_number is already set, POST only re-applies
+ * the VoiceUrl on that IncomingPhoneNumber and does not buy a second line.
+ */
+export async function handleOpsProvisionLsaNumber(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const guard = requireSecret(request, env);
+  if (guard) return guard;
+
+  const existing = await loadLsaTrackingNumber(env);
+  if (request.method === "GET") {
+    const url = new URL(request.url);
+    if (url.searchParams.get("inspect") === "1") {
+      try {
+        const inspect = await inspectLsaVoice(env);
+        return jsonOk({
+          ok: inspect.ok,
+          error: inspect.error ?? null,
+          existing,
+          expected_voice_url: lsaVoiceUrl(),
+          tracking: inspect.tracking,
+          number: inspect.number,
+          inbound_calls: inspect.inbound_calls,
+          child_calls: inspect.child_calls,
+        });
+      } catch (e) {
+        return jsonOk({ ok: false, error: (e as Error).message.slice(0, 400), existing }, 502);
+      }
+    }
+    const search = await searchLsaNumbers(env);
+    return jsonOk({
+      ok: search.ok,
+      error: search.error ?? null,
+      existing,
+      target: "501-263-2050",
+      candidates: search.candidates,
+    });
+  }
+
+  if (existing) {
+    const wired = await configureExistingLsaNumber(env, existing);
+    return jsonOk({
+      ok: wired.ok,
+      already_provisioned: true,
+      phone_number: existing,
+      sid: wired.sid ?? null,
+      error: wired.error ?? null,
+    });
+  }
+
+  const url = new URL(request.url);
+  const requested = (url.searchParams.get("phone") ?? "").trim();
+  let pick = requested;
+  if (!pick) {
+    const search = await searchLsaNumbers(env);
+    if (!search.ok) return jsonOk({ ok: false, error: search.error }, 502);
+    pick = search.candidates[0]?.phoneNumber ?? "";
+    if (!pick) return jsonOk({ ok: false, error: "no_501_numbers_available", candidates: [] }, 404);
+  }
+
+  const bought = await purchaseLsaNumber(env, pick);
+  if (!bought.ok) return jsonOk({ ok: false, error: bought.error, phone: pick }, 502);
+  return jsonOk({
+    ok: true,
+    already_provisioned: false,
+    phone_number: bought.phoneNumber,
+    sid: bought.sid ?? null,
+  });
+}
+

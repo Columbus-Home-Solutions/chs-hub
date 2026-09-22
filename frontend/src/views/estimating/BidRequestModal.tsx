@@ -12,6 +12,7 @@ import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
 import { Spinner } from "../../components/ui/Spinner";
 import { api } from "../../api";
+import { ensureJpegPhoto } from "../../lib/heic";
 
 interface Sub {
   id: string;
@@ -61,7 +62,8 @@ function subMatchesQuery(s: Sub, query: string): boolean {
 async function uploadBidPhotos(bidRequestId: string, photos: File[]): Promise<void> {
   const form = new FormData();
   for (const file of photos) {
-    form.append("photos", file, file.name || "reference.jpg");
+    const jpeg = await ensureJpegPhoto(file);
+    form.append("photos", jpeg, jpeg.name || "reference.jpg");
   }
   const res = await fetch(`/api/bid-requests/${bidRequestId}/photos`, {
     method: "POST",

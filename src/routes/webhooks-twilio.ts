@@ -3,10 +3,13 @@
  * request signature (no Cloudflare Access), registered the same way as
  * /api/webhooks/stripe so they bypass the edge auth.
  *
- *   POST /api/webhooks/twilio/inbound   inbound SMS → match client, log comm, owner bell
- *   POST /api/webhooks/twilio/voice     inbound voice → whisper caller name, dial Tony
+ *   POST /api/webhooks/twilio/inbound       inbound SMS → match client, log comm, owner bell
+ *   POST /api/webhooks/twilio/voice         inbound voice → optional Gather, whisper, Dial Tony
  *   GET  /api/webhooks/twilio/call-whisper  TwiML whisper audio (called by Twilio during Dial)
- *   POST /api/webhooks/twilio/status    delivery status callback → update the log by SID
+ *   POST /api/webhooks/twilio/call-intake   Gather action → always Dial (never block)
+ *   POST /api/webhooks/twilio/call-status   Dial action → missed-call SMS / log
+ *   POST /api/webhooks/twilio/voice-lsa     Google LSA tracking number → Dial Tony + auto-lead
+ *   POST /api/webhooks/twilio/status        SMS delivery status callback → update the log by SID
  *
  * Signature discipline mirrors the Stripe handler: verify BEFORE any DB write,
  * constant-time compare, decide the response on every branch, audit the
@@ -18,7 +21,22 @@
 
 import type { Env } from "../env.js";
 import { getTwilioConfig, verifyTwilioSignature, phoneDigits } from "../lib/twilio.js";
-import { createOwnerInApp } from "../lib/notification-engine.js";
+import { createOwnerInApp, triggerNotification } from "../lib/notification-engine.js";
+import {
+  INTAKE_PROMPT,
+  buildDialTwiml,
+  buildForwardDialTwiml,
+  buildGatherTwiml,
+  buildWhisperSayText,
+  buildWhisperTwiml,
+  capTranscript,
+  emptyTwiml,
+} from "../lib/twilio-voice-twiml.js";
+import {
+  captureGoogleLsaLead,
+  loadLsaTrackingNumber,
+  phonesMatchTracking,
+} from "../lib/google-lsa-capture.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -29,19 +47,10 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 
 /** Empty TwiML — tells Twilio "received, no auto-reply". */
 function twiml(): Response {
-  return new Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>', {
+  return new Response(emptyTwiml(), {
     status: 200,
     headers: { "content-type": "text/xml; charset=utf-8" },
   });
-}
-
-function escapeXmlText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
 }
 
 function twimlXml(body: string): Response {
@@ -53,9 +62,7 @@ function twimlXml(body: string): Response {
 
 /** Simple forward — no whisper (fallback when no public whisper origin is available). */
 function twimlDialForward(forwardNumber: string): Response {
-  return twimlXml(
-    `<?xml version="1.0" encoding="UTF-8"?><Response><Dial><Number>${escapeXmlText(forwardNumber)}</Number></Dial></Response>`,
-  );
+  return twimlXml(buildForwardDialTwiml(forwardNumber));
 }
 
 /** TwiML with a reply message — for STOP/START compliance responses. */
@@ -385,17 +392,47 @@ function resolveTwilioWhisperOrigin(request: Request, env: Env): string | null {
 async function lookupClientByPhone(
   env: Env,
   callerPhone: string,
-): Promise<{ first_name: string | null; last_name: string | null; name: string | null } | null> {
+): Promise<{
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  name: string | null;
+} | null> {
   const fromDigits = phoneDigits(callerPhone).slice(-10);
   if (fromDigits.length !== 10) return null;
   return env.DB.prepare(
-    `SELECT first_name, last_name, name FROM clients
+    `SELECT id, first_name, last_name, name FROM clients
       WHERE substr(replace(replace(replace(replace(phone,'(',''),')',''),'-',''),' ',''), -10) = ?
          OR substr(replace(replace(replace(replace(COALESCE(phone_secondary,''),'(',''),')',''),'-',''),' ',''), -10) = ?
       LIMIT 1`,
   )
     .bind(fromDigits, fromDigits)
     .first();
+}
+
+async function isMissedCallIntakeEnabled(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT value FROM system_settings WHERE key = 'missed_call_intake_enabled'",
+  ).first<{ value: string | null }>();
+  const v = (row?.value ?? "").trim().toLowerCase();
+  return v === "true" || v === "1";
+}
+
+function missedCallHourKey(): string {
+  return new Date().toISOString().slice(0, 13);
+}
+
+function appendVoiceContext(
+  url: URL,
+  opts: { clientId?: string | null; digits?: string | null; transcript?: string | null },
+): void {
+  if (opts.clientId) url.searchParams.set("client_id", opts.clientId);
+  if (opts.digits) url.searchParams.set("digits", opts.digits);
+  if (opts.transcript) url.searchParams.set("transcript", capTranscript(opts.transcript));
+}
+
+function voiceTwimlResponse(xml: string): Response {
+  return twimlXml(xml);
 }
 
 export async function handleTwilioVoice(request: Request, env: Env): Promise<Response> {
@@ -415,6 +452,7 @@ export async function handleTwilioVoice(request: Request, env: Env): Promise<Res
   const form = new Map(entries);
   const callerPhone = form.get("From") ?? "";
   const callSid = form.get("CallSid") ?? "";
+  const digits = phoneDigits(callerPhone).replace(/^1/, "").slice(-10);
 
   let client: Awaited<ReturnType<typeof lookupClientByPhone>> = null;
   if (callerPhone) {
@@ -437,48 +475,363 @@ export async function handleTwilioVoice(request: Request, env: Env): Promise<Res
     return twimlDialForward(forwardNumber);
   }
 
-  const whisperUrl = new URL(`${whisperOrigin}/api/webhooks/twilio/call-whisper`);
-  if (callerName) {
-    whisperUrl.searchParams.set("name", callerName);
-  } else {
-    whisperUrl.searchParams.set("digits", phoneDigits(callerPhone).replace(/^1/, "").slice(-10));
+  const intakeEnabled = await isMissedCallIntakeEnabled(env);
+  const known = Boolean(client?.id);
+
+  if (!known && intakeEnabled) {
+    const intakeUrl = new URL(`${whisperOrigin}/api/webhooks/twilio/call-intake`);
+    appendVoiceContext(intakeUrl, { digits });
+    await audit(env, "twilio_voice_intake_prompt", {
+      call_sid: callSid,
+      from: callerPhone,
+      digits,
+    });
+    return voiceTwimlResponse(
+      buildGatherTwiml({
+        prompt: INTAKE_PROMPT,
+        actionUrl: intakeUrl.toString(),
+        fallbackUrl: intakeUrl.toString(),
+      }),
+    );
   }
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Dial>
-    <Number method="GET" url="${escapeXmlText(whisperUrl.toString())}">${escapeXmlText(forwardNumber)}</Number>
-  </Dial>
-</Response>`;
+  const xml = buildVoiceDialTwiml(whisperOrigin, forwardNumber, {
+    clientId: client?.id ?? null,
+    name: callerName,
+    digits: known ? null : digits,
+    transcript: null,
+    includeAction: intakeEnabled,
+  });
 
   await audit(env, "twilio_voice_inbound", {
     call_sid: callSid,
     from: callerPhone,
     matched_client: callerName,
     whisper: true,
+    intake: false,
   });
-  return twimlXml(twiml);
+  return voiceTwimlResponse(xml);
+}
+
+/**
+ * POST /api/webhooks/twilio/voice-lsa
+ *
+ * Dedicated Google LSA tracking number. Skip whisper / known-client lookup /
+ * missed-call Gather — every call here is a paid lead. Bridge immediately to
+ * Tony's cell (TWILIO_FORWARD_NUMBER) and auto-create an estimate_request.
+ *
+ * Outbound-caller-ID constraint (no outbound-calling feature exists today):
+ * if CHS later places Twilio outbound calls, never present this tracking
+ * number as caller ID. Always use the main business line 501-263-2050.
+ */
+export async function handleTwilioVoiceLsa(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<Response> {
+  const entries = await parseForm(request);
+  const verified = await verify(env, request, entries);
+  if (!verified.ok) {
+    await audit(env, "twilio_lsa_rejected", { reason: verified.reason });
+    return json({ error: "invalid_signature", reason: verified.reason }, { status: verified.status });
+  }
+
+  const forwardNumber = (env.TWILIO_FORWARD_NUMBER ?? "").trim();
+  if (!forwardNumber) {
+    console.error("[twilio-lsa] TWILIO_FORWARD_NUMBER is not configured");
+    return json({ error: "not_configured" }, { status: 503 });
+  }
+
+  const form = new Map(entries);
+  const from = form.get("From") ?? "";
+  const to = form.get("Called") ?? form.get("To") ?? "";
+  const callSid = form.get("CallSid") ?? "";
+
+  // Return Dial TwiML immediately — never let D1/capture delay the bridge.
+  const origin = resolveTwilioWhisperOrigin(request, env);
+  const action = new URL(`${origin}/api/webhooks/twilio/call-status`);
+  action.searchParams.set("lsa", "1");
+  const xml = buildForwardDialTwiml(forwardNumber, action.toString());
+
+  const captureWork = async () => {
+    const tracking = await loadLsaTrackingNumber(env);
+    if (tracking && to && !phonesMatchTracking(to, tracking)) {
+      await audit(env, "twilio_lsa_to_mismatch", { from, to, tracking, call_sid: callSid });
+      return;
+    }
+    try {
+      const result = await captureGoogleLsaLead(env, { from, to, callSid });
+      await audit(env, "twilio_lsa_inbound", {
+        call_sid: callSid,
+        from,
+        to,
+        capture: result,
+      });
+    } catch (e) {
+      console.error("[twilio-lsa] lead capture failed:", (e as Error).message);
+      await audit(env, "twilio_lsa_capture_error", {
+        call_sid: callSid,
+        from,
+        error: (e as Error).message.slice(0, 300),
+      });
+    }
+  };
+
+  if (ctx) ctx.waitUntil(captureWork());
+  else await captureWork();
+
+  return twimlXml(xml);
+}
+
+function buildVoiceDialTwiml(
+  origin: string,
+  forwardNumber: string,
+  ctx: {
+    clientId?: string | null;
+    name?: string | null;
+    digits?: string | null;
+    transcript?: string | null;
+    intakeAttempted?: boolean;
+    includeAction?: boolean;
+  },
+): string {
+  const whisperUrl = new URL(`${origin}/api/webhooks/twilio/call-whisper`);
+  if (ctx.transcript) whisperUrl.searchParams.set("transcript", capTranscript(ctx.transcript));
+  else if (ctx.name) whisperUrl.searchParams.set("name", ctx.name);
+  else if (ctx.digits) whisperUrl.searchParams.set("digits", ctx.digits);
+  if (ctx.intakeAttempted) whisperUrl.searchParams.set("intake", "1");
+
+  let actionUrl: string | null = null;
+  if (ctx.includeAction !== false) {
+    const action = new URL(`${origin}/api/webhooks/twilio/call-status`);
+    appendVoiceContext(action, {
+      clientId: ctx.clientId,
+      digits: ctx.digits,
+      transcript: ctx.transcript,
+    });
+    actionUrl = action.toString();
+  }
+
+  return buildDialTwiml({
+    forwardNumber,
+    whisperUrl: whisperUrl.toString(),
+    actionUrl,
+  });
 }
 
 // ─── GET|POST /api/webhooks/twilio/call-whisper ───────────────────────────────
 
 export async function handleCallWhisper(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const name = url.searchParams.get("name");
-  const digits = url.searchParams.get("digits");
+  const sayText = buildWhisperSayText({
+    name: url.searchParams.get("name"),
+    digits: url.searchParams.get("digits"),
+    transcript: url.searchParams.get("transcript"),
+    intakeAttempted: url.searchParams.get("intake") === "1",
+  });
+  return twimlXml(buildWhisperTwiml(sayText));
+}
 
-  let whisperText: string;
-  if (name) {
-    whisperText = `Incoming call from ${name}.`;
-  } else if (digits) {
-    whisperText = `Incoming call from ${digits.split("").join(" ")}.`;
-  } else {
-    whisperText = "Incoming call.";
+// ─── GET|POST /api/webhooks/twilio/call-intake ────────────────────────────────
+// Gather action: always Dial (never block). Transcript is forwarded via query
+// params — no DB write on the live-call path.
+
+export async function handleCallIntake(request: Request, env: Env): Promise<Response> {
+  const entries = await parseForm(request);
+  const verified = await verify(env, request, entries);
+  const form = new Map(entries);
+  const url = new URL(request.url);
+
+  const forwardNumber = (env.TWILIO_FORWARD_NUMBER ?? "").trim();
+  if (!forwardNumber) {
+    return json({ error: "not_configured" }, { status: 503 });
   }
 
-  return twimlXml(
-    `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">${escapeXmlText(whisperText)}</Say></Response>`,
-  );
+  const whisperOrigin = resolveTwilioWhisperOrigin(request, env);
+  if (!whisperOrigin) return twimlDialForward(forwardNumber);
+
+  const callerPhone = form.get("From") ?? "";
+  const digits =
+    phoneDigits(callerPhone).replace(/^1/, "").slice(-10) ||
+    (url.searchParams.get("digits") ?? "").replace(/\D/g, "").slice(-10);
+  const speech = capTranscript(form.get("SpeechResult") ?? url.searchParams.get("transcript") ?? "");
+
+  if (!verified.ok) {
+    await audit(env, "twilio_intake_unverified", { reason: verified.reason, digits });
+  }
+
+  const xml = buildVoiceDialTwiml(whisperOrigin, forwardNumber, {
+    clientId: null,
+    name: null,
+    digits,
+    transcript: verified.ok ? speech || null : null,
+    intakeAttempted: true,
+  });
+  await audit(env, "twilio_voice_intake_complete", {
+    digits,
+    transcript: verified.ok ? speech : null,
+    verified: verified.ok,
+  });
+  return voiceTwimlResponse(xml);
+}
+
+const MISSED_DIAL_STATUSES = new Set(["busy", "no-answer", "failed", "canceled"]);
+
+// ─── GET|POST /api/webhooks/twilio/call-status ────────────────────────────────
+
+export async function handleCallStatus(request: Request, env: Env): Promise<Response> {
+  const entries = await parseForm(request);
+  const verified = await verify(env, request, entries);
+  if (!verified.ok) {
+    await audit(env, "twilio_call_status_rejected", { reason: verified.reason });
+    return json({ error: "invalid_signature", reason: verified.reason }, { status: verified.status });
+  }
+
+  const form = new Map(entries);
+  const url = new URL(request.url);
+  const dialStatus = (form.get("DialCallStatus") ?? form.get("CallStatus") ?? "").toLowerCase();
+  const callSid = form.get("CallSid") ?? form.get("ParentCallSid") ?? "";
+  const from = form.get("From") ?? "";
+  const clientId = url.searchParams.get("client_id");
+  const digits =
+    (url.searchParams.get("digits") ?? "").replace(/\D/g, "").slice(-10) ||
+    phoneDigits(from).replace(/^1/, "").slice(-10);
+  const transcript = capTranscript(url.searchParams.get("transcript") ?? "");
+
+  const isLsa = url.searchParams.get("lsa") === "1";
+  if (isLsa) {
+    await audit(env, "twilio_lsa_dial_status", {
+      call_sid: callSid,
+      dial_status: dialStatus,
+      from,
+    });
+    return twiml();
+  }
+
+  if (!MISSED_DIAL_STATUSES.has(dialStatus)) {
+    await audit(env, "twilio_call_status", { call_sid: callSid, dial_status: dialStatus, missed: false });
+    return twiml();
+  }
+
+  try {
+    await handleMissedCall(env, {
+      callSid,
+      dialStatus,
+      clientId,
+      digits,
+      from,
+      transcript,
+    });
+  } catch (e) {
+    console.error("[twilio-call-status] missed-call handler failed:", (e as Error).message);
+    await audit(env, "twilio_missed_call_error", {
+      call_sid: callSid,
+      error: (e as Error).message.slice(0, 300),
+    });
+  }
+
+  return twiml();
+}
+
+async function handleMissedCall(
+  env: Env,
+  args: {
+    callSid: string;
+    dialStatus: string;
+    clientId: string | null;
+    digits: string;
+    from: string;
+    transcript: string;
+  },
+): Promise<void> {
+  const hourKey = missedCallHourKey();
+  const toNumber = args.from.startsWith("+") ? args.from : args.digits ? `+1${args.digits}` : "";
+
+  if (args.clientId) {
+    const client = await env.DB.prepare(
+      "SELECT first_name, last_name, name FROM clients WHERE id = ?",
+    )
+      .bind(args.clientId)
+      .first<{ first_name: string | null; last_name: string | null; name: string | null }>();
+    const clientName =
+      [client?.first_name, client?.last_name].filter(Boolean).join(" ").trim() ||
+      (client?.name ?? "").trim() ||
+      "a known client";
+
+    await triggerNotification(env, "missed_call_client", {
+      clientId: args.clientId,
+      instanceKey: hourKey,
+    });
+    try {
+      await env.DB.prepare(
+        `INSERT INTO communications (id, client_id, channel, direction, summary, body, sent_via, created_at)
+         VALUES (?, ?, 'phone_call', 'inbound', ?, ?, 'system_auto', datetime('now'))`,
+      )
+        .bind(
+          crypto.randomUUID(),
+          args.clientId,
+          "Missed call",
+          `Dial status: ${args.dialStatus}. Auto-text sent if not opted out.`,
+        )
+        .run();
+    } catch (e) {
+      console.warn("[twilio-call-status] communications insert failed:", (e as Error).message);
+    }
+    await createOwnerInApp(env, {
+      message: `Missed call from ${clientName}`,
+      linkPath: `/app/clients/${args.clientId}`,
+      clientId: args.clientId,
+      dedupe: `missed_call:${args.clientId}:${hourKey}`,
+      triggerEvent: "missed_call",
+    });
+    await audit(env, "twilio_missed_call_client", {
+      call_sid: args.callSid,
+      client_id: args.clientId,
+      dial_status: args.dialStatus,
+    });
+    return;
+  }
+
+  if (args.transcript) {
+    const noteId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO smart_notes
+         (id, job_id, raw_content, entered_via, callback_phone, is_processed, processing_status, created_by, created_at)
+       VALUES (?, NULL, ?, 'missed_call', ?, 0, 'pending', 'system@twilio-webhook', datetime('now'))`,
+    )
+      .bind(noteId, args.transcript, args.digits || toNumber)
+      .run();
+
+    if (toNumber) {
+      await triggerNotification(env, "missed_call_unknown", {
+        instanceKey: `${args.digits}:${hourKey}`,
+        recipientPhone: toNumber,
+        recipientName: "Caller",
+        linkPath: "/app/voice-notes/unmatched",
+      });
+    }
+
+    await createOwnerInApp(env, {
+      message: `Missed call from ${args.digits || "unknown"}: "${args.transcript.slice(0, 120)}"`,
+      linkPath: "/app/voice-notes/unmatched",
+      dedupe: `missed_call:${args.digits}:${hourKey}`,
+      triggerEvent: "missed_call",
+    });
+    await audit(env, "twilio_missed_call_unknown", {
+      call_sid: args.callSid,
+      digits: args.digits,
+      note_id: noteId,
+      dial_status: args.dialStatus,
+    });
+    return;
+  }
+
+  await audit(env, "twilio_missed_call_silent", {
+    call_sid: args.callSid,
+    digits: args.digits,
+    dial_status: args.dialStatus,
+    priority: "low",
+  });
 }
 
 // ─── POST /api/webhooks/twilio/status ─────────────────────────────────────────

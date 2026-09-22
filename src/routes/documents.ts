@@ -195,6 +195,9 @@ export async function handleDocumentCreate(request: Request, env: Env): Promise<
   const origName = file instanceof File && typeof file.name === "string" ? file.name : "document";
   const title = str(form, "title") ?? origName;
   const bytes = await file.arrayBuffer();
+  const isSigned =
+    str(form, "is_signed") === "1" || str(form, "is_signed") === "true";
+  const signatureSource = str(form, "signature_source");
 
   const id = await insertDocument(env, {
     title,
@@ -207,9 +210,28 @@ export async function handleDocumentCreate(request: Request, env: Env): Promise<
     estimateId,
     category,
     uploadedBy: user.email,
+    isSigned,
   });
 
-  await logAudit(env, user.email, "document.upload", id, { title, category, context_type: contextType, job_id: jobId });
+  if (signatureSource === "jobber_import") {
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE documents
+          SET signature_data = ?, signed_date = COALESCE(signed_date, ?)
+        WHERE id = ?`,
+    )
+      .bind(
+        JSON.stringify({
+          source: "jobber_import",
+          note: "Original signed Jobber contract (reference) — no CHS BoldSign envelope",
+        }),
+        now,
+        id,
+      )
+      .run();
+  }
+
+  await logAudit(env, user.email, "document.upload", id, { title, category, context_type: contextType, job_id: jobId, estimate_id: estimateId });
   return json({ id, title, document_category: category, context_type: contextType, mirror_status: "pending" }, { status: 201 });
 }
 
@@ -227,6 +249,11 @@ export async function handleDocumentList(env: Env, url: URL): Promise<Response> 
   if (jobId) {
     where.push("job_id = ?");
     binds.push(jobId);
+  }
+  const estimateIdFilter = url.searchParams.get("estimate_id");
+  if (estimateIdFilter) {
+    where.push("estimate_id = ?");
+    binds.push(estimateIdFilter);
   }
   if (contextType) {
     where.push("context_type = ?");

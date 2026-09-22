@@ -44,3 +44,23 @@ export async function findClientByEmail(
     .bind(email.trim())
     .first<DedupClientMatch>();
 }
+
+/**
+ * Insert a minimal clients row (phone only, no name, no placeholder email).
+ * Caller MUST have already run findClientByPhone and gotten null.
+ */
+export async function createPhoneOnlyClient(
+  env: Env,
+  phone: string,
+  opts: { leadSource: string; createdBy: string },
+): Promise<string> {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO clients (id, phone, lead_source, synced_at, created_at, updated_at, created_by)
+     VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`,
+  )
+    .bind(id, phone, opts.leadSource, now, now, opts.createdBy)
+    .run();
+  return id;
+}

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { Button } from "../../components/ui/Button";
 import { FormField } from "../../components/ui/FormField";
 import { Spinner } from "../../components/ui/Spinner";
+import { ensureJpegPhoto } from "../../lib/heic";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -150,7 +151,10 @@ export function BidPage() {
       const form = new FormData();
       form.append("price", String(parsedPrice));
       if (notes.trim()) form.append("notes", notes.trim());
-      if (photo) form.append("photo", photo, photo.name || "attachment.jpg");
+      if (photo) {
+        const jpeg = await ensureJpegPhoto(photo);
+        form.append("photo", jpeg, jpeg.name || "attachment.jpg");
+      }
 
       await apiFetch(`/api/bid/${encodeURIComponent(token)}/submit`, { method: "POST", body: form });
       setSubmitted(true);

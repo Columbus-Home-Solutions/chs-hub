@@ -148,3 +148,7 @@
   min-width: 200px;
   margin: 0;
 }
+
+.voice-unmatched__actions a.btn {
+  text-decoration: none;
+}

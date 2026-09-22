@@ -113,6 +113,20 @@ function embedContractorSignatureInXml(docXml: string): string {
 }
 
 /**
+ * Repair WordprocessingML produced by a prior template patch that used
+ * lastIndexOf("<w:p") and accidentally matched <w:pPr>.
+ *
+ * That left nested <w:p><w:p> and an orphan <w:pPr> (no wrapping <w:p>) —
+ * a valid zip that desktop Word repairs, but Word Online refuses to open
+ * ("Sorry, Word ran into a problem opening this document in a browser").
+ */
+export function repairWordDocumentXml(xml: string): string {
+  return xml
+    .replace(/<w:p>\s*<w:p>/g, "<w:p>")
+    .replace(/<\/w:p>(<w:pPr(?:\s[^>]*)?\/?>)/g, "</w:p><w:p>$1");
+}
+
+/**
  * Takes a prepped .docx template (ArrayBuffer from R2) and a map of merge
  * fields, replaces every {{field_name}} in word/document.xml, and returns the
  * resulting .docx as a Uint8Array.
@@ -159,6 +173,7 @@ export async function generateDocument(
   // Include digits so payment_1_amount etc. are cleared when missing (BoldSign
   // text tags use | and are intentionally left alone).
   docXml = docXml.replace(/\$?\{\{[a-z0-9_]+\}\}/g, "");
+  docXml = repairWordDocumentXml(docXml);
 
   unzipped["word/document.xml"] = strToU8(docXml);
   return zipSync(unzipped);

@@ -8,7 +8,8 @@ import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatStatus, formatDateTime } from "../../lib/format";
-import { SOCIAL_TYPE_COLORS, type SocialPost } from "../../types";
+import { type SocialPost } from "../../types";
+import { PhotoTile, postTypeLabel } from "./PhotoTile";
 import { ApprovalQueue } from "./ApprovalQueue";
 import { ContentCalendar } from "./ContentCalendar";
 import { PublishedHistory } from "./PublishedHistory";
@@ -149,22 +150,36 @@ function DashboardTab(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.refreshKey]);
 
+  const attentionRef = useRef<HTMLDivElement>(null);
   const stats = useMemo(() => computeStats(posts), [posts]);
   const upcoming = useMemo(
     () =>
       posts
-        .filter((p) => (p.status === "approved" || p.status === "scheduled") && p.scheduled_date)
-        .sort((a, b) => (a.scheduled_date! < b.scheduled_date! ? -1 : 1))
-        .slice(0, 6),
+        .filter((p) => p.status === "pending_approval" || p.status === "approved" || p.status === "scheduled")
+        .sort((a, b) => (a.scheduled_date ?? "9999").localeCompare(b.scheduled_date ?? "9999"))
+        .slice(0, 12),
     [posts],
   );
+  const failed = useMemo(() => posts.filter((p) => p.status === "failed"), [posts]);
+
+  const retry = async (id: string) => {
+    try {
+      const r = await api.post<{ ok: boolean; reason?: string }>(`/api/social-posts/${id}/publish`, {});
+      if (r.ok) toast.push("success", "Publish retried.");
+      else toast.push("error", r.reason || "Retry did not publish.");
+      const again = await api.get<{ posts: SocialPost[] }>("/api/social-posts");
+      setPosts(again.posts);
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  };
 
   if (loading) return <Spinner center />;
 
   return (
     <div class="flex flex-col gap-md">
       <div class="social-stats">
-        <button class="social-stat" onClick={() => props.onGoTab("queue")} style={{ textAlign: "left" }}>
+        <button class="social-stat" onClick={() => props.onGoTab("queue")}>
           <div class="social-stat__value">{stats.pending}</div>
           <div class="social-stat__label">Pending approval</div>
         </button>
@@ -176,37 +191,55 @@ function DashboardTab(props: {
           <div class="social-stat__value">{stats.publishedThisMonth}</div>
           <div class="social-stat__label">Published this month</div>
         </div>
-        <button class="social-stat" onClick={() => props.onGoTab("history")} style={{ textAlign: "left" }}>
+        <button
+          class={`social-stat${stats.failed > 0 ? " social-stat--alert" : ""}`}
+          onClick={() => attentionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+        >
           <div class="social-stat__value">{stats.failed}</div>
           <div class="social-stat__label">Failed / needs attention</div>
         </button>
       </div>
 
+      <div ref={attentionRef}>
+        {failed.length > 0 && (
+          <Card title="Needs attention">
+            {failed.map((p) => (
+              <div class="attention-row" key={p.id}>
+                <PhotoTile post={p} size="sm" />
+                <div class="attention-row__body">
+                  <div class="flex gap-sm items-center flex-wrap">
+                    <strong>{postTypeLabel(p.post_type)}</strong>
+                    <Badge status={p.status}>{formatStatus(p.status)}</Badge>
+                  </div>
+                  <div class="social-cal__post-label">{p.caption || "No caption"}</div>
+                  <div class="attention-row__reason">{p.rejection_reason || "No failure reason recorded."}</div>
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => void retry(p.id)}>
+                  Retry
+                </Button>
+              </div>
+            ))}
+          </Card>
+        )}
+      </div>
+
       <Card title="Upcoming posts">
         {upcoming.length === 0 ? (
           <div class="empty-state">
-            <div class="empty-state__title">Nothing scheduled.</div>
+            <div class="empty-state__title">Nothing waiting or approved.</div>
             <Button variant="secondary" onClick={() => props.onGoTab("calendar")}>
               Generate a monthly schedule
             </Button>
           </div>
         ) : (
-          <div class="flex flex-col gap-sm">
+          <div class="upcoming-strip">
             {upcoming.map((p) => (
-              <button
-                key={p.id}
-                class="social-cal__post"
-                style={{ padding: "var(--space-sm)" }}
-                onClick={() => props.onEdit(p.id)}
-              >
-                <span class="social-dot" style={{ background: SOCIAL_TYPE_COLORS[p.post_type] }} />
-                <span class="social-cal__post-label" style={{ flex: 1 }}>
-                  {p.caption || formatStatus(p.post_type)}
-                </span>
-                <Badge status={p.status}>{formatStatus(p.status)}</Badge>
-                <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
-                  {formatDateTime(p.scheduled_date)}
-                </span>
+              <button key={p.id} class="upcoming-card" onClick={() => props.onEdit(p.id)}>
+                <PhotoTile post={p} size="lg" />
+                <div class="upcoming-card__meta">
+                  {postTypeLabel(p.post_type)}
+                  {p.scheduled_date ? ` · ${formatDateTime(p.scheduled_date)}` : ""}
+                </div>
               </button>
             ))}
           </div>

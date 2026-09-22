@@ -27,6 +27,16 @@ function patchXml(docxPath: string, outPath: string, patchFn: (xml: string) => s
   writeFileSync(outPath, Buffer.from(zipSync(zip, { level: 6 })));
 }
 
+/** Index of the last real <w:p> / <w:p …> start at or before `before` (never <w:pPr>). */
+function lastParagraphStart(xml: string, before: number): number {
+  const slice = xml.slice(0, before);
+  const re = /<w:p(?:\s|>)/g;
+  let idx = -1;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(slice))) idx = m.index;
+  return idx;
+}
+
 function escXml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -60,10 +70,9 @@ function patchWarranty(xml: string): string {
     throw new Error("warranty markers not found (What Is Covered / Transferability)");
   }
 
-  // Walk back to the containing <w:p> of "What Is Covered" heading
-  const pStart = xml.lastIndexOf("<w:p", startIdx);
-  // Walk back to the containing <w:p> of "Transferability" — keep that heading
-  const pEnd = xml.lastIndexOf("<w:p", endIdx);
+  // Walk back to the containing <w:p> (NOT <w:pPr> — lastIndexOf("<w:p") matches both).
+  const pStart = lastParagraphStart(xml, startIdx);
+  const pEnd = lastParagraphStart(xml, endIdx);
   if (pStart < 0 || pEnd < 0 || pEnd <= pStart) {
     throw new Error("could not locate paragraph boundaries for warranty body rewrite");
   }

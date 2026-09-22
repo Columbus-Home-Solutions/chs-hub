@@ -17,10 +17,18 @@ import {
   formatDate,
   formatToday,
 } from "./document-generator.js";
+import { renderContract } from "./contracts.js";
 import { depositFromSchedule } from "./deposit-from-schedule.js";
 import { paymentScheduleMergeFields } from "./payment-schedule-merge.js";
 import { ensureServiceAgreementTemplate } from "./service-agreement-template.js";
-import { getBoldSignConfig, getDocumentProperties, getEmbeddedSignLink, mapBoldSignDocumentStatus, sendDocumentForSignature } from "./boldsign.js";
+import {
+  getBoldSignConfig,
+  getDocumentProperties,
+  getEmbeddedSignLink,
+  mapBoldSignDocumentStatus,
+  revokeDocument,
+  sendDocumentForSignature,
+} from "./boldsign.js";
 import { applyPmFields, resolvePmFields } from "./pm-fields.js";
 import { loadWorkingAgreementAttachment } from "./working-agreement.js";
 
@@ -77,6 +85,149 @@ export function serializeSignatureMeta(meta: EstimateSignatureMeta): string {
   return JSON.stringify(meta);
 }
 
+/** BoldSign statuses that must not be revoked/replaced in place. */
+const TERMINAL_BOLDSIGN_STATUSES = new Set(["completed", "revoked", "declined", "expired"]);
+
+/** True when a stored envelope is still live and must be voided before regenerating. */
+export function priorBoldSignEnvelopeNeedsRevoke(meta: EstimateSignatureMeta): boolean {
+  if (!meta.boldsign_document_id) return false;
+  return !TERMINAL_BOLDSIGN_STATUSES.has(meta.signature_status ?? "");
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function formatUsd(n: number | null | undefined): string {
+  if (n == null) return "$0.00";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+}
+
+/**
+ * Re-render the portal's stored `estimates.contract_text` from current client,
+ * property, and payment-schedule data. Does not persist — callers write it.
+ */
+export async function renderEstimateContractText(
+  env: Env,
+  estimateId: string,
+): Promise<string | null> {
+  const est = await env.DB.prepare(
+    `SELECT e.include_contract, e.title, e.total, e.deposit_amount, e.billing_model,
+            c.name AS client_name, c.first_name AS c_first, c.last_name AS c_last,
+            er.property_address, er.property_city, er.property_state, er.property_zip
+       FROM estimates e
+       LEFT JOIN clients c ON c.id = e.client_id
+       LEFT JOIN estimate_requests er ON er.id = e.request_id
+      WHERE e.id = ?`,
+  )
+    .bind(estimateId)
+    .first<{
+      include_contract: number | null;
+      title: string | null;
+      total: number | null;
+      deposit_amount: number | null;
+      billing_model: string | null;
+      client_name: string | null;
+      c_first: string | null;
+      c_last: string | null;
+      property_address: string | null;
+      property_city: string | null;
+      property_state: string | null;
+      property_zip: string | null;
+    }>();
+
+  if (!est) return null;
+  if ((est.include_contract ?? 1) !== 1) return null;
+
+  const total = est.total ?? 0;
+  const schedule = (
+    await env.DB.prepare(
+      `SELECT description, is_deposit, fixed_amount, percentage, amount, sort_order
+         FROM payment_schedules WHERE estimate_id = ? ORDER BY sort_order ASC`,
+    )
+      .bind(estimateId)
+      .all<{
+        description: string;
+        is_deposit: number | null;
+        fixed_amount: number | null;
+        percentage: number | null;
+        amount: number | null;
+        sort_order: number;
+      }>()
+  ).results ?? [];
+
+  const clientName =
+    [est.c_first, est.c_last].filter(Boolean).join(" ").trim() || est.client_name || null;
+  const propertyAddress =
+    [est.property_address, est.property_city, est.property_state, est.property_zip]
+      .filter(Boolean)
+      .join(", ") || null;
+  const scheduleLines = schedule.map((p) => {
+    const amt =
+      p.fixed_amount != null
+        ? p.fixed_amount
+        : p.percentage != null
+          ? round2((p.percentage / 100) * total)
+          : (p.amount ?? 0);
+    const pct = p.percentage != null && p.fixed_amount == null ? ` (${p.percentage}%)` : "";
+    const dep = (p.is_deposit ?? 0) === 1 ? " — deposit" : "";
+    return `${p.description}: ${formatUsd(amt)}${pct}${dep}`;
+  });
+
+  return renderContract(env, {
+    client_name: clientName,
+    property_address: propertyAddress,
+    job_title: est.title,
+    total,
+    deposit_amount: est.deposit_amount,
+    billing_model: est.billing_model,
+    payment_schedule_lines: scheduleLines,
+  });
+}
+
+/** Void live BoldSign envelopes for this estimate before minting a replacement. */
+async function revokePriorUnsignedEstimateContracts(
+  env: Env,
+  estimateId: string,
+): Promise<string[]> {
+  const rows = (
+    await env.DB.prepare(
+      `SELECT id, signature_data
+         FROM documents
+        WHERE estimate_id = ?
+          AND context_type = 'estimate'
+          AND document_category = 'contract'
+          AND COALESCE(is_active, 1) = 1`,
+    )
+      .bind(estimateId)
+      .all<{ id: string; signature_data: string | null }>()
+  ).results ?? [];
+
+  const revoked: string[] = [];
+  const config = await getBoldSignConfig(env);
+  for (const row of rows) {
+    const meta = parseSignatureMeta(row.signature_data);
+    if (!priorBoldSignEnvelopeNeedsRevoke(meta) || !meta.boldsign_document_id) continue;
+    if (config) {
+      try {
+        await revokeDocument(
+          config,
+          meta.boldsign_document_id,
+          "Client details corrected — regenerating contract with current name and contact",
+        );
+      } catch (e) {
+        console.warn(
+          `[estimate-contract] revoke prior ${meta.boldsign_document_id}: ${(e as Error).message}`,
+        );
+      }
+    }
+    meta.signature_status = "revoked";
+    await persistEstimateSignatureMeta(env, row.id, meta);
+    revoked.push(meta.boldsign_document_id);
+  }
+  return revoked;
+}
+
 /** Latest active estimate-phase contract document, if any. */
 export async function loadEstimateContractDoc(
   env: Env,
@@ -124,6 +275,15 @@ export async function shouldSkipContractAutogen(
   templateType: string,
 ): Promise<boolean> {
   if (!CONTRACT_TEXT_TAG_TYPES.has(templateType)) return false;
+  const imported = await env.DB.prepare(
+    `SELECT e.data_source
+       FROM jobs j
+       JOIN estimates e ON e.id = j.estimate_id
+      WHERE j.id = ?`,
+  )
+    .bind(jobId)
+    .first<{ data_source: string | null }>();
+  if (imported?.data_source === "jobber_accepted_import") return true;
   return estimateHasSignedContractForJob(env, jobId);
 }
 
@@ -250,11 +410,15 @@ export interface GenerateEstimateContractResult {
   skipped: boolean;
   reason?: string;
   boldsign_sent?: boolean;
+  revoked_document_ids?: string[];
+  signer_name?: string;
 }
 
 /**
  * Generate the Service Agreement .docx, attach to the estimate, and send for
  * BoldSign signature when configured. Non-blocking failures log and return skipped.
+ * Re-resolves merge fields from the current `clients` row. Prior unsigned
+ * BoldSign envelopes are revoked via the API — they cannot be edited in place.
  */
 export async function generateAndSendEstimateContract(
   env: Env,
@@ -264,7 +428,7 @@ export async function generateAndSendEstimateContract(
   _opts?: { exec?: { waitUntil: (p: Promise<unknown>) => void } },
 ): Promise<GenerateEstimateContractResult> {
   const row = await env.DB.prepare(
-    `SELECT id, estimate_number, title, billing_model, include_contract, contract_template_id, client_id
+    `SELECT id, estimate_number, title, billing_model, include_contract, contract_template_id, client_id, data_source
        FROM estimates WHERE id = ?`,
   )
     .bind(estimateId)
@@ -276,11 +440,23 @@ export async function generateAndSendEstimateContract(
       include_contract: number | null;
       contract_template_id: string | null;
       client_id: string | null;
+      data_source: string | null;
     }>();
 
   if (!row) return { docId: null, skipped: true, reason: "estimate_not_found" };
+  if (row.data_source === "jobber_accepted_import") {
+    return { docId: null, skipped: true, reason: "jobber_accepted_import" };
+  }
   if ((row.include_contract ?? 1) !== 1) {
     return { docId: null, skipped: true, reason: "no_contract" };
+  }
+
+  const existing = await loadEstimateContractDoc(env, estimateId);
+  if (existing) {
+    const existingMeta = parseSignatureMeta(existing.signature_data);
+    if (existingMeta.signature_status === "completed" || (existing.is_signed ?? 0) === 1) {
+      return { docId: existing.id, skipped: true, reason: "already_signed" };
+    }
   }
 
   const templateType = resolveEstimateTemplateType(row.contract_template_id, row.billing_model);
@@ -302,6 +478,8 @@ export async function generateAndSendEstimateContract(
   const slugType = templateType.replace(/_/g, "-");
   const estNum = row.estimate_number != null ? String(row.estimate_number).padStart(3, "0") : "000";
   const filename = `${slugType}-EST-${estNum}-${today}.docx`;
+
+  const revoked_document_ids = await revokePriorUnsignedEstimateContracts(env, estimateId);
 
   // Supersede any prior estimate-phase contract docs on re-send.
   await env.DB.prepare(
@@ -338,7 +516,7 @@ export async function generateAndSendEstimateContract(
   const config = await getBoldSignConfig(env);
   if (!config) {
     console.warn("[estimate-contract] BoldSign not configured — portal will use typed signature fallback");
-    return { docId, skipped: false, boldsign_sent: false };
+    return { docId, skipped: false, boldsign_sent: false, revoked_document_ids };
   }
 
   const client = row.client_id
@@ -361,7 +539,7 @@ export async function generateAndSendEstimateContract(
 
   if (!signerEmail) {
     console.warn("[estimate-contract] client email missing — BoldSign send skipped");
-    return { docId, skipped: false, boldsign_sent: false };
+    return { docId, skipped: false, boldsign_sent: false, revoked_document_ids, signer_name: signerName };
   }
 
   const docRow = await env.DB.prepare("SELECT r2_key FROM documents WHERE id = ?")
@@ -370,7 +548,7 @@ export async function generateAndSendEstimateContract(
   const obj = docRow ? await env.FILES.get(docRow.r2_key) : null;
   if (!obj) {
     console.error("[estimate-contract] generated doc missing from R2");
-    return { docId, skipped: false, boldsign_sent: false };
+    return { docId, skipped: false, boldsign_sent: false, revoked_document_ids, signer_name: signerName };
   }
 
   const docxBytes = await obj.arrayBuffer();
@@ -420,7 +598,13 @@ export async function generateAndSendEstimateContract(
     // sign → pay). A raw BoldSign URL at send time reads as "sign first".
     // Job-phase docs still call notifySignatureNeeded from their own send paths.
 
-    return { docId, skipped: false, boldsign_sent: true };
+    return {
+      docId,
+      skipped: false,
+      boldsign_sent: true,
+      revoked_document_ids,
+      signer_name: signerName,
+    };
   } catch (e) {
     const msg = (e as Error).message;
     console.error("[estimate-contract] BoldSign send failed:", msg);
@@ -431,7 +615,14 @@ export async function generateAndSendEstimateContract(
     )
       .bind(serializeSignatureMeta(meta), docId)
       .run();
-    return { docId, skipped: false, boldsign_sent: false, reason: msg.slice(0, 300) };
+    return {
+      docId,
+      skipped: false,
+      boldsign_sent: false,
+      reason: msg.slice(0, 300),
+      revoked_document_ids,
+      signer_name: signerName,
+    };
   }
 }
 

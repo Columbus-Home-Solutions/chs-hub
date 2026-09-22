@@ -80,6 +80,8 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
       return meta.jobId ? `/jobs/${meta.jobId}?tab=punch_list` : "/jobs";
     case "voice_note_unmatched":
       return "/voice-notes/unmatched";
+    case "missed_call":
+      return "/voice-notes/unmatched";
     case "ai_extraction_failure":
       // Link to the job's Photos tab if a single job, otherwise Financial Expenses for review.
       return meta.jobId ? `/jobs/${meta.jobId}?tab=photos` : "/financial?tab=expenses";
@@ -456,15 +458,15 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
 
     // MEDIUM/HIGH: punch list + voice note in-app notifications (Sprint 33)
     env.DB.prepare(
-      `SELECT id, trigger_event, body, job_id, created_at
+      `SELECT id, trigger_event, body, job_id, link_path, created_at
          FROM notification_logs
         WHERE channel = 'in_app'
-          AND trigger_event IN ('punch_list_item_done', 'punch_list_complete', 'voice_note_unmatched')
+          AND trigger_event IN ('punch_list_item_done', 'punch_list_complete', 'voice_note_unmatched', 'missed_call')
           AND status IN ('queued', 'sent', 'delivered')
           AND created_at >= datetime('now', '-14 days')
         ORDER BY created_at DESC
         LIMIT 15`,
-    ).all<{ id: string; trigger_event: string; body: string; job_id: string | null; created_at: string }>(),
+    ).all<{ id: string; trigger_event: string; body: string; job_id: string | null; link_path: string | null; created_at: string }>(),
 
     // HIGH: AI extraction failures in last 24h — groups by source feature for extensibility.
     // Threshold: 2+ failures within window → alert. Auto-clears when failures drop below threshold.
@@ -642,7 +644,9 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     const priority =
       row.trigger_event === "punch_list_complete"
         ? "high"
-        : row.trigger_event === "voice_note_unmatched" || row.trigger_event === "punch_list_item_done"
+        : row.trigger_event === "voice_note_unmatched" ||
+            row.trigger_event === "punch_list_item_done" ||
+            row.trigger_event === "missed_call"
           ? "medium"
           : "medium";
     items.push({
@@ -651,7 +655,9 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       type: row.trigger_event,
       title: row.body,
       meta: { jobId: row.job_id, notificationLogId: row.id },
-      link: actionItemLink(row.trigger_event, { jobId: row.job_id }),
+      link: row.link_path
+        ? row.link_path.replace(/^\/app/, "")
+        : actionItemLink(row.trigger_event, { jobId: row.job_id }),
       createdAt: row.created_at,
     });
   }

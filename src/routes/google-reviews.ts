@@ -10,6 +10,7 @@
  *   POST   /api/google-reviews/:id/reply        post to GBP when live; else local save
  *   PUT    /api/google-reviews/:id/match        confirm or dismiss client-match suggestion
  *   POST   /api/google-reviews/:id/feature      upsert into saved_reviews (feature on quote page)
+ *   POST   /api/google-reviews/:id/social-post draft a review-highlight post (any rating)
  */
 
 import type { Env } from "../env.js";
@@ -17,6 +18,7 @@ import { guard } from "../middleware/guard.js";
 import { claudeMessages } from "../lib/claude.js";
 import { DEFAULT_BRAND_VOICE } from "../lib/social.js";
 import { postGbpReply } from "../lib/google-reviews-sync.js";
+import { createReviewHighlightPost } from "../lib/social-review-post.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 
@@ -443,4 +445,34 @@ export async function handleGoogleReviewFeature(
     await env.DB.prepare("UPDATE saved_reviews SET is_active = 0 WHERE id = ?").bind(savedId).run();
     return json({ featured: false });
   }
+}
+
+// ─── POST /api/google-reviews/:id/social-post ────────────────────────────────
+// Manual "Feature as social post" — any rating, any time. Auto 5-star drafts
+// are created inside the GBP sync insert, not here.
+
+export async function handleGoogleReviewSocialPost(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, [...WRITE_ROLES]);
+  if (guarded instanceof Response) return guarded;
+
+  const review = await env.DB.prepare("SELECT * FROM google_reviews WHERE id = ?")
+    .bind(id)
+    .first<ReviewRow>();
+  if (!review) return err(404, "not_found", "Review not found");
+
+  const result = await createReviewHighlightPost(
+    env,
+    {
+      id: review.id,
+      reviewer_name: review.reviewer_name,
+      comment_text: review.comment_text,
+      star_rating: review.star_rating,
+    },
+    "manual",
+  );
+  return json({ ok: true, post_id: result.id, created: result.created }, { status: 201 });
 }

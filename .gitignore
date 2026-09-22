@@ -42,9 +42,11 @@ scripts/dev-seed-sprint4.local.sql
 scripts/*.local.sql
 scripts/.e2e-cookie.local
 backup_pre_sprint*_remote_*.sql
+backup_pre_0124_remote_*.sql
 scripts/dev-seed-sprint6.local.sql
 scripts/dev-seed-sprint8.local.sql
 scripts/dev-seed-sprint10.local.sql
 scripts/dev-seed-sprint11.local.sql
 scripts/dev-seed-sprint12.local.sql
 documents/
+tmp-warranty/

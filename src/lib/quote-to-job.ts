@@ -78,6 +78,10 @@ export interface DepositPayment {
   stripeFee?: number | null;
   /** Stripe PaymentIntent id, for reconciliation (electronic only). */
   stripePaymentId?: string | null;
+  /** Calendar date the deposit was actually received (YYYY-MM-DD). Defaults to today. */
+  receivedDate?: string | null;
+  /** Existing payments.data_source marker, e.g. 'jobber_import'. Never implies a Stripe charge. */
+  dataSource?: string | null;
 }
 
 export type ConversionOutcome =
@@ -200,6 +204,10 @@ export async function convertQuoteToJob(
 
   const nowIso = new Date().toISOString();
   const today = nowIso.slice(0, 10);
+  const receivedDate =
+    payment.receivedDate && /^\d{4}-\d{2}-\d{2}/.test(payment.receivedDate)
+      ? payment.receivedDate.slice(0, 10)
+      : today;
 
   // ── Case 2: bare job exists → complete the deferred steps in place. ────
   if (existing) {
@@ -353,8 +361,8 @@ export async function convertQuoteToJob(
     `INSERT INTO payments (
        id, job_id, estimate_id, client_id, amount, convenience_fee, stripe_fee,
        net_amount, payment_method, stripe_payment_id,
-       received_date, collected_at, notes, synced_at, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       received_date, collected_at, notes, synced_at, created_at, data_source
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     paymentId,
     jobId,
@@ -366,11 +374,12 @@ export async function convertQuoteToJob(
     netAmount,
     payment.method,
     payment.stripePaymentId ?? null,
-    today,
+    receivedDate,
     nowIso,
     payment.reference ?? null,
     nowIso,
     nowIso,
+    payment.dataSource ?? null,
   );
 
   const linkRequest = env.DB.prepare(

@@ -55,9 +55,18 @@ export const SETTING_IG_USER_TOKEN = "social_instagram_user_token";
 export const SETTING_GEMINI_KEY = "social_gemini_api_key";
 /** @deprecated Use SETTING_GEMINI_KEY — kept for migration reference only. */
 export const SETTING_REPLICATE_KEY = SETTING_GEMINI_KEY;
-/** When "false" / "0", disables Imagen even if Google credentials are present. */
+/** When "false" / "0", disables Gemini image gen even if Google credentials are present. */
 export const SETTING_IMAGE_GEN_ENABLED = "image_gen_enabled";
 export const SETTING_IMAGE_GEN_COUNT = "social_image_gen_count";
+/**
+ * Vertex model ID for image gen. A settings value so a retirement is a
+ * one-field update. Falls back to IMAGE_GEN_MODEL when the row is missing.
+ */
+export const SETTING_IMAGE_GEN_MODEL = "image_gen_model_id";
+/** JSON streak state for the weekly image-gen liveness check. */
+export const SETTING_IMAGE_GEN_PROBE = "image_gen_probe_state";
+/** JSON cooldown state for the nightly Facebook/Instagram token check. */
+export const SETTING_SOCIAL_TOKEN_HEALTH = "social_token_health_state";
 export const SETTING_HASHTAG_POOL = "social_hashtag_pool";
 
 /** Default brand voice — owner can override via the settings row without a deploy. */

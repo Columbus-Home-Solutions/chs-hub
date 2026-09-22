@@ -8,6 +8,7 @@ import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { formatStatus, formatDateTime } from "../../lib/format";
 import { SOCIAL_POST_TYPES, SOCIAL_TYPE_COLORS, type SocialPost } from "../../types";
+import { PhotoTile } from "./PhotoTile";
 
 interface Props {
   onEdit: (id: string, intent?: "default" | "approve") => void;
@@ -169,10 +170,6 @@ function QueueCard(props: {
     startX.current = null;
   };
 
-  const hero =
-    p.ai_generated_image_url ??
-    (p.photos && p.photos.length > 0 ? p.photos[p.photos.length - 1].thumb_url : null);
-
   return (
     <div
       class="social-queue-card"
@@ -189,17 +186,16 @@ function QueueCard(props: {
           aria-label="Select for batch approve"
           class="social-queue-card__check"
         />
-        {hero ? (
-          <img src={hero} alt="" class="social-queue-card__thumb" />
-        ) : (
-          <div class="social-queue-card__thumb social-queue-card__thumb--empty">No image</div>
-        )}
+        <PhotoTile post={p} size="md" />
       </div>
 
       <div class="social-queue-card__body">
         <div class="flex gap-sm items-center flex-wrap mb-sm">
           <span class="social-dot" style={{ background: SOCIAL_TYPE_COLORS[p.post_type] }} />
           <Badge tone="neutral">{formatStatus(p.post_type)}</Badge>
+          {(p.generated_by === "ai_schedule" || p.generated_by === "ai_job_complete") && (
+            <Badge tone="neutral">🤖 auto-drafted</Badge>
+          )}
           <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
             {p.scheduled_date ? formatDateTime(p.scheduled_date) : "unscheduled"}
           </span>
@@ -232,15 +228,42 @@ function QueueCard(props: {
           <Button size="sm" variant="tertiary" onClick={props.onEdit}>
             Open editor
           </Button>
-          <Button size="sm" variant="tertiary" onClick={props.onReject}>
-            Reject
-          </Button>
-          <Button size="sm" variant="danger" onClick={props.onDelete}>
-            Delete
-          </Button>
+          <OverflowMenu onReject={props.onReject} onDelete={props.onDelete} />
         </div>
         <div class="social-swipe-hint text--muted">Swipe right to approve · left to reject</div>
       </div>
+    </div>
+  );
+}
+
+function OverflowMenu(props: { onReject: () => void; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [open]);
+
+  return (
+    <div class="menu-wrap" ref={ref}>
+      <Button size="sm" variant="tertiary" aria-label="More actions" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        ⋯
+      </Button>
+      {open && (
+        <div class="menu-wrap__panel" role="menu">
+          <button type="button" class="menu-wrap__item" role="menuitem" onClick={() => { setOpen(false); props.onReject(); }}>
+            Reject
+          </button>
+          <button type="button" class="menu-wrap__item menu-wrap__item--danger" role="menuitem" onClick={() => { setOpen(false); props.onDelete(); }}>
+            Delete
+          </button>
+        </div>
+      )}
     </div>
   );
 }

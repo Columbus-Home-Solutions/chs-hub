@@ -153,8 +153,8 @@ export interface Env {
   /** BoldSign template for client conditional lien waiver (completion package flow). */
   BOLDSIGN_LIEN_WAIVER_CLIENT_TEMPLATE_ID?: string;
 
-  // ─── Google Cloud (Imagen + Maps) ─────────────────────────────────
-  // Service account for Vertex AI Imagen 3 (image gen). All three required.
+  // ─── Google Cloud (Gemini image + Maps) ───────────────────────────
+  // Service account for Vertex AI Gemini image gen. All three required.
   GOOGLE_CLIENT_EMAIL?: string;
   GOOGLE_PROJECT_ID?: string;
   GOOGLE_PRIVATE_KEY?: string;

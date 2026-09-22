@@ -12,7 +12,7 @@ import { Spinner } from "../../components/ui/Spinner";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime, formatPhone } from "../../lib/format";
 import "../../styles/voice-note.css";
 
 const DISMISS_KEY = "chs_voice_notes_dismissed";
@@ -21,6 +21,7 @@ interface UnmatchedNote {
   id: string;
   raw_content: string;
   entered_via: string;
+  callback_phone: string | null;
   created_at: string;
   processing_status: string | null;
 }
@@ -44,6 +45,15 @@ function loadDismissed(): Set<string> {
 
 function saveDismissed(ids: Set<string>) {
   localStorage.setItem(DISMISS_KEY, JSON.stringify([...ids]));
+}
+
+function telHref(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length === 10) return `tel:+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `tel:+${digits}`;
+  if (digits.length >= 10) return `tel:+${digits}`;
+  return null;
 }
 
 export function UnmatchedVoiceNotes() {
@@ -105,7 +115,8 @@ export function UnmatchedVoiceNotes() {
       </div>
 
       <p class="text--muted" style={{ marginBottom: "var(--space-lg)" }}>
-        These notes couldn't be matched to a job. Assign each one or dismiss it.
+        Voice notes that couldn't be matched to a job, plus missed calls from unknown numbers that
+        left a name or reason. Assign, call back, or dismiss.
       </p>
 
       {loading ? (
@@ -122,11 +133,24 @@ export function UnmatchedVoiceNotes() {
           <div>You're all caught up!</div>
         </div>
       ) : (
-        visible.map((note) => (
+        visible.map((note) => {
+          const missed = note.entered_via === "missed_call";
+          const callHref = telHref(note.callback_phone);
+          return (
           <div class="voice-unmatched__card" key={note.id}>
-            <div class="voice-unmatched__meta">🎤 {formatDateTime(note.created_at)}</div>
+            <div class="voice-unmatched__meta">
+              {missed ? "📞" : "🎤"} {formatDateTime(note.created_at)}
+              {missed && note.callback_phone ? ` · ${formatPhone(note.callback_phone)}` : ""}
+            </div>
             <div class="voice-unmatched__text">&ldquo;{note.raw_content}&rdquo;</div>
             <div class="voice-unmatched__actions">
+              {missed && callHref ? (
+                <a class="btn btn--primary btn--sm" href={callHref}>
+                  Call back
+                </a>
+              ) : null}
+              {!missed ? (
+                <>
               <FormField label="Assign to job">
                 <Select
                   value={assignJob[note.id] ?? ""}
@@ -142,12 +166,15 @@ export function UnmatchedVoiceNotes() {
               >
                 {busyId === note.id ? "Saving…" : "Assign"}
               </Button>
+                </>
+              ) : null}
               <Button variant="tertiary" size="sm" onClick={() => dismiss(note.id)}>
                 Dismiss
               </Button>
             </div>
           </div>
-        ))
+          );
+        })
       )}
     </div>
   );

@@ -11,7 +11,7 @@
  *   POST   /api/social-posts/:id/approve     pending/draft → approved
  *   POST   /api/social-posts/:id/reject      → rejected (+ reason)
  *   POST   /api/social-posts/:id/regenerate  re-run caption (+ optional hashtags)
- *   POST   /api/social-posts/:id/generate-image  Gemini Imagen image (gated on key)
+ *   POST   /api/social-posts/:id/generate-image  Gemini image (gated on key)
  *   GET    /api/social-posts/:id/image       stream the generated image from R2
  *
  * Soft vs. hard delete: `social_posts` has NO is_active column (confirmed in
@@ -24,11 +24,15 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { generateAndStoreImage, streamSocialImage } from "../lib/image-gen.js";
 import {
+  assembleHashtags,
+  captionWithHeadline,
+  cityFromContext,
   generateCaptions,
   generateHashtags,
   generateImageSubjectPrompt,
   type CaptionContext,
 } from "../lib/social-ai.js";
+import { attachAiImageIfNeeded } from "../lib/social-image-attach.js";
 import {
   err,
   json,
@@ -345,7 +349,70 @@ export async function handleSocialPostReject(request: Request, env: Env, id: str
     .bind(reason, id)
     .run();
   await logSocialAudit(env, user.email, "social_post_rejected", id, { reason });
+
+  // Job, seasonal, tips, and promotion drafts are cheap to redo. Review
+  // highlights stay rejected — the words belong to the customer.
+  if (shouldRegenerateOnReject(row.post_type)) {
+    const replacement = await replaceRejectedPost(env, row, user.email);
+    return json({ ok: true, rejected_id: id, replacement_id: replacement?.id ?? null });
+  }
   return handleSocialPostGet(env, id);
+}
+
+const REGENERATE_ON_REJECT = new Set(["job_completion", "seasonal_tips", "tips_tricks", "promotion"]);
+
+export function shouldRegenerateOnReject(postType: string): boolean {
+  return REGENERATE_ON_REJECT.has(postType);
+}
+
+/** Fresh pending draft that takes the rejected post's slot in the queue. */
+async function replaceRejectedPost(
+  env: Env,
+  row: SocialPostRow,
+  actor: string,
+): Promise<{ id: string } | null> {
+  try {
+    const ctx = await buildContextForPost(env, row);
+    const captionRes = await generateCaptions(env, ctx);
+    const fallback =
+      row.post_type === "job_completion"
+        ? "Another project complete! Free estimates — call us!"
+        : "A fresh tip from your central-Arkansas remodeling team. Free estimates — call us!";
+    const caption = captionWithHeadline(
+      captionRes.headline,
+      captionRes.ok ? captionRes.options[0]! : fallback,
+    );
+    const id = crypto.randomUUID();
+    const hashtags = assembleHashtags(cityFromContext(ctx), captionRes.tradeTags, id);
+    const generatedBy = row.post_type === "job_completion" ? "ai_job_complete" : "ai_schedule";
+    await env.DB.prepare(
+      `INSERT INTO social_posts
+         (id, post_type, status, caption, hashtags, platform, scheduled_date,
+          job_id, photo_ids, generated_by, created_at)
+       VALUES (?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    )
+      .bind(
+        id,
+        row.post_type,
+        caption,
+        JSON.stringify(hashtags),
+        row.platform,
+        row.scheduled_date,
+        row.job_id,
+        row.photo_ids,
+        generatedBy,
+      )
+      .run();
+    await attachAiImageIfNeeded(env, id, row.post_type, ctx);
+    await logSocialAudit(env, actor, "social_post_regenerated", id, {
+      replaced: row.id,
+      post_type: row.post_type,
+    });
+    return { id };
+  } catch (err) {
+    console.error("[social] reject regenerate failed:", (err as Error).message);
+    return null;
+  }
 }
 
 // ─── DELETE /api/social-posts/:id ───────────────────────────────────────────
@@ -444,7 +511,7 @@ export async function handleSocialPostGenerateImage(request: Request, env: Env, 
     return json({
       ok: false,
       unconfigured: true,
-      message: "Image generation isn't configured — set Google Imagen credentials or attach a photo manually.",
+      message: "Image generation isn't configured — set Google Vertex credentials or attach a photo manually.",
     });
   }
 
@@ -460,7 +527,7 @@ export async function handleSocialPostGenerateImage(request: Request, env: Env, 
   const result = await generateAndStoreImage(env, id, prompt);
   if (!result.ok) {
     const message = result.unconfigured
-      ? "Image generation isn't configured — set Google Imagen credentials or attach a photo manually."
+      ? "Image generation isn't configured — set Google Vertex credentials or attach a photo manually."
       : result.error ?? "Image generation failed.";
     return json({ ok: false, unconfigured: result.unconfigured, error: result.error, message });
   }

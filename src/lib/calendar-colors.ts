@@ -5,7 +5,19 @@ export type CalendarEventType =
   | "warranty_call"
   | "estimate_visit"
   | "proposal_review"
+  | "permit_inspection"
+  | "deadline"
   | "google_meeting";
+
+export const TYPE_PROPOSAL_REVIEW = "#EC4899";
+export const TYPE_PERMIT_INSPECTION = "#6366F1";
+export const TYPE_DEADLINE = "#EF4444";
+export const TYPE_WARRANTY_CALL = "#14B8A6";
+export const TYPE_ESTIMATE_VISIT = "#06B6D4";
+export const TYPE_GOOGLE_MEETING = "#8B5CF6";
+export const TYPE_UNASSIGNED = "#6B7280";
+
+export type JobRag = "on_track" | "at_risk" | "behind";
 
 export interface CalendarEvent {
   id: string;
@@ -30,17 +42,62 @@ export interface CalendarEvent {
   status: string | null;
 }
 
+export interface ScheduleJob {
+  id: string;
+  job_number: number | null;
+  title: string | null;
+  status: string | null;
+  start_date: string | null;
+  target_end_date: string | null;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  assigned_to_color: string | null;
+  rag: JobRag;
+}
+
 export function getCalendarColor(event: CalendarEvent): string {
   if (event.type === "warranty_call") {
-    if (!event.assigned_user_id && !event.assigned_sub_id) return "#6B7280";
-    return "#F59E0B";
+    if (!event.assigned_user_id && !event.assigned_sub_id) return TYPE_UNASSIGNED;
+    return TYPE_WARRANTY_CALL;
   }
-  if (event.type === "google_meeting") return "#8B5CF6";
-  if (event.type === "estimate_visit") return "#06B6D4";
-  if (event.type === "proposal_review") return "#6366F1";
+  if (event.type === "google_meeting") return TYPE_GOOGLE_MEETING;
+  if (event.type === "estimate_visit") return TYPE_ESTIMATE_VISIT;
+  if (event.type === "proposal_review") return TYPE_PROPOSAL_REVIEW;
+  if (event.type === "permit_inspection") return TYPE_PERMIT_INSPECTION;
+  if (event.type === "deadline") return TYPE_DEADLINE;
+  // Job tasks stay on the assigned user's color — never the sub's.
   if (event.assigned_user_color) return event.assigned_user_color;
-  if (event.assigned_sub_color) return event.assigned_sub_color;
-  return "#6B7280";
+  return TYPE_UNASSIGNED;
+}
+
+export const CALENDAR_LEGEND: Array<{ color: string; label: string }> = [
+  { color: "#3B82F6", label: "Job (assignee color)" },
+  { color: TYPE_WARRANTY_CALL, label: "Warranty call" },
+  { color: TYPE_ESTIMATE_VISIT, label: "Estimate visit" },
+  { color: TYPE_PROPOSAL_REVIEW, label: "Proposal review" },
+  { color: TYPE_PERMIT_INSPECTION, label: "Permit Inspection" },
+  { color: TYPE_DEADLINE, label: "Deadline" },
+  { color: TYPE_GOOGLE_MEETING, label: "Google Meet" },
+  { color: TYPE_UNASSIGNED, label: "Unassigned" },
+];
+
+export function eventTypeLabel(type: CalendarEventType): string {
+  switch (type) {
+    case "job_appointment":
+      return "Job appointment";
+    case "warranty_call":
+      return "Warranty call";
+    case "estimate_visit":
+      return "Estimate visit";
+    case "proposal_review":
+      return "Proposal Review";
+    case "permit_inspection":
+      return "Permit Inspection";
+    case "deadline":
+      return "Deadline";
+    case "google_meeting":
+      return "Google Meet";
+  }
 }
 
 export function datePart(isoOrDate: string | null): string | null {

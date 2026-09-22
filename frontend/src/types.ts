@@ -348,6 +348,14 @@ export const WON_PAYMENT_METHODS: { value: string; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
+/** Invoice-side equivalent of Mark as Won — money collected outside CHS. */
+export const HISTORICAL_PAYMENT_METHODS: { value: string; label: string }[] = [
+  ...WON_PAYMENT_METHODS,
+  { value: "jobber", label: "Migrated from Jobber" },
+];
+
+export const HISTORICAL_INVOICE_BADGE = "Paid externally — not collected in CHS";
+
 export const ESTIMATE_SENT_TOOLTIP =
   "Estimate must be sent to the client before marking as won.";
 
@@ -399,7 +407,7 @@ export const LOST_REASONS = [
 
 export type EstimateMode = "lump_sum" | "trade_by_trade";
 export type BillingModel = "fixed_price" | "fifty_fifty" | "trade_by_trade" | "cost_plus" | "per_line_item";
-export type EstimateStatus = "draft" | "sent" | "viewed" | "approved" | "expired" | "revised";
+export type EstimateStatus = "draft" | "sent" | "viewed" | "signed" | "approved" | "expired" | "revised";
 
 export const SUB_ITEM_CATEGORIES = [
   "material",
@@ -520,6 +528,9 @@ export interface Estimate {
   last_resent_at: string | null;
   /** ISO timestamps of every manual resend (audit trail). */
   resent_dates?: string[];
+  data_source?: string | null;
+  imported_signed_at?: string | null;
+  imported_signed_note?: string | null;
   created_at: string | null;
   updated_at: string | null;
   line_items: EstimateLineItem[];
@@ -888,6 +899,8 @@ export interface JobDetailResponse {
     reversal_reason: string | null;
     reversed_at: string | null;
     portal_url: string | null;
+    schedule_entry_count?: number;
+    has_detailed_schedule?: boolean;
   };
   financial: {
     contract_total: number | null;

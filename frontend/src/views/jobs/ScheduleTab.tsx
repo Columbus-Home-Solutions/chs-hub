@@ -1,4 +1,4 @@
-import { useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -11,6 +11,13 @@ import { useToast } from "../../store/toast";
 import { useWeather, weatherEmoji } from "../../store/weather";
 import { api, ApiError } from "../../api";
 import { formatDate, formatStatus } from "../../lib/format";
+import { TYPE_DEADLINE } from "../../lib/calendar-colors";
+import {
+  dateOnly,
+  daysPastTarget,
+  isOutOfRangeEntry,
+  overallScheduleProgress,
+} from "../../lib/schedule-banner";
 
 /**
  * Job Detail → Schedule tab (Sprint 13). A day-by-day grid spanning the job's
@@ -30,6 +37,7 @@ interface ScheduleEntry {
   end_time: string | null;
   notes: string | null;
   status: string;
+  entry_type?: "job_task" | "deadline";
   sub_notified: boolean;
 }
 interface ScheduleResponse {
@@ -75,7 +83,13 @@ function daysBetween(start: string, end: string): string[] {
   return out;
 }
 
-export function ScheduleTab({ jobId }: { jobId: string }) {
+export function ScheduleTab({
+  jobId,
+  onDatesChanged,
+}: {
+  jobId: string;
+  onDatesChanged?: () => void;
+}) {
   const { data, loading, error, refetch } = useApi<ScheduleResponse>(`/api/jobs/${jobId}/schedule`);
   const subsApi = useApi<{ subcontractors: Sub[] }>("/api/subcontractors?active=1");
   const toast = useToast();
@@ -89,6 +103,7 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
     [weather],
   );
   const [modalDate, setModalDate] = useState<string | null>(null);
+  const [deadlineMode, setDeadlineMode] = useState(false);
   const [editing, setEditing] = useState<ScheduleEntry | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
 
@@ -153,8 +168,35 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
     }
   };
 
+  const today = new Date().toISOString().slice(0, 10);
+  const flagged = (data.entries ?? []).filter((e) =>
+    isOutOfRangeEntry(e.scheduled_date, data.target_end_date),
+  );
+  const soonestFlag = [...flagged].sort((a, b) =>
+    (a.scheduled_date ?? "").localeCompare(b.scheduled_date ?? ""),
+  )[0];
+
+  const openAdd = (date: string, deadline = false) => {
+    setDeadlineMode(deadline);
+    setModalDate(date);
+  };
+
   return (
     <div class="stack">
+      <OverallScheduleBanner
+        jobId={jobId}
+        startDate={data.start_date}
+        targetEndDate={data.target_end_date}
+        today={today}
+        flaggedCount={flagged.length}
+        soonest={soonestFlag}
+        onSaved={() => {
+          refetch();
+          onDatesChanged?.();
+        }}
+        toast={toast}
+      />
+
       {data.suggest_status_scheduled && (
         <Card>
           <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
@@ -174,9 +216,18 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
           {data.start_date ? ` · ${formatDate(data.start_date)}` : ""}
           {data.target_end_date ? ` → ${formatDate(data.target_end_date)}` : ""}
         </span>
-        <Button variant="primary" size="sm" onClick={() => setModalDate(data.start_date ?? new Date().toISOString().slice(0, 10))}>
-          + Add Entry
-        </Button>
+        <div class="flex gap-sm">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => openAdd(data.target_end_date ?? data.start_date ?? today, true)}
+          >
+            + Add Deadline
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => openAdd(data.start_date ?? today)}>
+            + Add Entry
+          </Button>
+        </div>
       </div>
 
       {!data.start_date || !data.target_end_date ? (
@@ -202,7 +253,8 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
             const wxAlert = alertDates.has(day);
             return (
               <div
-                class={`sched-day${dragId ? " sched-day--drop" : ""}`}
+                class={`sched-day${dragId ? " sched-day--drop" : ""}${isOutOfRangeEntry(day, data.target_end_date) ? " sched-day--oor" : ""}`}
+                id={`sched-day-${day}`}
                 key={day}
                 onDragOver={(e) => dragId && e.preventDefault()}
                 onDrop={() => {
@@ -221,19 +273,20 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
                       {weatherEmoji(wx.icon)} {wx.high}°
                     </span>
                   )}
-                  <button class="sched-day__add" title="Add entry" onClick={() => setModalDate(day)}>
+                  <button class="sched-day__add" title="Add entry" onClick={() => openAdd(day)}>
                     +
                   </button>
                 </div>
                 <div class="sched-day__entries">
                   {entries.map((e) => (
                     <div
-                      class="sched-entry"
+                      class={`sched-entry${e.entry_type === "deadline" ? " sched-entry--deadline" : ""}`}
                       key={e.id}
                       draggable
                       onDragStart={() => setDragId(e.id)}
                       onDragEnd={() => setDragId(null)}
                       onClick={() => setEditing(e)}
+                      style={e.entry_type === "deadline" ? { borderLeftColor: TYPE_DEADLINE } : undefined}
                     >
                       <div class="sched-entry__top">
                         <span class="sched-entry__work">{e.trade_or_work}</span>
@@ -241,7 +294,11 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
                       </div>
                       <div class="sched-entry__meta">
                         {e.start_time ? `${e.start_time}${e.end_time ? `–${e.end_time}` : ""} · ` : ""}
-                        {e.sub_name ?? "Unassigned"}
+                        {e.sub_id && e.sub_name ? (
+                          <span class="sched-sub-badge">Sub: {e.sub_name}</span>
+                        ) : (
+                          "Unassigned"
+                        )}
                         {e.sub_id ? (e.sub_notified ? " · ✓ notified" : " · notify pending") : ""}
                       </div>
                     </div>
@@ -260,7 +317,9 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
               <div class="invoice-row" key={e.id} onClick={() => setEditing(e)} style={{ cursor: "pointer" }}>
                 <div class="invoice-row__main">
                   <div class="invoice-row__title">{e.trade_or_work}</div>
-                  <div class="invoice-row__meta">{e.sub_name ?? "Unassigned"}</div>
+                  <div class="invoice-row__meta">
+                    {e.sub_id && e.sub_name ? `Sub: ${e.sub_name}` : (e.sub_name ?? "Unassigned")}
+                  </div>
                 </div>
                 <Badge tone={STATUS_TONE[e.status] ?? "neutral"}>{formatStatus(e.status)}</Badge>
               </div>
@@ -275,13 +334,16 @@ export function ScheduleTab({ jobId }: { jobId: string }) {
           subs={subs}
           entry={editing}
           defaultDate={modalDate}
+          defaultDeadline={deadlineMode}
           onClose={() => {
             setModalDate(null);
             setEditing(null);
+            setDeadlineMode(false);
           }}
           onSaved={() => {
             setModalDate(null);
             setEditing(null);
+            setDeadlineMode(false);
             refetch();
           }}
           onStatus={markStatus}
@@ -297,6 +359,7 @@ function ScheduleModal({
   subs,
   entry,
   defaultDate,
+  defaultDeadline,
   onClose,
   onSaved,
   toast,
@@ -305,6 +368,7 @@ function ScheduleModal({
   subs: Sub[];
   entry: ScheduleEntry | null;
   defaultDate: string | null;
+  defaultDeadline?: boolean;
   onClose: () => void;
   onSaved: () => void;
   onStatus: (e: ScheduleEntry, s: string) => void;
@@ -312,10 +376,13 @@ function ScheduleModal({
 }) {
   const [date, setDate] = useState(entry?.scheduled_date ?? defaultDate ?? "");
   const [work, setWork] = useState(entry?.trade_or_work ?? "");
+  const entryType = entry?.entry_type === "deadline" || defaultDeadline ? "deadline" : "job_task";
   const [subId, setSubId] = useState(entry?.sub_id ?? "");
   const [startTime, setStartTime] = useState(entry?.start_time ?? "");
   const [endTime, setEndTime] = useState(entry?.end_time ?? "");
-  const [notes, setNotes] = useState(entry?.notes ?? "");
+  const [notes, setNotes] = useState(
+    entry?.notes === "overview_start_date" ? "" : (entry?.notes ?? ""),
+  );
   const [status, setStatus] = useState(entry?.status ?? "scheduled");
   const [busy, setBusy] = useState(false);
 
@@ -337,8 +404,9 @@ function ScheduleModal({
       sub_id: subId || null,
       start_time: startTime || null,
       end_time: endTime || null,
-      notes: notes.trim() || null,
+      notes: notes.trim() || (entry?.notes === "overview_start_date" ? "overview_start_date" : null),
       status,
+      entry_type: entryType,
     };
     try {
       if (entry) {
@@ -371,7 +439,7 @@ function ScheduleModal({
   return (
     <Modal
       open
-      title={entry ? "Edit schedule entry" : "Add schedule entry"}
+      title={entry ? "Edit schedule entry" : entryType === "deadline" ? "Add deadline" : "Add schedule entry"}
       onClose={onClose}
       footer={
         <>
@@ -397,11 +465,11 @@ function ScheduleModal({
           <Select value={status} options={STATUS_OPTIONS} onChange={setStatus} />
         </FormField>
       </div>
-      <FormField label="Trade / work" required>
+      <FormField label={entryType === "deadline" ? "Deadline" : "Trade / work"} required>
         <input
           class="form-input"
           value={work}
-          placeholder="e.g. Framing, Electrical rough-in"
+          placeholder={entryType === "deadline" ? "e.g. Permit expires, Material order cutoff" : "e.g. Framing, Electrical rough-in"}
           onInput={(e) => setWork((e.target as HTMLInputElement).value)}
         />
       </FormField>
@@ -427,5 +495,118 @@ function ScheduleModal({
         </p>
       )}
     </Modal>
+  );
+}
+
+function OverallScheduleBanner({
+  jobId,
+  startDate,
+  targetEndDate,
+  today,
+  flaggedCount,
+  soonest,
+  onSaved,
+  toast,
+}: {
+  jobId: string;
+  startDate: string | null;
+  targetEndDate: string | null;
+  today: string;
+  flaggedCount: number;
+  soonest?: ScheduleEntry;
+  onSaved: () => void;
+  toast: ToastApi;
+}) {
+  const [start, setStart] = useState(startDate ?? "");
+  const [target, setTarget] = useState(targetEndDate ?? "");
+  useEffect(() => {
+    setStart(startDate ?? "");
+    setTarget(targetEndDate ?? "");
+  }, [startDate, targetEndDate]);
+
+  const progress = overallScheduleProgress(startDate, targetEndDate, today);
+  const rangeReady = !!(dateOnly(startDate) && dateOnly(targetEndDate));
+
+  const save = async (field: "start_date" | "target_end_date", value: string) => {
+    const current = field === "start_date" ? startDate : targetEndDate;
+    if ((current ?? "") === value) return;
+    try {
+      await api.put(`/api/jobs/${jobId}`, { [field]: value || null });
+      toast.push("success", "Dates updated");
+      onSaved();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    }
+  };
+
+  const jumpToSoonest = () => {
+    const day = soonest?.scheduled_date;
+    if (!day) return;
+    document.getElementById(`sched-day-${day}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  return (
+    <Card>
+      <div class="os-banner">
+        <div class="os-banner__head">
+          <h3 class="os-banner__title">Overall Schedule</h3>
+          {progress.dayCount != null && (
+            <span class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+              {progress.dayCount} day{progress.dayCount === 1 ? "" : "s"}
+            </span>
+          )}
+        </div>
+        <div class="os-banner__dates">
+          <FormField label="Start">
+            <input
+              class="form-input"
+              type="date"
+              value={start}
+              onInput={(e) => setStart((e.target as HTMLInputElement).value)}
+              onBlur={() => save("start_date", start)}
+            />
+          </FormField>
+          <span class="os-banner__arrow">→</span>
+          <FormField label="Target end">
+            <input
+              class="form-input"
+              type="date"
+              value={target}
+              onInput={(e) => setTarget((e.target as HTMLInputElement).value)}
+              onBlur={() => save("target_end_date", target)}
+            />
+          </FormField>
+        </div>
+        {rangeReady ? (
+          <div class="os-banner__track" aria-label="Schedule progress">
+            <div class="os-banner__fill" style={{ width: `${progress.pct}%` }} />
+            <div class="os-banner__today" style={{ left: `${progress.pct}%` }} title="Today" />
+          </div>
+        ) : (
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>
+            Start or target end is not set — day-by-day list below still works.
+          </p>
+        )}
+        {flaggedCount > 0 && soonest && (
+          <div class="os-banner__flag">
+            {flaggedCount === 1 ? (
+              <>
+                <strong>{soonest.trade_or_work}</strong> is {daysPastTarget(soonest.scheduled_date ?? "", targetEndDate ?? "")}{" "}
+                day(s) past the target end.
+              </>
+            ) : (
+              <>
+                {flaggedCount} entries sit past the target end. Soonest:{" "}
+                <strong>{soonest.trade_or_work}</strong> ({daysPastTarget(soonest.scheduled_date ?? "", targetEndDate ?? "")}{" "}
+                days past).
+              </>
+            )}{" "}
+            <button type="button" class="link-btn" onClick={jumpToSoonest}>
+              view all
+            </button>
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }

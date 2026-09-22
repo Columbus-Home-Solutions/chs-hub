@@ -6,6 +6,7 @@
  *
  *   GET  /api/estimate-requests                 list + filters
  *   GET  /api/estimate-requests/pipeline        grouped by status (Kanban data)
+ *   GET  /api/estimate-requests/untouched      new_request count + oldest created_at
  *   GET  /api/estimate-requests/:id             detail (+ client + activity log)
  *   POST /api/estimate-requests                 create (lead WC hook, repeat check)
  *   PUT  /api/estimate-requests/:id             update (status state machine)
@@ -419,6 +420,25 @@ export async function handleEstimateRequestPipeline(env: Env): Promise<Response>
     console.error("estimate-requests/pipeline failed:", message);
     return err(500, "pipeline_failed", message);
   }
+}
+
+/**
+ * New Lead count for the nav badge. Same test-client filter as the Kanban.
+ * Opening a lead does not change this; only status, Lost, or delete does.
+ */
+export async function handleUntouchedLeads(env: Env): Promise<Response> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS count, MIN(er.created_at) AS oldest_created_at
+     FROM estimate_requests er
+     LEFT JOIN clients c ON c.id = er.client_id
+     WHERE er.status = 'new_request'
+       AND ${NON_TEST_OR_ORPHAN_CLIENT}`,
+  ).first<{ count: number; oldest_created_at: string | null }>();
+
+  return json({
+    count: row?.count ?? 0,
+    oldest_created_at: row?.oldest_created_at ?? null,
+  });
 }
 
 // ─── GET /api/estimate-requests/:id ──────────────────────────────────────────

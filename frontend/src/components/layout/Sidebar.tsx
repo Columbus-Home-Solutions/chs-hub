@@ -7,6 +7,7 @@ import {
   childActive,
   parentActive,
 } from "../../lib/sidebar-nav";
+import { UntouchedLeadsBadge } from "./UntouchedLeadsBadge";
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,7 @@ export function Sidebar({
                 >
                   <span class="sidebar__icon">{section.icon}</span>
                   <span>{section.label}</span>
+                  {section.id === "pipeline" && !isExpanded && <UntouchedLeadsBadge />}
                 </div>
 
                 {/* Chevron zone — always toggles */}
@@ -158,6 +160,7 @@ export function Sidebar({
                       onClick={() => route(child.href)}
                     >
                       {child.label}
+                      {child.label === "Leads" && <UntouchedLeadsBadge />}
                     </div>
                   );
                 })}

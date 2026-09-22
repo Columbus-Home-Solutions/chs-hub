@@ -17,6 +17,7 @@ import {
 import { useViewportTier } from "../../hooks/useViewportTier";
 import { MessageCenterProvider } from "../../store/messageCenter";
 import { MessageCenter } from "../MessageCenter";
+import { UntouchedLeadsBadge } from "./UntouchedLeadsBadge";
 
 export function AppShell({ children }: { children: ComponentChildren }) {
   const [{ url }] = useRouter();
@@ -108,6 +109,7 @@ export function AppShell({ children }: { children: ComponentChildren }) {
                   >
                     <span class="bottom-tabs__icon">{tab.icon}</span>
                     <span>{tab.label}</span>
+                    {tab.path === "__more__" && <UntouchedLeadsBadge />}
                   </button>
                 );
               }

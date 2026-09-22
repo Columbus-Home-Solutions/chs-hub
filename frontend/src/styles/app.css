@@ -429,6 +429,10 @@
   padding: var(--space-sm) var(--space-xs) var(--space-sm) var(--space-md);
   min-width: 0;
 }
+.sidebar__parent-label > .badge,
+.sidebar__sublink > .badge {
+  margin-left: auto;
+}
 
 .sidebar__chevron {
   display: flex;
@@ -2833,6 +2837,15 @@
     cursor: pointer;
     min-width: 56px;
     min-height: 44px;
+    position: relative;
+  }
+  .bottom-tabs__btn > .badge {
+    position: absolute;
+    top: 2px;
+    right: 6px;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 1.4;
   }
   .bottom-tabs__btn--active {
     color: var(--color-brand);
@@ -2909,6 +2922,15 @@
   font-size: 10px;
   line-height: 1.15;
   width: 100%;
+  position: relative;
+}
+.tablet-rail__btn > .badge {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 1.4;
 }
 .tablet-rail__btn:hover,
 .tablet-rail__avatar-btn:hover {
@@ -3226,6 +3248,12 @@
 .app-shell--tablet .more-nav-sheet__row--active,
 .app-shell--tablet .more-nav-sheet__row--child-active {
   color: var(--color-brand);
+}
+.app-shell--mobile .more-nav-sheet__row > .badge,
+.app-shell--tablet .more-nav-sheet__row > .badge,
+.app-shell--mobile .more-nav-sheet__sublink > .badge,
+.app-shell--tablet .more-nav-sheet__sublink > .badge {
+  margin-left: auto;
 }
 .app-shell--mobile .more-nav-sheet__row-label,
 .app-shell--tablet .more-nav-sheet__row-label {

@@ -303,6 +303,7 @@ import {
 import {
   handleEstimateRequestList,
   handleEstimateRequestPipeline,
+  handleUntouchedLeads,
   handleEstimateRequestGet,
   handleEstimateRequestCreate,
   handleEstimateRequestUpdate,
@@ -2410,6 +2411,9 @@ export default {
     }
     if (url.pathname === "/api/estimate-requests/pipeline" && request.method === "GET") {
       return handleEstimateRequestPipeline(env);
+    }
+    if (url.pathname === "/api/estimate-requests/untouched" && request.method === "GET") {
+      return handleUntouchedLeads(env);
     }
     if (url.pathname === "/api/estimate-requests/quick-lead" && request.method === "POST") {
       return handleEstimateRequestQuickLead(request, env);

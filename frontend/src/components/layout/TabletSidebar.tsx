@@ -6,6 +6,7 @@ import {
   isActive,
   isEstimatesTabActive,
 } from "../../lib/nav";
+import { UntouchedLeadsBadge } from "./UntouchedLeadsBadge";
 
 /**
  * iPad / tablet vertical rail — same primary destinations as phone tabs
@@ -57,6 +58,7 @@ export function TabletSidebar({
                   {tab.icon}
                 </span>
                 <span class="tablet-rail__label">{tab.label}</span>
+                {tab.path === "__more__" && <UntouchedLeadsBadge />}
               </button>
             );
           }

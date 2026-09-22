@@ -8,6 +8,7 @@ import {
   type NavSection,
 } from "../../lib/sidebar-nav";
 import { SlideUpSheet } from "./SlideUpSheet";
+import { UntouchedLeadsBadge } from "./UntouchedLeadsBadge";
 
 /**
  * Mobile More sheet: same accordion as desktop sidebar, minus sections already
@@ -130,6 +131,7 @@ function MoreSection({
       >
         <span class="more-nav-sheet__icon">{section.icon}</span>
         <span class="more-nav-sheet__row-label">{section.label}</span>
+        {section.id === "pipeline" && !expanded && <UntouchedLeadsBadge />}
         <span class={`more-nav-sheet__chevron${expanded ? " more-nav-sheet__chevron--open" : ""}`}>
           ▸
         </span>
@@ -172,6 +174,7 @@ function MoreSection({
                 onClick={() => onNavHref(child.href)}
               >
                 {child.label}
+                {child.label === "Leads" && <UntouchedLeadsBadge />}
               </button>
             );
           })}

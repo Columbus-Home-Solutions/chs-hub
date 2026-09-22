@@ -1,47 +1,51 @@
 /**
- * Estimate Requests widget (phone / tablet / desktop Home).
- *
- * Surfaces leads at Appointment Set or later that have not yet been converted
- * into a full estimate/job. Rows open Request Detail (Visit Capture), not the
- * builder. Distinct from Open Bid Requests (subcontractor bids).
+ * Estimates in Progress (phone / tablet / desktop Home).
+ * Building leads only. A row opens the draft builder, or the pre-filled
+ * new-estimate form when no draft exists yet.
  */
 
 import { useApi } from "../../hooks/useApi";
 import { go } from "../../lib/nav";
-import { formatStatus } from "../../lib/format";
+import { formatCurrency, formatStatus } from "../../lib/format";
 
 interface EstimateRequestItem {
   id: string;
   client_name: string;
-  status: string;
   job_type: string | null;
-  appointment_date: string | null;
-  appointment_time: string | null;
-  property_label: string | null;
-  updated_at: string | null;
-  created_at: string | null;
+  place_label: string | null;
+  estimate_id: string | null;
+  estimate_total: number | null;
+  building_at: string | null;
+  days_in_building: number;
+  stale: boolean;
 }
 
 interface EstimateRequestsResponse {
   requests: EstimateRequestItem[];
 }
 
-function quietLabel(item: EstimateRequestItem): string {
-  const stage = formatStatus(item.status);
-  if (item.appointment_date) {
-    // appointment_date is YYYY-MM-DD; keep short for the row.
-    const d = item.appointment_date.slice(5).replace("-", "/"); // MM/DD
-    return `${stage} · ${d}`;
+const VISIBLE = 5;
+
+function daysLabel(days: number): string {
+  if (days <= 0) return "Today";
+  if (days === 1) return "1 day";
+  return `${days} days`;
+}
+
+function openEstimate(item: EstimateRequestItem): void {
+  if (item.estimate_id) {
+    go(`/estimating/${item.id}/estimate`);
+    return;
   }
-  return stage;
+  go(`/estimating/new?request_id=${item.id}&autostart=1`);
 }
 
 export function EstimateRequestsWidget() {
   const { data, loading } = useApi<EstimateRequestsResponse>("/api/dashboard/estimate-requests");
 
   const items = data?.requests ?? [];
-  const displayed = items.slice(0, 3);
-  const hasMore = items.length > 3;
+  const displayed = items.slice(0, VISIBLE);
+  const extra = items.length - displayed.length;
 
   return (
     <div class="quick-actions">
@@ -49,12 +53,12 @@ export function EstimateRequestsWidget() {
         class="quick-actions__header"
         style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
       >
-        <span>Estimate requests</span>
+        <span>Estimates in Progress</span>
         <button
           type="button"
           class="link-btn"
           style={{ fontSize: "var(--text-xs)", fontWeight: "var(--weight-normal)" }}
-          onClick={() => go("/estimating?tab=chs")}
+          onClick={() => go("/estimating?tab=chs&stage=building")}
         >
           View all
         </button>
@@ -71,8 +75,7 @@ export function EstimateRequestsWidget() {
 
       {!loading && items.length === 0 && (
         <div class="job-health-widget__empty">
-          <span style={{ marginRight: "var(--space-xs)" }}>✓</span>
-          No open estimate requests
+          No estimates in progress.
         </div>
       )}
 
@@ -82,28 +85,32 @@ export function EstimateRequestsWidget() {
             <button
               key={item.id}
               type="button"
-              class="job-health-widget__row"
-              onClick={() => go(`/estimating/${item.id}`)}
+              class={`job-health-widget__row${item.stale ? " job-health-widget__row--stale" : ""}`}
+              onClick={() => openEstimate(item)}
             >
               <span
                 class="job-health-widget__dot"
-                style={{ background: "#3b82f6" }}
+                style={{ background: item.stale ? "var(--color-warning)" : "#3b82f6" }}
               />
               <span class="job-health-widget__title">
                 {item.client_name}
-                {item.property_label ? ` · ${item.property_label}` : ""}
+                {item.place_label ? ` · ${item.place_label}` : ""}
               </span>
-              <span class="job-health-widget__quiet">{quietLabel(item)}</span>
+              <span class="job-health-widget__quiet">
+                {item.job_type ? `${formatStatus(item.job_type)} · ` : ""}
+                {daysLabel(item.days_in_building)}
+                {item.estimate_total != null ? ` · ${formatCurrency(item.estimate_total)}` : ""}
+              </span>
             </button>
           ))}
-          {hasMore && (
+          {extra > 0 && (
             <button
               type="button"
               class="link-btn"
               style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-xs)" }}
-              onClick={() => go("/estimating?tab=chs")}
+              onClick={() => go("/estimating?tab=chs&stage=building")}
             >
-              +{items.length - 3} more — View all
+              +{extra} more — View all
             </button>
           )}
         </div>

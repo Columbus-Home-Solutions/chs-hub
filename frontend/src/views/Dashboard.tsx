@@ -37,7 +37,7 @@ export function Dashboard(_props: RoutableProps) {
   const showQuickActions = !isPhone;
   const showPipeline = isDesktop;
   const showJobHealth = !isPhone;
-  // Estimate Requests is action-oriented (Visit Capture) — include on phone Home too.
+  // Estimates in Progress stays on phone, tablet, and desktop.
   // Job Health / Open Bids stay tablet+desktop only.
   const showEstimateRequests = true;
   const showOpenBids = !isPhone;

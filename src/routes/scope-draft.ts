@@ -18,6 +18,7 @@ import {
   type SketchImageBlock,
 } from "../lib/scope-draft.js";
 import { parseSketches } from "../lib/sketches.js";
+import { advanceLeadToBuildingIfEligible } from "../lib/lead-stage.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const VALID_STATUSES: ReadonlySet<ScopeDraftStatus> = new Set([
@@ -449,16 +450,7 @@ export async function handlePushToEstimate(
 
     estimateCreated = true;
 
-    try {
-      await env.DB.prepare(
-        `UPDATE estimate_requests SET status = 'building', updated_at = ?
-         WHERE id = ? AND status IN ('appointment_set', 'visit_done')`,
-      )
-        .bind(now, id)
-        .run();
-    } catch (e) {
-      console.warn("[push-to-estimate] status advance failed:", (e as Error).message);
-    }
+    await advanceLeadToBuildingIfEligible(env, id, row.status);
 
     await env.DB.prepare(
       "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, ?, 'estimate_created', 'estimate', ?, ?, datetime('now'))",

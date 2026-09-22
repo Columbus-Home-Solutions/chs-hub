@@ -4,7 +4,7 @@
  *   GET /api/dashboard/kpis           → { tiles: KpiTile[] }           5-min cache
  *   GET /api/dashboard/action-items   → { items: ActionItem[] }         fresh
  *   PATCH /api/dashboard/action-items/:id/dismiss → { ok: true }        owner/admin
- *   GET /api/dashboard/estimate-requests → { requests }                 fresh (desktop widget)
+ *   GET /api/dashboard/estimate-requests → { requests }                 fresh (Estimates in Progress)
  *   GET /api/dashboard/pipeline       → { leads, jobs, conversionRate, unpaidTotal }  5-min cache
  *   GET /api/dashboard/schedule       → { entries: ScheduleEntry[] }    fresh
  *   GET /api/dashboard/activity       → { entries: ActivityEntry[], bellCount: number } fresh
@@ -21,6 +21,12 @@ import {
   NON_TEST_OR_ORPHAN_CLIENT,
   notTestClientExists,
 } from "../lib/non-test-client.js";
+import {
+  buildingClientName,
+  buildingIsStale,
+  buildingPlace,
+  daysInBuilding,
+} from "../lib/building-widget.js";
 
 const DISMISSED_SETTING_KEY = "dashboard_dismissed_action_items";
 const DISMISS_ROLES = ["owner", "office_admin"] as const;
@@ -1036,64 +1042,51 @@ export async function handleDashboardActivity(env: Env): Promise<Response> {
 }
 
 /**
- * Desktop Home "Estimate Requests" widget.
- * Leads at Appointment Set or later that do not yet have a built estimate /
- * converted job — distinct from Open Bid Requests (subcontractor bids).
+ * Home "Estimates in Progress" widget.
+ * Building leads only, oldest building_at first, with or without a draft.
  */
 export async function handleDashboardEstimateRequests(env: Env): Promise<Response> {
   const rows = await env.DB.prepare(
-    `SELECT er.id, er.status, er.job_type, er.appointment_date, er.appointment_time,
-            er.property_address, er.property_city, er.updated_at, er.created_at,
+    `SELECT er.id, er.job_type, er.building_at, er.estimate_id,
+            er.property_address, er.property_city, er.property_state, er.property_zip,
             er.contact_name, er.contact_phone,
-            c.first_name, c.last_name, c.phone
+            c.first_name, c.last_name, c.phone,
+            e.total AS estimate_total
      FROM estimate_requests er
      LEFT JOIN clients c ON er.client_id = c.id
-     WHERE er.status IN ('appointment_set', 'visit_done', 'building', 'sent', 'follow_up')
-       AND er.estimate_id IS NULL
-       AND er.converted_job_id IS NULL
+     LEFT JOIN estimates e ON e.id = er.estimate_id
+     WHERE er.status = 'building'
        AND ${NON_TEST_OR_ORPHAN_CLIENT}
-     ORDER BY
-       CASE WHEN er.appointment_date IS NULL THEN 1 ELSE 0 END,
-       er.appointment_date ASC,
-       er.updated_at DESC
-     LIMIT 20`,
+     ORDER BY er.building_at ASC, er.updated_at ASC`,
   ).all<{
     id: string;
-    status: string;
     job_type: string | null;
-    appointment_date: string | null;
-    appointment_time: string | null;
+    building_at: string | null;
+    estimate_id: string | null;
     property_address: string | null;
     property_city: string | null;
-    updated_at: string | null;
-    created_at: string | null;
+    property_state: string | null;
+    property_zip: string | null;
     contact_name: string | null;
     contact_phone: string | null;
     first_name: string | null;
     last_name: string | null;
     phone: string | null;
+    estimate_total: number | null;
   }>();
 
-  const requests = (rows.results ?? []).map((r) => {
-    const name =
-      `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() ||
-      r.contact_name?.trim() ||
-      r.phone ||
-      r.contact_phone ||
-      "Lead";
-    const place = [r.property_address, r.property_city].filter(Boolean).join(", ");
-    return {
-      id: r.id,
-      client_name: name,
-      status: r.status,
-      job_type: r.job_type,
-      appointment_date: r.appointment_date,
-      appointment_time: r.appointment_time,
-      property_label: place || null,
-      updated_at: r.updated_at,
-      created_at: r.created_at,
-    };
-  });
+  const now = Date.now();
+  const requests = (rows.results ?? []).map((r) => ({
+    id: r.id,
+    client_name: buildingClientName(r),
+    job_type: r.job_type,
+    place_label: buildingPlace(r),
+    estimate_id: r.estimate_id,
+    estimate_total: r.estimate_id ? r.estimate_total : null,
+    building_at: r.building_at,
+    days_in_building: daysInBuilding(r.building_at, now),
+    stale: buildingIsStale(r.building_at, now),
+  }));
 
   return json({ requests });
 }

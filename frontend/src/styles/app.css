@@ -7901,6 +7901,12 @@ button.mc-unassigned-row:hover {
   transition: background var(--transition-base);
 }
 .job-health-widget__row:hover { background: var(--color-surface-2); }
+.job-health-widget__row--stale {
+  background: var(--color-warning-subtle);
+}
+.job-health-widget__row--stale:hover {
+  background: var(--color-warning-subtle);
+}
 .job-health-widget__dot {
   flex-shrink: 0;
   width: 8px;

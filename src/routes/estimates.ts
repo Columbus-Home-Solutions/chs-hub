@@ -65,6 +65,7 @@ import { allocateNextEstimateNumber } from "../lib/estimate-number.js";
 import { extractSupplierQuote } from "../lib/quote-import.js";
 import { upsertVendorMaterial } from "./vendor-materials.js";
 import { handleEstimateRequestWin } from "./estimate-requests.js";
+import { advanceLeadToBuildingIfEligible, applyLeadStageChange } from "../lib/lead-stage.js";
 import {
   JOBBER_ACCEPTED_IMPORT,
   JOBBER_IMPORT,
@@ -821,7 +822,7 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
 
   // ── Normal (request-linked) path ──────────────────────────────────────────
   const req = await env.DB.prepare(
-    `SELECT id, client_id, job_type, job_type_detail,
+    `SELECT id, client_id, job_type, job_type_detail, status,
             property_address, property_city, property_state, property_zip, estimate_id
      FROM estimate_requests WHERE id = ?`,
   )
@@ -831,6 +832,7 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
       client_id: string | null;
       job_type: string;
       job_type_detail: string | null;
+      status: string;
       property_address: string;
       property_city: string;
       property_state: string | null;
@@ -893,16 +895,14 @@ export async function handleEstimateCreate(request: Request, env: Env): Promise<
     )
     .run();
 
-  // Link the estimate back to its request and nudge the request into "building".
   await env.DB.prepare(
-    `UPDATE estimate_requests
-     SET estimate_id = ?,
-         status = CASE WHEN status IN ('new_request','appointment_set','visit_done') THEN 'building' ELSE status END,
-         updated_at = ?
-     WHERE id = ?`,
+    `UPDATE estimate_requests SET estimate_id = ?, updated_at = ? WHERE id = ?`,
   )
     .bind(id, now, requestId)
     .run();
+
+  // Forward only: new_request / appointment_set / visit_done. Same hook as a Kanban move.
+  await advanceLeadToBuildingIfEligible(env, requestId, req.status);
 
   await logAudit(env, user.email, "estimate_created", "estimate", id, {
     estimate_number: estimateNumber,
@@ -1830,6 +1830,11 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
       .run();
   }
   if (orig.request_id) {
+    const lead = await env.DB.prepare(
+      "SELECT status FROM estimate_requests WHERE id = ?",
+    )
+      .bind(orig.request_id)
+      .first<{ status: string }>();
     await env.DB.prepare(
       `UPDATE estimate_requests
        SET estimate_id = ?,
@@ -1842,6 +1847,9 @@ export async function handleEstimateRevise(request: Request, env: Env, id: strin
     )
       .bind(newId, now, orig.request_id)
       .run();
+    if (lead && (lead.status === "sent" || lead.status === "follow_up")) {
+      await applyLeadStageChange(env, orig.request_id, lead.status, "building");
+    }
   }
 
   await recomputeEstimate(env, newId);

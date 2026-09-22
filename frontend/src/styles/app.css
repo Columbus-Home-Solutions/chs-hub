@@ -535,6 +535,10 @@
   width: 100%;
   margin: 0 auto;
 }
+/* CHS Leads only. Page padding stays on .content. */
+.content__inner:has(.view--pipeline) {
+  max-width: none;
+}
 
 /* ─── View header ─── */
 .view-header {
@@ -780,6 +784,11 @@
 .pipeline-col--won { --col-accent: var(--pipeline-won); }
 .pipeline-col--lost { --col-accent: var(--pipeline-lost); }
 .pipeline-col--highlighted { outline: 2px solid var(--color-brand); outline-offset: -2px; }
+/* Equal columns on the CHS Leads board. No spacing token is near 240px. */
+.view--pipeline .pipeline-col {
+  flex: 1 1 0;
+  min-width: 240px;
+}
 
 /* Job pipeline column accents + status pills (Sprint 6). */
 .pipeline-col--deposit_paid { --col-accent: var(--job-deposit-paid); }
@@ -1363,10 +1372,12 @@
     gap: 0;
     overflow-x: hidden;
   }
-  .pipeline-col {
+  .pipeline-col,
+  .view--pipeline .pipeline-col {
     display: none;
     flex: 1 1 100%;
     width: 100%;
+    min-width: 0;
     max-height: none;
   }
   .pipeline-col.is-active {

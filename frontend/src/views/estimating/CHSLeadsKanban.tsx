@@ -12,7 +12,8 @@ import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 import { ViewToggle } from "../../components/ViewToggle";
 import { MarkWonModal } from "./MarkWonModal";
-import { canDeleteRequest, DeleteRequestButton } from "./DeleteRequestButton";
+import { DeleteRequestButton } from "./DeleteRequestButton";
+import { MarkLostButton } from "./MarkLostButton";
 import { QuickLeadModal } from "./QuickLeadModal";
 import { useToast } from "../../store/toast";
 import { useMessageCenter } from "../../store/messageCenter";
@@ -81,6 +82,22 @@ interface LeadCardProps {
   onOpen: () => void;
   onDelete: () => void;
   onMessage: (clientId: string) => void;
+}
+
+function LeadStageAction({
+  request,
+  size,
+  onChanged,
+}: {
+  request: EstimateRequest;
+  size: "sm" | "default";
+  onChanged: () => void;
+}) {
+  if (request.status === "won" || request.status === "lost") return null;
+  if (request.status === "new_request") {
+    return <DeleteRequestButton request={request} size={size} onDeleted={onChanged} />;
+  }
+  return <MarkLostButton request={request} size={size} onLost={onChanged} />;
 }
 
 function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete, onMessage }: LeadCardProps) {
@@ -154,9 +171,7 @@ function LeadCard({ request, dragging, onDragStart, onDragEnd, onOpen, onDelete,
               💬
             </button>
           )}
-          {canDeleteRequest(request) && (
-            <DeleteRequestButton request={request} size="sm" onDeleted={onDelete} />
-          )}
+          <LeadStageAction request={request} size="sm" onChanged={onDelete} />
         </div>
       </div>
     </article>
@@ -347,7 +362,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
   }
 
   return (
-    <div>
+    <div class="view view--pipeline">
       <div class="view-header">
         <div>
           <h1 class="view-title">CHS Leads</h1>
@@ -468,8 +483,8 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
                 <td>{r.appointment_date ? formatDate(r.appointment_date) : "—"}</td>
                 <td>
                   <div class="flex items-center gap-sm" style={{ justifyContent: "flex-end" }}>
-                    {!selectMode && canDeleteRequest(r) && (
-                      <DeleteRequestButton request={r} size="sm" onDeleted={refetch} />
+                    {!selectMode && (
+                      <LeadStageAction request={r} size="sm" onChanged={refetch} />
                     )}
                     <Button
                       size="sm"

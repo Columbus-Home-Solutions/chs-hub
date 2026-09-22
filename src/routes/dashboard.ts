@@ -156,6 +156,12 @@ function cacheSet<T>(map: Map<string, Cached<unknown>>, key: string, data: T): v
   map.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
 }
 
+/** Drop the 5-minute KPI and pipeline snapshots after a job is deleted. */
+export function invalidateDashboardCache(): void {
+  kpiCache.clear();
+  pipelineCache.clear();
+}
+
 // ── KPI handler ───────────────────────────────────────────────────────────
 
 interface KpiTile {

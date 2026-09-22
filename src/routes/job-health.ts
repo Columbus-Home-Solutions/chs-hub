@@ -13,6 +13,8 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
+import { nativeJobSourceWhereAliased } from "../lib/native-jobs.js";
+import { NON_TEST_CLIENT } from "../lib/non-test-client.js";
 
 const READ_ROLES = ["owner", "project_manager", "field_crew", "office_admin"] as const;
 
@@ -119,6 +121,8 @@ export async function handleJobHealth(env: Env, request: Request): Promise<Respo
      LEFT JOIN smart_notes sn ON sn.job_id = j.id
      LEFT JOIN photos p ON p.job_id = j.id AND p.is_active = 1
      WHERE j.status IN ('scheduled', 'in_progress', 'punch_list')
+       AND ${nativeJobSourceWhereAliased("j")}
+       AND ${NON_TEST_CLIENT}
      GROUP BY j.id`,
   ).all<JobHealthRow>();
 

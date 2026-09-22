@@ -35,6 +35,7 @@ import { checkAndFireLienWaiverForJob } from "../lib/completion-triggers.js";
 import { shouldSkipContractAutogen } from "../lib/estimate-contract-document.js";
 import { scheduleWorkingAgreementGeneration } from "../lib/working-agreement.js";
 import { cascadeDeleteJob, DELETABLE_JOB_STATUSES } from "../lib/cascade-delete.js";
+import { invalidateDashboardCache } from "./dashboard.js";
 import { formatPmPhone, resolvePmFields } from "../lib/pm-fields.js";
 import { generateWeeklyRecap } from "../lib/weekly-recap.js";
 import { sendSubEmail } from "../lib/notification-engine.js";
@@ -1343,6 +1344,7 @@ export async function handleJobDelete(request: Request, env: Env, id: string): P
   const estimateId = job.estimate_id;
   await cascadeDeleteJob(env, id);
   await env.DB.prepare("DELETE FROM jobs WHERE id = ?").bind(id).run();
+  invalidateDashboardCache();
 
   if (estimateId) {
     await env.DB.prepare("UPDATE estimates SET status = 'archived' WHERE id = ?").bind(estimateId).run();

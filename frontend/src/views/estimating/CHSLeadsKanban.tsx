@@ -362,7 +362,7 @@ export function CHSLeadsKanban({ onNewRequestCount, highlightStage }: CHSLeadsKa
   }
 
   return (
-    <div class={`view view--pipeline${viewMode === "list" ? " view--list" : ""}`}>
+    <div class={`view${viewMode === "kanban" ? " view--pipeline" : ""}`}>
       <div class="view-header">
         <div>
           <h1 class="view-title">CHS Leads</h1>

@@ -402,6 +402,8 @@ export async function buildQboInvoice(env: Env, inv: InvoiceRow): Promise<Record
 
   const invoice: Record<string, unknown> = {
     CustomerRef: { value: inv.qbo_customer_id },
+    // Jobber imports must already have stored Jobber's visible number here.
+    // That value stays below 10000 and is not taken from next_invoice_number.
     DocNumber: inv.invoice_number != null ? String(inv.invoice_number) : undefined,
     PrivateNote: `CHS-INV:${inv.id}`,
     Line,

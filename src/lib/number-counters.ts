@@ -12,6 +12,13 @@ export const NEXT_REQUEST_NUMBER_KEY = "next_request_number";
 export const NEXT_JOB_NUMBER_KEY = "next_job_number";
 export const NEXT_INVOICE_NUMBER_KEY = "next_invoice_number";
 
+/**
+ * Native CHS invoices start here. Jobber's client-visible numbers stay below
+ * this and are written onto invoices.invoice_number directly — they must not
+ * call allocateNextInvoiceNumber.
+ */
+export const CHS_INVOICE_SERIES_START = 10_000;
+
 type CounterMeta = {
   key: string;
   category: string;
@@ -19,6 +26,8 @@ type CounterMeta = {
   description: string;
   /** SQL that returns { n: number } = current MAX of the numbered column. */
   maxSql: string;
+  /** Never seed the counter below this. */
+  floor?: number;
 };
 
 async function claimNext(env: Env, key: string): Promise<number | null> {
@@ -39,7 +48,7 @@ async function claimNext(env: Env, key: string): Promise<number | null> {
 
 async function ensureSeeded(env: Env, meta: CounterMeta): Promise<void> {
   const maxRow = await env.DB.prepare(meta.maxSql).first<{ n: number | null }>();
-  const seedNext = Math.max(0, Number(maxRow?.n ?? 0)) + 1;
+  const seedNext = Math.max(meta.floor ?? 1, Math.max(0, Number(maxRow?.n ?? 0)) + 1);
   const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT OR IGNORE INTO system_settings
@@ -83,9 +92,25 @@ const INVOICE_META: CounterMeta = {
   key: NEXT_INVOICE_NUMBER_KEY,
   category: "billing",
   label: "Next invoice number",
-  description: "Durable counter for invoices.invoice_number (never reuse after delete).",
+  description: "CHS invoice series. Starts at 10000. Jobber imports write their own visible numbers below that and do not bump this counter.",
   maxSql: "SELECT COALESCE(MAX(invoice_number), 0) AS n FROM invoices",
+  floor: CHS_INVOICE_SERIES_START,
 };
+
+/**
+ * Jobber's client-visible invoice number (what the client saw, and what QBO
+ * DocNumber should match). Does not read or update next_invoice_number.
+ */
+export function jobberVisibleInvoiceNumber(raw: unknown): number {
+  const text = typeof raw === "number" ? String(raw) : String(raw ?? "").trim().replace(/^#/, "");
+  const n = Number(text);
+  if (!Number.isInteger(n) || n < 1 || n >= CHS_INVOICE_SERIES_START) {
+    throw new Error(
+      `Jobber invoice number ${text || "(blank)"} must be an integer below ${CHS_INVOICE_SERIES_START}`,
+    );
+  }
+  return n;
+}
 
 export function allocateNextRequestNumber(env: Env): Promise<number> {
   return allocateNext(env, REQUEST_META);

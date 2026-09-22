@@ -3,6 +3,8 @@ import {
   allocateNextInvoiceNumber,
   allocateNextJobNumber,
   allocateNextRequestNumber,
+  CHS_INVOICE_SERIES_START,
+  jobberVisibleInvoiceNumber,
   NEXT_INVOICE_NUMBER_KEY,
   NEXT_JOB_NUMBER_KEY,
   NEXT_REQUEST_NUMBER_KEY,
@@ -186,5 +188,82 @@ describe("monotonic number counters", () => {
     maxRequest = 49;
     const n2 = await allocateNextRequestNumber(env);
     expect(n2).toBe(52);
+  });
+
+  it("native invoices take 10000 then 10001", async () => {
+    const inv = makeCounterEnv({
+      counterKey: NEXT_INVOICE_NUMBER_KEY,
+      initialNext: CHS_INVOICE_SERIES_START,
+      entities: [{ id: "nancee", number: 1 }],
+    });
+    const first = await allocateNextInvoiceNumber(inv.env);
+    const second = await allocateNextInvoiceNumber(inv.env);
+    expect(first).toBe(10000);
+    expect(second).toBe(10001);
+    expect(inv.settings.get(NEXT_INVOICE_NUMBER_KEY)).toBe("10002");
+  });
+
+  it("stores a Jobber visible number without touching the counter", async () => {
+    const inv = makeCounterEnv({
+      counterKey: NEXT_INVOICE_NUMBER_KEY,
+      initialNext: CHS_INVOICE_SERIES_START,
+      entities: [{ id: "nancee", number: 1 }],
+    });
+    const visible = jobberVisibleInvoiceNumber(240);
+    await inv.env.DB.prepare("INSERT INTO invoices (id, invoice_number) VALUES (?, ?)")
+      .bind("jobber-240", visible)
+      .run();
+    expect(inv.entities.some((e) => e.id === "jobber-240" && e.number === 240)).toBe(true);
+    expect(inv.settings.get(NEXT_INVOICE_NUMBER_KEY)).toBe("10000");
+    expect(inv.statements.some((sql) => sql.includes("UPDATE system_settings"))).toBe(false);
+  });
+
+  it("seeds the invoice counter at 10000 when the row is missing, even if MAX is 1", async () => {
+    const settings = new Map<string, string>();
+    const env = {
+      DB: {
+        prepare(sql: string) {
+          return {
+            _binds: [] as unknown[],
+            bind(...binds: unknown[]) {
+              this._binds = binds;
+              return this;
+            },
+            async first<T>() {
+              if (sql.includes("UPDATE system_settings") && sql.includes("RETURNING")) {
+                const key = this._binds[0] as string;
+                const cur = Number.parseInt(settings.get(key) ?? "", 10);
+                if (!Number.isFinite(cur) || cur < 1) return null;
+                settings.set(key, String(cur + 1));
+                return { n: cur } as T;
+              }
+              if (sql.includes("MAX(invoice_number)")) return { n: 1 } as T;
+              return null;
+            },
+            async run() {
+              if (sql.includes("INSERT OR IGNORE INTO system_settings")) {
+                const key = this._binds[0] as string;
+                const value = String(this._binds[1]);
+                if (!settings.has(key)) settings.set(key, value);
+              }
+              return { success: true, meta: { changes: 1 } };
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+
+    const n = await allocateNextInvoiceNumber(env);
+    expect(n).toBe(CHS_INVOICE_SERIES_START);
+    expect(settings.get(NEXT_INVOICE_NUMBER_KEY)).toBe(String(CHS_INVOICE_SERIES_START + 1));
+  });
+
+  it("accepts a Jobber visible invoice number below 10000 and does not touch the counter", () => {
+    expect(jobberVisibleInvoiceNumber(42)).toBe(42);
+    expect(jobberVisibleInvoiceNumber("#7")).toBe(7);
+    expect(jobberVisibleInvoiceNumber(" 9999 ")).toBe(9999);
+    expect(() => jobberVisibleInvoiceNumber(10000)).toThrow(/below 10000/);
+    expect(() => jobberVisibleInvoiceNumber(0)).toThrow(/below 10000/);
+    expect(() => jobberVisibleInvoiceNumber("")).toThrow(/below 10000/);
   });
 });

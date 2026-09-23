@@ -200,29 +200,6 @@ function DashboardTab(props: {
         </button>
       </div>
 
-      <div ref={attentionRef}>
-        {failed.length > 0 && (
-          <Card title="Needs attention">
-            {failed.map((p) => (
-              <div class="attention-row" key={p.id}>
-                <PhotoTile post={p} size="sm" />
-                <div class="attention-row__body">
-                  <div class="flex gap-sm items-center flex-wrap">
-                    <strong>{postTypeLabel(p.post_type)}</strong>
-                    <Badge status={p.status}>{formatStatus(p.status)}</Badge>
-                  </div>
-                  <div class="social-cal__post-label">{p.caption || "No caption"}</div>
-                  <div class="attention-row__reason">{p.rejection_reason || "No failure reason recorded."}</div>
-                </div>
-                <Button size="sm" variant="secondary" onClick={() => void retry(p.id)}>
-                  Retry
-                </Button>
-              </div>
-            ))}
-          </Card>
-        )}
-      </div>
-
       <Card title="Upcoming posts">
         {upcoming.length === 0 ? (
           <div class="empty-state">
@@ -245,6 +222,29 @@ function DashboardTab(props: {
           </div>
         )}
       </Card>
+
+      <div ref={attentionRef}>
+        {failed.length > 0 && (
+          <Card title="Needs attention">
+            {failed.map((p) => (
+              <div class="attention-row" key={p.id}>
+                <PhotoTile post={p} size="sm" />
+                <div class="attention-row__body">
+                  <div class="flex gap-sm items-center flex-wrap">
+                    <strong>{postTypeLabel(p.post_type)}</strong>
+                    <Badge status={p.status}>{formatStatus(p.status)}</Badge>
+                  </div>
+                  <div class="social-cal__post-label">{p.caption || "No caption"}</div>
+                  <div class="attention-row__reason">{p.rejection_reason || "No failure reason recorded."}</div>
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => void retry(p.id)}>
+                  Retry
+                </Button>
+              </div>
+            ))}
+          </Card>
+        )}
+      </div>
     </div>
   );
 }

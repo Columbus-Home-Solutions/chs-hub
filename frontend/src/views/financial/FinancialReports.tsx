@@ -245,9 +245,15 @@ interface RevenueData {
   jobs: Array<Record<string, unknown>>;
 }
 
+function jobCostsLogged(row: Record<string, unknown>): "yes" | "no" {
+  if (row.costs_logged === "yes" || row.costs_logged === "no") return row.costs_logged;
+  return Number(row.total_expenses ?? 0) === 0 ? "no" : "yes";
+}
+
 function JobRevenueReport({ data, year }: { data: RevenueData; year: string }) {
   const s = data.summary;
   const rows = data.jobs ?? [];
+  const noCostJobs = rows.filter((r) => jobCostsLogged(r) === "no").length;
   const cols = [
     { key: "job_display", label: "Job #" },
     { key: "client_name", label: "Client" },
@@ -256,22 +262,30 @@ function JobRevenueReport({ data, year }: { data: RevenueData; year: string }) {
     { key: "total_collected", label: "Collected" },
     { key: "total_expenses", label: "Expenses" },
     { key: "gross_profit", label: "Gross Profit" },
+    { key: "costs_logged", label: "costs_logged" },
   ];
+  const tableCols = cols.filter((c) => c.key !== "costs_logged");
+  const csvRows = rows.map((r) => ({ ...r, costs_logged: jobCostsLogged(r) }));
   return (
     <div>
-      <ReportHeader title={`Job Revenue (${year})`} onCsv={() => downloadCsv(`job-revenue-${year}.csv`, rows, cols)} disabled={rows.length === 0} />
+      <ReportHeader title={`Job Revenue (${year})`} onCsv={() => downloadCsv(`job-revenue-${year}.csv`, csvRows, cols)} disabled={rows.length === 0} />
       <div class="report-summary-grid">
         <SummaryCard label="Contract Value" value={formatCurrency(s.total_revenue)} />
         <SummaryCard label="Collected" value={formatCurrency(s.total_collected)} />
         <SummaryCard label="Expenses" value={formatCurrency(s.total_expenses)} />
-        <SummaryCard label="Gross Profit" value={formatCurrency(s.gross_profit)} />
+        <SummaryCard
+          label="Gross Profit"
+          value={formatCurrency(s.gross_profit)}
+          note={rows.length > 0 ? `${noCostJobs} ${noCostJobs === 1 ? "job" : "jobs"} with no costs logged` : undefined}
+        />
       </div>
       {rows.length === 0 ? <EmptyReport /> : (
         <table class="data-table">
-          <thead><tr>{cols.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
+          <thead><tr>{tableCols.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
           <tbody>
             {rows.map((r) => {
               const profit = Number(r.gross_profit ?? 0);
+              const logged = jobCostsLogged(r) === "yes";
               return (
                 <tr key={String(r.id)}>
                   <td>{String(r.job_display ?? "")}</td>
@@ -280,7 +294,11 @@ function JobRevenueReport({ data, year }: { data: RevenueData; year: string }) {
                   <td>{formatCurrency(Number(r.contract_value ?? 0))}</td>
                   <td>{formatCurrency(Number(r.total_collected ?? 0))}</td>
                   <td>{formatCurrency(Number(r.total_expenses ?? 0))}</td>
-                  <td class={profit >= 0 ? "text--success" : "text--error"}>{formatCurrency(profit)}</td>
+                  {logged ? (
+                    <td class={profit >= 0 ? "text--success" : "text--error"}>{formatCurrency(profit)}</td>
+                  ) : (
+                    <td class="text--muted">No costs logged</td>
+                  )}
                 </tr>
               );
             })}
@@ -302,11 +320,12 @@ function ReportHeader({ title, onCsv, disabled }: { title: string; onCsv: () => 
   );
 }
 
-function SummaryCard({ label, value }: { label: string; value: string }) {
+function SummaryCard({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
     <div class="report-summary-card">
       <div class="report-summary-card__label">{label}</div>
       <div class="report-summary-card__value">{value}</div>
+      {note && <div class="report-summary-card__note">{note}</div>}
     </div>
   );
 }

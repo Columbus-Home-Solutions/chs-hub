@@ -1,3 +1,4 @@
+import { Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
@@ -257,6 +258,10 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   const invoiced = data.summary.total_invoiced;
   const profit = Math.round((invoiced - totalCost) * 100) / 100;
   const marginPct = invoiced > 0 ? Math.round((profit / invoiced) * 1000) / 10 : null;
+  // $0 total actual (expenses + time labor, including unallocated) is "nothing
+  // recorded," not a full-budget win. Wait for costing before treating $0 as real.
+  const noCostsLogged = costing.data != null && costing.data.costing.totals.actual === 0;
+  const profitPending = costing.loading && costing.data == null && totalExpenses + laborCost === 0;
 
   const refetchAll = () => {
     refetch();
@@ -317,7 +322,17 @@ export function FinancialTab({ jobId }: { jobId: string }) {
         <SummaryStat label="Collected" value={data.summary.total_paid} tone="success" />
         <SummaryStat label="Balance Due" value={data.summary.balance_due} tone="warning" />
         <SummaryStat label="Expenses" value={totalExpenses + laborCost} />
-        {canSeeCosting && (
+        {canSeeCosting && (noCostsLogged || profitPending) && (
+          <>
+            <SummaryStat label="Profit" value={0} emptyNote={noCostsLogged ? "No costs logged" : ""} />
+            <div class="fin-stat">
+              <div class="fin-stat__label">Margin</div>
+              <div class="fin-stat__value">—</div>
+              {noCostsLogged && <div class="fin-stat__note">No costs logged</div>}
+            </div>
+          </>
+        )}
+        {canSeeCosting && !noCostsLogged && !profitPending && (
           <>
             <SummaryStat label="Profit" value={profit} tone={profit >= 0 ? "success" : undefined} />
             <div class="fin-stat">
@@ -612,9 +627,15 @@ function BudgetVsActual({
     );
   }
   const toggle = (id: string) => setExpanded((e) => ({ ...e, [id]: !e[id] }));
+  const noCostsLogged = costing.totals.actual === 0;
 
   return (
     <Card title="Budget vs. Actual">
+      {noCostsLogged && (
+        <p class="costing-note">
+          No costs logged for this job yet. Add expenses, sub payments or time entries to see variance.
+        </p>
+      )}
       <div class="table-container">
         <table class="table costing-table">
           <thead>
@@ -627,8 +648,8 @@ function BudgetVsActual({
           </thead>
           <tbody>
             {costing.lines.map((l) => (
-              <>
-                <tr key={l.line_item_id} class="costing-row" onClick={() => l.sub_items.length && toggle(l.line_item_id)}>
+              <Fragment key={l.line_item_id}>
+                <tr class="costing-row" onClick={() => l.sub_items.length && toggle(l.line_item_id)}>
                   <td>
                     {l.sub_items.length > 0 && <span class="costing-row__caret">{expanded[l.line_item_id] ? "▾" : "▸"}</span>}
                     {l.name}
@@ -636,7 +657,13 @@ function BudgetVsActual({
                   <td class="num">{formatCurrency(l.budget)}</td>
                   <td class="num">{formatCurrency(l.actual)}</td>
                   <td class="num">
-                    <Badge tone={VARIANCE_TONE[l.status]}>{formatCurrency(l.variance)}</Badge>
+                    <VarianceValue
+                      actual={l.actual}
+                      variance={l.variance}
+                      status={l.status}
+                      noCostsLogged={noCostsLogged}
+                      colored
+                    />
                   </td>
                 </tr>
                 {expanded[l.line_item_id] &&
@@ -645,10 +672,17 @@ function BudgetVsActual({
                       <td class="costing-subrow__name">↳ {s.description ?? s.category} <span class="text--muted">({s.category})</span></td>
                       <td class="num">{formatCurrency(s.budget)}</td>
                       <td class="num">{formatCurrency(s.actual)}</td>
-                      <td class="num text--muted">{formatCurrency(s.variance)}</td>
+                      <td class="num">
+                        <VarianceValue
+                          actual={s.actual}
+                          variance={s.variance}
+                          status={s.status}
+                          noCostsLogged={noCostsLogged}
+                        />
+                      </td>
                     </tr>
                   ))}
-              </>
+              </Fragment>
             ))}
             {costing.labor_from_time > 0 && (
               <tr class="costing-row costing-row--aux">
@@ -671,7 +705,11 @@ function BudgetVsActual({
               <td class="num"><strong>{formatCurrency(costing.totals.budget)}</strong></td>
               <td class="num"><strong>{formatCurrency(costing.totals.actual)}</strong></td>
               <td class="num">
-                <Badge tone={VARIANCE_TONE[costing.totals.status]}>{formatCurrency(costing.totals.variance)}</Badge>
+                {noCostsLogged ? (
+                  <span class="text--muted">—</span>
+                ) : (
+                  <Badge tone={VARIANCE_TONE[costing.totals.status]}>{formatCurrency(costing.totals.variance)}</Badge>
+                )}
               </td>
             </tr>
           </tbody>
@@ -1170,15 +1208,46 @@ function MileageSection({ jobId, toast }: { jobId: string; toast: ToastApi }) {
   );
 }
 
+function VarianceValue({
+  actual,
+  variance,
+  status,
+  noCostsLogged,
+  colored = false,
+}: {
+  actual: number;
+  variance: number;
+  status: "under" | "within" | "over";
+  noCostsLogged: boolean;
+  colored?: boolean;
+}) {
+  if (noCostsLogged) return <span class="text--muted">—</span>;
+  if (actual === 0) return <Badge tone="neutral">Not logged</Badge>;
+  if (!colored) return <span class="text--muted">{formatCurrency(variance)}</span>;
+  return <Badge tone={VARIANCE_TONE[status]}>{formatCurrency(variance)}</Badge>;
+}
+
 function SummaryStat({
   label,
   value,
   tone,
+  emptyNote,
 }: {
   label: string;
   value: number;
   tone?: "success" | "warning";
+  /** When set, show an em dash instead of the dollar amount. */
+  emptyNote?: string;
 }) {
+  if (emptyNote !== undefined) {
+    return (
+      <div class="fin-stat">
+        <div class="fin-stat__label">{label}</div>
+        <div class="fin-stat__value">—</div>
+        {emptyNote ? <div class="fin-stat__note">{emptyNote}</div> : null}
+      </div>
+    );
+  }
   return (
     <div class={`fin-stat${tone ? ` fin-stat--${tone}` : ""}`}>
       <div class="fin-stat__label">{label}</div>

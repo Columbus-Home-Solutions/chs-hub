@@ -941,6 +941,11 @@
 }
 .fin-stat--success .fin-stat__value { color: var(--color-success); }
 .fin-stat--warning .fin-stat__value { color: var(--color-warning); }
+.fin-stat__note {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
 
 .invoice-list { display: flex; flex-direction: column; }
 .invoice-row {
@@ -4168,7 +4173,58 @@
   border-color: transparent;
   color: #fff;
 }
+.costing-note {
+  margin: 0 0 var(--space-sm);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
 .costing-table th.num, .costing-table td.num { text-align: right; white-space: nowrap; font-family: var(--font-mono); }
+.job-cost__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: var(--space-sm) var(--space-md);
+}
+.job-cost__label {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.job-cost__value {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  margin-top: 2px;
+}
+.job-cost__value--error { color: var(--color-error); }
+.job-cost__track {
+  margin-top: var(--space-md);
+  height: 8px;
+  width: 100%;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.job-cost__fill {
+  height: 100%;
+  border-radius: inherit;
+}
+.job-cost__fill--under { background: var(--color-success); }
+.job-cost__fill--within { background: var(--color-warning); }
+.job-cost__fill--over { background: var(--color-error); }
+.job-cost__pct {
+  margin-top: var(--space-xs);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.job-cost__note {
+  margin-top: var(--space-sm);
+  margin-bottom: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.job-cost .callout { margin-top: var(--space-sm); }
 .costing-row { cursor: pointer; }
 .costing-row__caret { display: inline-block; width: 1em; color: var(--color-text-muted); }
 .costing-subrow td { background: var(--color-surface-2); font-size: var(--text-sm); }
@@ -5925,6 +5981,11 @@
 .report-summary-card__value {
   font-size: var(--text-lg);
   font-weight: var(--weight-bold);
+}
+.report-summary-card__note {
+  margin-top: var(--space-xs);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
 }
 .aging-row--current td { background: color-mix(in srgb, var(--color-success) 6%, transparent); }
 .aging-row--days_1_30 td { background: color-mix(in srgb, var(--color-warning) 8%, transparent); }

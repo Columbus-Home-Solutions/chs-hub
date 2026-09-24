@@ -5,6 +5,7 @@ import { useUrlTab } from "../../hooks/useUrlTab";
 import { useViewportTier } from "../../hooks/useViewportTier";
 import { Card } from "../../components/ui/Card";
 import { WarrantyExpirationCallout } from "../../components/WarrantyExpirationCallout";
+import { JobCostCard, type JobCostingPayload } from "./JobCostCard";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
@@ -130,6 +131,11 @@ export function JobDetail({ id }: DetailProps) {
   const { data, loading, error, refetch } = useApi<JobDetailResponse>(id ? `/api/jobs/${id}` : null);
   const toast = useToast();
   const { user } = useAuth();
+  // Same gate as costing/profit on the Financial tab (owner + project manager).
+  const canSeeCosting = user?.role === "owner" || user?.role === "project_manager";
+  const jobCosting = useApi<{ costing: JobCostingPayload }>(
+    id && canSeeCosting ? `/api/jobs/${id}/costing` : null,
+  );
   const tier = useViewportTier();
   const compactTabs = tier === "mobile" || tier === "tablet";
   const [tab, setTab] = useUrlTab([...TAB_KEYS], "overview");
@@ -264,7 +270,18 @@ export function JobDetail({ id }: DetailProps) {
         </SlideUpSheet>
       )}
 
-      {tab === "overview" && <OverviewTab data={data} refetch={refetch} toast={toast} />}
+      {tab === "overview" && (
+        <OverviewTab
+          data={data}
+          refetch={refetch}
+          toast={toast}
+          canSeeCosting={canSeeCosting}
+          costing={jobCosting.data?.costing ?? null}
+          costingLoading={jobCosting.loading}
+          costingError={jobCosting.error}
+          onViewCosts={() => setTab("financial")}
+        />
+      )}
       {tab === "scope" && <ScopeOfWorkTab estimateId={job.estimate_id} jobSource={job.source} />}
       {tab === "selections" && id && (
         <SelectionsTab jobId={id} estimateId={job.estimate_id} />
@@ -307,10 +324,20 @@ function OverviewTab({
   data,
   refetch,
   toast,
+  canSeeCosting,
+  costing,
+  costingLoading,
+  costingError,
+  onViewCosts,
 }: {
   data: JobDetailResponse;
   refetch: () => void;
   toast: ToastApi;
+  canSeeCosting: boolean;
+  costing: JobCostingPayload | null;
+  costingLoading: boolean;
+  costingError: string | null;
+  onViewCosts: () => void;
 }) {
   const job = data.job;
   const allTargets = statusTargets(job.status);
@@ -458,6 +485,16 @@ function OverviewTab({
             )}
           </div>
         </Card>
+
+        {canSeeCosting && (
+          <JobCostCard
+            jobStatus={job.status}
+            costing={costing}
+            loading={costingLoading}
+            error={costingError}
+            onViewDetails={onViewCosts}
+          />
+        )}
       </div>
 
       {drawerOpen && eligibility && (

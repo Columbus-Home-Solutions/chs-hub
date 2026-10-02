@@ -30,6 +30,7 @@ import { NotificationLogs } from "./views/notifications/NotificationLogs";
 import { SocialMedia } from "./views/social/SocialMedia";
 import { ReviewsPage } from "./views/social/ReviewsPage";
 import { FinancialDashboard } from "./views/financial/FinancialDashboard";
+import { LaborStatement } from "./views/financial/LaborStatement";
 import { PayerList } from "./views/payers/PayerList";
 import { PayerDetail } from "./views/payers/PayerDetail";
 import { PhotoLibrary } from "./views/photos/PhotoLibrary";
@@ -69,6 +70,7 @@ export function AppRouter() {
       <WarrantyCallDetail path={`${BASE}/warranty-calls/:id`} />
       <CompletionPackageReview path={`${BASE}/jobs/:id/completion-package`} />
       <JobDetail path={`${BASE}/jobs/:id`} />
+      <LaborStatement path={`${BASE}/financial/labor/statement`} />
       <FinancialDashboard path={`${BASE}/financial`} />
       <PayerList path={`${BASE}/payers`} />
       <PayerDetail path={`${BASE}/payers/:id`} />

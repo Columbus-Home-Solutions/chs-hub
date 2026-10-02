@@ -154,6 +154,8 @@ export interface CostingActuals {
   totalExpenses: number;
   /** Σ non-void subcontractor expense amounts */
   subExpenses: number;
+  /** Unpaid day-rate labor (labor_entries with no expense yet). Drops out once paid. */
+  accruedLabor: number;
 }
 
 export interface ActualsWindow {
@@ -282,7 +284,31 @@ export async function computeJobActuals(
   let laborFromTime = 0;
   for (const t of times) laborFromTime = round2(laborFromTime + (Number(t.labor_cost) || 0));
 
-  return { byParent, bySubItem, unallocated, laborFromTime, totalExpenses, subExpenses };
+  // Unpaid day-rate labor. Paid rows have expense_id set and are already in totalExpenses.
+  let accruedLabor = 0;
+  try {
+    const awhere: string[] = ["job_id = ?", "expense_id IS NULL", "deleted_at IS NULL"];
+    const abinds: unknown[] = [jobId];
+    if (window.from) {
+      awhere.push("work_date >= ?");
+      abinds.push(window.from);
+    }
+    if (window.to) {
+      awhere.push("work_date <= ?");
+      abinds.push(window.to);
+    }
+    const accrued = await env.DB.prepare(
+      `SELECT COALESCE(SUM(days * day_rate), 0) AS v FROM labor_entries WHERE ${awhere.join(" AND ")}`,
+    )
+      .bind(...abinds)
+      .first<{ v: number }>();
+    accruedLabor = round2(accrued?.v ?? 0);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/no such (table|column)/i.test(msg)) throw e;
+  }
+
+  return { byParent, bySubItem, unallocated, laborFromTime, totalExpenses, subExpenses, accruedLabor };
 }
 
 /** One expense row in a billing-cycle window — parallel to {@link computeJobActuals} filters. */
@@ -468,6 +494,8 @@ export interface JobCosting {
   has_budget: boolean;
   lines: CostingLine[];
   labor_from_time: number;
+  /** Unpaid day-rate labor. Not included again once the pay batch writes the expense. */
+  accrued_labor: number;
   unallocated: number;
   totals: {
     budget: number;
@@ -541,9 +569,10 @@ export async function buildJobCosting(env: Env, jobId: string): Promise<JobCosti
   });
 
   const budgetTotal = round2(lines.reduce((a, l) => a + l.budget, 0));
-  // Total actual = every non-void expense (aligned + unallocated) + labor from
-  // time entries. (byParent + unallocated already sums all expenses.)
-  const actualTotal = round2(actuals.totalExpenses + actuals.laborFromTime);
+  // Total actual = expenses + closed time-entry labor + unpaid day-rate labor.
+  // Paying a labor batch writes the expense and clears expense_id IS NULL, so
+  // the same dollars are not in both accrued_labor and totalExpenses.
+  const actualTotal = round2(actuals.totalExpenses + actuals.laborFromTime + actuals.accruedLabor);
 
   return {
     job_id: jobId,
@@ -551,6 +580,7 @@ export async function buildJobCosting(env: Env, jobId: string): Promise<JobCosti
     has_budget: lines.length > 0,
     lines,
     labor_from_time: actuals.laborFromTime,
+    accrued_labor: actuals.accruedLabor,
     unallocated: actuals.unallocated,
     totals: {
       budget: budgetTotal,
@@ -569,7 +599,9 @@ export interface YtdOperatingCosts {
   labor_from_time: number;
   /** Stripe processing fees on collected payments. */
   stripe_fees: number;
-  /** expenses + labor_from_time + stripe_fees */
+  /** Unpaid day-rate labor not yet written as an expense. */
+  accrued_labor: number;
+  /** expenses + labor_from_time + accrued_labor + stripe_fees */
   total_cogs: number;
 }
 
@@ -603,20 +635,36 @@ export async function computeYtdOperatingCosts(
       .first<{ v: number }>(),
   ]);
 
+  let accrued_labor = 0;
+  try {
+    const accruedRow = await env.DB.prepare(
+      `SELECT COALESCE(SUM(le.days * le.day_rate), 0) AS v
+         FROM labor_entries le
+        WHERE le.expense_id IS NULL
+          AND le.deleted_at IS NULL
+          AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = le.job_id)")}`,
+    ).first<{ v: number }>();
+    accrued_labor = round2(accruedRow?.v ?? 0);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/no such (table|column)/i.test(msg)) throw e;
+  }
+
   const expenses = round2(expRow?.v ?? 0);
   const labor_from_time = round2(laborRow?.v ?? 0);
   const stripe_fees = round2(feeRow?.v ?? 0);
   return {
     expenses,
     labor_from_time,
+    accrued_labor,
     stripe_fees,
-    total_cogs: round2(expenses + labor_from_time + stripe_fees),
+    total_cogs: round2(expenses + labor_from_time + accrued_labor + stripe_fees),
   };
 }
 
 /** Job COGS only (expenses + labor) — used for accrual/earned margin vs. invoiced revenue. */
 export function jobCogsOnly(costs: YtdOperatingCosts): number {
-  return round2(costs.expenses + costs.labor_from_time);
+  return round2(costs.expenses + costs.labor_from_time + (costs.accrued_labor ?? 0));
 }
 
 /** Invoiced revenue YTD (accrual): sent/viewed/partial/past_due/paid, excluding draft & void. */

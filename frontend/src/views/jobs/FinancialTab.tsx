@@ -27,6 +27,7 @@ import { HISTORICAL_INVOICE_BADGE } from "../../types";
 import { CycleManager } from "./CycleManager";
 import { LineItemBilling } from "./LineItemBilling";
 import { go } from "../../lib/nav";
+import { JobLaborCard } from "./JobLaborCard";
 import type { QueueItem } from "../financial/ReceiptQueueView";
 import type { JobCard, Payer } from "../../types";
 
@@ -132,6 +133,7 @@ interface CostingResponse {
     has_budget: boolean;
     lines: CostingLine[];
     labor_from_time: number;
+    accrued_labor?: number;
     unallocated: number;
     totals: { budget: number; actual: number; variance: number; status: "under" | "within" | "over" };
   };
@@ -254,14 +256,15 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   // Total cost = non-void expenses + time-entry labor; profit on the invoiced basis.
   const totalExpenses = expenses.data?.total_amount ?? 0;
   const laborCost = costing.data?.costing.labor_from_time ?? 0;
-  const totalCost = Math.round((totalExpenses + laborCost) * 100) / 100;
+  const accruedLabor = costing.data?.costing.accrued_labor ?? 0;
+  const totalCost = Math.round((totalExpenses + laborCost + accruedLabor) * 100) / 100;
   const invoiced = data.summary.total_invoiced;
   const profit = Math.round((invoiced - totalCost) * 100) / 100;
   const marginPct = invoiced > 0 ? Math.round((profit / invoiced) * 1000) / 10 : null;
   // $0 total actual (expenses + time labor, including unallocated) is "nothing
   // recorded," not a full-budget win. Wait for costing before treating $0 as real.
   const noCostsLogged = costing.data != null && costing.data.costing.totals.actual === 0;
-  const profitPending = costing.loading && costing.data == null && totalExpenses + laborCost === 0;
+  const profitPending = costing.loading && costing.data == null && totalCost === 0;
 
   const refetchAll = () => {
     refetch();
@@ -309,6 +312,7 @@ export function FinancialTab({ jobId }: { jobId: string }) {
 
   return (
     <div class="stack">
+      <JobLaborCard jobId={jobId} />
       <div class="fin-summary">
         <SummaryStat label="Contract" value={data.summary.contract_total} />
         {data.summary.change_orders_count > 0 && (
@@ -321,7 +325,7 @@ export function FinancialTab({ jobId }: { jobId: string }) {
         <SummaryStat label="Invoiced" value={data.summary.total_invoiced} />
         <SummaryStat label="Collected" value={data.summary.total_paid} tone="success" />
         <SummaryStat label="Balance Due" value={data.summary.balance_due} tone="warning" />
-        <SummaryStat label="Expenses" value={totalExpenses + laborCost} />
+        <SummaryStat label="Expenses" value={totalCost} />
         {canSeeCosting && (noCostsLogged || profitPending) && (
           <>
             <SummaryStat label="Profit" value={0} emptyNote={noCostsLogged ? "No costs logged" : ""} />
@@ -633,7 +637,7 @@ function BudgetVsActual({
     <Card title="Budget vs. Actual">
       {noCostsLogged && (
         <p class="costing-note">
-          No costs logged for this job yet. Add expenses, sub payments or time entries to see variance.
+          No costs logged for this job yet. Add expenses, labor days, sub payments, or time entries to see variance.
         </p>
       )}
       <div class="table-container">
@@ -689,6 +693,14 @@ function BudgetVsActual({
                 <td>Labor (time tracking)</td>
                 <td class="num text--muted">—</td>
                 <td class="num">{formatCurrency(costing.labor_from_time)}</td>
+                <td class="num text--muted">—</td>
+              </tr>
+            )}
+            {(costing.accrued_labor ?? 0) > 0 && (
+              <tr class="costing-row costing-row--aux">
+                <td>Accrued labor, unpaid</td>
+                <td class="num text--muted">—</td>
+                <td class="num">{formatCurrency(costing.accrued_labor ?? 0)}</td>
                 <td class="num text--muted">—</td>
               </tr>
             )}

@@ -196,6 +196,14 @@ export const SIDEBAR_NAV: NavSection[] = [
           p === to("/financial") && new URLSearchParams(s).get("tab") === "receipts",
       },
       {
+        label: "Labor Tracker",
+        href: to("/financial") + "?tab=labor",
+        activeTest: (p, s) =>
+          (p === to("/financial") && new URLSearchParams(s).get("tab") === "labor") ||
+          p === to("/financial/labor/statement") ||
+          p.startsWith(to("/financial/labor/")),
+      },
+      {
         label: "Reports",
         href: to("/financial") + "?tab=reports",
         activeTest: (p, s) =>

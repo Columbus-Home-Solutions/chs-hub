@@ -165,6 +165,8 @@ export async function cascadeDeleteJobChildren(env: Env, jobId: string): Promise
     const msg = e instanceof Error ? e.message : String(e);
     if (!/no such table/i.test(msg)) throw new CascadeStepError("expense_line_items", e);
   }
+  // labor_entries.expense_id references expenses — remove days before the expense rows.
+  await runDeleteRequired(env, "labor_entries", "DELETE FROM labor_entries WHERE job_id = ?", jobId);
   await runDeleteRequired(env, "expenses", "DELETE FROM expenses WHERE job_id = ?", jobId);
 
   await runDeleteRequired(env, "payments", "DELETE FROM payments WHERE job_id = ?", jobId);
@@ -233,6 +235,22 @@ export async function jobFinancialDeleteBlock(
 
   if ((row?.open_invoices ?? 0) > 0 || (row?.payments ?? 0) > 0) {
     return "Job has invoices/payments; void them first or keep the job";
+  }
+
+  // Unpaid or paid day-rate days stay with the job. Test clients skip this
+  // function entirely (same as invoices) so local seed jobs can still be removed.
+  try {
+    const labor = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM labor_entries WHERE job_id = ?",
+    )
+      .bind(jobId)
+      .first<{ n: number }>();
+    if ((labor?.n ?? 0) > 0) {
+      return "This job has labor days logged — keep the job so the pay history stays attached.";
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/no such table/i.test(msg)) throw e;
   }
   return null;
 }

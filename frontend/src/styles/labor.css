@@ -1,0 +1,224 @@
+.labor-log {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr 2fr 0.7fr auto;
+  gap: var(--space-sm);
+  align-items: end;
+}
+
+.labor-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.labor-stat__label {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.labor-stat__value {
+  font-size: var(--text-xl);
+  font-weight: 650;
+}
+
+.labor-scroll {
+  overflow-x: auto;
+}
+
+.labor-grid {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.labor-grid th,
+.labor-grid td {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-xs) var(--space-sm);
+  vertical-align: top;
+  text-align: left;
+  font-size: var(--text-sm);
+}
+
+.labor-grid th {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.labor-grid__num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.labor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 4px 2px 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--color-text-inverse);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.labor-chip--locked {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.labor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.labor-picker {
+  position: relative;
+}
+
+.labor-picker__list {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+}
+
+.labor-pay-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  align-items: flex-start;
+  padding: var(--space-xs) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.labor-statement__page {
+  background: #fff;
+  color: #111;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.labor-statement__page h1,
+.labor-statement__page h2,
+.labor-statement__page p,
+.labor-statement__page td,
+.labor-statement__page th {
+  color: #111;
+}
+
+.labor-statement table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.labor-statement th,
+.labor-statement td {
+  border-bottom: 1px solid #ddd;
+  padding: 6px 4px;
+  text-align: left;
+}
+
+.labor-statement .num {
+  text-align: right;
+}
+
+@media (max-width: 800px) {
+  .labor-log,
+  .labor-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.labor-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: #fff7ed;
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+}
+
+.labor-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.labor-week-row {
+  cursor: pointer;
+}
+
+.labor-pay-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.labor-pay-worker {
+  margin-top: var(--space-sm);
+}
+
+.labor-pay-job {
+  margin-left: var(--space-md);
+}
+
+.labor-pay-matches {
+  margin: var(--space-xs) 0 var(--space-sm);
+}
+
+.labor-pay-choice {
+  display: flex;
+  gap: var(--space-xs);
+  align-items: flex-start;
+  margin: var(--space-xs) 0;
+}
+
+.labor-pay-reconcile {
+  margin: var(--space-xs) 0;
+}
+
+@media (max-width: 800px) {
+  .labor-banner,
+  .labor-pay-fields {
+    display: block;
+  }
+}
+
+@media print {
+  .topnav,
+  .sidebar,
+  .tablet-rail,
+  .bottom-tabs,
+  .labor-no-print {
+    display: none !important;
+  }
+
+  .app-shell,
+  .app-body,
+  .content,
+  .content__inner {
+    display: block !important;
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .labor-statement__page {
+    break-after: page;
+    page-break-after: always;
+    margin: 0;
+  }
+}

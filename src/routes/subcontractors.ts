@@ -489,9 +489,10 @@ export async function handleSubcontractorDelete(
         (SELECT COUNT(*) FROM bid_submissions WHERE sub_id = ?) AS bid_submissions,
         (SELECT COUNT(*) FROM bid_requests WHERE awarded_sub_id = ?) AS bid_awards,
         (SELECT COUNT(*) FROM warranty_calls WHERE assigned_sub_id = ?) AS warranty_calls,
-        (SELECT COUNT(*) FROM sub_access_tokens WHERE sub_id = ?) AS sub_access_tokens`,
+        (SELECT COUNT(*) FROM sub_access_tokens WHERE sub_id = ?) AS sub_access_tokens,
+        (SELECT COUNT(*) FROM labor_entries WHERE sub_id = ?) AS labor_entries`,
   )
-    .bind(id, id, id, id, id, id, id, id, id, id, id, id)
+    .bind(id, id, id, id, id, id, id, id, id, id, id, id, id)
     .first<Record<string, number>>();
 
   const blocking = Object.values(history ?? {}).some((n) => (n ?? 0) > 0);

@@ -29,6 +29,7 @@ const PRIORITY_ICON: Record<string, string> = {
   voice_note_unmatched: "🎤",
   missed_call: "📞",
   ai_extraction_failure: "🤖",
+  labor_payroll_due: "👷",
 };
 
 function relativeTime(iso: string): string {

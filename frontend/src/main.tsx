@@ -3,6 +3,7 @@ import "./styles/tokens.css";
 import "./styles/components.css";
 import "./styles/app.css";
 import "./styles/punch.css";
+import "./styles/labor.css";
 import { App } from "./app";
 import { resolveViewportTier } from "./hooks/useViewportTier";
 import { isNativePlatform } from "./lib/native";

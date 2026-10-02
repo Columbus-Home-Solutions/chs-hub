@@ -20,10 +20,11 @@ import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
 import { FinancialReports } from "./FinancialReports";
 import { PricingIntelligence } from "./PricingIntelligence";
 import { ReceiptQueueView } from "./ReceiptQueueView";
+import { LaborTracker } from "./LaborTracker";
 
-type FinTab = "invoices" | "reports" | "pricing" | "receipts";
+type FinTab = "invoices" | "reports" | "pricing" | "receipts" | "labor";
 
-const FIN_TABS = ["invoices", "reports", "pricing", "receipts"] as const;
+const FIN_TABS = ["invoices", "reports", "pricing", "receipts", "labor"] as const;
 
 interface InvoiceRow {
   id: string;
@@ -169,7 +170,7 @@ export function FinancialDashboard(_props: RoutableProps) {
   }, [invoices, statusFilter, dueSoonDate, paymentsResp.data?.payments]);
 
   // Receipt Queue and Pricing Intelligence tabs render without waiting for invoices/jobs.
-  if (tab === "receipts" || tab === "pricing") {
+  if (tab === "receipts" || tab === "pricing" || tab === "labor") {
     const jobId = new URLSearchParams(currentSearch).get("job_id") ?? undefined;
     return (
       <div>
@@ -181,6 +182,8 @@ export function FinancialDashboard(_props: RoutableProps) {
         <FinTabBar tab={tab} setTab={setTab} />
         {tab === "receipts" ? (
           <ReceiptQueueView jobId={jobId} />
+        ) : tab === "labor" ? (
+          <LaborTracker />
         ) : (
           <PricingIntelligence />
         )}
@@ -359,6 +362,13 @@ function FinTabBar({
         onClick={() => setTab("pricing")}
       >
         Pricing
+      </button>
+      <button
+        type="button"
+        class={`segmented__btn${tab === "labor" ? " segmented__btn--active" : ""}`}
+        onClick={() => setTab("labor")}
+      >
+        Labor
       </button>
       <button
         type="button"

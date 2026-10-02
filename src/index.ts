@@ -194,6 +194,22 @@ import {
   handleExpenseReceipt,
 } from "./routes/expenses.js";
 import {
+  handleLaborBatchPay,
+  handleLaborEntryCreate,
+  handleLaborEntryDelete,
+  handleLaborEntryUpdate,
+  handleLaborJobEntries,
+  handleLaborJobs,
+  handleLaborLedger,
+  handleLaborPay,
+  handleLaborPayable,
+  handleLaborRangeStatements,
+  handleLaborStatements,
+  handleLaborWeek,
+  handleLaborWeeks,
+  handleLaborWorkers,
+} from "./routes/labor.js";
+import {
   handleTimeEntryClockIn,
   handleTimeEntryUpdate,
   handleJobTimeEntries,
@@ -1970,6 +1986,55 @@ export default {
     if (url.pathname === "/api/time-entries/active" && request.method === "GET") {
       return handleActiveTimeEntries(env, url);
     }
+    // ── Labor tracker (day-rate) ─────────────────────────────────────
+    if (url.pathname === "/api/labor/workers" && request.method === "GET") {
+      return handleLaborWorkers(request, env);
+    }
+    const laborLedger = url.pathname.match(/^\/api\/labor\/workers\/([^/]+)\/ledger$/);
+    if (laborLedger && request.method === "GET") {
+      return handleLaborLedger(request, env, decodeURIComponent(laborLedger[1]));
+    }
+    if (url.pathname === "/api/labor/jobs" && request.method === "GET") {
+      return handleLaborJobs(request, env);
+    }
+    const laborJobEntries = url.pathname.match(/^\/api\/labor\/jobs\/([^/]+)\/entries$/);
+    if (laborJobEntries && request.method === "GET") {
+      return handleLaborJobEntries(request, env, decodeURIComponent(laborJobEntries[1]));
+    }
+    if (url.pathname === "/api/labor/weeks" && request.method === "GET") {
+      return handleLaborWeeks(request, env);
+    }
+    if (url.pathname === "/api/labor/week" && request.method === "GET") {
+      return handleLaborWeek(request, env);
+    }
+    if (url.pathname === "/api/labor/payable" && request.method === "GET") {
+      return handleLaborPayable(request, env);
+    }
+    if (url.pathname === "/api/labor/statements" && request.method === "GET") {
+      return handleLaborRangeStatements(request, env);
+    }
+    const laborStatements = url.pathname.match(/^\/api\/labor\/week\/(\d{4}-\d{2}-\d{2})\/statements$/);
+    if (laborStatements && request.method === "GET") {
+      return handleLaborStatements(request, env, laborStatements[1]);
+    }
+    if (url.pathname === "/api/labor/entries" && request.method === "POST") {
+      return handleLaborEntryCreate(request, env);
+    }
+    const laborEntry = url.pathname.match(/^\/api\/labor\/entries\/([^/]+)$/);
+    if (laborEntry && request.method === "PUT") {
+      return handleLaborEntryUpdate(request, env, decodeURIComponent(laborEntry[1]));
+    }
+    if (laborEntry && request.method === "DELETE") {
+      return handleLaborEntryDelete(request, env, decodeURIComponent(laborEntry[1]));
+    }
+    if (url.pathname === "/api/labor/batches/pay" && request.method === "POST") {
+      return handleLaborPay(request, env);
+    }
+    const laborPay = url.pathname.match(/^\/api\/labor\/batches\/(\d{4}-\d{2}-\d{2})\/pay$/);
+    if (laborPay && request.method === "POST") {
+      return handleLaborBatchPay(request, env, laborPay[1]);
+    }
+
     const timeEntryById = url.pathname.match(/^\/api\/time-entries\/([^/]+)$/);
     if (timeEntryById && request.method === "PUT") {
       return handleTimeEntryUpdate(env, request, decodeURIComponent(timeEntryById[1]));

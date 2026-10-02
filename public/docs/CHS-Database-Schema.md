@@ -22,7 +22,7 @@ This document consolidates every data model from the 9 module specs into a singl
 2. Client Tables (clients, properties, communications)
 3. Estimating Tables (estimate_requests, estimates, estimate_line_items, estimate_sub_items, payment_schedules, estimate_templates, saved_reviews)
 4. Job Tables (jobs, tasks, daily_logs, change_orders, schedule_entries, permits, warranties)
-5. Financial Tables (invoices, payments, expenses, time_entries, billing_cycles, mileage, lien_waivers, vendor_materials)
+5. Financial Tables (invoices, payments, expenses, time_entries, labor_entries, labor_pay_batches, billing_cycles, mileage, lien_waivers, vendor_materials)
 6. Photo Tables (photos, receipt_photos)
 7. Document Tables (documents, document_templates)
 8. Notification Tables (notification_templates, notification_logs)
@@ -592,6 +592,49 @@ Internal cost breakdown — NOT visible to client.
 | entered_via | TEXT | NOT NULL | "web", "mobile", "auto" |
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 
+### labor_pay_batches
+
+One row per **pay event**. A week can have several. Draft weeks are computed and not stored. `week_start` is the Monday of the earliest day in the payment, `week_end` is the Sunday of the latest. `period_start` / `period_end` are the actual first and last work dates. `pay_date` defaults to the next Friday on or after today.
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | TEXT | PRIMARY KEY | UUID |
+| week_start | TEXT | NOT NULL | Monday of the earliest day. Not unique |
+| week_end | TEXT | NOT NULL | Sunday of the latest day |
+| period_start | TEXT | | First work date in this payment |
+| period_end | TEXT | | Last work date in this payment |
+| pay_date | TEXT | NOT NULL | |
+| method | TEXT | | cash, check, zelle, other |
+| note | TEXT | | Optional |
+| total | REAL | NOT NULL | Sum of expenses created (skipped hand-entered groups are not included) |
+| paid_at | TEXT | | |
+| paid_by | TEXT | | |
+| created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
+
+### labor_entries
+
+One worker, one job, one date, 0.5 or 1 day. `day_rate` is snapshotted at entry time. `expense_id` is a single expense: set when that day is included in a pay event, or linked to one hand-entered labor, subcontractor, or other expense. If that expense is short of the days earned, a second labor expense can be written for the difference; the day's `expense_id` stays the linked expense. Accepting the logged amount as full payment links the day and writes nothing extra. Unpaid rows (`expense_id IS NULL` and `deleted_at IS NULL`) are accrued labor in job costing and are not counted again after payment. Removed rows stay for the dispute ledger and are left out of totals.
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | TEXT | PRIMARY KEY | UUID |
+| sub_id | TEXT | NOT NULL REFERENCES subcontractors(id) | Day-rate worker |
+| job_id | TEXT | NOT NULL REFERENCES jobs(id) | |
+| work_date | TEXT | NOT NULL | YYYY-MM-DD, Central calendar date |
+| days | REAL | NOT NULL CHECK (days IN (0.5, 1)) | |
+| day_rate | REAL | NOT NULL | Snapshot |
+| notes | TEXT | | |
+| batch_id | TEXT | REFERENCES labor_pay_batches(id) | Null until this day is included in a payment |
+| expense_id | TEXT | REFERENCES expenses(id) | Set when paid |
+| entered_via | TEXT | NOT NULL DEFAULT 'web' | |
+| deleted_at | TEXT | | Soft delete. Totals ignore removed days |
+| deleted_by | TEXT | | |
+| delete_reason | TEXT | | Optional |
+| updated_at | TEXT | | Set on edit |
+| updated_by | TEXT | | |
+| created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
+| created_by | TEXT | | |
+
 ### billing_cycles
 
 Cost-plus bi-weekly billing cycles.
@@ -975,6 +1018,10 @@ CREATE INDEX idx_payments_job_id ON payments(job_id);
 CREATE INDEX idx_expenses_job_id ON expenses(job_id);
 CREATE INDEX idx_expenses_incurred_date ON expenses(incurred_date);
 CREATE INDEX idx_time_entries_job_id ON time_entries(job_id);
+CREATE INDEX idx_labor_batches_paid ON labor_pay_batches(paid_at);
+CREATE INDEX idx_labor_entries_week ON labor_entries(work_date);
+CREATE INDEX idx_labor_entries_sub ON labor_entries(sub_id);
+CREATE INDEX idx_labor_entries_job ON labor_entries(job_id);
 CREATE INDEX idx_billing_cycles_job_id ON billing_cycles(job_id);
 
 -- Photos
@@ -1120,6 +1167,8 @@ GROUP BY cs.id;
 | 23 | payments | Financial | Growing | Per invoice |
 | 24 | expenses | Financial | High volume | Receipts, subs, labor |
 | 25 | time_entries | Financial | High volume | Daily time tracking |
+| 25b | labor_entries | Financial | Medium | Day-rate labor log |
+| 25c | labor_pay_batches | Financial | Low | Labor pay events |
 | 26 | billing_cycles | Financial | Low volume | Cost-plus only |
 | 27 | mileage | Financial | Med volume | Tax deductions |
 | 28 | lien_waivers | Financial | Low volume | Per sub per job |

@@ -21,6 +21,7 @@ import {
   NON_TEST_OR_ORPHAN_CLIENT,
   notTestClientExists,
 } from "../lib/non-test-client.js";
+import { centralDate, laborUnpaidAggregate, weekBounds } from "../../shared/labor-week.js";
 import {
   buildingClientName,
   buildingIsStale,
@@ -70,6 +71,8 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
       return "/financial?tab=invoices&filter=overdue";
     case "invoice_due_soon":
       return "/financial?tab=invoices&filter=due_soon";
+    case "labor_payroll_due":
+      return "/financial?tab=labor&view=weeks&status=unpaid";
     case "social_approval":
       return "/social?tab=queue";
     case "follow_up_due":
@@ -737,6 +740,46 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
       link: actionItemLink("ai_extraction_failure", {}),
       createdAt: aiExtractionFailures?.latest_at ?? today,
     });
+  }
+
+  try {
+    const unpaidLabor = await env.DB.prepare(
+      `SELECT le.work_date, le.days, le.day_rate
+         FROM labor_entries le
+         JOIN jobs j ON j.id = le.job_id
+        WHERE le.expense_id IS NULL
+          AND le.batch_id IS NULL
+          AND le.deleted_at IS NULL
+          AND ${notTestClientExists("j.client_id")}`,
+    ).all<{ work_date: string; days: number; day_rate: number }>();
+    const byWeek = new Map<string, { week_start: string; week_end: string; unpaid: number }>();
+    for (const row of unpaidLabor.results ?? []) {
+      const bounds = weekBounds(row.work_date);
+      const bucket = byWeek.get(bounds.start) ?? {
+        week_start: bounds.start,
+        week_end: bounds.end,
+        unpaid: 0,
+      };
+      bucket.unpaid = Math.round((bucket.unpaid + row.days * row.day_rate) * 100) / 100;
+      byWeek.set(bounds.start, bucket);
+    }
+    const signal = laborUnpaidAggregate(centralDate(), [...byWeek.values()]);
+    if (signal) {
+      const amount = signal.total.toLocaleString("en-US", { style: "currency", currency: "USD" });
+      const weeks = signal.weeks === 1 ? "1 week" : `${signal.weeks} weeks`;
+      items.push({
+        id: "labor_payroll_due",
+        priority: signal.priority,
+        type: "labor_payroll_due",
+        title: `Unpaid labor — ${weeks}, ${amount} (oldest week of ${signal.oldest})`,
+        meta: { weeks: signal.weeks, total: signal.total, oldest: signal.oldest },
+        link: actionItemLink("labor_payroll_due", {}),
+        createdAt: signal.oldest,
+      });
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/no such (table|column)/i.test(msg)) throw e;
   }
 
   const visible = items.filter((i) => !dismissed.has(i.id));

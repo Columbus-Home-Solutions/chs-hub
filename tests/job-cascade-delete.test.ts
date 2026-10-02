@@ -32,7 +32,8 @@ function makeJobCascadeEnv(jobId: string, opts?: { clientIsTest?: boolean }) {
       { id: "t2", job_id: jobId },
     ],
     time_entries: [],
-    expenses: [],
+    labor_entries: [{ id: "le1", job_id: jobId, expense_id: "exp-labor" }],
+    expenses: [{ id: "exp-labor", job_id: jobId }],
     payments: [{ id: "pay1", job_id: jobId }],
     client_lien_waivers: [],
     invoices: [],
@@ -284,6 +285,8 @@ describe("cascadeDeleteJob", () => {
     expect(idx("DELETE FROM punch_list_items")).toBeLessThan(idx("DELETE FROM punch_lists"));
     expect(idx("DELETE FROM signature_events")).toBeLessThan(idx("DELETE FROM job_documents"));
     expect(idx("DELETE FROM tasks")).toBeGreaterThan(idx("DELETE FROM punch_list_items"));
+    expect(idx("DELETE FROM labor_entries")).toBeGreaterThanOrEqual(0);
+    expect(idx("DELETE FROM labor_entries")).toBeLessThan(idx("DELETE FROM expenses"));
   });
 
   it("reports the failing table instead of swallowing the error", async () => {

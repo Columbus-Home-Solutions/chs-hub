@@ -42,7 +42,7 @@ Role checks are documented per endpoint:
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
 | GET | `/api/dashboard/kpis` | O/PM/OA | All 6 KPI tile values in one response. 5-minute in-memory cache. |
-| GET | `/api/dashboard/action-items` | O/PM/OA | Computed action items (9 types) sorted by priority then age. Cap 8 items. Fresh on every call. |
+| GET | `/api/dashboard/action-items` | O/PM/OA | Computed action items (including one `labor_payroll_due` aggregate across every unpaid closed week) sorted by priority then age. Cap 8 items. Fresh on every call. |
 | GET | `/api/dashboard/pipeline` | O/PM/OA | Lead + job pipeline stage counts, conversion rate, unpaid total. 5-minute cache. |
 | GET | `/api/dashboard/schedule` | O/PM/OA | Today's schedule entries + estimate appointments merged. Fresh on every call. |
 | GET | `/api/dashboard/activity` | O/PM/OA | Last 10 audit log entries + `bellCount` (24-hour notification approximation). Fresh on every call. |
@@ -355,6 +355,27 @@ Client approval is **not** an internal route — it happens when the client sign
 | POST | `/api/time-entries` | O/PM/FC | Clock in (creates entry with clock_in, no clock_out) |
 | PUT | `/api/time-entries/:id` | O/PM/FC | Clock out or edit |
 | GET | `/api/time-entries/active` | O/PM/FC | Get currently active (clocked in) entries |
+
+### Labor Tracker
+
+Day-rate labor (`subcontractors.worker_type = day_rate_labor`). Weeks are Monday–Sunday, Central time. The Pay dialog posts to `/api/labor/batches/pay`. A new labor expense uses the hand-entered shape (`expense_type=labor`, `is_1099_reportable=1`, `entered_via=auto`, `pushed_to_qbo=0`). Linking uses one existing expense for that worker and job; a shortfall needs `add_difference` (one extra labor expense) or `accept_as_paid` (no extra expense). No lien waiver. `POST /api/labor/batches/:week_start/pay` still pays a whole closed week and stays for the original tests.
+
+| Method | Route | Role | Description |
+|--------|-------|------|-------------|
+| GET | `/api/labor/workers` | O/PM | Active day-rate workers (`id`, `name`, `day_rate`) |
+| GET | `/api/labor/jobs` | O/PM | Post-deposit jobs (deposit paid through complete, not closed). Excludes test clients |
+| GET | `/api/labor/jobs/:id/entries` | O/PM | Labor on one job, with accrued unpaid total |
+| GET | `/api/labor/weeks?status=&worker=&from=&to=` | O/PM | Every week with a day logged, newest first. States open, closed_unpaid, partly_paid, paid. Includes unpaid_summary |
+| GET | `/api/labor/week?start=` | O/PM | Mon–Sun grid, totals, pay date, paid batch, possible-duplicate flags (any expense type) |
+| GET | `/api/labor/payable?pay_date=` | O/PM | Unpaid days in closed weeks. Each worker-job group lists matching active expenses of type labor, subcontractor, or other in the window (newest first) with date, vendor, description, amount, and difference from earned. Material, permit, equipment rental, vehicle, office, and insurance expenses are not listed |
+| GET | `/api/labor/week/:start/statements` | O/PM | Printable per-worker week statements. No SSN |
+| GET | `/api/labor/statements?sub_id=&from=&to=` | O/PM | Settlement statement for any date range. No SSN |
+| GET | `/api/labor/workers/:id/ledger?from=&to=&include_removed=` | O/PM | One worker's days, pay status, and edit history |
+| POST | `/api/labor/entries` | O/PM | Log one or more days. Rejects a missing day rate. Warns (still saves) if a worker exceeds 1 day on a date |
+| PUT | `/api/labor/entries/:id` | O/PM | Edit an unpaid entry. Writes audit_logs. 409 once paid or removed |
+| DELETE | `/api/labor/entries/:id` | O/PM | Soft-delete an unpaid entry (`delete_reason` optional). Writes audit_logs |
+| POST | `/api/labor/batches/pay` | O/PM | Pay chosen closed days. `groups` is `{ sub_id, job_id, action: create\|link, expense_id, difference_decision }`. `create` writes a labor expense. `link` attaches the days to one expense for that worker and job. A shortfall without `difference_decision` is rejected. `add_difference` writes the shortfall; `accept_as_paid` writes nothing extra. Logged above earned is allowed. Omitting `groups` keeps the older `skip` behavior |
+| POST | `/api/labor/batches/:week_start/pay` | O/PM | Mark a whole closed week paid. Idempotent if a batch already exists for that week |
 
 ### Cost-Plus Billing Cycles
 

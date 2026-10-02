@@ -138,7 +138,13 @@ export const api = {
       }),
     );
   },
-  async del<T>(url: string): Promise<T> {
-    return parse<T>(await rawFetch(url, { method: "DELETE" }));
+  async del<T>(url: string, body?: unknown): Promise<T> {
+    return parse<T>(
+      await rawFetch(url, {
+        method: "DELETE",
+        headers: body == null ? undefined : JSON_HEADERS,
+        body: body == null ? undefined : JSON.stringify(body),
+      }),
+    );
   },
 };

@@ -631,7 +631,11 @@ export async function handleJobRevenue(request: Request, env: Env): Promise<Resp
               COALESCE((
                 SELECT SUM(t.labor_cost) FROM time_entries t
                 WHERE t.job_id = j.id AND t.clock_out IS NOT NULL
-              ), 0) AS time_entry_labor
+              ), 0) AS time_entry_labor,
+              COALESCE((
+                SELECT SUM(le.days * le.day_rate) FROM labor_entries le
+                WHERE le.job_id = j.id AND le.expense_id IS NULL AND le.deleted_at IS NULL
+              ), 0) AS accrued_labor
        FROM jobs j
        JOIN clients c ON j.client_id = c.id
        LEFT JOIN invoices i ON i.job_id = j.id
@@ -660,6 +664,7 @@ export async function handleJobRevenue(request: Request, env: Env): Promise<Resp
         total_collected: number;
         total_expenses: number;
         time_entry_labor: number;
+        accrued_labor: number;
       }>()
   ).results ?? [];
 
@@ -677,7 +682,9 @@ export async function handleJobRevenue(request: Request, env: Env): Promise<Resp
     totalExpenses += expenses;
     // Flag only. Time-entry labor is part of "costs logged" (same sources as
     // job costing actuals) but is not folded into total_expenses or gross_profit.
-    const loggedAmount = Math.round(((r.total_expenses ?? 0) + (r.time_entry_labor ?? 0)) * 100) / 100;
+    const loggedAmount = Math.round(
+      ((r.total_expenses ?? 0) + (r.time_entry_labor ?? 0) + (r.accrued_labor ?? 0)) * 100,
+    ) / 100;
     return {
       id: r.id,
       job_number: r.job_number,

@@ -50,3 +50,4 @@ scripts/dev-seed-sprint11.local.sql
 scripts/dev-seed-sprint12.local.sql
 documents/
 tmp-warranty/
+backups/

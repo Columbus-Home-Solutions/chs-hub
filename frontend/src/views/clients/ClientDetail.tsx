@@ -14,6 +14,7 @@ import { ClientForm } from "./ClientForm";
 import { useToast } from "../../store/toast";
 import { EstimateStatusBadge } from "../../components/EstimateStatusBadge";
 import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
+import { clientInvoiceBalance, invoiceFace } from "./client-balance";
 import { go } from "../../lib/nav";
 import {
   COMM_CHANNELS,
@@ -565,17 +566,11 @@ function InvoicesCard({
   payments: PaymentLite[];
   totalRevenue: number;
 }) {
-  const face = (inv: InvoiceLite) => inv.total ?? inv.total_due ?? inv.amount ?? 0;
+  const face = invoiceFace;
   const paidOn = (invoiceId: string) =>
     payments.filter((p) => p.invoice_id === invoiceId).reduce((sum, p) => sum + (p.amount ?? 0), 0);
   const isBadDebt = (inv: InvoiceLite) => (inv.status ?? "").toLowerCase() === "bad_debt";
-  const totalPaid = payments.reduce((sum, p) => sum + (p.amount ?? 0), 0);
-  const writtenOff = invoices
-    .filter(isBadDebt)
-    .reduce((sum, inv) => sum + Math.max(0, face(inv) - paidOn(inv.id)), 0);
-  const balance = invoices
-    .filter((inv) => !isBadDebt(inv))
-    .reduce((sum, inv) => sum + Math.max(0, face(inv) - paidOn(inv.id)), 0);
+  const { collected: totalPaid, writtenOff, balance } = clientInvoiceBalance(invoices, payments);
 
   type LedgerRow =
     | { kind: "invoice"; id: string; label: string; date: string; amount: number | null; status: string | null }

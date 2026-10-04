@@ -51,3 +51,7 @@ scripts/dev-seed-sprint12.local.sql
 documents/
 tmp-warranty/
 backups/
+
+# Jobber historical import — client PII CSVs and generated reports
+scripts/jobber-import/data/
+scripts/jobber-import/out/

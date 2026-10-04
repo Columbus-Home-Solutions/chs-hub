@@ -66,6 +66,7 @@ import { extractSupplierQuote } from "../lib/quote-import.js";
 import { upsertVendorMaterial } from "./vendor-materials.js";
 import { handleEstimateRequestWin } from "./estimate-requests.js";
 import { advanceLeadToBuildingIfEligible, applyLeadStageChange } from "../lib/lead-stage.js";
+import { jobberImportHeaderIsProtected } from "../lib/invoicing.js";
 import {
   JOBBER_ACCEPTED_IMPORT,
   JOBBER_IMPORT,
@@ -282,10 +283,32 @@ export async function recomputeEstimate(env: Env, estimateId: string): Promise<T
   internalCost = round2(internalCost);
 
   const est = await env.DB.prepare(
-    "SELECT tax_amount, deposit_type, deposit_percentage FROM estimates WHERE id = ?",
+    "SELECT tax_amount, deposit_type, deposit_percentage, data_source, subtotal AS header_subtotal, total AS header_total FROM estimates WHERE id = ?",
   )
     .bind(estimateId)
-    .first<{ tax_amount: number | null; deposit_type: string | null; deposit_percentage: number | null }>();
+    .first<{
+      tax_amount: number | null;
+      deposit_type: string | null;
+      deposit_percentage: number | null;
+      data_source: string | null;
+      header_subtotal: number | null;
+      header_total: number | null;
+    }>();
+
+  // Historical Jobber quotes keep Jobber's Total. A revise clone does not copy
+  // data_source, so the new draft still recomputes from its lines below.
+  if (jobberImportHeaderIsProtected(est?.data_source)) {
+    return {
+      subtotal: est?.header_subtotal ?? round2(subtotal),
+      total: est?.header_total ?? round2(subtotal),
+      internal_cost: internalCost,
+      margin_percent:
+        (est?.header_total ?? 0) > 0
+          ? round2((((est?.header_total ?? 0) - internalCost) / (est?.header_total ?? 1)) * 100)
+          : 0,
+    };
+  }
+
   const tax = est?.tax_amount ?? 0;
   const total = round2(subtotal + tax);
   const marginPercent = total > 0 ? round2(((total - internalCost) / total) * 100) : 0;

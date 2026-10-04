@@ -2,14 +2,24 @@ import { describe, expect, it } from "vitest";
 import {
   buildQboPayment,
   buildQboPurchase,
+  expenseSweepSelectSql,
+  EXPENSE_SWEEP_LIMIT,
+  isExpensePushEligible,
+  isJobberExcludedExpense,
   isJobberExcludedInvoice,
   isJobberExcludedPayment,
+  isQboExpenseSyncEnabled,
+  pickExpenseSweepBatch,
+  pushExpenseById,
+  runQboSweep,
+  SETTING_QBO_EXPENSE_SYNC_ENABLED,
   resolveInvoiceTxnDate,
   resolvePaymentAccountId,
   resolvePaymentTxnDate,
   resolveQboCustomerId,
 } from "../src/lib/qbo-sync.js";
 import { decryptToken, encryptToken } from "../src/lib/qbo-auth.js";
+import { replayDeadLetters } from "../src/lib/ops/dlq.js";
 import type { Env } from "../src/env.js";
 
 // Minimal Env stub — only the QBO encryption key is needed for these tests.
@@ -81,6 +91,16 @@ describe("isJobberExcludedInvoice", () => {
       isJobberExcludedInvoice({
         invoiceId: "Z2lkOi8vSm9iYmVyL0ludm9pY2UvMTUwMjM2ODUz",
         jobDataSource: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("excludes invoices.data_source=jobber_import even with a null job", () => {
+    expect(
+      isJobberExcludedInvoice({
+        invoiceId: "native-uuid-invoice",
+        jobDataSource: null,
+        invoiceDataSource: "jobber_import",
       }),
     ).toBe(true);
   });
@@ -271,5 +291,257 @@ describe("token encryption at rest — round trip + rotation safety", () => {
   it("returns null for null", async () => {
     expect(await encryptToken(env, null)).toBeNull();
     expect(await decryptToken(env, null)).toBeNull();
+  });
+});
+
+const laborMap = { accountMap: { labor: "71" }, paymentAccountRef: "9", subPaymentAccountRef: "12" };
+
+function expense(partial: Record<string, unknown>) {
+  return {
+    id: "e1",
+    amount: 150,
+    description: "day labor",
+    expense_type: "labor",
+    sub_id: "w1",
+    qbo_vendor_id: "V1",
+    job_data_source: null,
+    incurred_date: "2026-09-21",
+    created_at: "2026-09-21T12:00:00Z",
+    qbo_transaction_id: null,
+    ...partial,
+  };
+}
+
+describe("isJobberExcludedExpense", () => {
+  it("excludes a jobber_import job and a Jobber expense id", () => {
+    expect(isJobberExcludedExpense({ expenseId: "native-uuid", jobDataSource: "jobber_import" })).toBe(true);
+    expect(
+      isJobberExcludedExpense({
+        expenseId: "Z2lkOi8vSm9iYmVyL0V4cGVuc2UvMTM0ODg4NzQ=",
+        jobDataSource: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows a native expense on a non-Jobber job", () => {
+    expect(isJobberExcludedExpense({ expenseId: "1e5846d2-a90f-4a57-a309-56478f5eb76e", jobDataSource: null })).toBe(
+      false,
+    );
+  });
+});
+
+describe("expense sweep eligibility", () => {
+  it("requires a mapped type and a vendor when a worker is attached", () => {
+    expect(isExpensePushEligible(expense({}), laborMap)).toBe(true);
+    expect(isExpensePushEligible(expense({ qbo_vendor_id: null }), laborMap)).toBe(false);
+    expect(isExpensePushEligible(expense({ qbo_vendor_id: "  " }), laborMap)).toBe(false);
+    expect(isExpensePushEligible(expense({ expense_type: null, sub_id: null, qbo_vendor_id: null }), laborMap)).toBe(
+      false,
+    );
+    expect(isExpensePushEligible(expense({ expense_type: "office" }), laborMap)).toBe(false);
+    expect(isExpensePushEligible(expense({ sub_id: null, qbo_vendor_id: null, expense_type: "labor" }), laborMap)).toBe(
+      true,
+    );
+  });
+
+  it("never treats a Jobber expense as eligible, even when type and vendor are mapped", () => {
+    expect(isExpensePushEligible(expense({ job_data_source: "jobber_import" }), laborMap)).toBe(false);
+    expect(
+      isExpensePushEligible(expense({ id: "Z2lkOi8vSm9iYmVyL0V4cGVuc2UvMTM0ODg4NzQ=", sub_id: null }), laborMap),
+    ).toBe(false);
+  });
+
+  it("does not let unmapped or historical rows starve an older eligible expense", () => {
+    const historical = Array.from({ length: 250 }, (_, i) =>
+      expense({
+        id: `hist-${String(i).padStart(3, "0")}`,
+        expense_type: null,
+        sub_id: null,
+        qbo_vendor_id: null,
+        job_data_source: i < 200 ? "jobber_import" : null,
+        incurred_date: null,
+        created_at: null,
+      }),
+    );
+    const unmappedWorker = expense({ id: "no-vendor", qbo_vendor_id: null, incurred_date: "2020-01-01" });
+    const older = expense({ id: "labor-old", incurred_date: "2026-09-21" });
+    const newer = expense({ id: "labor-new", incurred_date: "2026-09-27" });
+    const batch = pickExpenseSweepBatch([unmappedWorker, ...historical, newer, older], laborMap);
+    expect(batch.map((row) => row.id)).toEqual(["labor-old", "labor-new"]);
+    expect(batch.length).toBeLessThanOrEqual(EXPENSE_SWEEP_LIMIT);
+  });
+
+  it("selects only eligible rows in the sweep query, oldest first, capped at 200", () => {
+    const sql = expenseSweepSelectSql(2);
+    expect(sql).toContain("COALESCE(j.data_source, '') != 'jobber_import'");
+    expect(sql).toContain("e.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'");
+    expect(sql).toContain("e.expense_type IN (?, ?)");
+    expect(sql).toContain("e.sub_id IS NULL OR (s.qbo_vendor_id IS NOT NULL AND TRIM(s.qbo_vendor_id) != '')");
+    expect(sql).toContain("ORDER BY COALESCE(NULLIF(TRIM(e.incurred_date), ''), substr(e.created_at, 1, 10)) ASC, e.id ASC");
+    expect(sql).toContain("LIMIT 200");
+    expect(sql).not.toMatch(/LIMIT 200[\s\S]*WHERE/);
+  });
+});
+
+function qboEnv(settings: Record<string, string | null>, sqlLog: string[] = []) {
+  const connection = {
+    id: "quickbooks",
+    status: "connected",
+    access_token: null,
+    refresh_token: "refresh-token",
+    token_expiry: new Date(Date.now() + 3_600_000).toISOString(),
+    account_id: "realm",
+    configuration: JSON.stringify({
+      environment: "sandbox",
+      account_map: { labor: "71", material: "70" },
+      payment_account_ref: "9",
+      subcontractor_payment_account_ref: "12",
+    }),
+    last_sync: null,
+    last_error: null,
+  };
+  const db = {
+    prepare(sql: string) {
+      sqlLog.push(sql);
+      return {
+        bind(...args: unknown[]) {
+          return {
+            async first<T>() {
+              if (sql.includes("FROM integration_connections")) return connection as T;
+              if (sql.includes("FROM system_settings") && sql.includes("key = ?")) {
+                const key = String(args[0]);
+                if (!(key in settings) || settings[key] == null) return null;
+                return { value: settings[key] } as T;
+              }
+              if (sql.includes("FROM expenses")) {
+                return {
+                  id: "jobber-exp",
+                  amount: 20,
+                  description: null,
+                  expense_type: "labor",
+                  sub_id: null,
+                  qbo_vendor_id: null,
+                  job_data_source: "jobber_import",
+                  qbo_transaction_id: null,
+                } as T;
+              }
+              return null;
+            },
+            async all<T>() {
+              return { results: [] as T[] };
+            },
+            async run() {
+              return { success: true };
+            },
+          };
+        },
+      };
+    },
+  };
+  return { DB: db, QBO_TOKEN_ENCRYPTION_KEY: "unit-test-key" } as unknown as Env;
+}
+
+describe("qbo expense go-live gate", () => {
+  it("is off unless the setting is exactly true", async () => {
+    const missing = qboEnv({});
+    expect(await isQboExpenseSyncEnabled(missing)).toBe(false);
+    expect(await isQboExpenseSyncEnabled(qboEnv({ [SETTING_QBO_EXPENSE_SYNC_ENABLED]: "false" }))).toBe(false);
+    expect(await isQboExpenseSyncEnabled(qboEnv({ [SETTING_QBO_EXPENSE_SYNC_ENABLED]: "true" }))).toBe(true);
+  });
+
+  it("skips the expense sweep and writes no dead-letter row when the gate is off", async () => {
+    const sqlLog: string[] = [];
+    const result = await runQboSweep(
+      qboEnv(
+        {
+          qbo_invoice_sync_enabled: "false",
+          qbo_payment_sync_enabled: "false",
+          [SETTING_QBO_EXPENSE_SYNC_ENABLED]: "false",
+        },
+        sqlLog,
+      ),
+    );
+    expect(result.ran).toBe(true);
+    expect(result.expenses).toEqual({ pushed: 0, skipped: 0, failed: 0 });
+    expect(sqlLog.some((sql) => sql.includes("FROM expenses"))).toBe(false);
+    expect(sqlLog.some((sql) => sql.includes("sync_dead_letters"))).toBe(false);
+  });
+
+  it("queries only eligible expenses when the gate is on and does not dead-letter an empty batch", async () => {
+    const sqlLog: string[] = [];
+    const result = await runQboSweep(
+      qboEnv(
+        {
+          qbo_invoice_sync_enabled: "false",
+          qbo_payment_sync_enabled: "false",
+          [SETTING_QBO_EXPENSE_SYNC_ENABLED]: "true",
+        },
+        sqlLog,
+      ),
+    );
+    const expenseSql = sqlLog.find((sql) => sql.includes("FROM expenses e"));
+    expect(expenseSql).toBeTruthy();
+    expect(expenseSql).toContain("jobber_import");
+    expect(expenseSql).toContain("e.sub_id IS NULL");
+    expect(expenseSql).toContain("ORDER BY");
+    expect(expenseSql).toContain("LIMIT 200");
+    expect(result.expenses.failed).toBe(0);
+    expect(sqlLog.some((sql) => sql.includes("INSERT INTO sync_dead_letters"))).toBe(false);
+  });
+
+  it("does not push a Jobber expense when the gate is on", async () => {
+    await expect(
+      pushExpenseById(qboEnv({ [SETTING_QBO_EXPENSE_SYNC_ENABLED]: "true" }), "jobber-exp"),
+    ).rejects.toThrow(/permanently excluded: Jobber-imported/);
+  });
+
+  it("resolves an expense DLQ row without inserting another when the gate is off", async () => {
+    const sqlLog: string[] = [];
+    const envGate = qboEnv({ [SETTING_QBO_EXPENSE_SYNC_ENABLED]: "false" }, sqlLog);
+    const db = envGate.DB as unknown as {
+      prepare: (sql: string) => {
+        bind: (...args: unknown[]) => {
+          all: () => Promise<{ results: unknown[] }>;
+          first: () => Promise<unknown>;
+          run: () => Promise<unknown>;
+        };
+      };
+    };
+    const original = db.prepare.bind(db);
+    db.prepare = (sql: string) => {
+      const stmt = original(sql);
+      return {
+        bind(...args: unknown[]) {
+          const bound = stmt.bind(...args);
+          return {
+            all: async () => {
+              if (sql.includes("FROM sync_dead_letters") && sql.includes("resolved_at IS NULL")) {
+                return {
+                  results: [
+                    {
+                      id: 9,
+                      job_name: "qbo_sync",
+                      entity_type: "expense",
+                      entity_id: "labor-1",
+                      payload: "{}",
+                      attempts: 1,
+                      alerted_at: null,
+                    },
+                  ],
+                };
+              }
+              return bound.all();
+            },
+            first: () => bound.first(),
+            run: () => bound.run(),
+          };
+        },
+      };
+    };
+    const replay = await replayDeadLetters(envGate);
+    expect(replay.succeeded).toBe(1);
+    expect(replay.failed).toBe(0);
+    expect(sqlLog.some((sql) => sql.startsWith("INSERT INTO sync_dead_letters"))).toBe(false);
+    expect(sqlLog.some((sql) => sql.includes("UPDATE sync_dead_letters") && sql.includes("resolved_at"))).toBe(true);
   });
 });

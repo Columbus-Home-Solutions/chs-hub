@@ -290,7 +290,7 @@ export async function handleClientGet(env: Env, id: string): Promise<Response> {
       .all(),
     // Invoices for this client (has direct client_id column).
     env.DB.prepare(
-      `SELECT id, invoice_number, title, job_id, amount, total_due, status, due_date, created_at
+      `SELECT id, invoice_number, title, job_id, amount, total, total_due, status, due_date, created_at
        FROM invoices WHERE client_id = ? ORDER BY created_at DESC LIMIT 200`,
     )
       .bind(id)

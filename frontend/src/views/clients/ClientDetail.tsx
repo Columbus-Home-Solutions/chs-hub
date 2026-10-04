@@ -59,6 +59,7 @@ interface InvoiceLite {
   title: string | null;
   job_id: string | null;
   amount: number | null;
+  total: number | null;
   total_due: number | null;
   status: string | null;
   due_date: string | null;
@@ -564,13 +565,22 @@ function InvoicesCard({
   payments: PaymentLite[];
   totalRevenue: number;
 }) {
+  const face = (inv: InvoiceLite) => inv.total ?? inv.total_due ?? inv.amount ?? 0;
+  const paidOn = (invoiceId: string) =>
+    payments.filter((p) => p.invoice_id === invoiceId).reduce((sum, p) => sum + (p.amount ?? 0), 0);
+  const isBadDebt = (inv: InvoiceLite) => (inv.status ?? "").toLowerCase() === "bad_debt";
   const totalPaid = payments.reduce((sum, p) => sum + (p.amount ?? 0), 0);
-  const totalInvoiced = invoices.reduce((sum, i) => sum + (i.total_due ?? i.amount ?? 0), 0);
-  const balance = totalInvoiced - totalPaid;
+  const writtenOff = invoices
+    .filter(isBadDebt)
+    .reduce((sum, inv) => sum + Math.max(0, face(inv) - paidOn(inv.id)), 0);
+  const balance = invoices
+    .filter((inv) => !isBadDebt(inv))
+    .reduce((sum, inv) => sum + Math.max(0, face(inv) - paidOn(inv.id)), 0);
 
   type LedgerRow =
     | { kind: "invoice"; id: string; label: string; date: string; amount: number | null; status: string | null }
-    | { kind: "payment"; id: string; label: string; date: string; amount: number; invoiceNum: number | null };
+    | { kind: "payment"; id: string; label: string; date: string; amount: number; invoiceNum: number | null }
+    | { kind: "writeoff"; id: string; label: string; date: string; amount: number };
 
   const rows: LedgerRow[] = [
     ...invoices.map((inv): LedgerRow => ({
@@ -578,9 +588,20 @@ function InvoicesCard({
       id: inv.id,
       label: inv.title ?? (inv.invoice_number ? `Invoice #${inv.invoice_number}` : "Invoice"),
       date: inv.created_at,
-      amount: inv.total_due ?? inv.amount,
+      amount: face(inv),
       status: inv.status,
     })),
+    ...invoices.filter(isBadDebt).flatMap((inv): LedgerRow[] => {
+      const off = Math.max(0, face(inv) - paidOn(inv.id));
+      if (off <= 0) return [];
+      return [{
+        kind: "writeoff",
+        id: `${inv.id}-writeoff`,
+        label: "Bad-debt write-off",
+        date: inv.created_at,
+        amount: off,
+      }];
+    }),
     ...payments.map((p): LedgerRow => ({
       kind: "payment",
       id: p.id,
@@ -615,7 +636,7 @@ function InvoicesCard({
                   >
                     <td style={{ padding: "6px 8px 6px 0" }}>
                       <span class="text--muted" style={{ fontSize: "var(--text-xs)", marginRight: "6px" }}>
-                        {row.kind === "invoice" ? "INV" : "PAY"}
+                        {row.kind === "invoice" ? "INV" : row.kind === "writeoff" ? "W/O" : "PAY"}
                       </span>
                       {row.label}
                       {row.kind === "invoice" && row.status && (
@@ -639,11 +660,23 @@ function InvoicesCard({
             </table>
           </div>
           {/* Pinned balance — not inside the scroll container */}
-          <div style={{ borderTop: "2px solid var(--color-border)", marginTop: "var(--space-sm)", paddingTop: "var(--space-sm)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>Current balance</span>
-            <span style={{ fontWeight: 700, color: balance > 0 ? "var(--color-error, #dc2626)" : "var(--color-success, #16a34a)" }}>
-              {formatCurrency(balance)}
-            </span>
+          <div style={{ borderTop: "2px solid var(--color-border)", marginTop: "var(--space-sm)", paddingTop: "var(--space-sm)", display: "grid", gap: "4px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ fontSize: "var(--text-sm)" }}>Collected</span>
+              <span style={{ fontWeight: 600 }}>{formatCurrency(totalPaid)}</span>
+            </div>
+            {writtenOff > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ fontSize: "var(--text-sm)" }}>Written off</span>
+                <span style={{ fontWeight: 600 }}>{formatCurrency(writtenOff)}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>Current balance</span>
+              <span style={{ fontWeight: 700, color: balance > 0 ? "var(--color-error, #dc2626)" : "var(--color-success, #16a34a)" }}>
+                {formatCurrency(balance)}
+              </span>
+            </div>
           </div>
         </>
       )}

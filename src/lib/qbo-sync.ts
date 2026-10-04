@@ -41,6 +41,10 @@ export const SETTING_QBO_DEFAULT_CUSTOMER_NAME = "qbo_default_customer_name";
 export const SETTING_QBO_PAYMENT_SYNC_ENABLED = "qbo_payment_sync_enabled";
 /** Go-live gate: invoice push (sweep + DLQ replay) stays off until Tony flips this. */
 export const SETTING_QBO_INVOICE_SYNC_ENABLED = "qbo_invoice_sync_enabled";
+/** Go-live gate: expense push (sweep + DLQ replay) stays off until Tony flips this. */
+export const SETTING_QBO_EXPENSE_SYNC_ENABLED = "qbo_expense_sync_enabled";
+/** One nightly expense sweep never takes more than this many eligible rows. */
+export const EXPENSE_SWEEP_LIMIT = 200;
 
 /** True only when system_settings explicitly stores "true". Missing/false → off. */
 export async function isQboPaymentSyncEnabled(env: Env): Promise<boolean> {
@@ -54,6 +58,14 @@ export async function isQboPaymentSyncEnabled(env: Env): Promise<boolean> {
 export async function isQboInvoiceSyncEnabled(env: Env): Promise<boolean> {
   const row = await env.DB.prepare(`SELECT value FROM system_settings WHERE key = ?`)
     .bind(SETTING_QBO_INVOICE_SYNC_ENABLED)
+    .first<{ value: string | null }>();
+  return (row?.value ?? "").trim().toLowerCase() === "true";
+}
+
+/** True only when system_settings explicitly stores "true". Missing/false → off. */
+export async function isQboExpenseSyncEnabled(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(`SELECT value FROM system_settings WHERE key = ?`)
+    .bind(SETTING_QBO_EXPENSE_SYNC_ENABLED)
     .first<{ value: string | null }>();
   return (row?.value ?? "").trim().toLowerCase() === "true";
 }
@@ -85,9 +97,27 @@ export function isJobberExcludedPayment(opts: {
 export function isJobberExcludedInvoice(opts: {
   invoiceId: string;
   jobDataSource?: string | null;
+  invoiceDataSource?: string | null;
 }): boolean {
+  if ((opts.invoiceDataSource ?? "").trim() === "jobber_import") return true;
   if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
   if (opts.invoiceId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
+  return false;
+}
+
+/**
+ * Permanent structural exclusion — Jobber history must never push to QBO,
+ * regardless of `qbo_expense_sync_enabled`. Not a toggle.
+ *
+ * Signals: jobs.data_source = 'jobber_import', or a Jobber GraphQL expense id
+ * (covers expenses with no job_id).
+ */
+export function isJobberExcludedExpense(opts: {
+  expenseId: string;
+  jobDataSource?: string | null;
+}): boolean {
+  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  if (opts.expenseId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
   return false;
 }
 
@@ -349,6 +379,7 @@ interface InvoiceRow {
   issued_date?: string | null;
   created_at?: string | null;
   job_data_source?: string | null;
+  invoice_data_source?: string | null;
 }
 
 /** YYYY-MM-DD for QBO TxnDate. Prefer sent_date; then issued_date; then created_at. */
@@ -479,6 +510,58 @@ interface ExpenseRow {
   expense_type: string | null;
   sub_id: string | null;
   qbo_vendor_id: string | null;
+  job_data_source?: string | null;
+  incurred_date?: string | null;
+  created_at?: string | null;
+  qbo_transaction_id?: string | null;
+}
+
+export interface ExpensePushContext {
+  accountMap: Record<string, string | undefined>;
+  paymentAccountRef: string;
+  subPaymentAccountRef: string;
+}
+
+/** Mapped expense type, vendor when a worker is attached, and a payment account. Jobber history is never eligible. */
+export function isExpensePushEligible(e: ExpenseRow, opts: ExpensePushContext): boolean {
+  if (isJobberExcludedExpense({ expenseId: e.id, jobDataSource: e.job_data_source })) return false;
+  if (e.qbo_transaction_id) return false;
+  const accountId = e.expense_type ? (opts.accountMap[e.expense_type] ?? "").trim() : "";
+  if (!accountId) return false;
+  if (e.sub_id && !(e.qbo_vendor_id ?? "").trim()) return false;
+  return resolvePaymentAccountId(e, opts.paymentAccountRef, opts.subPaymentAccountRef).trim() !== "";
+}
+
+function expenseAgeKey(e: ExpenseRow): string {
+  const incurred = (e.incurred_date ?? "").trim();
+  const created = (e.created_at ?? "").trim().slice(0, 10);
+  return `${incurred || created}\0${e.id}`;
+}
+
+/** Oldest eligible first, capped at EXPENSE_SWEEP_LIMIT. Unmapped and Jobber rows are not in the result. */
+export function pickExpenseSweepBatch<T extends ExpenseRow>(rows: T[], opts: ExpensePushContext): T[] {
+  return rows
+    .filter((row) => isExpensePushEligible(row, opts))
+    .sort((a, b) => expenseAgeKey(a).localeCompare(expenseAgeKey(b)))
+    .slice(0, EXPENSE_SWEEP_LIMIT);
+}
+
+/** Candidate query: eligible rows only, oldest first. mappedTypes must be non-empty. */
+export function expenseSweepSelectSql(mappedTypeCount: number): string {
+  const types = Array.from({ length: mappedTypeCount }, () => "?").join(", ");
+  return `SELECT e.id, e.amount, e.description, e.expense_type, e.sub_id, e.incurred_date, e.created_at,
+            e.qbo_transaction_id, s.qbo_vendor_id, j.data_source AS job_data_source
+       FROM expenses e
+       LEFT JOIN subcontractors s ON s.id = e.sub_id
+       LEFT JOIN jobs j ON j.id = e.job_id
+      WHERE e.pushed_to_qbo IS NOT 1
+        AND e.qbo_transaction_id IS NULL
+        AND COALESCE(j.data_source, '') != 'jobber_import'
+        AND e.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
+        AND e.expense_type IN (${types})
+        AND (e.sub_id IS NULL OR (s.qbo_vendor_id IS NOT NULL AND TRIM(s.qbo_vendor_id) != ''))
+      ORDER BY COALESCE(NULLIF(TRIM(e.incurred_date), ''), substr(e.created_at, 1, 10)) ASC, e.id ASC
+      LIMIT ${EXPENSE_SWEEP_LIMIT}`;
 }
 
 /**
@@ -618,7 +701,7 @@ export async function pushInvoiceById(
   const { qbo_customer_id: defaultCustomerId } = await getQboDefaultCustomer(env);
   const inv = await env.DB.prepare(
     `SELECT i.id, i.job_id, i.invoice_number, i.total, i.qbo_invoice_id,
-            i.sent_date, i.issued_date, i.created_at,
+            i.sent_date, i.issued_date, i.created_at, i.data_source AS invoice_data_source,
             c.qbo_customer_id, j.data_source AS job_data_source
        FROM invoices i
        LEFT JOIN jobs j ON j.id = i.job_id
@@ -633,6 +716,7 @@ export async function pushInvoiceById(
     isJobberExcludedInvoice({
       invoiceId: inv.id,
       jobDataSource: inv.job_data_source,
+      invoiceDataSource: inv.invoice_data_source,
     })
   ) {
     console.log(
@@ -806,6 +890,7 @@ async function sweepInvoices(
        LEFT JOIN jobs j ON j.id = i.job_id
       WHERE i.qbo_invoice_id IS NULL
         AND COALESCE(j.data_source, '') != 'jobber_import'
+        AND COALESCE(i.data_source, '') != 'jobber_import'
         AND i.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
       LIMIT 200`,
   ).all<{ id: string }>();
@@ -895,66 +980,127 @@ async function sweepPayments(
   }
 }
 
-async function sweepExpenses(env: Env, conn: QboConnection, result: SweepResult): Promise<void> {
-  const accountMap = conn.configuration.account_map ?? {};
-  const paymentAccountRef = (conn.configuration.payment_account_ref as string) ?? "";
-  const subPaymentAccountRef =
-    (conn.configuration.subcontractor_payment_account_ref as string | undefined) ?? "";
-  const { results } = await env.DB.prepare(
-    `SELECT e.id, e.amount, e.description, e.expense_type, e.sub_id, s.qbo_vendor_id
+function expensePushContext(conn: QboConnection): ExpensePushContext {
+  return {
+    accountMap: conn.configuration.account_map ?? {},
+    paymentAccountRef: (conn.configuration.payment_account_ref as string) ?? "",
+    subPaymentAccountRef: (conn.configuration.subcontractor_payment_account_ref as string | undefined) ?? "",
+  };
+}
+
+async function loadExpenseForPush(env: Env, expenseId: string): Promise<ExpenseRow | null> {
+  return env.DB.prepare(
+    `SELECT e.id, e.amount, e.description, e.expense_type, e.sub_id, e.incurred_date, e.created_at,
+            e.qbo_transaction_id, s.qbo_vendor_id, j.data_source AS job_data_source
        FROM expenses e
        LEFT JOIN subcontractors s ON s.id = e.sub_id
-      WHERE e.pushed_to_qbo IS NOT 1 AND e.qbo_transaction_id IS NULL
-      LIMIT 200`,
-  ).all<ExpenseRow>();
+       LEFT JOIN jobs j ON j.id = e.job_id
+      WHERE e.id = ?`,
+  )
+    .bind(expenseId)
+    .first<ExpenseRow>();
+}
 
-  for (const e of results ?? []) {
-    const accountId = e.expense_type ? accountMap[e.expense_type] : undefined;
-    if (e.sub_id && !e.qbo_vendor_id) {
-      result.expenses.skipped++;
-      result.needs_mapping.push(`expense ${e.id}: subcontractor not mapped to a QBO Vendor`);
-      continue;
-    }
-    const paymentAccountId = resolvePaymentAccountId(e, paymentAccountRef, subPaymentAccountRef);
-    if (!accountId || !paymentAccountId) {
-      result.expenses.skipped++;
-      result.needs_mapping.push(
-        `expense ${e.id}: ${!accountId ? `expense_type '${e.expense_type}' not mapped to a QBO Account` : "no payment_account_ref configured"}`,
-      );
-      continue;
-    }
+async function pushEligibleExpense(
+  env: Env,
+  conn: QboConnection,
+  e: ExpenseRow,
+  ctx: ExpensePushContext,
+): Promise<{ qboId: string; alreadySynced: boolean }> {
+  const accountId = (e.expense_type ? ctx.accountMap[e.expense_type] : "") ?? "";
+  const paymentAccountId = resolvePaymentAccountId(e, ctx.paymentAccountRef, ctx.subPaymentAccountRef);
+  const existingId = await findExistingQboPurchase(env, conn, e.id);
+  if (existingId) {
+    await env.DB.prepare(
+      `UPDATE expenses SET pushed_to_qbo = 1, qbo_transaction_id = ? WHERE id = ? AND qbo_transaction_id IS NULL`,
+    )
+      .bind(existingId, e.id)
+      .run();
+    return { qboId: existingId, alreadySynced: true };
+  }
+  const body = buildQboPurchase(e, accountId, paymentAccountId);
+  const created = (await qboFetch(env, conn, `/purchase?minorversion=70`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })) as { Purchase?: { Id?: string } };
+  const qboId = created.Purchase?.Id;
+  if (!qboId) throw new Error("QBO returned no Purchase.Id");
+  await env.DB.prepare(
+    `UPDATE expenses SET pushed_to_qbo = 1, qbo_transaction_id = ? WHERE id = ? AND qbo_transaction_id IS NULL`,
+  )
+    .bind(qboId, e.id)
+    .run();
+  return { qboId, alreadySynced: false };
+}
+
+/**
+ * Push one expense. Gate off returns skipped and writes nothing. Jobber history
+ * throws so a DLQ replay can resolve the row instead of retrying it.
+ */
+export async function pushExpenseById(
+  env: Env,
+  expenseId: string,
+): Promise<{ qboId: string; alreadySynced: boolean } | { skipped: true }> {
+  if (!(await isQboExpenseSyncEnabled(env))) {
+    console.log("[qbo] QBO expense sync disabled — pending go-live; skip pushExpenseById");
+    return { skipped: true };
+  }
+  const conn = await loadConnection(env);
+  if (!conn || conn.status === "disconnected" || !conn.refresh_token) {
+    throw new QboNotConnectedError();
+  }
+  const row = await loadExpenseForPush(env, expenseId);
+  if (!row) throw new Error(`expense ${expenseId} not found`);
+  if (isJobberExcludedExpense({ expenseId: row.id, jobDataSource: row.job_data_source })) {
+    throw new Error("QBO expense push permanently excluded: Jobber-imported record");
+  }
+  if (row.qbo_transaction_id) return { qboId: row.qbo_transaction_id, alreadySynced: true };
+  const ctx = expensePushContext(conn);
+  if (!isExpensePushEligible(row, ctx)) {
+    throw new Error(`expense ${expenseId}: not eligible for QBO push`);
+  }
+  return pushEligibleExpense(env, conn, row, ctx);
+}
+
+async function sweepExpenses(env: Env, conn: QboConnection, result: SweepResult): Promise<void> {
+  if (!(await isQboExpenseSyncEnabled(env))) {
+    console.log("[qbo] QBO expense sync disabled — pending go-live; skip expense sweep");
+    return;
+  }
+  const ctx = expensePushContext(conn);
+  const mappedTypes = Object.entries(ctx.accountMap)
+    .filter(([, accountId]) => (accountId ?? "").trim() !== "")
+    .map(([expenseType]) => expenseType);
+  if (
+    mappedTypes.length === 0 ||
+    (ctx.paymentAccountRef.trim() === "" && ctx.subPaymentAccountRef.trim() === "")
+  ) {
+    console.log("[qbo] expense sweep: no mapped expense account or payment account; skip");
+    return;
+  }
+  const { results } = await env.DB.prepare(expenseSweepSelectSql(mappedTypes.length))
+    .bind(...mappedTypes)
+    .all<ExpenseRow>();
+  const batch = pickExpenseSweepBatch(results ?? [], ctx);
+
+  for (const e of batch) {
     try {
-      const existingId = await findExistingQboPurchase(env, conn, e.id);
-      if (existingId) {
-        await env.DB.prepare(
-          `UPDATE expenses SET pushed_to_qbo = 1, qbo_transaction_id = ? WHERE id = ? AND qbo_transaction_id IS NULL`,
-        )
-          .bind(existingId, e.id)
-          .run();
-        result.expenses.pushed++;
+      const pushed = await pushEligibleExpense(env, conn, e, ctx);
+      if (pushed.qboId) result.expenses.pushed++;
+      else result.expenses.skipped++;
+    } catch (err) {
+      const msg = (err as Error).message ?? "";
+      if (msg.includes("permanently excluded: Jobber-imported")) {
+        result.expenses.skipped++;
         continue;
       }
-      const body = buildQboPurchase(e, accountId, paymentAccountId);
-      const created = (await qboFetch(env, conn, `/purchase?minorversion=70`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      })) as { Purchase?: { Id?: string } };
-      const qboId = created.Purchase?.Id;
-      if (!qboId) throw new Error("QBO returned no Purchase.Id");
-      await env.DB.prepare(
-        `UPDATE expenses SET pushed_to_qbo = 1, qbo_transaction_id = ? WHERE id = ? AND qbo_transaction_id IS NULL`,
-      )
-        .bind(qboId, e.id)
-        .run();
-      result.expenses.pushed++;
-    } catch (err) {
       result.expenses.failed++;
       await recordDeadLetter(env, {
         jobName: QBO_DLQ_JOB,
         entityType: "expense",
         entityId: e.id,
         payload: { kind: "expense", id: e.id },
-        errorMessage: (err as Error).message,
+        errorMessage: msg,
       });
     }
   }

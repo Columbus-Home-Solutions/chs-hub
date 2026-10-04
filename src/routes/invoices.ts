@@ -434,9 +434,11 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
   ).results ?? [];
   const invoices = rows.map(shapeInvoice);
 
-  // Summary bar: invoiced (non-void), paid, balance due.
+  // Summary bar: invoiced face (non-void, including bad debt), cash paid,
+  // balance due. A bad-debt remainder is a write-off, not money still owed.
+  const face = (r: InvoiceRow) => r.total ?? r.total_due ?? r.amount ?? 0;
   const totalInvoiced = round2(
-    rows.filter((r) => r.status !== "void").reduce((s, r) => s + (r.total_due ?? r.amount ?? 0), 0),
+    rows.filter((r) => r.status !== "void").reduce((s, r) => s + face(r), 0),
   );
   const paidAgg = await env.DB.prepare(
     // Exclude payments linked to voided invoices — they no longer count toward
@@ -449,6 +451,21 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
     .bind(jobId)
     .first<{ paid: number }>();
   const totalPaid = round2(paidAgg?.paid ?? 0);
+  const badDebtIds = rows.filter((r) => (r.status ?? "").toLowerCase() === "bad_debt").map((r) => r.id);
+  let badDebtPaid = 0;
+  if (badDebtIds.length) {
+    const placeholders = badDebtIds.map(() => "?").join(", ");
+    const wrote = await env.DB.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS paid FROM payments WHERE invoice_id IN (${placeholders})`,
+    )
+      .bind(...badDebtIds)
+      .first<{ paid: number }>();
+    badDebtPaid = wrote?.paid ?? 0;
+  }
+  const badDebtFace = round2(
+    rows.filter((r) => (r.status ?? "").toLowerCase() === "bad_debt").reduce((s, r) => s + face(r), 0),
+  );
+  const writeOff = round2(Math.max(0, badDebtFace - badDebtPaid));
   const contractTotal = round2(job.contract_total ?? 0);
 
   // Approved + applied change orders folded into the summary bar (net of credits)
@@ -471,7 +488,7 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
       contract_total: contractTotal,
       total_invoiced: totalInvoiced,
       total_paid: totalPaid,
-      balance_due: round2(totalInvoiced - totalPaid),
+      balance_due: round2(Math.max(0, totalInvoiced - totalPaid - writeOff)),
       change_orders_total: round2(coAgg?.total ?? 0),
       change_orders_count: coAgg?.count ?? 0,
     },

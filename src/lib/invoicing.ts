@@ -53,6 +53,21 @@ export const JOBBER_HISTORY_INVOICE_SQL = `
   AND COALESCE(i.data_source, '') != 'jobber_import'
   AND COALESCE(j.data_source, '') != 'jobber_import'`;
 
+/** Native invoices Tony has put on hold. Jobber history is excluded separately. */
+export function isBillingHeld(billingHold: number | null | undefined): boolean {
+  return Number(billingHold ?? 0) === 1;
+}
+
+/**
+ * Historical Jobber estimates keep the Jobber Total as the header price.
+ * Line math can be higher when Jobber excluded optional items or applied a
+ * discount. Native estimates are not protected.
+ */
+export function jobberImportHeaderIsProtected(dataSource: string | null | undefined): boolean {
+  return (dataSource ?? "").trim() === "jobber_import";
+}
+
+export const BILLING_HOLD_SQL = `AND COALESCE(i.billing_hold, 0) = 0`;
 export const DEFAULT_DUE_DAYS = 7;
 export const CONVENIENCE_FEE_RATE = 0.035;
 
@@ -154,6 +169,7 @@ export interface InvoiceRow {
   title: string | null;
   description: string | null;
   amount: number | null;
+  total: number | null;
   tax_amount: number | null;
   late_fee_amount: number | null;
   credits_applied: number | null;
@@ -179,7 +195,7 @@ export interface InvoiceRow {
 }
 
 export const INVOICE_COLUMNS = `id, invoice_number, job_id, client_id, billing_model, invoice_type,
-  title, description, amount, tax_amount, late_fee_amount, credits_applied, total_due,
+  title, description, amount, total, tax_amount, late_fee_amount, credits_applied, total_due,
   status, sent_date, viewed_date, due_date, paid_date, paid_amount, payment_method,
   stripe_payment_id, portal_link, payment_token, cost_plus_cycle_id, milestone_number,
   trade_line_item_id, line_item_ids, payer_id, notes, created_at, created_by`;
@@ -196,6 +212,7 @@ export function shapeInvoice(r: InvoiceRow) {
     title: r.title,
     description: r.description,
     amount: r.amount,
+    total: r.total,
     tax_amount: r.tax_amount ?? 0,
     late_fee_amount: r.late_fee_amount ?? 0,
     credits_applied: r.credits_applied ?? 0,
@@ -521,11 +538,12 @@ export interface LateFeeStats {
 type BillingInvoice = InvoiceRow & {
   invoice_data_source?: string | null;
   job_data_source?: string | null;
+  billing_hold?: number | null;
 };
 
 const BILLING_INVOICE_COLUMNS = `${INVOICE_COLUMNS.split(",")
   .map((c) => `i.${c.trim()}`)
-  .join(", ")}, i.data_source AS invoice_data_source, j.data_source AS job_data_source`;
+  .join(", ")}, i.data_source AS invoice_data_source, j.data_source AS job_data_source, i.billing_hold`;
 
 export async function runLateFeeCalculator(env: Env): Promise<LateFeeStats> {
   const stats: LateFeeStats = { scanned: 0, updated: 0, marked_past_due: 0 };
@@ -536,7 +554,8 @@ export async function runLateFeeCalculator(env: Env): Promise<LateFeeStats> {
        LEFT JOIN jobs j ON j.id = i.job_id
       WHERE i.status IN ('sent','viewed','partial','past_due')
         AND i.due_date IS NOT NULL AND substr(i.due_date, 1, 10) < ?
-        ${JOBBER_HISTORY_INVOICE_SQL}`,
+        ${JOBBER_HISTORY_INVOICE_SQL}
+        ${BILLING_HOLD_SQL}`,
   )
     .bind(today)
     .all<BillingInvoice>();
@@ -547,7 +566,8 @@ export async function runLateFeeCalculator(env: Env): Promise<LateFeeStats> {
         invoiceId: inv.id,
         invoiceDataSource: inv.invoice_data_source,
         jobDataSource: inv.job_data_source,
-      })
+      }) ||
+      isBillingHeld(inv.billing_hold)
     ) {
       continue;
     }
@@ -606,7 +626,8 @@ export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
        LEFT JOIN jobs j ON j.id = i.job_id
       WHERE i.status IN ('sent','viewed','partial','past_due')
         AND i.due_date IS NOT NULL
-        ${JOBBER_HISTORY_INVOICE_SQL}`,
+        ${JOBBER_HISTORY_INVOICE_SQL}
+        ${BILLING_HOLD_SQL}`,
   ).all<BillingInvoice>();
 
   for (const inv of results ?? []) {
@@ -615,7 +636,8 @@ export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
         invoiceId: inv.id,
         invoiceDataSource: inv.invoice_data_source,
         jobDataSource: inv.job_data_source,
-      })
+      }) ||
+      isBillingHeld(inv.billing_hold)
     ) {
       continue;
     }

@@ -25,6 +25,34 @@ import type { Env } from "../env.js";
 import { triggerNotification } from "./notification-engine.js";
 
 export const LATE_FEE_PER_DAY = 50;
+
+/** Jobber GraphQL global ids are base64 of "gid://Jobber/...". */
+export const JOBBER_GID_PREFIX = "Z2lkOi8vSm9iYmVy";
+
+/**
+ * Permanent billing exclusion. Jobber history must never accrue late fees or
+ * receive due / past-due notices. Not a setting and not a column.
+ *
+ * A missing job (NULL job_id) is still excluded when the invoice id is a
+ * Jobber GraphQL id or invoices.data_source is jobber_import.
+ */
+export function isJobberHistoryInvoice(opts: {
+  invoiceId: string;
+  invoiceDataSource?: string | null;
+  jobDataSource?: string | null;
+}): boolean {
+  if ((opts.invoiceDataSource ?? "").trim() === "jobber_import") return true;
+  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  if ((opts.invoiceId ?? "").startsWith(JOBBER_GID_PREFIX)) return true;
+  return false;
+}
+
+/** SQL fragment. Caller joins `invoices i` to `jobs j` with a LEFT JOIN. */
+export const JOBBER_HISTORY_INVOICE_SQL = `
+  AND i.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
+  AND COALESCE(i.data_source, '') != 'jobber_import'
+  AND COALESCE(j.data_source, '') != 'jobber_import'`;
+
 export const DEFAULT_DUE_DAYS = 7;
 export const CONVENIENCE_FEE_RATE = 0.035;
 
@@ -490,18 +518,39 @@ export interface LateFeeStats {
  * partial status but still accrue. Enqueue nothing here — the due-check cron
  * owns the past-due notice.
  */
+type BillingInvoice = InvoiceRow & {
+  invoice_data_source?: string | null;
+  job_data_source?: string | null;
+};
+
+const BILLING_INVOICE_COLUMNS = `${INVOICE_COLUMNS.split(",")
+  .map((c) => `i.${c.trim()}`)
+  .join(", ")}, i.data_source AS invoice_data_source, j.data_source AS job_data_source`;
+
 export async function runLateFeeCalculator(env: Env): Promise<LateFeeStats> {
   const stats: LateFeeStats = { scanned: 0, updated: 0, marked_past_due: 0 };
   const today = new Date().toISOString().slice(0, 10);
   const { results } = await env.DB.prepare(
-    `SELECT ${INVOICE_COLUMNS} FROM invoices
-      WHERE status IN ('sent','viewed','partial','past_due')
-        AND due_date IS NOT NULL AND substr(due_date, 1, 10) < ?`,
+    `SELECT ${BILLING_INVOICE_COLUMNS}
+       FROM invoices i
+       LEFT JOIN jobs j ON j.id = i.job_id
+      WHERE i.status IN ('sent','viewed','partial','past_due')
+        AND i.due_date IS NOT NULL AND substr(i.due_date, 1, 10) < ?
+        ${JOBBER_HISTORY_INVOICE_SQL}`,
   )
     .bind(today)
-    .all<InvoiceRow>();
+    .all<BillingInvoice>();
 
   for (const inv of results ?? []) {
+    if (
+      isJobberHistoryInvoice({
+        invoiceId: inv.id,
+        invoiceDataSource: inv.invoice_data_source,
+        jobDataSource: inv.job_data_source,
+      })
+    ) {
+      continue;
+    }
     stats.scanned++;
     const fee = accruedLateFee(inv.due_date);
     const newTotalDue = computeTotalDue(inv.amount ?? 0, inv.tax_amount ?? 0, fee, inv.credits_applied ?? 0);
@@ -552,12 +601,24 @@ export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
   const reminderDay = addDays(today, 2); // due in ~2 days
 
   const { results } = await env.DB.prepare(
-    `SELECT ${INVOICE_COLUMNS} FROM invoices
-      WHERE status IN ('sent','viewed','partial','past_due')
-        AND due_date IS NOT NULL`,
-  ).all<InvoiceRow>();
+    `SELECT ${BILLING_INVOICE_COLUMNS}
+       FROM invoices i
+       LEFT JOIN jobs j ON j.id = i.job_id
+      WHERE i.status IN ('sent','viewed','partial','past_due')
+        AND i.due_date IS NOT NULL
+        ${JOBBER_HISTORY_INVOICE_SQL}`,
+  ).all<BillingInvoice>();
 
   for (const inv of results ?? []) {
+    if (
+      isJobberHistoryInvoice({
+        invoiceId: inv.id,
+        invoiceDataSource: inv.invoice_data_source,
+        jobDataSource: inv.job_data_source,
+      })
+    ) {
+      continue;
+    }
     stats.scanned++;
     const due = inv.due_date!.slice(0, 10);
     const link = inv.payment_token ? paymentLink(env, inv.payment_token) : (inv.portal_link ?? "");

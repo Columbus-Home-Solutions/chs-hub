@@ -33,10 +33,9 @@ const HOLD_NOTE: Record<number, string> = {
 };
 const DEPOSIT_SPLIT = new Set([141, 148]);
 /** Tony approved header corrections for these stubs only. */
-const APPROVED_STUBS = new Set([9054, 9067, 9069, 9001, 9002]);
+const APPROVED_STUBS = new Set([9054, 9067, 9069, 9000, 9001, 9002]);
 /** Stubs whose headers stay at the pre-import amount. The Jobber total goes in the notes. */
 const KEEP_STUB_TOTAL: Record<number, number> = {
-  9000: 0,
   9009: 17826.28,
   9035: 15937.5,
   9036: 4940,
@@ -240,7 +239,7 @@ function main() {
   };
   const stubBefore = db
     .prepare(
-      `SELECT estimate_number, total FROM estimates WHERE estimate_number IN (9054, 9067, 9069, 9001, 9002, 9025)`,
+      `SELECT estimate_number, total FROM estimates WHERE estimate_number IN (9000, 9054, 9067, 9069, 9001, 9002, 9025)`,
     )
     .all() as Array<{ estimate_number: number; total: number | null }>;
 
@@ -750,7 +749,9 @@ function applyImport(
         db.prepare(`UPDATE estimates SET total = ?, subtotal = ? WHERE id = ?`).run(total, total, e.id);
         stats.updates++;
       }
-      const noteBits = keepPrior != null
+      // 9000 is corrected to the Jobber total. Keep the quote-total note
+      // that the $0 stub carried, since the lines already match the header.
+      const noteBits = keepPrior != null || e.estimate_number === 9000
         ? `Jobber quote total $${usd(total)}.`
         : gapNote(q, total, lines);
       const nextNotes = appendNote(e.notes, noteBits);
@@ -1541,7 +1542,7 @@ function applyImport(
   ).all();
 
   const stubAfter = db.prepare(
-    `SELECT estimate_number, total FROM estimates WHERE estimate_number IN (9054, 9067, 9069, 9001, 9002, 9025) ORDER BY estimate_number`,
+    `SELECT estimate_number, total FROM estimates WHERE estimate_number IN (9000, 9054, 9067, 9069, 9001, 9002, 9025) ORDER BY estimate_number`,
   ).all();
 
   return { notes, headerChanges, contractFills, invoiceDiffs, relinks, relinkSkips, stubAfter, createdInvoices, createdPayments, newJobs, orphanLinks, orphanUnmatched, jobFixes, nameLinks, writeoffFixes, clientStamps, brandonFixes };

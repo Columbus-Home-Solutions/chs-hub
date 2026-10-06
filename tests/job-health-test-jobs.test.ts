@@ -14,7 +14,7 @@ describe("job health matches the jobs list", () => {
 
   it("starts from jobs and drops test clients and non-native sources", () => {
     expect(health).toContain("FROM jobs j");
-    expect(health).toContain("nativeJobSourceWhereAliased(\"j\")");
+    expect(health).toContain("boardJobWhere(\"j\")");
     expect(health).toContain("NON_TEST_CLIENT");
     expect(health).not.toMatch(/FROM\s+(daily_logs|smart_notes|photos)\b/);
   });

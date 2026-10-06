@@ -99,3 +99,11 @@ export function buildClientLedgerRows(
     })),
   ].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
 }
+
+/** Client-page invoice rows open the job. A Jobber invoice with no job stays on the page. */
+export function clientInvoiceJobPath(jobId: string | null | undefined): string | null {
+  if (jobId == null) return null;
+  const id = String(jobId).trim();
+  if (!id) return null;
+  return `/jobs/${id}`;
+}

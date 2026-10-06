@@ -47,14 +47,14 @@ export function RecordPaymentModal({
     if (!valid) return;
     setBusy(true);
     try {
-      await api.post(`/api/payments`, {
+      const res = await api.post<{ receipt_skipped?: boolean; message?: string }>(`/api/payments`, {
         invoice_id: invoice.id,
         amount: amt,
         payment_method: method,
         received_date: receivedDate || null,
         notes: notes.trim() || null,
       });
-      toast.push("success", "Payment recorded");
+      toast.push(res.receipt_skipped ? "info" : "success", res.receipt_skipped && res.message ? res.message : "Payment recorded");
       onRecorded();
     } catch (err) {
       toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);

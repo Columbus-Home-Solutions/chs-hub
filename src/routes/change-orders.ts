@@ -18,6 +18,7 @@
  */
 
 import type { Env } from "../env.js";
+import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 import { guard } from "../middleware/guard.js";
 import {
   triggerChangeOrderSent,
@@ -290,6 +291,8 @@ export async function handleChangeOrderSend(request: Request, env: Env, id: stri
 
   const co = await loadCo(env, id);
   if (!co) return err(404, "not_found", "Change order not found.");
+  const quiet = await jobberQuietSendBlock(env, co.job_id);
+  if (quiet) return quiet;
   if (co.status === "sent") {
     // Idempotent re-send: re-fire the (dedupe-keyed) notice, return current state.
     const job = await loadJob(env, co.job_id);

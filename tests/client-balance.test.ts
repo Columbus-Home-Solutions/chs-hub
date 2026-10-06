@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildClientLedgerRows, clientInvoiceBalance } from "../frontend/src/views/clients/client-balance.ts";
+import { buildClientLedgerRows, clientInvoiceBalance, clientInvoiceJobPath } from "../frontend/src/views/clients/client-balance.ts";
 
 describe("client page balance", () => {
   it("does not count a void invoice, so Ian Hawk's $600 void is not owed", () => {
@@ -69,5 +69,15 @@ describe("client page balance", () => {
     expect(rows[0]).toMatchObject({ label: "Invoice", date: null, amount: 1200, status: "past_due" });
     expect(rows.find((row) => row.kind === "writeoff")).toMatchObject({ date: null, amount: 400 });
     expect(rows.find((row) => row.kind === "payment")).toMatchObject({ label: "Payment", date: null, amount: 0 });
+  });
+
+  it("does not build a job link when an invoice has no job", () => {
+    expect(clientInvoiceJobPath(null)).toBeNull();
+    expect(clientInvoiceJobPath(undefined)).toBeNull();
+    expect(clientInvoiceJobPath("")).toBeNull();
+    expect(clientInvoiceJobPath("  ")).toBeNull();
+    expect(clientInvoiceJobPath("Z2lkOi8vSm9iYmVyL0pvYi8xNDExNDI0MzU=")).toBe(
+      "/jobs/Z2lkOi8vSm9iYmVyL0pvYi8xNDExNDI0MzU=",
+    );
   });
 });

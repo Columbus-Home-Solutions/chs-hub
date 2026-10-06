@@ -21,6 +21,7 @@ import {
   NON_TEST_OR_ORPHAN_CLIENT,
   notTestClientExists,
 } from "../lib/non-test-client.js";
+import { boardJobWhere } from "../lib/jobber-board.js";
 import { centralDate, laborUnpaidAggregate, weekBounds } from "../../shared/labor-week.js";
 import {
   buildingClientName,
@@ -853,6 +854,7 @@ export async function handleDashboardPipeline(env: Env): Promise<Response> {
       `SELECT status, COUNT(*) as count
        FROM jobs
        WHERE status NOT IN ('closed')
+         AND ${boardJobWhere("")}
          AND ${notTestClientExists("client_id")}
        GROUP BY status`
     ).all<{ status: string; count: number }>(),

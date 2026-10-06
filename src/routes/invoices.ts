@@ -17,7 +17,6 @@
 import type { Env } from "../env.js";
 import { allocateNextInvoiceNumber } from "../lib/number-counters.js";
 import { guard } from "../middleware/guard.js";
-import { nativeJobSourceWhere } from "../lib/native-jobs.js";
 import { triggerInvoiceSent } from "../lib/notification-engine.js";
 import {
   INVOICE_COLUMNS,
@@ -36,7 +35,7 @@ import {
   type InvoiceRow,
 } from "../lib/invoicing.js";
 import { createOffSessionPaymentIntent, getStripeConfig } from "../lib/stripe.js";
-import { recordPayment } from "./payments.js";
+import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 import { checkAndFireLienWaiver } from "../lib/completion-triggers.js";
 import { notTestClientExists } from "../lib/non-test-client.js";
 import {
@@ -203,7 +202,7 @@ export async function handleInvoiceCreate(request: Request, env: Env): Promise<R
   }
 
   const job = await env.DB.prepare(
-    `SELECT id, client_id, billing_model, conversion_reversed FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
+    "SELECT id, client_id, billing_model, conversion_reversed FROM jobs WHERE id = ?",
   )
     .bind(jobId)
     .first<JobCtx>();
@@ -346,6 +345,9 @@ export async function handleInvoiceSend(request: Request, env: Env, id: string):
   if (!inv) return err(404, "not_found", "Invoice not found.");
   if (inv.status === "void") return err(409, "invoice_void", "Voided invoices cannot be sent.");
   if (inv.status === "paid") return err(409, "invoice_paid", "This invoice is already paid.");
+
+  const quiet = await jobberQuietSendBlock(env, inv.job_id);
+  if (quiet) return quiet;
 
   // Business rule #1: an invoice cannot be sent without a valid client email.
   const client = inv.client_id

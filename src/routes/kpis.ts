@@ -19,6 +19,7 @@
  */
 
 import type { Env } from "../env.js";
+import { boardJobWhere } from "../lib/jobber-board.js";
 import { notTestClientExists } from "../lib/non-test-client.js";
 
 type DateRange = { start: string; end: string };
@@ -118,6 +119,7 @@ export async function handleKpis(env: Env): Promise<KpiResponse> {
   const jobsInProgress = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM jobs
      WHERE LOWER(COALESCE(status,'')) IN (${jobsInProgressPlaceholders})
+       AND ${boardJobWhere("")}
        AND ${notTestClientExists("client_id")}`,
   )
     .bind(...OPEN_JOB_STATUSES)

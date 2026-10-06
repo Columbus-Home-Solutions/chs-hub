@@ -70,17 +70,31 @@ export async function isQboExpenseSyncEnabled(env: Env): Promise<boolean> {
   return (row?.value ?? "").trim().toLowerCase() === "true";
 }
 
+/** Shared by the payment sweep. Orphan Jobber invoices (job_id NULL) stay out. */
+export const JOBBER_PAYMENT_EXCLUSION_SQL = `COALESCE(j.data_source, '') != 'jobber_import'
+        AND COALESCE(p.data_source, '') != 'jobber_import'
+        AND COALESCE(i.data_source, '') != 'jobber_import'
+        AND COALESCE(i.id, '') NOT LIKE 'Z2lkOi8vSm9iYmVy%'
+        AND p.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'`;
+
 /**
  * Permanent structural exclusion — Jobber history must never push to QBO,
  * regardless of `qbo_payment_sync_enabled`. Not a toggle.
  *
- * Signals: jobs.data_source = 'jobber_import', or a Jobber GraphQL payment id
- * (covers orphan payments with no job_id).
+ * Signals: jobs.data_source or payments.data_source = 'jobber_import', a Jobber
+ * GraphQL payment id, or a linked Jobber-history invoice. The invoice check
+ * covers payments recorded in CHS against an orphan Jobber invoice (job_id NULL).
  */
 export function isJobberExcludedPayment(opts: {
   paymentId: string;
   jobDataSource?: string | null;
+  paymentDataSource?: string | null;
+  invoiceId?: string | null;
+  invoiceDataSource?: string | null;
 }): boolean {
+  if ((opts.paymentDataSource ?? "").trim() === "jobber_import") return true;
+  if ((opts.invoiceDataSource ?? "").trim() === "jobber_import") return true;
+  if ((opts.invoiceId ?? "").startsWith("Z2lkOi8vSm9iYmVy")) return true;
   if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
   // Jobber GraphQL global ids are base64 of "gid://Jobber/..."
   if (opts.paymentId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
@@ -787,7 +801,9 @@ export async function pushPaymentById(
   const { qbo_customer_id: defaultCustomerId } = await getQboDefaultCustomer(env);
   const p = await env.DB.prepare(
     `SELECT p.id, p.amount, p.invoice_id, p.qbo_payment_id, p.received_date, p.collected_at,
-            c.qbo_customer_id, i.qbo_invoice_id, j.data_source AS job_data_source
+            p.data_source AS payment_data_source,
+            c.qbo_customer_id, i.qbo_invoice_id, i.data_source AS invoice_data_source,
+            j.data_source AS job_data_source
        FROM payments p
        LEFT JOIN invoices i ON i.id = p.invoice_id
        LEFT JOIN jobs j ON j.id = COALESCE(p.job_id, i.job_id)
@@ -795,13 +811,20 @@ export async function pushPaymentById(
       WHERE p.id = ?`,
   )
     .bind(paymentId)
-    .first<PaymentRow & { job_data_source?: string | null }>();
+    .first<PaymentRow & {
+      job_data_source?: string | null;
+      payment_data_source?: string | null;
+      invoice_data_source?: string | null;
+    }>();
 
   if (!p) throw new Error(`payment not found: ${paymentId}`);
   if (
     isJobberExcludedPayment({
       paymentId: p.id,
       jobDataSource: p.job_data_source,
+      paymentDataSource: p.payment_data_source,
+      invoiceId: p.invoice_id,
+      invoiceDataSource: p.invoice_data_source,
     })
   ) {
     console.log(
@@ -934,9 +957,9 @@ async function sweepPayments(
     return;
   }
 
-  // Permanent Jobber exclusion is structural (not the go-live gate): never pick
-  // jobs.data_source='jobber_import' or Jobber GraphQL payment ids.
+  // Permanent Jobber exclusion is structural (not the go-live gate).
   // Job join prefers payments.job_id, falls back to the invoice's job.
+  // payments.data_source and the linked invoice cover orphans with job_id NULL.
   const { results } = await env.DB.prepare(
     `SELECT p.id, p.amount, p.invoice_id, p.received_date, p.collected_at,
             c.qbo_customer_id, i.qbo_invoice_id
@@ -945,8 +968,7 @@ async function sweepPayments(
        LEFT JOIN jobs j ON j.id = COALESCE(p.job_id, i.job_id)
        LEFT JOIN clients c ON c.id = COALESCE(p.client_id, j.client_id)
       WHERE p.qbo_payment_id IS NULL
-        AND COALESCE(j.data_source, '') != 'jobber_import'
-        AND p.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
+        AND ${JOBBER_PAYMENT_EXCLUSION_SQL}
       LIMIT 200`,
   ).all<PaymentRow>();
 

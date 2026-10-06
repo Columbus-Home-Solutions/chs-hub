@@ -16,6 +16,7 @@ import { buildCompletionPackageData, renderCompletionPackageHtml } from "../lib/
 import { notifySignatureNeeded, triggerNotification } from "../lib/notification-engine.js";
 import { formatDate, formatDatePlusOneYear } from "../lib/document-generator.js";
 import { sendImmediateReviewRequest } from "../lib/review-followups.js";
+import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 import {
   fetchEmbeddedSignLinkWithRetry,
   getBoldSignConfig,
@@ -391,6 +392,9 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
   if (review.package_status !== "ready_to_send") {
     return err(409, "not_ready", "Completion package is not ready to send.");
   }
+
+  const quiet = await jobberQuietSendBlock(env, jobId);
+  if (quiet) return quiet;
 
   const job = await env.DB.prepare(
     `SELECT client_id, portal_token, warranty_expiration, actual_end_date, target_end_date,

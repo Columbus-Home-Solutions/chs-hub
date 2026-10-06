@@ -47,6 +47,7 @@ import {
   BOLDSIGN_API_BASE,
 } from "../lib/boldsign.js";
 import { notifySignatureNeeded } from "../lib/notification-engine.js";
+import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 import { applyPmFields, resolvePmFields } from "../lib/pm-fields.js";
 import { loadWorkingAgreementAttachment } from "../lib/working-agreement.js";
 
@@ -899,6 +900,8 @@ export async function handleSendForSignature(
 ): Promise<Response> {
   const guarded = await guard(request, env, [...OWNER_PM]);
   if (guarded instanceof Response) return guarded;
+  const quiet = await jobberQuietSendBlock(env, jobId);
+  if (quiet) return quiet;
 
   const row = await env.DB.prepare(
     `SELECT id, job_id, template_type, filename, r2_key, review_status, signature_status, boldsign_document_id
@@ -1175,6 +1178,8 @@ export async function handleSendReminder(
 ): Promise<Response> {
   const guarded = await guard(request, env, [...OWNER_PM]);
   if (guarded instanceof Response) return guarded;
+  const quietReminder = await jobberQuietSendBlock(env, jobId);
+  if (quietReminder) return quietReminder;
 
   const row = await env.DB.prepare(
     "SELECT id, boldsign_document_id, signature_status FROM job_documents WHERE id = ? AND job_id = ?",

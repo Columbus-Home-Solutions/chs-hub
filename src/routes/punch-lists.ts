@@ -32,6 +32,7 @@ import {
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "../lib/twilio.js";
 import { streamObject, putImage } from "../lib/r2.js";
 import { resolveSubAccessToken, subAccessLink } from "../lib/sub-access-tokens.js";
+import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 
 const MAX_COMPLETION_PHOTO_BYTES = 10 * 1024 * 1024;
 
@@ -645,6 +646,8 @@ export async function handlePunchListSend(
     .bind(punchListId)
     .first<PunchListRow & { job_title: string | null; property_address: string | null }>();
   if (!punchList) return err(404, "not_found");
+  const quietSend = await jobberQuietSendBlock(env, punchList.job_id);
+  if (quietSend) return quietSend;
 
   const rawItems = await loadItems(env, punchListId);
   const assigned = rawItems.filter((i) => i.sub_id);
@@ -738,6 +741,8 @@ export async function handlePunchListRenotify(
     .bind(punchListId)
     .first<PunchListRow & { job_title: string | null }>();
   if (!punchList) return err(404, "not_found");
+  const quiet = await jobberQuietSendBlock(env, punchList.job_id);
+  if (quiet) return quiet;
   if (!punchList.sent_at) return err(400, "not_yet_sent");
 
   const { results: newItems } = await env.DB.prepare(

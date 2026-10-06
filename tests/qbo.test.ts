@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildQboPayment,
@@ -8,6 +9,7 @@ import {
   isJobberExcludedExpense,
   isJobberExcludedInvoice,
   isJobberExcludedPayment,
+  JOBBER_PAYMENT_EXCLUSION_SQL,
   isQboExpenseSyncEnabled,
   pickExpenseSweepBatch,
   pushExpenseById,
@@ -73,6 +75,46 @@ describe("isJobberExcludedPayment", () => {
         jobDataSource: "chs",
       }),
     ).toBe(false);
+  });
+
+  it("excludes a jobber_import payment even when the job is missing", () => {
+    expect(
+      isJobberExcludedPayment({
+        paymentId: "4f8a1350-0604-4b05-9000-000000009050",
+        jobDataSource: null,
+        paymentDataSource: "jobber_import",
+      }),
+    ).toBe(true);
+  });
+
+  it("excludes a CHS payment on a Jobber invoice with no job", () => {
+    expect(
+      isJobberExcludedPayment({
+        paymentId: "4f8a1350-0604-4b05-9000-000000009050",
+        jobDataSource: null,
+        paymentDataSource: null,
+        invoiceId: "Z2lkOi8vSm9iYmVyL0ludm9pY2UvMTU2MjI0NDgw",
+        invoiceDataSource: null,
+      }),
+    ).toBe(true);
+    expect(
+      isJobberExcludedPayment({
+        paymentId: "native-uuid-payment",
+        jobDataSource: null,
+        invoiceId: "native-uuid-invoice",
+        invoiceDataSource: "jobber_import",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the payment sweep SQL on the same exclusion, including orphan invoices", () => {
+    expect(JOBBER_PAYMENT_EXCLUSION_SQL).toContain("COALESCE(p.data_source, '') != 'jobber_import'");
+    expect(JOBBER_PAYMENT_EXCLUSION_SQL).toContain("COALESCE(i.data_source, '') != 'jobber_import'");
+    expect(JOBBER_PAYMENT_EXCLUSION_SQL).toContain("COALESCE(i.id, '') NOT LIKE 'Z2lkOi8vSm9iYmVy%'");
+    expect(JOBBER_PAYMENT_EXCLUSION_SQL).toContain("COALESCE(j.data_source, '') != 'jobber_import'");
+    const sweep = readFileSync(new URL("../src/lib/qbo-sync.ts", import.meta.url), "utf8");
+    const fn = sweep.slice(sweep.indexOf("async function sweepPayments"));
+    expect(fn.slice(0, fn.indexOf("async function " , 20))).toContain("JOBBER_PAYMENT_EXCLUSION_SQL");
   });
 });
 

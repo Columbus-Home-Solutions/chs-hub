@@ -14,7 +14,7 @@ import { ClientForm } from "./ClientForm";
 import { useToast } from "../../store/toast";
 import { EstimateStatusBadge } from "../../components/EstimateStatusBadge";
 import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
-import { buildClientLedgerRows, clientInvoiceBalance } from "./client-balance";
+import { buildClientLedgerRows, clientInvoiceBalance, clientInvoiceJobPath } from "./client-balance";
 import { go } from "../../lib/nav";
 import {
   COMM_CHANNELS,
@@ -585,11 +585,15 @@ function InvoicesCard({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {rows.map((row) => {
+                  const jobPath = row.kind === "invoice"
+                    ? clientInvoiceJobPath(invoices.find((i) => i.id === row.id)?.job_id)
+                    : null;
+                  return (
                   <tr
                     key={row.id}
-                    style={{ borderBottom: "1px solid var(--color-border-subtle)", cursor: row.kind === "invoice" ? "pointer" : "default" }}
-                    onClick={() => row.kind === "invoice" && go(`/jobs/${(invoices.find(i => i.id === row.id))?.job_id}`)}
+                    style={{ borderBottom: "1px solid var(--color-border-subtle)", cursor: jobPath ? "pointer" : "default" }}
+                    onClick={() => jobPath && go(jobPath)}
                   >
                     <td style={{ padding: "6px 8px 6px 0" }}>
                       <span class="text--muted" style={{ fontSize: "var(--text-xs)", marginRight: "6px" }}>
@@ -612,7 +616,8 @@ function InvoicesCard({
                       </span>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

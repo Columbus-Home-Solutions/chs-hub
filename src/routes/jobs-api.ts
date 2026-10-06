@@ -25,7 +25,8 @@
  */
 
 import type { Env } from "../env.js";
-import { nativeJobSourceWhere, nativeJobSourceWhereAliased } from "../lib/native-jobs.js";
+import { boardJobWhere, jobberQuietSendBlock } from "../lib/jobber-board.js";
+import { nativeJobSourceWhere } from "../lib/native-jobs.js";
 import { guard } from "../middleware/guard.js";
 import { triggerJobStatusChanged } from "../lib/wc/triggers.js";
 import { reverseJobConversion } from "../lib/quote-to-job.js";
@@ -152,7 +153,7 @@ interface JobListRow {
   status_since: string | null; // last status-change timestamp (or created_at)
 }
 
-const NATIVE_JOB_WHERE = nativeJobSourceWhereAliased("j");
+const JOB_LIST_WHERE = `${boardJobWhere("j")} AND (${NON_TEST_CLIENT})`;
 
 const JOB_SELECT = `
   SELECT j.id, j.job_number, j.title, j.status, j.client_id, c.name AS client_name,
@@ -169,7 +170,7 @@ const JOB_SELECT = `
          ), j.created_at) AS status_since
   FROM jobs j
   LEFT JOIN clients c ON c.id = j.client_id
-  WHERE ${NATIVE_JOB_WHERE} AND (${NON_TEST_CLIENT})`;
+  WHERE ${JOB_LIST_WHERE}`;
 
 function daysSince(iso: string | null): number {
   if (!iso) return 0;
@@ -290,8 +291,8 @@ export async function handleJobPipeline(env: Env): Promise<Response> {
 export async function handleJobDetail(env: Env, id: string): Promise<Response> {
   const row = await env.DB.prepare(
     `${JOB_SELECT.replace(
-      `WHERE ${NATIVE_JOB_WHERE} AND (${NON_TEST_CLIENT})`,
-      `WHERE j.id = ? AND ${NATIVE_JOB_WHERE}`,
+      `WHERE ${JOB_LIST_WHERE}`,
+      "WHERE j.id = ?",
     )}`,
   )
     .bind(id)
@@ -481,7 +482,7 @@ export async function handleJobUpdate(request: Request, env: Env, id: string): P
   }
 
   const job = await env.DB.prepare(
-    `SELECT id, title, job_number, start_date FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
+    "SELECT id, title, job_number, start_date FROM jobs WHERE id = ?",
   )
     .bind(id)
     .first<{ id: string; title: string | null; job_number: number | null; start_date: string | null }>();
@@ -725,7 +726,7 @@ export async function handleJobCloseEligibility(request: Request, env: Env, id: 
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
 
-  const job = await env.DB.prepare(`SELECT id FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`)
+  const job = await env.DB.prepare("SELECT id FROM jobs WHERE id = ?")
     .bind(id)
     .first<{ id: string }>();
   if (!job) return err(404, "not_found", "Job not found.");
@@ -749,7 +750,7 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   }
 
   const job = await env.DB.prepare(
-    `SELECT id, status FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
+    "SELECT id, status FROM jobs WHERE id = ?",
   )
     .bind(id)
     .first<{ id: string; status: string }>();
@@ -1511,7 +1512,7 @@ export async function handleTestWeeklyRecap(
   if (authed instanceof Response) return authed;
 
   const job = await env.DB.prepare(
-    `SELECT id, title, client_id, portal_token, billing_model, portal_type FROM jobs WHERE id = ?`,
+    `SELECT id, title, client_id, portal_token, billing_model, portal_type, data_source, status FROM jobs WHERE id = ?`,
   )
     .bind(jobId)
     .first<{
@@ -1521,8 +1522,13 @@ export async function handleTestWeeklyRecap(
       portal_token: string | null;
       billing_model: string | null;
       portal_type: string | null;
+      data_source: string | null;
+      status: string | null;
     }>();
   if (!job) return err(404, "job_not_found");
+
+  const quiet = await jobberQuietSendBlock(env, jobId);
+  if (quiet) return quiet;
 
   const client = job.client_id
     ? await env.DB.prepare(

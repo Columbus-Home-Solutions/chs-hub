@@ -14,7 +14,7 @@ import { ClientForm } from "./ClientForm";
 import { useToast } from "../../store/toast";
 import { EstimateStatusBadge } from "../../components/EstimateStatusBadge";
 import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
-import { clientInvoiceBalance, invoiceFace } from "./client-balance";
+import { buildClientLedgerRows, clientInvoiceBalance } from "./client-balance";
 import { go } from "../../lib/nav";
 import {
   COMM_CHANNELS,
@@ -64,7 +64,7 @@ interface InvoiceLite {
   total_due: number | null;
   status: string | null;
   due_date: string | null;
-  created_at: string;
+  created_at: string | null;
 }
 
 interface PaymentLite {
@@ -72,7 +72,7 @@ interface PaymentLite {
   invoice_id: string;
   amount: number;
   received_date: string | null;
-  created_at: string;
+  created_at: string | null;
   invoice_number: number | null;
 }
 
@@ -566,46 +566,8 @@ function InvoicesCard({
   payments: PaymentLite[];
   totalRevenue: number;
 }) {
-  const face = invoiceFace;
-  const paidOn = (invoiceId: string) =>
-    payments.filter((p) => p.invoice_id === invoiceId).reduce((sum, p) => sum + (p.amount ?? 0), 0);
-  const isBadDebt = (inv: InvoiceLite) => (inv.status ?? "").toLowerCase() === "bad_debt";
   const { collected: totalPaid, writtenOff, balance } = clientInvoiceBalance(invoices, payments);
-
-  type LedgerRow =
-    | { kind: "invoice"; id: string; label: string; date: string; amount: number | null; status: string | null }
-    | { kind: "payment"; id: string; label: string; date: string; amount: number; invoiceNum: number | null }
-    | { kind: "writeoff"; id: string; label: string; date: string; amount: number };
-
-  const rows: LedgerRow[] = [
-    ...invoices.map((inv): LedgerRow => ({
-      kind: "invoice",
-      id: inv.id,
-      label: inv.title ?? (inv.invoice_number ? `Invoice #${inv.invoice_number}` : "Invoice"),
-      date: inv.created_at,
-      amount: face(inv),
-      status: inv.status,
-    })),
-    ...invoices.filter(isBadDebt).flatMap((inv): LedgerRow[] => {
-      const off = Math.max(0, face(inv) - paidOn(inv.id));
-      if (off <= 0) return [];
-      return [{
-        kind: "writeoff",
-        id: `${inv.id}-writeoff`,
-        label: "Bad-debt write-off",
-        date: inv.created_at,
-        amount: off,
-      }];
-    }),
-    ...payments.map((p): LedgerRow => ({
-      kind: "payment",
-      id: p.id,
-      label: `Payment${p.invoice_number ? ` on Invoice #${p.invoice_number}` : ""}`,
-      date: p.received_date ?? p.created_at,
-      amount: p.amount,
-      invoiceNum: p.invoice_number,
-    })),
-  ].sort((a, b) => b.date.localeCompare(a.date));
+  const rows = buildClientLedgerRows(invoices, payments);
 
   return (
     <Card title={`Invoices${invoices.length > 0 ? ` (${invoices.length})` : ""}`}>

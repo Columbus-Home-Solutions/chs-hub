@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clientInvoiceBalance } from "../frontend/src/views/clients/client-balance.ts";
+import { buildClientLedgerRows, clientInvoiceBalance } from "../frontend/src/views/clients/client-balance.ts";
 
 describe("client page balance", () => {
   it("does not count a void invoice, so Ian Hawk's $600 void is not owed", () => {
@@ -26,5 +26,48 @@ describe("client page balance", () => {
     expect(balance).toBe(850);
     expect(writtenOff).toBe(1300);
     expect(collected).toBe(0);
+  });
+
+  it("renders an imported invoice with a null invoice number and null optional fields", () => {
+    const rows = buildClientLedgerRows(
+      [
+        {
+          id: "imported",
+          invoice_number: null,
+          title: null,
+          total: 1200,
+          total_due: null,
+          amount: null,
+          status: "past_due",
+          due_date: null,
+          created_at: null,
+        },
+        {
+          id: "written-off",
+          invoice_number: null,
+          title: null,
+          total: 400,
+          total_due: null,
+          amount: null,
+          status: "bad_debt",
+          due_date: null,
+          created_at: null,
+        },
+      ],
+      [
+        {
+          id: "pay",
+          invoice_id: "imported",
+          amount: null,
+          received_date: null,
+          created_at: null,
+          invoice_number: null,
+        },
+      ],
+    );
+    expect(rows.map((row) => row.kind)).toEqual(["invoice", "invoice", "writeoff", "payment"]);
+    expect(rows[0]).toMatchObject({ label: "Invoice", date: null, amount: 1200, status: "past_due" });
+    expect(rows.find((row) => row.kind === "writeoff")).toMatchObject({ date: null, amount: 400 });
+    expect(rows.find((row) => row.kind === "payment")).toMatchObject({ label: "Payment", date: null, amount: 0 });
   });
 });

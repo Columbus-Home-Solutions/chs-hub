@@ -37,6 +37,7 @@ import {
 import { createOffSessionPaymentIntent, getStripeConfig } from "../lib/stripe.js";
 import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 import { checkAndFireLienWaiver } from "../lib/completion-triggers.js";
+import { recordPayment } from "./payments.js";
 import { notTestClientExists } from "../lib/non-test-client.js";
 import {
   HISTORICAL_NOTE_MARKER,

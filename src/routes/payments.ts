@@ -21,6 +21,7 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerPaymentReceived } from "../lib/notification-engine.js";
 import { recomputeInvoiceStatus, round2 } from "../lib/invoicing.js";
+import { checkAndFireLienWaiver } from "../lib/completion-triggers.js";
 import { JOBBER_QUIET_SEND_MESSAGE, isJobberImportQuiet } from "../lib/jobber-board.js";
 
 const PAYMENT_ROLES = ["owner", "office_admin"] as const;

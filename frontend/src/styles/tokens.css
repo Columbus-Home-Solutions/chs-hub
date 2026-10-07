@@ -71,6 +71,8 @@
   --job-punch-list: #f97316;
   --job-complete: #22c55e;
   --job-closed: #64748b;
+  /* Alias of --color-error. No new hex. Outline badges stay distinct from the filled past-due badge and the solid error toast. */
+  --job-action-required: var(--color-error);
 
   /* ─── Schedule entry types ─── */
   --type-proposal-review: #ec4899;

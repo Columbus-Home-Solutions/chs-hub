@@ -801,12 +801,20 @@
 .pipeline-col--punch_list { --col-accent: var(--job-punch-list); }
 .pipeline-col--complete { --col-accent: var(--job-complete); }
 .pipeline-col--closed { --col-accent: var(--job-closed); }
+.pipeline-col--action_required { --col-accent: var(--job-action-required); }
+.pipeline-col--action_required .pipeline-col__title { color: var(--job-action-required); }
+.pipeline-col--action_required .er-card {
+  border-color: var(--color-error-border);
+  box-shadow: inset 3px 0 0 var(--job-action-required);
+}
+.pipeline-col--action_required .er-card:hover { border-color: var(--color-error); }
 .job-status--deposit_paid { --col-accent: var(--job-deposit-paid); }
 .job-status--scheduled { --col-accent: var(--job-scheduled); }
 .job-status--in_progress { --col-accent: var(--job-in-progress); }
 .job-status--punch_list { --col-accent: var(--job-punch-list); }
 .job-status--complete { --col-accent: var(--job-complete); }
 .job-status--closed { --col-accent: var(--job-closed); }
+.job-status--action_required { --col-accent: var(--job-action-required); }
 
 .er-card__value {
   font-family: var(--font-mono);

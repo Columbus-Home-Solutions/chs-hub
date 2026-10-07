@@ -26,6 +26,7 @@
 
 import type { Env } from "../env.js";
 import { boardJobWhere, jobberQuietSendBlock } from "../lib/jobber-board.js";
+import { clientDisplayName, groupJobPipeline } from "../../shared/job-pipeline.js";
 import { nativeJobSourceWhere } from "../lib/native-jobs.js";
 import { guard } from "../middleware/guard.js";
 import { triggerJobStatusChanged } from "../lib/wc/triggers.js";
@@ -127,6 +128,8 @@ interface JobListRow {
   status: string | null;
   client_id: string | null;
   client_name: string | null;
+  client_first_name: string | null;
+  client_last_name: string | null;
   billing_model: string | null;
   job_type: string | null;
   job_type_detail: string | null;
@@ -156,7 +159,8 @@ interface JobListRow {
 const JOB_LIST_WHERE = `${boardJobWhere("j")} AND (${NON_TEST_CLIENT})`;
 
 const JOB_SELECT = `
-  SELECT j.id, j.job_number, j.title, j.status, j.client_id, c.name AS client_name,
+  SELECT j.id, j.job_number, j.title, j.status, j.client_id,
+         c.name AS client_name, c.first_name AS client_first_name, c.last_name AS client_last_name,
          j.billing_model, j.job_type, j.job_type_detail, j.lead_source, j.source,
          j.property_address, j.property_city, j.property_state, j.property_zip,
          j.contract_total, j.deposit_amount, j.deposit_paid,
@@ -190,7 +194,7 @@ function shapeJobCard(r: JobListRow) {
     title: r.title,
     status: r.status,
     client_id: r.client_id,
-    client_name: r.client_name,
+    client_name: clientDisplayName(r.client_name, r.client_first_name, r.client_last_name),
     billing_model: r.billing_model,
     job_type: r.job_type,
     job_type_detail: r.job_type_detail ?? null,
@@ -263,26 +267,13 @@ export async function handleJobPipeline(env: Env): Promise<Response> {
   const rows = (await env.DB.prepare(`${JOB_SELECT} ORDER BY j.created_at DESC`).all<JobListRow>())
     .results ?? [];
   const cards = rows.map(shapeJobCard);
-
-  const pipeline: Record<string, ReturnType<typeof shapeJobCard>[]> = {};
-  const counts: Record<string, number> = {};
-  for (const s of JOB_STATUSES) {
-    pipeline[s] = [];
-    counts[s] = 0;
-  }
-  for (const card of cards) {
-    const s = String(card.status ?? "");
-    if (s in pipeline) {
-      pipeline[s].push(card);
-      counts[s]++;
-    }
-  }
+  const grouped = groupJobPipeline(cards);
 
   return json({
     as_of: new Date().toISOString(),
-    statuses: JOB_STATUSES,
-    counts,
-    pipeline,
+    statuses: grouped.statuses,
+    counts: grouped.counts,
+    pipeline: grouped.pipeline,
   });
 }
 

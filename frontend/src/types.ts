@@ -1,3 +1,5 @@
+import { BOARD_PIPELINE_STATUSES, type BoardPipelineStatus } from "@chs/shared/job-pipeline";
+
 export interface Client {
   id: string;
   name: string;
@@ -619,23 +621,24 @@ export const REVIEW_SOURCES = ["google", "facebook", "manual"];
 
 // ─── Jobs & Tasks (Sprint 6) ─────────────────────────────────────────────────
 
-export type JobStatus =
-  | "deposit_paid"
-  | "scheduled"
-  | "in_progress"
-  | "punch_list"
-  | "complete"
-  | "closed";
+export type JobStatus = BoardPipelineStatus;
+
+const JOB_STAGE_LABELS: Record<JobStatus, string> = {
+  action_required: "Action Required",
+  unscheduled: "Unscheduled",
+  deposit_paid: "Deposit Paid",
+  scheduled: "Scheduled",
+  in_progress: "In Progress",
+  punch_list: "Punch List",
+  complete: "Complete",
+  closed: "Closed",
+};
 
 // Pipeline columns, left → right (matches the API status order).
-export const JOB_STAGES: { key: JobStatus; label: string }[] = [
-  { key: "deposit_paid", label: "Deposit Paid" },
-  { key: "scheduled", label: "Scheduled" },
-  { key: "in_progress", label: "In Progress" },
-  { key: "punch_list", label: "Punch List" },
-  { key: "complete", label: "Complete" },
-  { key: "closed", label: "Closed" },
-];
+export const JOB_STAGES: { key: JobStatus; label: string }[] = BOARD_PIPELINE_STATUSES.map((key) => ({
+  key,
+  label: JOB_STAGE_LABELS[key],
+}));
 
 // Forward-only, plus the two allowed backward exceptions (Job Management §2).
 export const JOB_BACKWARD_EXCEPTIONS: Record<string, JobStatus> = {

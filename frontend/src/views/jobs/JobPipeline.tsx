@@ -11,6 +11,7 @@ import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { loadStoredView, storeView, truncate, useClientSort } from "../../lib/list-view";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
+import { MOVABLE_JOB_STATUSES } from "@chs/shared/job-pipeline";
 import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
@@ -62,6 +63,8 @@ const HEALTH_DOT_COLORS: Record<HealthColor, string> = {
 
 // Human-readable label for each status value as it appears in the new sidebar nav.
 const STATUS_LABELS: Record<string, string> = {
+  action_required: "Action Required",
+  unscheduled: "Unscheduled",
   deposit_paid: "Needs Scheduling",
   scheduled: "Scheduled",
   in_progress: "In Progress",
@@ -75,9 +78,10 @@ const STATUS_LABELS: Record<string, string> = {
 // (no error toast on an obviously-illegal drop); the API is the real gate.
 function canMove(from: JobStatus, to: JobStatus): boolean {
   if (from === to) return false;
-  const order = JOB_STAGES.map((s) => s.key);
+  const order: readonly string[] = MOVABLE_JOB_STATUSES;
   const fi = order.indexOf(from);
   const ti = order.indexOf(to);
+  if (fi < 0 || ti < 0) return false;
   if (ti > fi) return true;
   return JOB_BACKWARD_EXCEPTIONS[from] === to;
 }

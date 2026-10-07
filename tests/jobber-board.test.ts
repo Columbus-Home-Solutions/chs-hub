@@ -7,6 +7,11 @@ import {
   boardJobWhere,
   isJobberImportQuiet,
 } from "../src/lib/jobber-board.js";
+import {
+  BOARD_PIPELINE_STATUSES,
+  clientDisplayName,
+  groupJobPipeline,
+} from "../shared/job-pipeline.js";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
@@ -30,6 +35,38 @@ describe("jobber board visibility", () => {
       "deposit_paid",
       "action_required",
     ]);
+  });
+
+  it("keeps every live status on the list, Kanban, and search", () => {
+    for (const status of LIVE_JOBBER_STATUSES) {
+      expect(BOARD_PIPELINE_STATUSES).toContain(status);
+    }
+    const grouped = groupJobPipeline([
+      { id: "alicia", status: "in_progress" },
+      { id: "abdul", status: "unscheduled" },
+      { id: "jon", status: "action_required" },
+      { id: "archived", status: "archived" },
+      { id: "late", status: "late" },
+    ]);
+    expect(grouped.counts.in_progress).toBe(1);
+    expect(grouped.counts.unscheduled).toBe(1);
+    expect(grouped.counts.action_required).toBe(1);
+    expect(grouped.pipeline.unscheduled.map((job) => job.id)).toEqual(["abdul"]);
+    expect(grouped.pipeline.action_required.map((job) => job.id)).toEqual(["jon"]);
+    const shown = BOARD_PIPELINE_STATUSES.flatMap((status) => grouped.pipeline[status]);
+    expect(shown.map((job) => job.id)).toEqual(["jon", "abdul", "alicia"]);
+  });
+
+  it("builds the list name from the client joined on jobs.client_id", () => {
+    expect(clientDisplayName(null, "Alicia", "Johnson")).toBe("Alicia Johnson");
+    expect(clientDisplayName("  ", "Tony", "Amato")).toBe("Tony Amato");
+    expect(clientDisplayName("Connie Schenk", "Connie", "Schenk")).toBe("Connie Schenk");
+    expect(clientDisplayName(null, "Guardian", null)).toBe("Guardian");
+    expect(clientDisplayName(null, null, null)).toBeNull();
+    const jobsApi = read("../src/routes/jobs-api.ts");
+    expect(jobsApi).toContain("LEFT JOIN clients c ON c.id = j.client_id");
+    expect(jobsApi).toContain("c.first_name AS client_first_name");
+    expect(jobsApi).toContain("clientDisplayName(r.client_name, r.client_first_name, r.client_last_name)");
   });
 });
 

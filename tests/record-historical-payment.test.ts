@@ -2,6 +2,9 @@
  * Executes POST /api/invoices/:id/record-historical-payment
  * (handleInvoiceHistoricalPayment → recordPayment when additional > 0).
  * In-memory D1, foreign keys on.
+ *
+ * Amounts here are invented fixtures (invoice 133 is $1,500) so the method
+ * matrix stays small. Production totals are in production-historical-replay.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Miniflare } from "miniflare";

@@ -31,6 +31,9 @@ import type { Env } from "../env.js";
 export const QBO_SERVICE = "quickbooks";
 export const QBO_SCOPE = "com.intuit.quickbooks.accounting";
 
+/** ISO time of the last successful OAuth refresh. Not the access-token expiry. */
+export const SETTING_QBO_LAST_TOKEN_REFRESH = "qbo_last_token_refresh";
+
 const AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
@@ -577,14 +580,36 @@ async function doRefresh(env: Env, refreshToken: string): Promise<string> {
   }
 
   // ATOMIC: persist the (possibly rotated) refresh token + new access token in
-  // a single write BEFORE returning the token to any caller.
+  // a single write BEFORE returning the token to any caller. Realm and
+  // configuration are omitted so environment and realm id stay as stored.
+  const expiry = expiryIso(resp.expires_in);
   await writeTokens(env, {
     accessToken: resp.access_token,
     refreshToken: resp.refresh_token,
-    expiry: expiryIso(resp.expires_in),
+    expiry,
     status: "connected",
   });
+  try {
+    await recordLastTokenRefresh(env);
+  } catch (err) {
+    console.error(`[qbo] last_token_refresh stamp failed: ${(err as Error).message}`);
+  }
+  console.log(
+    `[qbo] token refresh ok expiry=${expiry} access_len=${resp.access_token.length} refresh_len=${resp.refresh_token.length}`,
+  );
   return resp.access_token;
+}
+
+async function recordLastTokenRefresh(env: Env): Promise<void> {
+  const at = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO system_settings (key, value, value_type, category, label, description, updated_at)
+     VALUES (?, ?, 'string', 'integrations', 'QuickBooks last token refresh',
+             'ISO time of the last successful OAuth refresh. Written by token refresh, not edited by hand.', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  )
+    .bind(SETTING_QBO_LAST_TOKEN_REFRESH, at, at)
+    .run();
 }
 
 // ─── Low-level token endpoint call ─────────────────────────────────────────

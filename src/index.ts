@@ -30,6 +30,7 @@ import { replayDeadLetters } from "./lib/ops/dlq.js";
 import { syncWorkbook } from "./lib/wc/sync.js";
 import { runWcSpreadsheetSync, getWcStatus } from "./services/wc-spreadsheet.js";
 import { runQboSweep, getQboStatus } from "./lib/qbo-sync.js";
+import { runQboTokenKeepalive } from "./lib/qbo-token-keepalive.js";
 import {
   handleIntegrationsList,
   handleImageGenStatus,
@@ -44,6 +45,7 @@ import {
   handleQboDefaultCustomerPut,
   handleQboStatus,
   handleQboSync,
+  handleQboRefresh,
 } from "./routes/integrations.js";
 import {
   handleWcSpreadsheetSync,
@@ -1229,6 +1231,9 @@ export default {
     }
     if (url.pathname === "/api/quickbooks/sync" && request.method === "POST") {
       return handleQboSync(request, env);
+    }
+    if (url.pathname === "/api/quickbooks/refresh-token" && request.method === "POST") {
+      return handleQboRefresh(request, env);
     }
 
     // ── WC Spreadsheet (Sprint 14 rebuild) ───────────────────────────
@@ -3020,6 +3025,19 @@ async function runInvoiceBilling(env: Env): Promise<void> {
 // disconnected/error connection is a no-op; per-record failures land in the
 // qbo_sync DLQ and the next sweep retries.
 async function runQboSyncSweep(env: Env): Promise<void> {
+  // Keepalive first, even when every push gate is off, so the sweep sees a
+  // fresh access token and the in-isolate refresh lock prevents a second call.
+  try {
+    const keep = await runQboTokenKeepalive(env);
+    if (keep.ran) {
+      console.log(
+        `[cron 15 7 * * *] qbo_token_keepalive: ok=${keep.ok} notified=${keep.notified ?? false} ` +
+          `expiry=${keep.token_expiry ?? ""} access_len=${keep.access_token_len ?? 0} refresh_len=${keep.refresh_token_len ?? 0}`,
+      );
+    }
+  } catch (err) {
+    console.error(`[cron 15 7 * * *] qbo_token_keepalive failed: ${(err as Error).message}`);
+  }
   try {
     const r = await runQboSweep(env);
     if (!r.ran) {

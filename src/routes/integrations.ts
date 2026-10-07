@@ -11,6 +11,7 @@
  *   POST /api/integrations/quickbooks/mapping           (O) persist client/vendor/account map
  *   GET  /api/quickbooks/status                         (O)
  *   POST /api/quickbooks/sync                           (O) manual sweep
+ *   POST /api/quickbooks/refresh-token                  (O) refresh OAuth token now
  *
  * Owner-only. Token lifecycle lives in src/lib/qbo-auth.ts; push/pull in
  * src/lib/qbo-sync.ts. QBO stays sandbox this sprint.
@@ -49,6 +50,7 @@ import {
   suggestClientMatches,
   suggestVendorMatches,
 } from "../lib/qbo-sync.js";
+import { runQboTokenKeepalive } from "../lib/qbo-token-keepalive.js";
 import { ensureImageGenModelSetting, resolveGoogleServiceAccount } from "../lib/image-gen.js";
 import { getSetting, SETTING_IMAGE_GEN_ENABLED } from "../lib/social.js";
 import { GCAL_SERVICE } from "../lib/google-calendar-auth.js";
@@ -446,6 +448,25 @@ export async function handleQboSync(request: Request, env: Env): Promise<Respons
   if (denied) return denied;
   const result = await runQboSweep(env);
   return json(result, { status: result.ran ? 200 : 409 });
+}
+
+export async function handleQboRefresh(request: Request, env: Env): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  const result = await runQboTokenKeepalive(env, { force: true });
+  if (!result.ran) {
+    return json({ error: "QuickBooks is not connected" }, { status: 409 });
+  }
+  if (!result.ok) {
+    return json({ error: result.error ?? "QuickBooks token refresh failed" }, { status: 502 });
+  }
+  return json({
+    ok: true,
+    token_expiry: result.token_expiry ?? null,
+    last_token_refresh: result.last_token_refresh ?? null,
+    access_token_len: result.access_token_len ?? 0,
+    refresh_token_len: result.refresh_token_len ?? 0,
+  });
 }
 
 // ─── Generic per-service management (Sprint 17) ───────────────────────────────

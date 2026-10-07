@@ -19,6 +19,8 @@ interface QboStatus {
   company_name: string | null;
   last_sync: string | null;
   last_error: string | null;
+  token_expiry: string | null;
+  last_token_refresh: string | null;
   counts: {
     invoices: { synced: number; pending: number };
     payments: { synced: number; pending: number };
@@ -40,19 +42,23 @@ export function Integrations(_props: RoutableProps) {
   const [paymentSyncBusy, setPaymentSyncBusy] = useState(false);
   const [invoiceSyncEnabled, setInvoiceSyncEnabled] = useState(false);
   const [invoiceSyncBusy, setInvoiceSyncBusy] = useState(false);
+  const [expenseSyncEnabled, setExpenseSyncEnabled] = useState(false);
+  const [expenseSyncBusy, setExpenseSyncBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [qbo, settings] = await Promise.all([
-        api.get<QboStatus>("/api/quickbooks/status"),
-        api.get<{ settings: Array<{ key: string; value: string }> }>("/api/settings"),
-      ]);
+      // Status seeds the expense gate row. Read settings after that so the
+      // switch reflects the stored value instead of racing an empty key.
+      const qbo = await api.get<QboStatus>("/api/quickbooks/status");
+      const settings = await api.get<{ settings: Array<{ key: string; value: string }> }>("/api/settings");
       setStatus(qbo);
       const payFlag = settings.settings?.find((s) => s.key === "qbo_payment_sync_enabled");
       setPaymentSyncEnabled((payFlag?.value ?? "false").toLowerCase() === "true");
       const invFlag = settings.settings?.find((s) => s.key === "qbo_invoice_sync_enabled");
       setInvoiceSyncEnabled((invFlag?.value ?? "false").toLowerCase() === "true");
+      const expFlag = settings.settings?.find((s) => s.key === "qbo_expense_sync_enabled");
+      setExpenseSyncEnabled((expFlag?.value ?? "false").toLowerCase() === "true");
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -108,6 +114,44 @@ export function Integrations(_props: RoutableProps) {
       toast.push("error", errMsg(e));
     } finally {
       setInvoiceSyncBusy(false);
+    }
+  };
+
+  const toggleExpenseSync = async () => {
+    const next = !expenseSyncEnabled;
+    if (
+      next &&
+      !confirm(
+        "Enable pushing expenses to QuickBooks?\n\nOnly turn this on once real CHS jobs (not Jobber history) are flowing. Historical imports must stay out of QBO.",
+      )
+    ) {
+      return;
+    }
+    setExpenseSyncBusy(true);
+    try {
+      await api.put(`/api/settings/${encodeURIComponent("qbo_expense_sync_enabled")}`, {
+        value: next,
+      });
+      setExpenseSyncEnabled(next);
+      toast.push("success", next ? "Expense push enabled" : "Expense push disabled");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setExpenseSyncBusy(false);
+    }
+  };
+
+  const refreshToken = async () => {
+    setBusy("refresh");
+    try {
+      await api.post("/api/quickbooks/refresh-token");
+      toast.push("success", "QuickBooks connection refreshed");
+      await load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+      await load();
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -229,9 +273,12 @@ export function Integrations(_props: RoutableProps) {
           {status.status === "error" && (
             <div class="alert alert--error" style={{ marginBottom: "var(--space-md)" }}>
               <strong>Reconnect required.</strong> {status.last_error ?? "The QuickBooks connection needs re-authorization."}
-              <div class="mt-sm">
+              <div class="mt-sm flex gap-sm">
                 <Button size="sm" variant="primary" disabled={busy !== null} onClick={connect}>
                   Reconnect QuickBooks
+                </Button>
+                <Button size="sm" variant="secondary" disabled={busy !== null} onClick={refreshToken}>
+                  {busy === "refresh" ? "Refreshing…" : "Refresh QuickBooks connection now"}
                 </Button>
               </div>
             </div>
@@ -255,6 +302,31 @@ export function Integrations(_props: RoutableProps) {
                 <span class="kv__label">Last sweep</span>
                 <span class="kv__value">{status.last_sync ?? "never"}</span>
               </div>
+              <div class="kv__row">
+                <span class="kv__label">Access token expires</span>
+                <span class="kv__value">{status.token_expiry ?? "unknown"}</span>
+              </div>
+              <div class="kv__row">
+                <span class="kv__label">Last token refresh</span>
+                <span class="kv__value">{status.last_token_refresh ?? "never"}</span>
+              </div>
+            </div>
+          )}
+
+          {status.status === "error" && (
+            <div class="kv" style={{ marginBottom: "var(--space-md)" }}>
+              <div class="kv__row">
+                <span class="kv__label">Environment</span>
+                <span class="kv__value">{status.environment ?? "—"}</span>
+              </div>
+              <div class="kv__row">
+                <span class="kv__label">Access token expires</span>
+                <span class="kv__value">{status.token_expiry ?? "unknown"}</span>
+              </div>
+              <div class="kv__row">
+                <span class="kv__label">Last token refresh</span>
+                <span class="kv__value">{status.last_token_refresh ?? "never"}</span>
+              </div>
             </div>
           )}
 
@@ -271,6 +343,9 @@ export function Integrations(_props: RoutableProps) {
                 </Button>
                 <Button variant="secondary" disabled={busy !== null} onClick={() => setMappingOpen(true)}>
                   Category Mapping
+                </Button>
+                <Button variant="secondary" disabled={busy !== null} onClick={refreshToken}>
+                  {busy === "refresh" ? "Refreshing…" : "Refresh QuickBooks connection now"}
                 </Button>
                 <Button variant="primary" disabled={busy !== null} onClick={syncNow}>
                   {busy === "sync" ? "Syncing…" : "Sync now"}
@@ -320,6 +395,24 @@ export function Integrations(_props: RoutableProps) {
                 <span class="text--muted" style={{ display: "block", fontSize: "var(--text-sm)" }}>
                   Keep off until real jobs are running through CHS. Prevents historical Jobber
                   imports from inflating QBO income.
+                </span>
+              </span>
+            </label>
+            <label
+              class="flex items-center gap-sm"
+              style={{ cursor: "pointer", marginTop: "var(--space-sm)" }}
+            >
+              <input
+                type="checkbox"
+                checked={expenseSyncEnabled}
+                disabled={expenseSyncBusy}
+                onChange={() => void toggleExpenseSync()}
+              />
+              <span>
+                <strong>Push expenses to QuickBooks</strong>
+                <span class="text--muted" style={{ display: "block", fontSize: "var(--text-sm)" }}>
+                  Keep off until real jobs are running through CHS. Jobber-imported expenses are
+                  permanently excluded regardless of this toggle.
                 </span>
               </span>
             </label>

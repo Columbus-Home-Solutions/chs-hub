@@ -27,6 +27,7 @@ import {
   tokenShape,
   QboNotConnectedError,
   QboReconnectError,
+  SETTING_QBO_LAST_TOKEN_REFRESH,
   type QboConfiguration,
   type QboConnection,
 } from "./qbo-auth.js";
@@ -60,6 +61,23 @@ export async function isQboInvoiceSyncEnabled(env: Env): Promise<boolean> {
     .bind(SETTING_QBO_INVOICE_SYNC_ENABLED)
     .first<{ value: string | null }>();
   return (row?.value ?? "").trim().toLowerCase() === "true";
+}
+
+/**
+ * Plant the expense push gate as false when the row is missing so Settings can
+ * show the switch and PUT /api/settings/:key can update it. Never overwrites
+ * a value that is already true or false.
+ */
+export async function ensureQboExpenseSyncSetting(env: Env): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO system_settings (key, value, value_type, category, label, description, updated_at)
+     VALUES (?, 'false', 'boolean', 'integrations', 'Push expenses to QuickBooks',
+             'When off, the QBO nightly sweep skips expense pushes. Keep off until real CHS jobs are live.',
+             datetime('now'))
+     ON CONFLICT(key) DO NOTHING`,
+  )
+    .bind(SETTING_QBO_EXPENSE_SYNC_ENABLED)
+    .run();
 }
 
 /** True only when system_settings explicitly stores "true". Missing/false → off. */
@@ -1446,6 +1464,8 @@ export interface QboStatus {
   company_name: string | null;
   last_sync: string | null;
   last_error: string | null;
+  token_expiry: string | null;
+  last_token_refresh: string | null;
   counts: {
     invoices: { synced: number; pending: number };
     payments: { synced: number; pending: number };
@@ -1455,7 +1475,11 @@ export interface QboStatus {
 }
 
 export async function getQboStatus(env: Env): Promise<QboStatus> {
+  await ensureQboExpenseSyncSetting(env);
   const conn = await loadConnection(env);
+  const refreshRow = await env.DB.prepare(`SELECT value FROM system_settings WHERE key = ?`)
+    .bind(SETTING_QBO_LAST_TOKEN_REFRESH)
+    .first<{ value: string | null }>();
   const counts = {
     invoices: await pendSynced(env, "invoices", "qbo_invoice_id"),
     payments: await pendSynced(env, "payments", "qbo_payment_id"),
@@ -1470,6 +1494,8 @@ export async function getQboStatus(env: Env): Promise<QboStatus> {
     company_name: (conn?.configuration.company_name as string) ?? null,
     last_sync: conn?.last_sync ?? null,
     last_error: conn?.last_error ?? null,
+    token_expiry: conn?.token_expiry ?? null,
+    last_token_refresh: (refreshRow?.value ?? "").trim() || null,
     counts,
   };
 }

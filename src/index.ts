@@ -212,6 +212,22 @@ import {
   handleLaborWorkers,
 } from "./routes/labor.js";
 import {
+  handleCheckinCounts,
+  handleCheckinDelete,
+  handleCheckinGet,
+  handleCheckinLink,
+  handleCheckinManifest,
+  handleCheckinPost,
+  handleWorkerLanguage,
+  handleCheckinPunch,
+  handleCheckinQr,
+  handleCheckinSchedule,
+  handleLaborConfirm,
+  handleLaborPending,
+  handleLaborReject,
+  handleTextUpdates,
+} from "./routes/labor-checkin.js";
+import {
   handleTimeEntryClockIn,
   handleTimeEntryUpdate,
   handleJobTimeEntries,
@@ -927,6 +943,36 @@ export default {
     const subItemDone = url.pathname.match(/^\/api\/sub\/([^/]+)\/items\/([^/]+)\/done$/);
     if (subItemDone && request.method === "PUT") {
       return handleSubItemDone(env, request, decodeURIComponent(subItemDone[1]), decodeURIComponent(subItemDone[2]));
+    }
+    const subCheckin = url.pathname.match(/^\/api\/sub\/([^/]+)\/checkin(?:\/([^/]+))?$/);
+    if (subCheckin && request.method === "GET" && !subCheckin[2]) {
+      return handleCheckinGet(env, decodeURIComponent(subCheckin[1]));
+    }
+    if (subCheckin && request.method === "POST" && !subCheckin[2]) {
+      return handleCheckinPost(env, decodeURIComponent(subCheckin[1]), request);
+    }
+    if (subCheckin && request.method === "DELETE" && subCheckin[2]) {
+      return handleCheckinDelete(env, decodeURIComponent(subCheckin[1]), decodeURIComponent(subCheckin[2]));
+    }
+    const subLanguage = url.pathname.match(/^\/api\/sub\/([^/]+)\/language$/);
+    if (subLanguage && request.method === "PUT") {
+      return handleWorkerLanguage(env, decodeURIComponent(subLanguage[1]), request);
+    }
+    const subSchedule = url.pathname.match(/^\/api\/sub\/([^/]+)\/schedule$/);
+    if (subSchedule && request.method === "GET") {
+      return handleCheckinSchedule(env, decodeURIComponent(subSchedule[1]));
+    }
+    const subPunch = url.pathname.match(/^\/api\/sub\/([^/]+)\/punch$/);
+    if (subPunch && request.method === "GET") {
+      return handleCheckinPunch(env, decodeURIComponent(subPunch[1]));
+    }
+    const subCounts = url.pathname.match(/^\/api\/sub\/([^/]+)\/counts$/);
+    if (subCounts && request.method === "GET") {
+      return handleCheckinCounts(env, decodeURIComponent(subCounts[1]));
+    }
+    const subManifest = url.pathname.match(/^\/api\/sub\/([^/]+)\/manifest\.webmanifest$/);
+    if (subManifest && request.method === "GET") {
+      return handleCheckinManifest(env, decodeURIComponent(subManifest[1]));
     }
     const subGet = url.pathname.match(/^\/api\/sub\/([^/]+)$/);
     if (subGet && request.method === "GET") {
@@ -1992,6 +2038,33 @@ export default {
       return handleActiveTimeEntries(env, url);
     }
     // ── Labor tracker (day-rate) ─────────────────────────────────────
+    if (url.pathname === "/api/labor/pending" && request.method === "GET") {
+      return handleLaborPending(request, env);
+    }
+    if (url.pathname === "/api/labor/pending/confirm" && request.method === "POST") {
+      return handleLaborConfirm(request, env);
+    }
+    if (url.pathname === "/api/labor/pending/reject" && request.method === "POST") {
+      return handleLaborReject(request, env);
+    }
+    const laborCheckinLink = url.pathname.match(/^\/api\/labor\/workers\/([^/]+)\/checkin-link$/);
+    if (laborCheckinLink && request.method === "GET") {
+      return handleCheckinLink(request, env, decodeURIComponent(laborCheckinLink[1]), "get");
+    }
+    if (laborCheckinLink && request.method === "POST") {
+      return handleCheckinLink(request, env, decodeURIComponent(laborCheckinLink[1]), "regenerate");
+    }
+    if (laborCheckinLink && request.method === "DELETE") {
+      return handleCheckinLink(request, env, decodeURIComponent(laborCheckinLink[1]), "disable");
+    }
+    const laborCheckinQr = url.pathname.match(/^\/api\/labor\/workers\/([^/]+)\/checkin-qr$/);
+    if (laborCheckinQr && request.method === "GET") {
+      return handleCheckinQr(request, env, decodeURIComponent(laborCheckinQr[1]));
+    }
+    const laborTexts = url.pathname.match(/^\/api\/labor\/workers\/([^/]+)\/text-updates$/);
+    if (laborTexts && request.method === "PUT") {
+      return handleTextUpdates(request, env, decodeURIComponent(laborTexts[1]));
+    }
     if (url.pathname === "/api/labor/workers" && request.method === "GET") {
       return handleLaborWorkers(request, env);
     }

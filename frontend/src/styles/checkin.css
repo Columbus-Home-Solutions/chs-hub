@@ -1,0 +1,30 @@
+.checkin {
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 3rem;
+  font-family: "DM Sans", sans-serif;
+}
+.checkin h1 { font-size: 1.6rem; margin: 0.5rem 0; }
+.checkin__lang { display: flex; justify-content: flex-end; gap: 0.4rem; align-items: center; }
+.checkin__lang button { background: none; border: 0; padding: 0.2rem; font: inherit; color: #5c564c; }
+.checkin__lang button[aria-current="true"] { color: #1f3a2e; font-weight: 700; text-decoration: underline; }
+.checkin__logo { height: 40px; }
+.checkin__lead { color: #5c564c; }
+.checkin__label { display: flex; flex-direction: column; gap: 0.35rem; margin: 0.75rem 0; font-weight: 600; }
+.checkin select, .checkin__actions button, .checkin__tiles a {
+  font: inherit;
+  border-radius: 12px;
+  border: 1px solid #e4dcc8;
+  padding: 0.9rem 1rem;
+  background: #fff;
+}
+.checkin__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.checkin__actions button { background: #1f3a2e; color: #fff; font-size: 1.05rem; }
+.checkin__tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 1.5rem; }
+.checkin__tiles a { text-decoration: none; color: inherit; font-weight: 600; }
+.checkin__dot { display: inline-block; margin-left: 0.4rem; background: #c45c26; color: #fff; border-radius: 999px; padding: 0.1rem 0.45rem; font-size: 0.75rem; }
+.checkin__tip { background: #fff7e8; border-radius: 12px; padding: 0.75rem; margin-top: 1rem; }
+.checkin__recent { list-style: none; padding: 0; }
+.checkin__recent li { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0; border-bottom: 1px solid #eee; }
+.labor-chip--pending { border: 1px dashed #1f3a2e; background: transparent !important; }
+.labor-pending { margin-bottom: 1rem; }

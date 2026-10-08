@@ -192,6 +192,7 @@ export interface Subcontractor {
   /** Project-priced sub vs day-rate labor — same table, filtered in People nav. */
   worker_type?: "subcontractor" | "day_rate_labor" | null;
   day_rate?: number | null;
+  preferred_language?: "en" | "es" | null;
   created_at: string | null;
   updated_at: string | null;
 }

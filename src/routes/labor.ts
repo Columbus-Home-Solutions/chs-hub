@@ -244,13 +244,18 @@ interface StoredEntry {
   job_number: number | null;
   title: string | null;
   property_address: string | null;
+  status?: string | null;
+  entered_via?: string | null;
+  submitted_at?: string | null;
 }
 
 /** Non-removed days. Soft-deleted rows stay for the dispute ledger and are left out of totals. */
 const ACTIVE_ENTRY = "le.deleted_at IS NULL";
+/** Pending check-ins are not money until Tony confirms. Missing status counts as confirmed. */
+const CONFIRMED_ENTRY = "COALESCE(le.status, 'confirmed') = 'confirmed'";
 
 const ENTRY_SELECT = `le.id, le.sub_id, le.job_id, le.work_date, le.days, le.day_rate, le.notes,
-  le.batch_id, le.expense_id,
+  le.batch_id, le.expense_id, le.status, le.entered_via, le.submitted_at,
   s.company_name, s.company, s.contact_name, s.primary_contact, s.day_rate AS worker_day_rate,
   j.job_number, j.title, j.property_address`;
 
@@ -277,6 +282,10 @@ export const OVERLAP_EXPENSE_SQL = `SELECT id, sub_id, job_id, amount, expense_t
         AND COALESCE(incurred_date, substr(incurred_at, 1, 10)) <= ?
       ORDER BY created_at DESC`;
 
+function countsAsLabor(entry: { status?: string | null }): boolean {
+  return (entry.status ?? "confirmed") === "confirmed";
+}
+
 function shapeEntry(row: StoredEntry) {
   const paid = Boolean(row.batch_id || row.expense_id);
   return {
@@ -289,6 +298,9 @@ function shapeEntry(row: StoredEntry) {
     line_total: lineTotal(row.days, row.day_rate),
     notes: row.notes,
     paid,
+    status: row.status ?? "confirmed",
+    entered_via: row.entered_via ?? null,
+    submitted_at: row.submitted_at ?? null,
     batch_id: row.batch_id,
     expense_id: row.expense_id,
     worker_name: workerName(row),
@@ -409,11 +421,13 @@ async function buildWeek(env: Env, anyDate: string) {
   }
 
   const workers = [...byWorker.entries()].map(([subId, entries]) => {
-    const days = round2(entries.reduce((sum, entry) => sum + entry.days, 0));
-    const total = round2(entries.reduce((sum, entry) => sum + entry.line_total, 0));
+    const counted = entries.filter(countsAsLabor);
+    const days = round2(counted.reduce((sum, entry) => sum + entry.days, 0));
+    const total = round2(counted.reduce((sum, entry) => sum + entry.line_total, 0));
     const accrued = round2(
-      entries.filter((entry) => !entry.expense_id).reduce((sum, entry) => sum + entry.line_total, 0),
+      counted.filter((entry) => !entry.expense_id).reduce((sum, entry) => sum + entry.line_total, 0),
     );
+    const pending = entries.filter((entry) => entry.status === "pending").length;
     return {
       sub_id: subId,
       name: entries[0]?.worker_name ?? "Labor",
@@ -421,6 +435,7 @@ async function buildWeek(env: Env, anyDate: string) {
       days,
       total,
       accrued,
+      pending,
       entries,
     };
   });
@@ -430,7 +445,7 @@ async function buildWeek(env: Env, anyDate: string) {
     { sub_id: string; job_id: string; name: string; job_label: string; days: number; total: number }
   >();
   for (const row of rows) {
-    if (row.expense_id) continue;
+    if (row.expense_id || (row.status ?? "confirmed") === "pending") continue;
     const key = groupKey(row.sub_id, row.job_id);
     const current = groups.get(key) ?? {
       sub_id: row.sub_id,
@@ -542,14 +557,15 @@ export async function handleLaborJobEntries(
     byWorker.set(row.sub_id, list);
   }
   const workers = [...byWorker.entries()].map(([, entries]) => {
+    const counted = entries.filter(countsAsLabor);
     const accrued = round2(
-      entries.filter((entry) => !entry.expense_id).reduce((sum, entry) => sum + entry.line_total, 0),
+      counted.filter((entry) => !entry.expense_id).reduce((sum, entry) => sum + entry.line_total, 0),
     );
     return {
       sub_id: entries[0].sub_id,
       name: entries[0].worker_name,
-      days: round2(entries.reduce((sum, entry) => sum + entry.days, 0)),
-      cost: round2(entries.reduce((sum, entry) => sum + entry.line_total, 0)),
+      days: round2(counted.reduce((sum, entry) => sum + entry.days, 0)),
+      cost: round2(counted.reduce((sum, entry) => sum + entry.line_total, 0)),
       accrued,
       entries,
     };
@@ -832,7 +848,8 @@ export async function handleLaborBatchPay(
            JOIN jobs j ON j.id = le.job_id
           WHERE le.work_date >= ? AND le.work_date <= ?
             AND le.batch_id IS NULL AND le.expense_id IS NULL
-            AND le.deleted_at IS NULL`,
+            AND le.deleted_at IS NULL
+            AND ${CONFIRMED_ENTRY}`,
       )
         .bind(start, end)
         .all<PayEntry>()
@@ -1075,6 +1092,7 @@ interface SelectedEntry extends PayEntry {
   batch_id: string | null;
   expense_id: string | null;
   deleted_at: string | null;
+  status?: string | null;
 }
 
 interface PaySettlement {
@@ -1320,7 +1338,7 @@ export async function handleLaborPay(request: Request, env: Env): Promise<Respon
   const rows = (
     await env.DB.prepare(
       `SELECT le.id, le.sub_id, le.job_id, le.work_date, le.days, le.day_rate,
-              le.batch_id, le.expense_id, le.deleted_at,
+              le.batch_id, le.expense_id, le.deleted_at, le.status,
               s.company_name, s.company, s.contact_name, s.primary_contact,
               j.job_number, j.title
          FROM labor_entries le
@@ -1334,6 +1352,9 @@ export async function handleLaborPay(request: Request, env: Env): Promise<Respon
   if (rows.length !== entryIds.length) return err(404, "not_found", "One of those days is no longer on the books.");
   if (rows.some((row) => row.deleted_at)) {
     return err(409, "entry_removed", "A removed day can't be paid.");
+  }
+  if (rows.some((row) => row.status === "pending")) {
+    return err(409, "not_confirmed", "A day still waiting on confirmation can't be paid.");
   }
   if (rows.some((row) => !isWeekClosed(weekBounds(row.work_date).end, today))) {
     return err(409, "week_open", "Days in the current week can't be paid until Sunday has passed.");
@@ -1539,7 +1560,7 @@ function weekEntrySql(extra: string[]): string {
        FROM labor_entries le
        JOIN subcontractors s ON s.id = le.sub_id
        JOIN jobs j ON j.id = le.job_id
-      WHERE ${[ACTIVE_ENTRY, notTestClientExists("j.client_id"), ...extra].join(" AND ")}`;
+      WHERE ${[ACTIVE_ENTRY, CONFIRMED_ENTRY, notTestClientExists("j.client_id"), ...extra].join(" AND ")}`;
 }
 
 export async function handleLaborWeeks(request: Request, env: Env): Promise<Response> {
@@ -1613,6 +1634,7 @@ export async function handleLaborPayable(request: Request, env: Env): Promise<Re
          JOIN subcontractors s ON s.id = le.sub_id
          JOIN jobs j ON j.id = le.job_id
         WHERE ${ACTIVE_ENTRY}
+          AND ${CONFIRMED_ENTRY}
           AND le.batch_id IS NULL AND le.expense_id IS NULL
           AND ${notTestClientExists("j.client_id")}
         ORDER BY le.work_date, j.job_number`,
@@ -1806,7 +1828,7 @@ export async function handleLaborLedger(
   const rows = (
     await env.DB.prepare(
       `SELECT le.id, le.sub_id, le.job_id, le.work_date, le.days, le.day_rate, le.notes,
-              le.batch_id, le.expense_id, le.entered_via, le.created_at, le.created_by,
+              le.batch_id, le.expense_id, le.entered_via, le.status, le.submitted_at, le.created_at, le.created_by,
               le.updated_at, le.updated_by, le.deleted_at, le.deleted_by, le.delete_reason,
               b.pay_date, b.method, b.note AS batch_note, b.paid_at,
               j.job_number, j.title, j.property_address
@@ -1828,6 +1850,8 @@ export async function handleLaborLedger(
         batch_id: string | null;
         expense_id: string | null;
         entered_via: string;
+        status: string | null;
+        submitted_at: string | null;
         created_at: string;
         created_by: string | null;
         updated_at: string | null;
@@ -1875,7 +1899,8 @@ export async function handleLaborLedger(
     const amount = lineTotal(row.days, row.day_rate);
     const removed = Boolean(row.deleted_at);
     const isPaid = Boolean(row.batch_id || row.expense_id);
-    if (!removed) {
+    const pending = (row.status ?? "confirmed") === "pending";
+    if (!removed && !pending) {
       earned = round2(earned + amount);
       if (isPaid) paid = round2(paid + amount);
     }
@@ -1890,13 +1915,15 @@ export async function handleLaborLedger(
       days: row.days,
       day_rate: row.day_rate,
       amount,
-      status: removed ? "removed" : isPaid ? "paid" : "unpaid",
+      status: removed ? "removed" : pending ? "pending" : isPaid ? "paid" : "unpaid",
       pay_date: row.pay_date,
       method: row.method,
       note: row.batch_note,
       batch_id: row.batch_id,
       expense_id: row.expense_id,
       entered_via: row.entered_via,
+      source: row.entered_via === "checkin_link" ? "Check-in link" : "Manual",
+      submitted_at: row.submitted_at,
       created_at: row.created_at,
       created_by: row.created_by,
       updated_at: row.updated_at,
@@ -1932,7 +1959,7 @@ export async function handleLaborRangeStatements(request: Request, env: Env): Pr
   if (from && !isIsoDate(from)) return err(400, "invalid_date", "from must be YYYY-MM-DD");
   if (to && !isIsoDate(to)) return err(400, "invalid_date", "to must be YYYY-MM-DD");
 
-  const where = [ACTIVE_ENTRY];
+  const where = [ACTIVE_ENTRY, CONFIRMED_ENTRY];
   const binds: unknown[] = [];
   if (subId) {
     where.push("le.sub_id = ?");

@@ -1,3 +1,9 @@
+.labor-chip--pending { outline: 1px dashed currentColor; opacity: 0.7; }
+.labor-pending__row { display: flex; gap: var(--space-sm); align-items: center; margin-bottom: var(--space-sm); flex-wrap: wrap; }
+.labor-pending__row--needs-rate { padding: var(--space-xs) var(--space-sm); border: 1px solid var(--color-warning-border); border-radius: var(--radius-sm, 6px); background: var(--color-warning-subtle); }
+.labor-pending__flag { font-weight: 700; }
+.labor-pending__rate { width: 7rem; }
+
 .labor-log {
   display: grid;
   grid-template-columns: 1.1fr 1.4fr 2fr 0.7fr auto;

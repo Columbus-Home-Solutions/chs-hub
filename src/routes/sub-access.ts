@@ -62,7 +62,7 @@ async function resolveSubToken(env: Env, token: string): Promise<(SubTokenRow & 
             COALESCE(s.contact_name, s.primary_contact) AS contact_name
        FROM sub_access_tokens sat
        JOIN subcontractors s ON s.id = sat.sub_id
-      WHERE sat.token = ?`,
+      WHERE sat.token = ? AND sat.disabled_at IS NULL`,
   )
     .bind(token)
     .first<SubTokenRow & SubRow>();

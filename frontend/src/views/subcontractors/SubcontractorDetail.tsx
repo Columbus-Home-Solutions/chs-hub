@@ -113,6 +113,7 @@ export function SubcontractorDetail({ id, path }: RoutableProps & { id?: string 
 
       <div class="detail-grid">
         <div class="stack">
+          {isLabor && id && <CheckinLinkCard subId={id} language={s.preferred_language === "es" ? "es" : "en"} />}
           <Card
             title="Payments"
             actions={
@@ -642,5 +643,78 @@ function ComplianceCheckButton({ subId }: { subId: string }) {
     >
       {busy ? "Checking…" : "Check Compliance"}
     </Button>
+  );
+}
+
+function CheckinLinkCard({ subId, language }: { subId: string; language: "en" | "es" }) {
+  const toast = useToast();
+  const [link, setLink] = useState("");
+  const [invite, setInvite] = useState("");
+  const [qr, setQr] = useState(false);
+  const [texts, setTexts] = useState(false);
+  const [workerLanguage, setWorkerLanguage] = useState(language);
+
+  async function saveLanguage(next: "en" | "es") {
+    setWorkerLanguage(next);
+    await api.put(`/api/subcontractors/${subId}`, { preferred_language: next });
+    const data = await load();
+    setInvite(data.invite);
+    toast.push("success", next === "es" ? "Language set to Spanish" : "Language set to English");
+  }
+
+  async function load() {
+    const data = await api.get<{ link: string; invite: string }>(`/api/labor/workers/${subId}/checkin-link`);
+    setLink(data.link);
+    setInvite(data.invite);
+    return data;
+  }
+
+  return (
+    <Card title="Check-in link">
+      <p class="text--muted">This is the same link as their punch list. Regenerating or disabling it replaces both.</p>
+      <div class="labor-pending__row">
+        <span>Language</span>
+        <Button size="sm" variant={workerLanguage === "en" ? "primary" : "secondary"} onClick={() => void saveLanguage("en")}>English</Button>
+        <Button size="sm" variant={workerLanguage === "es" ? "primary" : "secondary"} onClick={() => void saveLanguage("es")}>Español</Button>
+      </div>
+      <div class="labor-pending__row">
+        <Button size="sm" onClick={async () => {
+          const data = await load();
+          await navigator.clipboard.writeText(data.link);
+          toast.push("success", "Link copied");
+        }}>Copy link</Button>
+        <Button size="sm" variant="secondary" onClick={async () => {
+          const data = link ? { link, invite } : await load();
+          await navigator.clipboard.writeText(data.invite);
+          toast.push("success", "Invite text copied");
+        }}>Send invite</Button>
+        <Button size="sm" variant="secondary" onClick={() => setQr(true)}>Show QR</Button>
+        <Button size="sm" variant="secondary" onClick={async () => {
+          if (!window.confirm("This also kills their punch-list link. Continue?")) return;
+          await api.post(`/api/labor/workers/${subId}/checkin-link`, {});
+          setLink("");
+          toast.push("success", "New link created. The old punch link no longer works.");
+        }}>Regenerate</Button>
+        <Button size="sm" variant="secondary" onClick={async () => {
+          if (!window.confirm("This also disables their punch-list link. Continue?")) return;
+          await api.del(`/api/labor/workers/${subId}/checkin-link`);
+          toast.push("success", "Link disabled");
+        }}>Disable</Button>
+      </div>
+      <label class="checkin__label">
+        <input type="checkbox" checked={texts} onChange={async (e) => {
+          const enabled = (e.target as HTMLInputElement).checked;
+          setTexts(enabled);
+          await api.put(`/api/labor/workers/${subId}/text-updates`, { enabled });
+        }} />
+        Text schedule and punch updates
+      </label>
+      {qr && (
+        <div>
+          <img alt="Check-in QR" src={`/api/labor/workers/${subId}/checkin-qr`} width="240" height="240" />
+          <p class="text--muted">{link || "The QR opens this worker's check-in page."}</p>
+        </div>
+      )}
+    </Card>
   );
 }

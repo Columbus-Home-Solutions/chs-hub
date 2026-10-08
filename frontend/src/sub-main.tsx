@@ -3,8 +3,10 @@ import "./styles/tokens.css";
 import "./styles/components.css";
 import "./styles/portal.css";
 import "./styles/punch.css";
+import "./styles/checkin.css";
 import "./styles/quote.css";
 import { SubPage } from "./views/public/SubPage";
+import { CheckInPunch, CheckInSchedule } from "./views/public/CheckInPage";
 import { BidPage } from "./views/public/BidPage";
 import { PacketPage } from "./views/public/PacketPage";
 
@@ -20,7 +22,11 @@ if (root) {
   } else if (path.startsWith("/bid")) {
     view = <BidPage />;
   } else {
-    view = <SubPage />;
+    const parts = path.split("/").filter(Boolean);
+    const token = parts[1] ? decodeURIComponent(parts[1]) : "";
+    if (parts[0] === "sub" && parts[2] === "schedule") view = <CheckInSchedule token={token} />;
+    else if (parts[0] === "sub" && parts[2] === "punch") view = <CheckInPunch token={token} />;
+    else view = <SubPage />;
   }
   render(view, root);
 }

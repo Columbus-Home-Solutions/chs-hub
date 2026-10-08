@@ -74,6 +74,8 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
       return "/financial?tab=invoices&filter=due_soon";
     case "labor_payroll_due":
       return "/financial?tab=labor&view=weeks&status=unpaid";
+    case "labor_checkins_pending":
+      return "/financial?tab=labor";
     case "social_approval":
       return "/social?tab=queue";
     case "follow_up_due":
@@ -751,6 +753,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
         WHERE le.expense_id IS NULL
           AND le.batch_id IS NULL
           AND le.deleted_at IS NULL
+          AND COALESCE(le.status, 'confirmed') = 'confirmed'
           AND ${notTestClientExists("j.client_id")}`,
     ).all<{ work_date: string; days: number; day_rate: number }>();
     const byWeek = new Map<string, { week_start: string; week_end: string; unpaid: number }>();
@@ -776,6 +779,27 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
         meta: { weeks: signal.weeks, total: signal.total, oldest: signal.oldest },
         link: actionItemLink("labor_payroll_due", {}),
         createdAt: signal.oldest,
+      });
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/no such (table|column)/i.test(msg)) throw e;
+  }
+
+  try {
+    const pendingCheckins = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM labor_entries WHERE status = 'pending' AND deleted_at IS NULL`,
+    ).first<{ n: number }>();
+    const n = pendingCheckins?.n ?? 0;
+    if (n > 0) {
+      items.push({
+        id: "labor_checkins_pending",
+        priority: "medium",
+        type: "labor_checkins_pending",
+        title: n === 1 ? "1 check-in to confirm" : `${n} check-ins to confirm`,
+        meta: { count: n },
+        link: actionItemLink("labor_checkins_pending", {}),
+        createdAt: centralDate(),
       });
     }
   } catch (e) {

@@ -287,7 +287,7 @@ export async function computeJobActuals(
   // Unpaid day-rate labor. Paid rows have expense_id set and are already in totalExpenses.
   let accruedLabor = 0;
   try {
-    const awhere: string[] = ["job_id = ?", "expense_id IS NULL", "deleted_at IS NULL"];
+    const awhere: string[] = ["job_id = ?", "expense_id IS NULL", "deleted_at IS NULL", "COALESCE(status, 'confirmed') = 'confirmed'"];
     const abinds: unknown[] = [jobId];
     if (window.from) {
       awhere.push("work_date >= ?");
@@ -642,6 +642,7 @@ export async function computeYtdOperatingCosts(
          FROM labor_entries le
         WHERE le.expense_id IS NULL
           AND le.deleted_at IS NULL
+          AND COALESCE(le.status, 'confirmed') = 'confirmed'
           AND ${notTestClientExists("(SELECT client_id FROM jobs WHERE id = le.job_id)")}`,
     ).first<{ v: number }>();
     accrued_labor = round2(accruedRow?.v ?? 0);

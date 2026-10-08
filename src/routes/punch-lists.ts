@@ -33,6 +33,7 @@ import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "../l
 import { streamObject, putImage } from "../lib/r2.js";
 import { resolveSubAccessToken, subAccessLink } from "../lib/sub-access-tokens.js";
 import { jobberQuietSendBlock } from "../lib/jobber-board.js";
+import { queueDayRateNotice } from "../lib/day-rate-notify.js";
 
 const MAX_COMPLETION_PHOTO_BYTES = 10 * 1024 * 1024;
 
@@ -660,7 +661,7 @@ export async function handlePunchListSend(
 
   for (const subId of subIds) {
     const sub = await env.DB.prepare(
-      `SELECT id, phone, email,
+      `SELECT id, phone, email, worker_type,
               COALESCE(company_name, company) AS company_name,
               COALESCE(contact_name, primary_contact) AS contact_name
          FROM subcontractors WHERE id = ?`,
@@ -670,14 +671,13 @@ export async function handlePunchListSend(
         id: string;
         phone: string | null;
         email: string | null;
+        worker_type: string | null;
         company_name: string | null;
         contact_name: string | null;
       }>();
     if (!sub) continue;
 
     const token = await getOrCreateSubToken(env, punchListId, subId);
-    // Keep punch_list_sub_tokens for per-list reminder dedup bookkeeping; use
-    // the persistent sub access token for the link sent to the sub.
     const persistentToken = await resolveSubAccessToken(env, subId);
     const link = subAccessLink(persistentToken);
     const subItems = assigned.filter((i) => i.sub_id === subId);
@@ -697,10 +697,18 @@ export async function handlePunchListSend(
     });
     await storePunchListPdf(env, punchListId, subId, pdfBytes);
 
-    const subName = sub.contact_name || sub.company_name || "there";
-    const smsBody = `Hi ${subName}, Tony from Columbus Home Solutions has a ${listLabel} punch list for you on ${jobTitle} at ${jobAddress}. View your items and mark them complete here: ${link}`;
-
-    await notifySub(env, sub, smsBody, `${listLabel} Punch List — ${jobTitle}`, pdfBytes, jobTitle);
+    if ((sub.worker_type ?? "subcontractor") === "day_rate_labor") {
+      await queueDayRateNotice(env, {
+        subId,
+        kind: "punch",
+        label: jobTitle,
+        link,
+      });
+    } else {
+      const subName = sub.contact_name || sub.company_name || "there";
+      const smsBody = `Hi ${subName}, Tony from Columbus Home Solutions has a ${listLabel} punch list for you on ${jobTitle} at ${jobAddress}. View your items and mark them complete here: ${link}`;
+      await notifySub(env, sub, smsBody, `${listLabel} Punch List — ${jobTitle}`, pdfBytes, jobTitle);
+    }
 
     await env.DB.prepare(
       `UPDATE punch_list_sub_tokens SET notified_at = datetime('now') WHERE punch_list_id = ? AND sub_id = ? AND token = ?`,

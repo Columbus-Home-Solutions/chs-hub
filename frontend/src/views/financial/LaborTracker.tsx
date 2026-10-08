@@ -32,6 +32,7 @@ interface GridEntry {
   day_rate: number;
   line_total: number;
   paid: boolean;
+  status?: string;
   job_number: number | null;
   job_title: string | null;
   job_label: string;
@@ -44,6 +45,7 @@ interface WeekWorker {
   days: number;
   total: number;
   accrued: number;
+  pending?: number;
   entries: GridEntry[];
 }
 
@@ -87,6 +89,7 @@ export function LaborTracker() {
   const weekStart = weekBounds(requested || centralDate()).start;
 
   const week = useApi<WeekResponse>(`/api/labor/week?start=${weekStart}`);
+  const pending = useApi<{ count: number; entries: { id: string; worker_name: string; job_number: number | null; job_title: string | null; work_date: string; days: number; day_rate: number; hand_logged: number }[] }>("/api/labor/pending");
   const workers = useApi<{ workers: LaborWorkerOption[] }>("/api/labor/workers");
   const jobs = useApi<{ jobs: LaborJobOption[] }>("/api/labor/jobs");
 
@@ -98,6 +101,7 @@ export function LaborTracker() {
   const [editDays, setEditDays] = useState("1");
   const [payOpen, setPayOpen] = useState(false);
   const [removeReason, setRemoveReason] = useState("");
+  const [rateDraft, setRateDraft] = useState<Record<string, string>>({});
 
   const dates = useMemo(() => datesInWeek(weekStart), [weekStart]);
   const params = new URLSearchParams(search);
@@ -119,6 +123,60 @@ export function LaborTracker() {
 
   const goWeek = (start: string) => {
     setLaborQuery({ view: null, week: start });
+  };
+
+  const confirmPending = async (ids: string[], rateById: Record<string, number> = {}) => {
+    if (!ids.length) return false;
+    const edits = Object.entries(rateById).map(([id, day_rate]) => ({ id, day_rate }));
+    try {
+      const res = await api.post<{ confirmed: string[]; needs_rate?: string[] }>("/api/labor/pending/confirm", {
+        entry_ids: ids,
+        edits,
+      });
+      if (res.confirmed.length) toast.push("success", "Confirmed");
+      if (res.needs_rate?.length) toast.push("info", "A check-in still needs a day rate.");
+      pending.refetch();
+      week.refetch();
+      return true;
+    } catch (e) {
+      toast.push("error", e instanceof ApiError ? e.message : "Could not confirm");
+      return false;
+    }
+  };
+
+  const confirmOne = (entry: { id: string; day_rate: number }) => {
+    if (entry.day_rate > 0) {
+      void confirmPending([entry.id]);
+      return;
+    }
+    const typed = Number(rateDraft[entry.id]);
+    if (!(typed > 0)) {
+      toast.push("info", "Type a day rate on that check-in.");
+      return;
+    }
+    void confirmPending([entry.id], { [entry.id]: typed });
+  };
+
+  const confirmReady = () => {
+    const entries = pending.data?.entries ?? [];
+    const ready = entries.filter((entry) => entry.day_rate > 0).map((entry) => entry.id);
+    const unrated = entries.filter((entry) => entry.day_rate <= 0).length;
+    if (!ready.length) {
+      if (unrated) toast.push("info", "Type a day rate on the flagged check-in.");
+      return;
+    }
+    void confirmPending(ready).then((ok) => {
+      if (ok && unrated) toast.push("info", unrated === 1 ? "One check-in still needs a day rate." : `${unrated} check-ins still need a day rate.`);
+    });
+  };
+
+  const rejectPending = async (id: string) => {
+    const reason = window.prompt("Why reject this check-in?");
+    if (!reason?.trim()) return;
+    await api.post("/api/labor/pending/reject", { entry_id: id, reason: reason.trim() });
+    toast.push("success", "Rejected");
+    pending.refetch();
+    week.refetch();
   };
 
   const saveEdit = async () => {
@@ -205,6 +263,44 @@ export function LaborTracker() {
         <LaborByWorker subId={ledgerWorker} onWorker={(id) => setLaborQuery({ view: "worker", sub_id: id })} />
       )}
 
+      {view === "week" && (pending.data?.count ?? 0) > 0 && (
+        <Card title={`Needs confirmation (${pending.data?.count ?? 0})`}>
+          <div class="labor-pending">
+            {(pending.data?.entries ?? []).map((entry) => (
+              <div key={entry.id} class={entry.day_rate <= 0 ? "labor-pending__row labor-pending__row--needs-rate" : "labor-pending__row"}>
+                <span>
+                  {entry.worker_name} · {entry.job_number} {entry.job_title} · {entry.work_date} · {entry.days === 0.5 ? "½" : "1"}
+                  {entry.hand_logged ? " · a hand-logged day already exists" : ""}
+                </span>
+                {entry.day_rate <= 0 && (
+                  <>
+                    <span class="labor-pending__flag">Needs a day rate</span>
+                    <input
+                      class="form-input labor-pending__rate"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      aria-label={`Day rate for ${entry.worker_name}`}
+                      placeholder="Day rate"
+                      value={rateDraft[entry.id] ?? ""}
+                      onInput={(e) => {
+                        const value = (e.target as HTMLInputElement).value;
+                        setRateDraft((prev) => ({ ...prev, [entry.id]: value }));
+                      }}
+                    />
+                  </>
+                )}
+                <Button size="sm" onClick={() => confirmOne(entry)}>Confirm</Button>
+                <Button size="sm" variant="secondary" onClick={() => rejectPending(entry.id)}>Reject</Button>
+              </div>
+            ))}
+            <Button onClick={confirmReady}>
+              Confirm all
+            </Button>
+          </div>
+        </Card>
+      )}
       {view === "week" && (
       <div class="labor-actions labor-no-print">
         <Button variant="secondary" type="button" onClick={() => goWeek(addDays(weekStart, -7))}>
@@ -297,7 +393,7 @@ export function LaborTracker() {
                                 <button
                                   key={entry.id}
                                   type="button"
-                                  class={`labor-chip${entry.paid ? " labor-chip--locked" : ""}`}
+                                  class={`labor-chip${entry.paid ? " labor-chip--locked" : ""}${entry.status === "pending" ? " labor-chip--pending" : ""}`}
                                   style={{ background: jobChipColor(entry.job_id) }}
                                   onClick={() => {
                                     if (entry.paid) {
@@ -317,7 +413,12 @@ export function LaborTracker() {
                             </td>
                           );
                         })}
-                        <td class="labor-grid__num">{worker.days}</td>
+                        <td class="labor-grid__num">
+                          {worker.days}
+                          {(worker.pending ?? 0) > 0 && (
+                            <div class="text--muted">+ {worker.pending} unconfirmed</div>
+                          )}
+                        </td>
                         <td class="labor-grid__num">{formatCurrency(worker.total)}</td>
                       </tr>
                     ))}

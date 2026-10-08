@@ -23,6 +23,11 @@ export function centralDate(now: Date = new Date()): string {
   }).format(now);
 }
 
+/** A worker may self-report only today or yesterday in Central time. */
+export function isCheckinDate(workDate: string, today: string): boolean {
+  return workDate === today || workDate === addDays(today, -1);
+}
+
 export function addDays(iso: string, days: number): string {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));

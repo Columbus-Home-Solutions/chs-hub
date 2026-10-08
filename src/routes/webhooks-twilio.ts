@@ -186,13 +186,15 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
       .first();
   }
 
+  if (fromDigits.length === 10 && classifyInboundKeyword(body) === "stop") {
+    await stopWorkerTexts(env, fromDigits);
+  }
+
   if (client) {
     const name = [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || client.name || "Client";
     const keyword = classifyInboundKeyword(body);
-    if (keyword === "stop") {
+      if (keyword === "stop") {
       const now = new Date().toISOString();
-      // Write to dedicated column (Sprint 24) AND the legacy JSON prefs blob for
-      // notification-engine compat until that engine is updated to the column.
       await env.DB.prepare(
         `UPDATE clients SET sms_opt_out = 1, sms_opt_out_at = ?, updated_at = datetime('now') WHERE id = ?`,
       ).bind(now, client.id).run();
@@ -871,4 +873,17 @@ export async function handleTwilioStatus(request: Request, env: Env): Promise<Re
     .run();
   await audit(env, "twilio_status_callback", { message_sid: sid, status, matched: res.meta?.changes ?? 0 });
   return json({ received: true, status: mapped, matched: res.meta?.changes ?? 0 });
+}
+
+async function stopWorkerTexts(env: Env, fromDigits: string): Promise<void> {
+  if (fromDigits.length !== 10) return;
+  await env.DB.prepare(
+    `UPDATE subcontractors
+        SET text_updates_enabled = 0,
+            text_updates_enabled_at = datetime('now'),
+            text_updates_enabled_by = 'inbound_stop'
+      WHERE substr(replace(replace(replace(replace(COALESCE(phone,''),'(',''),')',''),'-',''),' ',''), -10) = ?`,
+  )
+    .bind(fromDigits)
+    .run();
 }

@@ -17,6 +17,9 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerSubScheduled } from "../lib/notification-engine.js";
+import { queueDayRateNotice } from "../lib/day-rate-notify.js";
+import { resolveSubAccessToken, subAccessLink } from "../lib/sub-access-tokens.js";
+import { centralDate } from "../../shared/labor-week.js";
 import {
   isScheduleEntryType,
   normalizeScheduleEntryType,
@@ -269,8 +272,10 @@ export async function handleScheduleUpdate(request: Request, env: Env, id: strin
   binds.push(id);
   await env.DB.prepare(`UPDATE schedule_entries SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
 
-  // Fire once: only when a sub was just assigned AND not already notified. Edits
-  // to notes/time on an already-notified entry never re-enqueue (rule #5).
+  const meaningful = ["scheduled_date", "trade_or_work", "start_time", "end_time", "status", "sub_id"].some(
+    (field) => field in body,
+  );
+  if (meaningful) await notifyDayRateSchedule(env, id, false);
   if (subChangedToAssigned) await notifySubOnce(env, id);
 
   return json({ entry: shape((await loadEntry(env, id))!) });
@@ -300,6 +305,47 @@ async function notifySubOnce(env: Env, entryId: string): Promise<void> {
     .bind(entryId)
     .first<{ notification_sent: number | null; sub_id: string | null }>();
   if (!row || !row.sub_id || (row.notification_sent ?? 0) === 1) return;
+  const kind = await env.DB.prepare(`SELECT worker_type FROM subcontractors WHERE id = ?`)
+    .bind(row.sub_id)
+    .first<{ worker_type: string | null }>();
+  if ((kind?.worker_type ?? "subcontractor") === "day_rate_labor") {
+    await notifyDayRateSchedule(env, entryId, true);
+    await env.DB.prepare("UPDATE schedule_entries SET notification_sent = 1 WHERE id = ?").bind(entryId).run();
+    return;
+  }
   await triggerSubScheduled(env, entryId);
   await env.DB.prepare("UPDATE schedule_entries SET notification_sent = 1 WHERE id = ?").bind(entryId).run();
+}
+
+async function notifyDayRateSchedule(env: Env, entryId: string, added: boolean): Promise<void> {
+  const row = await env.DB.prepare(
+    `SELECT se.sub_id, se.scheduled_date, se.status, j.job_number, j.title,
+            s.worker_type
+       FROM schedule_entries se
+       JOIN jobs j ON j.id = se.job_id
+       JOIN subcontractors s ON s.id = se.sub_id
+      WHERE se.id = ?`,
+  )
+    .bind(entryId)
+    .first<{
+      sub_id: string;
+      scheduled_date: string;
+      status: string | null;
+      job_number: number | null;
+      title: string | null;
+      worker_type: string | null;
+    }>();
+  if (!row || (row.worker_type ?? "subcontractor") !== "day_rate_labor") return;
+  if (row.scheduled_date < centralDate()) return;
+  const token = await resolveSubAccessToken(env, row.sub_id);
+  const label = `${row.job_number ?? ""} ${row.title ?? "job"}`.trim();
+  await queueDayRateNotice(env, {
+    subId: row.sub_id,
+    kind: "schedule",
+    label,
+    when: row.scheduled_date,
+    status: row.status,
+    added,
+    link: subAccessLink(token),
+  });
 }

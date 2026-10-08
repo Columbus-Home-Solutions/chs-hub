@@ -766,7 +766,7 @@ export async function handlePunchListRenotify(
 
   for (const subId of subIds) {
     const sub = await env.DB.prepare(
-      `SELECT id, phone, email,
+      `SELECT id, phone, email, worker_type,
               COALESCE(company_name, company) AS company_name,
               COALESCE(contact_name, primary_contact) AS contact_name
          FROM subcontractors WHERE id = ?`,
@@ -776,6 +776,7 @@ export async function handlePunchListRenotify(
         id: string;
         phone: string | null;
         email: string | null;
+        worker_type: string | null;
         company_name: string | null;
         contact_name: string | null;
       }>();
@@ -789,6 +790,17 @@ export async function handlePunchListRenotify(
       .bind(punchListId, subId)
       .first<{ token: string }>();
     if (!tokenRow) continue;
+
+    if ((sub.worker_type ?? "subcontractor") === "day_rate_labor") {
+      const persistentToken = await resolveSubAccessToken(env, subId);
+      await queueDayRateNotice(env, {
+        subId,
+        kind: "punch",
+        label: jobTitle,
+        link: subAccessLink(persistentToken),
+      });
+      continue;
+    }
 
     const link = punchListSecureLink(tokenRow.token);
     const subName = sub.contact_name || sub.company_name || "there";

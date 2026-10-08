@@ -6,6 +6,7 @@
  */
 
 import type { Env } from "../env.js";
+import { queueDayRateNotice } from "./day-rate-notify.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "./twilio.js";
 import { resolveSubAccessToken, subAccessLink } from "./sub-access-tokens.js";
 
@@ -69,7 +70,7 @@ export async function runPunchListReminderSweep(env: Env): Promise<{ scanned: nu
 
     const { results: tokens } = await env.DB.prepare(
       `SELECT pst.*,
-              s.phone, s.email,
+              s.phone, s.email, s.worker_type,
               COALESCE(s.company_name, s.company) AS company_name,
               COALESCE(s.contact_name, s.primary_contact) AS contact_name
          FROM punch_list_sub_tokens pst
@@ -85,6 +86,7 @@ export async function runPunchListReminderSweep(env: Env): Promise<{ scanned: nu
         followup_sent_at: string | null;
         phone: string | null;
         email: string | null;
+        worker_type: string | null;
         company_name: string | null;
         contact_name: string | null;
       }>();
@@ -109,18 +111,37 @@ export async function runPunchListReminderSweep(env: Env): Promise<{ scanned: nu
       const msg = `Hi ${subName}, reminder: you have ${openItems.n} open punch list item(s) for ${jobTitle}. View and complete here: ${link}`;
 
       if (schedDate === today && !token.reminder_sent_at) {
-        if (token.phone && twilioConfigured(twilioCfg)) {
-          await sendSms(twilioCfg, token.phone, msg);
+        const dayRate = (token.worker_type ?? "subcontractor") === "day_rate_labor";
+        if (dayRate) {
+          const queued = await queueDayRateNotice(env, {
+            subId: token.sub_id,
+            kind: "punch",
+            label: jobTitle,
+            status: "reminder",
+            link,
+          });
+          if (queued.queued) {
+            await env.DB.prepare(
+              `UPDATE punch_list_sub_tokens SET reminder_sent_at = datetime('now') WHERE id = ?`,
+            )
+              .bind(token.id)
+              .run();
+            stats.reminded++;
+          }
+        } else {
+          if (token.phone && twilioConfigured(twilioCfg)) {
+            await sendSms(twilioCfg, token.phone, msg);
+          }
+          if (token.email) {
+            await sendPunchListEmail(env, token.email, `Punch List Reminder — ${jobTitle}`, msg);
+          }
+          await env.DB.prepare(
+            `UPDATE punch_list_sub_tokens SET reminder_sent_at = datetime('now') WHERE id = ?`,
+          )
+            .bind(token.id)
+            .run();
+          stats.reminded++;
         }
-        if (token.email) {
-          await sendPunchListEmail(env, token.email, `Punch List Reminder — ${jobTitle}`, msg);
-        }
-        await env.DB.prepare(
-          `UPDATE punch_list_sub_tokens SET reminder_sent_at = datetime('now') WHERE id = ?`,
-        )
-          .bind(token.id)
-          .run();
-        stats.reminded++;
       }
 
       const dayAfter = new Date(schedDate + "T12:00:00Z");
@@ -128,24 +149,43 @@ export async function runPunchListReminderSweep(env: Env): Promise<{ scanned: nu
       const dayAfterStr = dayAfter.toISOString().split("T")[0];
 
       if (dayAfterStr === today && !token.followup_sent_at) {
-        const followupMsg = `Hi ${subName}, your punch list items for ${jobTitle} were due yesterday and are still open. Please complete ASAP: ${link}`;
-        if (token.phone && twilioConfigured(twilioCfg)) {
-          await sendSms(twilioCfg, token.phone, followupMsg);
+        const dayRate = (token.worker_type ?? "subcontractor") === "day_rate_labor";
+        if (dayRate) {
+          const queued = await queueDayRateNotice(env, {
+            subId: token.sub_id,
+            kind: "punch",
+            label: jobTitle,
+            status: "past_due",
+            link,
+          });
+          if (queued.queued) {
+            await env.DB.prepare(
+              `UPDATE punch_list_sub_tokens SET followup_sent_at = datetime('now') WHERE id = ?`,
+            )
+              .bind(token.id)
+              .run();
+            stats.followups++;
+          }
+        } else {
+          const followupMsg = `Hi ${subName}, your punch list items for ${jobTitle} were due yesterday and are still open. Please complete ASAP: ${link}`;
+          if (token.phone && twilioConfigured(twilioCfg)) {
+            await sendSms(twilioCfg, token.phone, followupMsg);
+          }
+          if (token.email) {
+            await sendPunchListEmail(
+              env,
+              token.email,
+              `Punch List Past Due — ${jobTitle}`,
+              followupMsg,
+            );
+          }
+          await env.DB.prepare(
+            `UPDATE punch_list_sub_tokens SET followup_sent_at = datetime('now') WHERE id = ?`,
+          )
+            .bind(token.id)
+            .run();
+          stats.followups++;
         }
-        if (token.email) {
-          await sendPunchListEmail(
-            env,
-            token.email,
-            `Punch List Past Due — ${jobTitle}`,
-            followupMsg,
-          );
-        }
-        await env.DB.prepare(
-          `UPDATE punch_list_sub_tokens SET followup_sent_at = datetime('now') WHERE id = ?`,
-        )
-          .bind(token.id)
-          .run();
-        stats.followups++;
       }
     }
   }

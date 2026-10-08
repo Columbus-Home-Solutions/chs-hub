@@ -78,9 +78,20 @@ export function dayRateMessage(message: DayRateMessage): string {
   const lang = workerLang(message.language);
   const stop = lang === "es" ? "Responde STOP para cancelar." : "Reply STOP to opt out.";
   if (message.kind === "punch") {
-    const line = lang === "es"
-      ? `CHS: Nuevo pendiente en ${message.label}. ${message.link}/punch`
-      : `CHS: New punch list item on ${message.label}. ${message.link}/punch`;
+    let line: string;
+    if (message.status === "reminder") {
+      line = lang === "es"
+        ? `CHS: Recordatorio. Pendientes abiertos en ${message.label}. ${message.link}/punch`
+        : `CHS: Reminder. Open punch items on ${message.label}. ${message.link}/punch`;
+    } else if (message.status === "past_due") {
+      line = lang === "es"
+        ? `CHS: Los pendientes en ${message.label} vencieron ayer. ${message.link}/punch`
+        : `CHS: Punch items on ${message.label} were due yesterday. ${message.link}/punch`;
+    } else {
+      line = lang === "es"
+        ? `CHS: Nuevo pendiente en ${message.label}. ${message.link}/punch`
+        : `CHS: New punch list item on ${message.label}. ${message.link}/punch`;
+    }
     return `${line}\n${stop}`;
   }
   if (message.count > 1) {
@@ -176,7 +187,10 @@ export async function queueDayRateNotice(env: Env, args: QueueArgs): Promise<{ q
   if (!sub || (sub.worker_type ?? "subcontractor") !== "day_rate_labor") {
     return { queued: false, reason: "not_day_rate" };
   }
-  if ((sub.text_updates_enabled ?? 0) !== 1) return { queued: false, reason: "text_updates_off" };
+  if ((sub.text_updates_enabled ?? 0) !== 1) {
+    console.log(`[day-rate] skipped reason=text_updates_off kind=${args.kind}`);
+    return { queued: false, reason: "text_updates_off" };
+  }
   const channel = sub.phone ? "sms" : sub.email ? "email" : null;
   const contact = sub.phone || sub.email;
   if (!channel || !contact) return { queued: false, reason: "no_contact" };

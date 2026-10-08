@@ -376,6 +376,21 @@ Day-rate labor (`subcontractors.worker_type = day_rate_labor`). Weeks are Monday
 | DELETE | `/api/labor/entries/:id` | O/PM | Soft-delete an unpaid entry (`delete_reason` optional). Writes audit_logs |
 | POST | `/api/labor/batches/pay` | O/PM | Pay chosen closed days. `groups` is `{ sub_id, job_id, action: create\|link, expense_id, difference_decision }`. `create` writes a labor expense. `link` attaches the days to one expense for that worker and job. A shortfall without `difference_decision` is rejected. `add_difference` writes the shortfall; `accept_as_paid` writes nothing extra. Logged above earned is allowed. Omitting `groups` keeps the older `skip` behavior |
 | POST | `/api/labor/batches/:week_start/pay` | O/PM | Mark a whole closed week paid. Idempotent if a batch already exists for that week |
+| GET | `/api/labor/pending` | O/PM | Check-ins waiting on confirmation |
+| POST | `/api/labor/pending/confirm` | O/PM | Confirm one or many. Optional per-entry job, days, or day_rate. Refuses a zero rate |
+| POST | `/api/labor/pending/reject` | O/PM | Soft-delete a pending check-in. Reason required |
+| GET/POST/DELETE | `/api/labor/workers/:id/checkin-link` | O/PM | Copy, regenerate, or disable the worker's `/sub/:token` link. Regenerate and disable also replace the punch-list link |
+| GET | `/api/labor/workers/:id/checkin-qr` | O/PM | SVG QR of that link |
+| PUT | `/api/labor/workers/:id/text-updates` | O/PM | Turn schedule and punch texts on or off. Off by default |
+| GET/POST | `/api/sub/:token/checkin` | public token | Worker check-in. Today or yesterday only. No dollar amounts |
+| DELETE | `/api/sub/:token/checkin/:id` | public token | Undo a pending check-in submitted today |
+| GET | `/api/sub/:token/schedule` | public token | This worker's next 14 days. Job number, title, street only |
+| GET | `/api/sub/:token/punch` | public token | Open punch items for a day-rate worker |
+| GET | `/api/sub/:token/manifest.webmanifest` | public token | Home-screen manifest whose start_url is this worker's page. Name stays CHS Check In. `lang` follows the worker |
+| PUT | `/api/sub/:token/language` | public token | Body `{ language: "en" \| "es" }`. Day-rate only. Saves `preferred_language` and rewrites a held text. Bad token is the generic 404 |
+| PUT | `/api/subcontractors/:id` | O/PM | Also accepts `preferred_language` (`en` or `es`) |
+
+Day-rate schedule and punch texts use templates `day_rate_schedule` and `day_rate_punch`. The copy is chosen from `preferred_language` when the text is built and again if the worker switches before a held text goes out. English: `CHS: Tony added 102 Kitchen Repair to your schedule for Mon Oct 5. See it: <link>/schedule`, `CHS: Tony updated your schedule (3 changes). See it: <link>/schedule`, `CHS: Schedule change. 104 Bath Remodel on Mon Oct 5 is on a weather delay. <link>/schedule`, `CHS: New punch list item on 101 Pergola Repair. <link>/punch`, each ending with `Reply STOP to opt out`. Spanish draft: `CHS: Tony agregó 102 Kitchen Repair a tu horario para el lun 5 oct. Míralo aquí: <link>/schedule`, `CHS: Tony actualizó tu horario (3 cambios). Míralo aquí: <link>/schedule`, `CHS: Cambio de horario. 104 Bath Remodel el lun 5 oct tiene retraso por clima. <link>/schedule`, `CHS: Nuevo pendiente en 101 Pergola Repair. <link>/punch`, each ending with `Responde STOP para cancelar.` STOP stays the English keyword. Job titles are copied as typed. Several changes in one hold window become one queued text. Quiet hours 8 PM–7 AM Central hold until 7 AM; the shared SMS gate may still wait until 8 AM. Local dispatch stays SIMULATE. Check-in, confirm, and pay do not send a text. There is no separate notification-templates file in this repo; this paragraph is the template store. Spanish is a draft until a fluent speaker reviews it.
 
 ### Cost-Plus Billing Cycles
 

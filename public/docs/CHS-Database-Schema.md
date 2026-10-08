@@ -613,7 +613,7 @@ One row per **pay event**. A week can have several. Draft weeks are computed and
 
 ### labor_entries
 
-One worker, one job, one date, 0.5 or 1 day. `day_rate` is snapshotted at entry time. `expense_id` is a single expense: set when that day is included in a pay event, or linked to one hand-entered labor, subcontractor, or other expense. If that expense is short of the days earned, a second labor expense can be written for the difference; the day's `expense_id` stays the linked expense. Accepting the logged amount as full payment links the day and writes nothing extra. Unpaid rows (`expense_id IS NULL` and `deleted_at IS NULL`) are accrued labor in job costing and are not counted again after payment. Removed rows stay for the dispute ledger and are left out of totals.
+One worker, one job, one date, 0.5 or 1 day. `day_rate` is snapshotted at entry time. `expense_id` is a single expense: set when that day is included in a pay event, or linked to one hand-entered labor, subcontractor, or other expense. If that expense is short of the days earned, a second labor expense can be written for the difference; the day's `expense_id` stays the linked expense. Accepting the logged amount as full payment links the day and writes nothing extra. Unpaid rows (`expense_id IS NULL`, `deleted_at IS NULL`, and `status = 'confirmed'`) are accrued labor in job costing and are not counted again after payment. `status = 'pending'` is a worker check-in that does not count toward pay, job cost, statements, or the dashboard payroll total until confirmed. Removed rows stay for the dispute ledger and are left out of totals. A check-in with no worker rate stores `day_rate` 0 and cannot be confirmed until a positive rate is saved.
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
@@ -634,6 +634,12 @@ One worker, one job, one date, 0.5 or 1 day. `day_rate` is snapshotted at entry 
 | updated_by | TEXT | | |
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 | created_by | TEXT | | |
+| status | TEXT | NOT NULL DEFAULT 'confirmed' CHECK (pending, confirmed) | Worker check-ins start pending. Existing rows stay confirmed |
+| submitted_at | TEXT | | Central date the worker submitted |
+| confirmed_at | TEXT | | |
+| confirmed_by | TEXT | | |
+
+`sub_access_tokens` gains `schedule_seen_at`, `punch_seen_at`, and `disabled_at`. A disabled or replaced token 404s for check-in and for the punch page. `subcontractors` gains `text_updates_enabled` (default 0), `text_updates_enabled_at`, and `text_updates_enabled_by`. STOP on a matching phone turns text updates off. `preferred_language` is `en` or `es`, default `en`. It changes the worker's public pages, texts, and invite. Tony's screens stay English.
 
 ### billing_cycles
 

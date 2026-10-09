@@ -166,7 +166,11 @@ interface QueueArgs {
 }
 
 /** Queue or fold into the worker's open day-rate text. No-op for other worker types, opt-out, or past dates. */
-export async function queueDayRateNotice(env: Env, args: QueueArgs): Promise<{ queued: boolean; reason?: string }> {
+export async function queueDayRateNotice(
+  env: Env,
+  args: QueueArgs,
+  now: Date = new Date(),
+): Promise<{ queued: boolean; reason?: string }> {
   if (args.past) return { queued: false, reason: "past" };
   const sub = await env.DB.prepare(
     `SELECT id, worker_type, phone, email, text_updates_enabled, is_active, preferred_language,
@@ -220,7 +224,7 @@ export async function queueDayRateNotice(env: Env, args: QueueArgs): Promise<{ q
     link: args.link,
   };
   const body = dayRateMessage({ ...payload, language: workerLang(sub.preferred_language) });
-  const when = nextDayRateSendAt();
+  const when = nextDayRateSendAt(now);
   const packed = JSON.stringify(payload);
   if (open) {
     await env.DB.prepare(

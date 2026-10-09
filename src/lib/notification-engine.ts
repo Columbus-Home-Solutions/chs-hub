@@ -709,13 +709,14 @@ async function dispatchRow(
   }
 
   // (3) SMS quiet hours — defer outside 08:00–21:00 America/Chicago (Pre-Launch H2).
+  // Day-rate schedule and punch texts pass a 07:00 morning floor. The 21:00 end stays.
   if (row.channel === "sms") {
-    if (isOutsideSmsQuietHours()) {
-      const nextWindow = nextCentral8amIso();
+    const hold = smsQuietDeferral(row.trigger_event);
+    if (hold.defer) {
       await env.DB.prepare(
         "UPDATE notification_logs SET status = 'queued', scheduled_for = ?, error_message = ? WHERE id = ?",
       )
-        .bind(nextWindow, "deferred: quiet hours", row.id)
+        .bind(hold.until, "deferred: quiet hours", row.id)
         .run();
       stats.deferred++;
       return;
@@ -1135,21 +1136,52 @@ function centralDateParts(now = new Date()): { y: number; m: number; d: number }
   };
 }
 
-/** True when SMS must not send now (outside 08:00–21:00 Central). */
-function isOutsideSmsQuietHours(now = new Date()): boolean {
-  const h = getCentralHour(now);
-  return h < 8 || h >= 21;
+/** Shared SMS window. Morning defaults to 8:00 Central. Evening stays 9:00 PM. */
+export const SMS_MORNING_HOUR = 8;
+export const SMS_EVENING_HOUR = 21;
+export const DAY_RATE_SMS_MORNING_HOUR = 7;
+
+const DAY_RATE_WORKER_TEXT_EVENTS = new Set(["day_rate_schedule", "day_rate_punch"]);
+
+export interface SmsQuietOptions {
+  /** Morning floor, America/Chicago. Omitted callers keep 8:00. Does not move 9:00 PM. */
+  morningHour?: number;
 }
 
-/** Next 08:00 America/Chicago as ISO (DST-correct via Intl scan). */
-function nextCentral8amIso(now = new Date()): string {
+/** Day-rate schedule and punch texts ask for 7:00. Every other event keeps the default. */
+export function smsQuietOptionsForEvent(triggerEvent: string): SmsQuietOptions | undefined {
+  if (DAY_RATE_WORKER_TEXT_EVENTS.has(triggerEvent)) {
+    return { morningHour: DAY_RATE_SMS_MORNING_HOUR };
+  }
+  return undefined;
+}
+
+/** True when SMS must not send now. Default window is 08:00–21:00 Central. */
+export function isOutsideSmsQuietHours(now = new Date(), opts?: SmsQuietOptions): boolean {
+  const morning = opts?.morningHour ?? SMS_MORNING_HOUR;
+  const h = getCentralHour(now);
+  return h < morning || h >= SMS_EVENING_HOUR;
+}
+
+/** Next morning open, America/Chicago, as ISO (DST-correct via Intl scan). */
+export function nextSmsWindowOpenIso(now = new Date(), opts?: SmsQuietOptions): string {
+  const morning = opts?.morningHour ?? SMS_MORNING_HOUR;
   let { y, m, d } = centralDateParts(now);
   const hour = getCentralHour(now);
-  if (hour >= 21) {
+  if (hour >= SMS_EVENING_HOUR) {
     const bump = new Date(Date.UTC(y, m - 1, d + 1, 12, 0, 0));
     ({ y, m, d } = centralDateParts(bump));
   }
-  return centralWallClockToUtcIso(y, m, d, 8);
+  return centralWallClockToUtcIso(y, m, d, morning);
+}
+
+export function smsQuietDeferral(
+  triggerEvent: string,
+  now = new Date(),
+): { defer: false } | { defer: true; until: string } {
+  const quiet = smsQuietOptionsForEvent(triggerEvent);
+  if (!isOutsideSmsQuietHours(now, quiet)) return { defer: false };
+  return { defer: true, until: nextSmsWindowOpenIso(now, quiet) };
 }
 
 function centralWallClockToUtcIso(y: number, m: number, d: number, hour: number): string {

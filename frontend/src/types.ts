@@ -193,6 +193,10 @@ export interface Subcontractor {
   worker_type?: "subcontractor" | "day_rate_labor" | null;
   day_rate?: number | null;
   preferred_language?: "en" | "es" | null;
+  /** Day-rate schedule and punch texts. Off unless a staff member turned it on. */
+  text_updates_enabled?: boolean;
+  text_updates_enabled_at?: string | null;
+  text_updates_enabled_by?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }

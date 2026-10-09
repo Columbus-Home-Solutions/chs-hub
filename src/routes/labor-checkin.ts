@@ -7,7 +7,7 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { resolveSubAccessToken, subAccessLink } from "../lib/sub-access-tokens.js";
 import { POST_DEPOSIT_JOB_STATUSES, centralDate, isCheckinDate, round2 } from "../../shared/labor-week.js";
-import { inviteText, retranslateQueuedDayRate, workerLang } from "../lib/day-rate-notify.js";
+import { cancelQueuedDayRateNotices, inviteText, retranslateQueuedDayRate, workerLang } from "../lib/day-rate-notify.js";
 import { renderSVG } from "uqr";
 
 function json(body: unknown, status = 200): Response {
@@ -527,6 +527,9 @@ export async function handleTextUpdates(request: Request, env: Env, subId: strin
   }
   const enabled = body.enabled ? 1 : 0;
   const email = staff.email;
+  const sub = await env.DB.prepare(`SELECT phone, email FROM subcontractors WHERE id = ?`)
+    .bind(subId)
+    .first<{ phone: string | null; email: string | null }>();
   await env.DB.prepare(
     `UPDATE subcontractors
         SET text_updates_enabled = ?, text_updates_enabled_at = datetime('now'), text_updates_enabled_by = ?
@@ -534,5 +537,8 @@ export async function handleTextUpdates(request: Request, env: Env, subId: strin
   )
     .bind(enabled, email, subId)
     .run();
+  if (enabled === 0) {
+    await cancelQueuedDayRateNotices(env, { phone: sub?.phone, email: sub?.email }, "text_updates_off");
+  }
   return json({ text_updates_enabled: enabled });
 }

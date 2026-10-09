@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
@@ -7,7 +7,8 @@ import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { Modal } from "../../components/ui/Modal";
 import { go, BASE } from "../../lib/nav";
-import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
+import { formatCurrency, formatDate, formatDateTime, formatPhone, formatStatus } from "../../lib/format";
+import { textUpdatesSwitchLabel } from "../../lib/text-updates";
 import { useAuth } from "../../store/auth";
 import { isOwner } from "../../lib/rbac";
 import { useToast } from "../../store/toast";
@@ -113,7 +114,18 @@ export function SubcontractorDetail({ id, path }: RoutableProps & { id?: string 
 
       <div class="detail-grid">
         <div class="stack">
-          {isLabor && id && <CheckinLinkCard subId={id} language={s.preferred_language === "es" ? "es" : "en"} />}
+          {isLabor && id && (
+            <CheckinLinkCard
+              subId={id}
+              language={s.preferred_language === "es" ? "es" : "en"}
+              textUpdatesEnabled={s.text_updates_enabled === true}
+              textUpdatesAt={s.text_updates_enabled_at ?? null}
+              textUpdatesBy={s.text_updates_enabled_by ?? null}
+              onTextUpdatesSaved={() => {
+                void refetch();
+              }}
+            />
+          )}
           <Card
             title="Payments"
             actions={
@@ -646,13 +658,31 @@ function ComplianceCheckButton({ subId }: { subId: string }) {
   );
 }
 
-function CheckinLinkCard({ subId, language }: { subId: string; language: "en" | "es" }) {
+function CheckinLinkCard({
+  subId,
+  language,
+  textUpdatesEnabled,
+  textUpdatesAt,
+  textUpdatesBy,
+  onTextUpdatesSaved,
+}: {
+  subId: string;
+  language: "en" | "es";
+  textUpdatesEnabled: boolean;
+  textUpdatesAt: string | null;
+  textUpdatesBy: string | null;
+  onTextUpdatesSaved: () => void;
+}) {
   const toast = useToast();
   const [link, setLink] = useState("");
   const [invite, setInvite] = useState("");
   const [qr, setQr] = useState(false);
-  const [texts, setTexts] = useState(false);
+  const [texts, setTexts] = useState(textUpdatesEnabled);
   const [workerLanguage, setWorkerLanguage] = useState(language);
+
+  useEffect(() => {
+    setTexts(textUpdatesEnabled);
+  }, [textUpdatesEnabled]);
 
   async function saveLanguage(next: "en" | "es") {
     setWorkerLanguage(next);
@@ -705,10 +735,28 @@ function CheckinLinkCard({ subId, language }: { subId: string; language: "en" | 
         <input type="checkbox" checked={texts} onChange={async (e) => {
           const enabled = (e.target as HTMLInputElement).checked;
           setTexts(enabled);
-          await api.put(`/api/labor/workers/${subId}/text-updates`, { enabled });
+          try {
+            const saved = await api.put<{ text_updates_enabled: number }>(
+              `/api/labor/workers/${subId}/text-updates`,
+              { enabled },
+            );
+            setTexts(saved.text_updates_enabled === 1);
+            onTextUpdatesSaved();
+          } catch (err) {
+            setTexts(!enabled);
+            toast.push("error", err instanceof ApiError ? err.message : "Couldn't save text updates");
+          }
         }} />
         Text schedule and punch updates
+        <strong> {textUpdatesSwitchLabel(texts)}</strong>
       </label>
+      {textUpdatesAt && (
+        <p class="text--muted">
+          Last change: {textUpdatesBy === "inbound_stop" ? "STOP" : textUpdatesBy ?? "staff"}
+          {" · "}
+          {formatDateTime(textUpdatesAt.includes("T") ? textUpdatesAt : `${textUpdatesAt.replace(" ", "T")}Z`)}
+        </p>
+      )}
       {qr && (
         <div>
           <img alt="Check-in QR" src={`/api/labor/workers/${subId}/checkin-qr`} width="240" height="240" />

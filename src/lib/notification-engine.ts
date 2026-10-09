@@ -30,6 +30,7 @@
  */
 
 import type { Env } from "../env.js";
+import { dayRateConsentAllowsSend } from "./day-rate-notify.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "./twilio.js";
 import { renderTemplate } from "./merge-render.js";
 
@@ -656,6 +657,8 @@ interface DispatchOpts {
    * without consuming a retry so the cron owns the retry counter.
    */
   leaveQueuedOnFailure?: boolean;
+  /** Test clock. Production callers omit this and use the current time. */
+  now?: Date;
 }
 
 /** Release a mid-flight claim so cron can retry. */
@@ -670,7 +673,7 @@ async function releaseClaim(env: Env, id: string): Promise<void> {
 }
 
 /** Send (or simulate) one due row, applying every send-time business rule. */
-async function dispatchRow(
+export async function dispatchRow(
   env: Env,
   row: LogRow,
   stats: ProcessStats,
@@ -711,7 +714,7 @@ async function dispatchRow(
   // (3) SMS quiet hours — defer outside 08:00–21:00 America/Chicago (Pre-Launch H2).
   // Day-rate schedule and punch texts pass a 07:00 morning floor. The 21:00 end stays.
   if (row.channel === "sms") {
-    const hold = smsQuietDeferral(row.trigger_event);
+    const hold = smsQuietDeferral(row.trigger_event, opts?.now);
     if (hold.defer) {
       await env.DB.prepare(
         "UPDATE notification_logs SET status = 'queued', scheduled_for = ?, error_message = ? WHERE id = ?",
@@ -744,6 +747,18 @@ async function dispatchRow(
         .bind(tomorrow, "deferred: SMS daily limit reached", row.id)
         .run();
       stats.deferred++;
+      return;
+    }
+  }
+
+  // Day-rate schedule and punch texts re-read the worker switch at send time.
+  // Queue-time is not enough: STOP or an uncheck can land after the row exists.
+  // Customer, lead, and true-subcontractor events are not in this set.
+  if (DAY_RATE_WORKER_TEXT_EVENTS.has(row.trigger_event)) {
+    const allowed = await dayRateConsentAllowsSend(env, row.recipient_contact);
+    if (!allowed) {
+      await suppressRow(env, row.id, "text_updates_off");
+      stats.suppressed++;
       return;
     }
   }

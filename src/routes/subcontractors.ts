@@ -88,6 +88,9 @@ interface RawSub {
   worker_type: string | null;
   day_rate: number | null;
   preferred_language?: string | null;
+  text_updates_enabled?: number | null;
+  text_updates_enabled_at?: string | null;
+  text_updates_enabled_by?: string | null;
 }
 
 /** Normalize a raw row (legacy + canonical columns) into the canonical shape. */
@@ -118,6 +121,9 @@ function shape(row: RawSub) {
     worker_type: workerType,
     day_rate: row.day_rate ?? null,
     preferred_language: workerLang(row.preferred_language),
+    text_updates_enabled: (row.text_updates_enabled ?? 0) === 1,
+    text_updates_enabled_at: row.text_updates_enabled_at ?? null,
+    text_updates_enabled_by: row.text_updates_enabled_by ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

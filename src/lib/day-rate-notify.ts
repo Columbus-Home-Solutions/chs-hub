@@ -5,6 +5,7 @@
  */
 
 import type { Env } from "../env.js";
+import { phoneDigits } from "./twilio.js";
 import { centralDate } from "../../shared/labor-week.js";
 
 const HOLD_MS = 15 * 60 * 1000;
@@ -163,6 +164,69 @@ interface QueueArgs {
   added?: boolean;
   link: string;
   past?: boolean;
+}
+
+/** Last-10 phone digits, or blank when the contact is not a phone. */
+function contactDigits(contact: string | null | undefined): string {
+  const digits = phoneDigits(contact).slice(-10);
+  return digits.length === 10 ? digits : "";
+}
+
+/**
+ * True only for an active day-rate worker whose Text updates switch is on.
+ * Inactive, missing, or true-subcontractor matches do not send these two events.
+ */
+export async function dayRateConsentAllowsSend(env: Env, contact: string): Promise<boolean> {
+  const digits = contactDigits(contact);
+  const email = contact.trim().toLowerCase();
+  const row = await env.DB.prepare(
+    `SELECT text_updates_enabled, is_active, worker_type
+       FROM subcontractors
+      WHERE (
+              ? != ''
+              AND substr(replace(replace(replace(replace(COALESCE(phone,''),'(',''),')',''),'-',''),' ',''), -10) = ?
+            )
+         OR (? != '' AND lower(COALESCE(email,'')) = ?)
+      ORDER BY CASE WHEN worker_type = 'day_rate_labor' THEN 0 ELSE 1 END
+      LIMIT 1`,
+  )
+    .bind(digits, digits, email, email)
+    .first<{
+      text_updates_enabled: number | null;
+      is_active: number | null;
+      worker_type: string | null;
+    }>();
+  if (!row || (row.worker_type ?? "subcontractor") !== "day_rate_labor") return false;
+  if (row.is_active === 0) return false;
+  return (row.text_updates_enabled ?? 0) === 1;
+}
+
+/**
+ * Fail queued day-rate texts so they never send. notification_logs has no
+ * skipped/cancelled status, so this uses the same terminal write as other
+ * send-time suppressions: status failed, retry_count 99, error_message
+ * `suppressed:<reason>`.
+ */
+export async function cancelQueuedDayRateNotices(
+  env: Env,
+  match: { phone?: string | null; email?: string | null },
+  reason: "text_updates_off" | "inbound_stop",
+): Promise<number> {
+  const digits = contactDigits(match.phone);
+  const email = (match.email ?? "").trim().toLowerCase();
+  const result = await env.DB.prepare(
+    `UPDATE notification_logs
+        SET status = 'failed', retry_count = 99, error_message = ?
+      WHERE status = 'queued'
+        AND trigger_event IN ('day_rate_schedule', 'day_rate_punch')
+        AND (
+          (? != '' AND substr(replace(replace(replace(replace(COALESCE(recipient_contact,''),'(',''),')',''),'-',''),' ',''), -10) = ?)
+          OR (? != '' AND lower(recipient_contact) = ?)
+        )`,
+  )
+    .bind(`suppressed:${reason}`, digits, digits, email, email)
+    .run();
+  return Number(result.meta?.changes ?? 0);
 }
 
 /** Queue or fold into the worker's open day-rate text. No-op for other worker types, opt-out, or past dates. */

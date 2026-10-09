@@ -21,6 +21,7 @@
 
 import type { Env } from "../env.js";
 import { getTwilioConfig, verifyTwilioSignature, phoneDigits } from "../lib/twilio.js";
+import { cancelQueuedDayRateNotices } from "../lib/day-rate-notify.js";
 import { stopOutreachForClient } from "../lib/lead-stage.js";
 import { allocateNextRequestNumber } from "../lib/number-counters.js";
 import { createOwnerInApp, triggerNotification } from "../lib/notification-engine.js";
@@ -875,7 +876,7 @@ export async function handleTwilioStatus(request: Request, env: Env): Promise<Re
   return json({ received: true, status: mapped, matched: res.meta?.changes ?? 0 });
 }
 
-async function stopWorkerTexts(env: Env, fromDigits: string): Promise<void> {
+export async function stopWorkerTexts(env: Env, fromDigits: string): Promise<void> {
   if (fromDigits.length !== 10) return;
   await env.DB.prepare(
     `UPDATE subcontractors
@@ -886,4 +887,5 @@ async function stopWorkerTexts(env: Env, fromDigits: string): Promise<void> {
   )
     .bind(fromDigits)
     .run();
+  await cancelQueuedDayRateNotices(env, { phone: fromDigits }, "inbound_stop");
 }

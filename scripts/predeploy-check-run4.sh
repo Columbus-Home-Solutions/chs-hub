@@ -30,6 +30,7 @@ src/index.ts
 src/routes/labor-checkin.ts
 tests/labor-checkin.test.ts
 tests/labor-language.test.ts
+tests/text-updates-consent.test.ts
 EOF
 )"
 

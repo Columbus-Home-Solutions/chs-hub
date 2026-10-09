@@ -143,7 +143,7 @@ Role checks are documented per endpoint:
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/webhooks/twilio/inbound` | PUBLIC (verified by Twilio signature) | Inbound SMS — auto-logs to client by phone match |
+| POST | `/api/webhooks/twilio/inbound` | PUBLIC (verified by Twilio signature) | Inbound SMS. Active workers are matched before clients. Public URL: `https://client.homesolutionsar.com/api/webhooks/twilio/inbound` |
 
 ### High Level Sync
 

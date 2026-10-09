@@ -765,6 +765,8 @@ export default {
         p === "/api/webhooks/twilio/call-intake" ||
         p === "/api/webhooks/twilio/call-status" ||
         p === "/api/webhooks/twilio/voice-lsa" ||
+        // Inbound SMS only. Signature-checked in the handler. Status callback stays off this host.
+        p === "/api/webhooks/twilio/inbound" ||
         p === "/api/integrations/boldsign/webhook" ||
         // Legal pages — required on custom domain for A2P 10DLC compliance (unauthenticated).
         p === "/privacy-policy" ||

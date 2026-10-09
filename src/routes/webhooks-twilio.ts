@@ -123,12 +123,23 @@ function classifyInboundKeyword(body: string): "stop" | "start" | "help" | null 
   return null;
 }
 
-async function audit(env: Env, action: string, details: unknown): Promise<void> {
+async function audit(
+  env: Env,
+  action: string,
+  details: unknown,
+  entity?: { type: string; id: string },
+): Promise<void> {
   try {
     await env.DB.prepare(
-      "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, 'system@twilio-webhook', ?, 'communication', ?, ?, datetime('now'))",
+      "INSERT INTO audit_logs (id, user_email, action, entity_type, entity_id, details, created_at) VALUES (?, 'system@twilio-webhook', ?, ?, ?, ?, datetime('now'))",
     )
-      .bind(crypto.randomUUID(), action, crypto.randomUUID(), JSON.stringify(details))
+      .bind(
+        crypto.randomUUID(),
+        action,
+        entity?.type ?? "communication",
+        entity?.id ?? crypto.randomUUID(),
+        JSON.stringify(details),
+      )
       .run();
   } catch {
     /* auditing must never break the webhook */
@@ -158,6 +169,174 @@ async function verify(
   return { ok: true };
 }
 
+/**
+ * URL to put in the Messaging Service "Incoming messages" webhook.
+ * dashboard.homesolutionsar.com is behind Access, so Twilio cannot call it.
+ * client.homesolutionsar.com is public; the host guard allows only this path.
+ * Signature verification uses request.url, which must be this exact URL.
+ */
+export const TWILIO_INBOUND_PUBLIC_URL =
+  "https://client.homesolutionsar.com/api/webhooks/twilio/inbound";
+
+const WORKER_START_BELL = "Worker replied START: switch is still OFF until you turn it on.";
+
+type InboundKeyword = "stop" | "start" | "help";
+
+interface InboundWorker {
+  id: string;
+  worker_type: string | null;
+  name: string | null;
+}
+
+interface InboundClient {
+  id: string;
+  name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+}
+
+/** Twilio Advanced Opt-Out sets OptOutType. That wins over an unusual Body. */
+function inboundKeyword(body: string, optOutType: string): InboundKeyword | null {
+  const typed = optOutType.trim().toUpperCase();
+  if (typed === "STOP" || typed === "START" || typed === "HELP") {
+    return typed.toLowerCase() as InboundKeyword;
+  }
+  return classifyInboundKeyword(body);
+}
+
+function workerLink(worker: InboundWorker): string {
+  return worker.worker_type === "day_rate_labor"
+    ? `/app/labor/${worker.id}`
+    : `/app/subcontractors/${worker.id}`;
+}
+
+async function matchActiveWorkers(env: Env, fromDigits: string): Promise<InboundWorker[]> {
+  if (fromDigits.length !== 10) return [];
+  const { results } = await env.DB.prepare(
+    `SELECT id, worker_type,
+            COALESCE(company_name, company, contact_name, primary_contact, 'Worker') AS name
+       FROM subcontractors
+      WHERE substr(replace(replace(replace(replace(COALESCE(phone,''),'(',''),')',''),'-',''),' ',''), -10) = ?
+        AND COALESCE(is_active, 1) = 1`,
+  )
+    .bind(fromDigits)
+    .all<InboundWorker>();
+  return results ?? [];
+}
+
+async function matchClient(env: Env, fromDigits: string): Promise<InboundClient | null> {
+  if (fromDigits.length !== 10) return null;
+  return env.DB.prepare(
+    `SELECT id, name, first_name, last_name FROM clients
+      WHERE substr(replace(replace(replace(replace(phone,'(',''),')',''),'-',''),' ',''), -10) = ?
+         OR substr(replace(replace(replace(replace(COALESCE(phone_secondary,''),'(',''),')',''),'-',''),' ',''), -10) = ?
+      LIMIT 1`,
+  )
+    .bind(fromDigits, fromDigits)
+    .first<InboundClient>();
+}
+
+function clientDisplayName(client: InboundClient): string {
+  return [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || client.name || "Client";
+}
+
+/** Client STOP/START/HELP side effects. Does not send a reply. */
+async function applyClientKeyword(
+  env: Env,
+  client: InboundClient,
+  keyword: InboundKeyword | null,
+  messageSid: string,
+): Promise<void> {
+  if (keyword === "stop") {
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE clients SET sms_opt_out = 1, sms_opt_out_at = ?, updated_at = datetime('now') WHERE id = ?`,
+    ).bind(now, client.id).run();
+    await mergeClientSmsPrefs(env, client.id, {
+      sms_opt_out: true,
+      sms_opt_out_at: now,
+      sms_opt_out_source: "inbound_stop",
+    });
+    await audit(env, "sms_opt_out_inbound", { client_id: client.id, message_sid: messageSid });
+  } else if (keyword === "start") {
+    await env.DB.prepare(
+      `UPDATE clients SET sms_opt_out = 0, sms_opt_out_at = NULL, updated_at = datetime('now') WHERE id = ?`,
+    ).bind(client.id).run();
+    await mergeClientSmsPrefs(env, client.id, {
+      sms_opt_out: false,
+      sms_opt_out_source: "inbound_start",
+    });
+    await audit(env, "sms_opt_in_inbound", { client_id: client.id, message_sid: messageSid });
+  } else if (keyword === "help") {
+    await audit(env, "sms_help_inbound", { client_id: client.id, message_sid: messageSid });
+  }
+}
+
+async function logClientInbound(
+  env: Env,
+  client: InboundClient,
+  body: string,
+  messageSid: string,
+  bell: boolean,
+): Promise<void> {
+  const name = clientDisplayName(client);
+  await env.DB.prepare(
+    `INSERT INTO communications (
+        id, client_id, channel, direction, summary, body, sent_via, high_level_message_id, created_at
+     ) VALUES (?, ?, 'text_sms', 'inbound', ?, ?, 'twilio', ?, datetime('now'))`,
+  )
+    .bind(crypto.randomUUID(), client.id, `Inbound text from ${name}`, body, messageSid || null)
+    .run();
+  await env.DB.prepare("UPDATE clients SET last_interaction_date = datetime('now') WHERE id = ?")
+    .bind(client.id)
+    .run();
+  try {
+    const openRequest = await env.DB.prepare(
+      `SELECT id FROM estimate_requests
+       WHERE client_id = ? AND status NOT IN ('won', 'lost')
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(client.id)
+      .first<{ id: string }>();
+    if (openRequest) {
+      await env.DB.prepare(
+        `UPDATE estimate_requests
+         SET last_sms_at = datetime('now'), last_sms_preview = ?, updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+        .bind(body.slice(0, 100), openRequest.id)
+        .run();
+    }
+  } catch {
+    // Column may not exist yet if migration hasn't run — safe to skip.
+  }
+  await stopOutreachForClient(env, client.id);
+  if (bell) {
+    await createOwnerInApp(env, {
+      message: `New text from ${name}: ${body.slice(0, 120)}`,
+      linkPath: `/app/clients/${client.id}`,
+      clientId: client.id,
+      dedupe: messageSid ? `inbound:${messageSid}` : null,
+    });
+  }
+  await audit(env, "twilio_inbound_matched", { client_id: client.id, message_sid: messageSid });
+}
+
+function confirmationFor(keyword: InboundKeyword | null, optOutType: string): Response | null {
+  if (optOutType.trim()) return null;
+  if (keyword === "stop") {
+    return twimlReply(
+      "You have been unsubscribed from Columbus Home Solutions messages. Reply START to re-subscribe.",
+    );
+  }
+  if (keyword === "start") {
+    return twimlReply(
+      "You have been re-subscribed to Columbus Home Solutions messages. Reply STOP at any time to unsubscribe.",
+    );
+  }
+  return null;
+}
+
 // ─── POST /api/webhooks/twilio/inbound ────────────────────────────────────────
 
 export async function handleTwilioInbound(request: Request, env: Env): Promise<Response> {
@@ -171,113 +350,67 @@ export async function handleTwilioInbound(request: Request, env: Env): Promise<R
   const form = new Map(entries);
   const from = form.get("From") ?? "";
   const body = form.get("Body") ?? "";
+  const optOutType = form.get("OptOutType") ?? "";
   const messageSid = form.get("MessageSid") ?? form.get("SmsSid") ?? "";
   const fromDigits = phoneDigits(from).slice(-10);
+  const keyword = inboundKeyword(body, optOutType);
 
-  // Match the From number against client phone / phone_secondary (last 10).
-  let client: { id: string; name: string | null; first_name: string | null; last_name: string | null } | null = null;
-  if (fromDigits.length === 10) {
-    client = await env.DB.prepare(
-      `SELECT id, name, first_name, last_name FROM clients
-        WHERE substr(replace(replace(replace(replace(phone,'(',''),')',''),'-',''),' ',''), -10) = ?
-           OR substr(replace(replace(replace(replace(COALESCE(phone_secondary,''),'(',''),')',''),'-',''),' ',''), -10) = ?
-        LIMIT 1`,
-    )
-      .bind(fromDigits, fromDigits)
-      .first();
-  }
+  const workers = await matchActiveWorkers(env, fromDigits);
+  const client = await matchClient(env, fromDigits);
 
-  if (fromDigits.length === 10 && classifyInboundKeyword(body) === "stop") {
-    await stopWorkerTexts(env, fromDigits);
+  if (workers.length > 0) {
+    const worker = workers[0];
+    if (keyword === "stop") {
+      await stopWorkerTexts(env, fromDigits);
+      for (const row of workers) {
+        await audit(env, "worker_text_stop", { message_sid: messageSid, keyword }, { type: "subcontractor", id: row.id });
+      }
+      if (client) await applyClientKeyword(env, client, "stop", messageSid);
+      if (client) await logClientInbound(env, client, body, messageSid, false);
+      await createOwnerInApp(env, {
+        message: "Worker STOP: text updates turned off.",
+        linkPath: workerLink(worker),
+        dedupe: messageSid ? `inbound:${messageSid}` : null,
+      });
+      return (client ? confirmationFor("stop", optOutType) : null) ?? twiml();
+    }
+    if (keyword === "start") {
+      for (const row of workers) {
+        await audit(env, "worker_text_start", { message_sid: messageSid, keyword }, { type: "subcontractor", id: row.id });
+      }
+      if (client) await applyClientKeyword(env, client, "start", messageSid);
+      if (client) await logClientInbound(env, client, body, messageSid, false);
+      await createOwnerInApp(env, {
+        message: WORKER_START_BELL,
+        linkPath: workerLink(worker),
+        dedupe: messageSid ? `inbound:${messageSid}` : null,
+      });
+      return (client ? confirmationFor("start", optOutType) : null) ?? twiml();
+    }
+    for (const row of workers) {
+      await audit(
+        env,
+        "worker_text_reply",
+        { message_sid: messageSid, body: body.slice(0, 500) },
+        { type: "subcontractor", id: row.id },
+      );
+    }
+    await createOwnerInApp(env, {
+      message: `Worker reply: ${body.slice(0, 120)}`,
+      linkPath: workerLink(worker),
+      dedupe: messageSid ? `inbound:${messageSid}` : null,
+    });
+    return twiml();
   }
 
   if (client) {
-    const name = [client.first_name, client.last_name].filter(Boolean).join(" ").trim() || client.name || "Client";
-    const keyword = classifyInboundKeyword(body);
-      if (keyword === "stop") {
-      const now = new Date().toISOString();
-      await env.DB.prepare(
-        `UPDATE clients SET sms_opt_out = 1, sms_opt_out_at = ?, updated_at = datetime('now') WHERE id = ?`,
-      ).bind(now, client.id).run();
-      await mergeClientSmsPrefs(env, client.id, {
-        sms_opt_out: true,
-        sms_opt_out_at: now,
-        sms_opt_out_source: "inbound_stop",
-      });
-      await audit(env, "sms_opt_out_inbound", { client_id: client.id, message_sid: messageSid });
-    } else if (keyword === "start") {
-      await env.DB.prepare(
-        `UPDATE clients SET sms_opt_out = 0, sms_opt_out_at = NULL, updated_at = datetime('now') WHERE id = ?`,
-      ).bind(client.id).run();
-      await mergeClientSmsPrefs(env, client.id, {
-        sms_opt_out: false,
-        sms_opt_out_source: "inbound_start",
-      });
-      await audit(env, "sms_opt_in_inbound", { client_id: client.id, message_sid: messageSid });
-    } else if (keyword === "help") {
-      await audit(env, "sms_help_inbound", { client_id: client.id, message_sid: messageSid });
-    }
-
-    const commId = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO communications (
-          id, client_id, channel, direction, summary, body, sent_via, high_level_message_id, created_at
-       ) VALUES (?, ?, 'text_sms', 'inbound', ?, ?, 'twilio', ?, datetime('now'))`,
-    )
-      .bind(commId, client.id, `Inbound text from ${name}`, body, messageSid || null)
-      .run();
-    await env.DB.prepare("UPDATE clients SET last_interaction_date = datetime('now') WHERE id = ?")
-      .bind(client.id)
-      .run();
-
-    // Update last_sms_at / last_sms_preview on the most recent open estimate_request
-    // for this client (only if the columns exist — safe with ?? fallback in shape()).
-    try {
-      const openRequest = await env.DB.prepare(
-        `SELECT id FROM estimate_requests
-         WHERE client_id = ? AND status NOT IN ('won', 'lost')
-         ORDER BY created_at DESC LIMIT 1`,
-      )
-        .bind(client.id)
-        .first<{ id: string }>();
-      if (openRequest) {
-        await env.DB.prepare(
-          `UPDATE estimate_requests
-           SET last_sms_at = datetime('now'), last_sms_preview = ?, updated_at = datetime('now')
-           WHERE id = ?`,
-        )
-          .bind(body.slice(0, 100), openRequest.id)
-          .run();
-      }
-    } catch {
-      // Column may not exist yet if migration hasn't run — safe to skip.
-    }
-
-    await stopOutreachForClient(env, client.id);
-
-    await createOwnerInApp(env, {
-      message: `New text from ${name}: ${body.slice(0, 120)}`,
-      linkPath: `/app/clients/${client.id}`,
-      clientId: client.id,
-      dedupe: messageSid ? `inbound:${messageSid}` : null,
-    });
-    await audit(env, "twilio_inbound_matched", { client_id: client.id, message_sid: messageSid });
-
-    // Return compliance TwiML reply for STOP/START keywords.
-    if (keyword === "stop") {
-      return twimlReply(
-        "You have been unsubscribed from Columbus Home Solutions messages. Reply START to re-subscribe.",
-      );
-    }
-    if (keyword === "start") {
-      return twimlReply(
-        "You have been re-subscribed to Columbus Home Solutions messages. Reply STOP at any time to unsubscribe.",
-      );
-    }
+    await applyClientKeyword(env, client, keyword, messageSid);
+    await logClientInbound(env, client, body, messageSid, true);
+    return confirmationFor(keyword, optOutType) ?? twiml();
   } else {
     // Check opt-out BEFORE lead creation — an unknown number sending STOP
     // should never result in a lead record.
-    const unknownKeyword = classifyInboundKeyword(body);
+    const unknownKeyword = keyword;
     if (unknownKeyword === "stop" || unknownKeyword === "help" || unknownKeyword === "start") {
       // Opt-out/help from unknown number: audit only, no lead.
       await audit(env, `twilio_inbound_unknown_${unknownKeyword}`, { from, message_sid: messageSid });

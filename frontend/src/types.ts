@@ -307,6 +307,9 @@ export interface EstimateRequest {
   lead_source_detail: string | null;
   high_level_opportunity_id: string | null;
   appointment_date: string | null;
+  appointment_time?: string | null;
+  /** `customer_self_scheduled` when the lead booked from the outreach link. */
+  booking_source?: string | null;
   appointment_completed: boolean;
   visit_notes: string | null;
   scope_draft: ScopeDraftItem[] | null;

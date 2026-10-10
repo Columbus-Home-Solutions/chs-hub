@@ -144,6 +144,8 @@ Role checks are documented per endpoint:
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
 | POST | `/api/webhooks/twilio/inbound` | PUBLIC (verified by Twilio signature) | Inbound SMS. Active workers are matched before clients. Public URL: `https://client.homesolutionsar.com/api/webhooks/twilio/inbound` |
+| GET | `/api/public/book/:token` | public token | Open estimate-visit slots for one lead. No calendar titles. |
+| POST | `/api/public/book/:token` | public token | Book one slot through the existing appointment path. Page: `https://client.homesolutionsar.com/book/:token` |
 
 ### High Level Sync
 

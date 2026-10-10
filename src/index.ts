@@ -426,6 +426,7 @@ import {
   handleStripeWebhook,
 } from "./routes/public-quote.js";
 import { handlePublicCompanyAsset } from "./routes/public-company-assets.js";
+import { handlePublicBookingGet, handlePublicBookingPost } from "./routes/public-booking.js";
 import {
   handleInvoiceList,
   handleInvoiceGet,
@@ -760,6 +761,9 @@ export default {
         // Sprint 39 Run 1: sub-facing onboarding packet (token auth, no Access).
         p === "/packet" || p.startsWith("/packet/") ||
         p.startsWith("/api/packet/") ||
+        // Customer self-scheduling. Token is the only credential. No wildcard.
+        p === "/book" || p.startsWith("/book/") ||
+        p.startsWith("/api/public/book/") ||
         p === "/api/webhooks/stripe" ||
         p === "/api/webhooks/twilio/call-whisper" ||
         p === "/api/webhooks/twilio/call-intake" ||
@@ -843,6 +847,13 @@ export default {
     // UNAUTHENTICATED on purpose: gated only by the estimate's portal_token
     // (or, for the webhook, the Stripe signature). No guard()/Access here.
     // Matched early so the token paths never fall through to auth'd routes.
+    const publicBook = url.pathname.match(/^\/api\/public\/book\/([^/]+)$/);
+    if (publicBook && request.method === "GET") {
+      return handlePublicBookingGet(request, env, decodeURIComponent(publicBook[1]));
+    }
+    if (publicBook && request.method === "POST") {
+      return handlePublicBookingPost(request, env, decodeURIComponent(publicBook[1]));
+    }
     const publicCompanyAsset = url.pathname.match(
       /^\/api\/public\/company-assets\/([a-z0-9-]+)$/,
     );
@@ -2951,6 +2962,14 @@ export default {
       const bidHtmlUrl = new URL(request.url);
       bidHtmlUrl.pathname = "/app/sub.html";
       return env.ASSETS.fetch(new Request(bidHtmlUrl.toString(), { method: "GET" }));
+    }
+
+    // ── Customer self-scheduling (token-gated, no Access) ────────────
+    // /book/:token — standalone page. Calls /api/public/book/:token.
+    if (url.pathname === "/book" || url.pathname.startsWith("/book/")) {
+      const bookHtmlUrl = new URL(request.url);
+      bookHtmlUrl.pathname = "/app/book.html";
+      return env.ASSETS.fetch(new Request(bookHtmlUrl.toString(), { method: "GET" }));
     }
 
     // ── Sub onboarding packet (Sprint 39 Run 1) ──────────────────────

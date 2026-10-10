@@ -33,6 +33,7 @@ import type { Env } from "../env.js";
 import { isWithinCentralSendWindow } from "./central-send-window.js";
 import { sendSms, getTwilioConfig, isConfigured as twilioConfigured } from "./twilio.js";
 import { renderTemplateText } from "./merge-render.js";
+import { bookingLinkForLead } from "./booking-link.js";
 
 // ─── touch schedule ───────────────────────────────────────────────────────────
 
@@ -172,6 +173,7 @@ async function processOneOutreach(
     .first<{ value: string }>();
 
   const mergeCtx = buildMergeContext(row);
+  mergeCtx.booking_link = await bookingLinkForLead(env, row.id);
   const smsBody = smsSetting?.value ? renderTemplate(smsSetting.value, mergeCtx) : null;
 
   const live = (env.NOTIFICATIONS_DISPATCH_MODE ?? "").toLowerCase() === "live";

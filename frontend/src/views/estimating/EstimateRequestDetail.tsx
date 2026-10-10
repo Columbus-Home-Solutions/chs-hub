@@ -11,7 +11,7 @@ import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
-import { formatDateTime, formatStatus } from "../../lib/format";
+import { formatDate, formatDateTime, formatStatus } from "../../lib/format";
 import { outreachLabel } from "../../lib/outreach-label";
 import { jobTypeDisplayLabel } from "@chs/shared/job-type-label";
 import { formatCurrency } from "../../lib/format";
@@ -1033,9 +1033,14 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             {r.appointment_date ? (
               <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
                 <div>
-                  <div>{formatDateTime(r.appointment_date)}</div>
+                  <div>
+                    {r.appointment_time
+                      ? `${formatDate(r.appointment_date.slice(0, 10))} at ${r.appointment_time}`
+                      : formatDateTime(r.appointment_date)}
+                  </div>
                   <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
                     {r.appointment_completed ? "Completed" : "Scheduled"}
+                    {r.booking_source === "customer_self_scheduled" ? " · Self-scheduled by customer" : ""}
                   </div>
                 </div>
                 <div class="flex gap-sm">

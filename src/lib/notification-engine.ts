@@ -397,7 +397,7 @@ async function buildMergeContext(env: Env, ctx: TriggerContext): Promise<Record<
 
   if (ctx.estimateRequestId) {
     const r = await env.DB.prepare(
-      "SELECT property_address, property_city, property_state, property_zip, appointment_date, job_type FROM estimate_requests WHERE id = ?",
+      "SELECT property_address, property_city, property_state, property_zip, appointment_date, appointment_time, job_type FROM estimate_requests WHERE id = ?",
     )
       .bind(ctx.estimateRequestId)
       .first<Record<string, string | null>>();
@@ -408,7 +408,8 @@ async function buildMergeContext(env: Env, ctx: TriggerContext): Promise<Record<
       if (r.property_zip) m.property_zip = r.property_zip;
       if (r.appointment_date) {
         m.appointment_date = formatDate(r.appointment_date);
-        m.appointment_time = formatTime(r.appointment_date);
+        const storedTime = (r.appointment_time ?? "").trim();
+        m.appointment_time = storedTime || formatTime(r.appointment_date);
       }
       if (r.job_type) m.job_type = titleCase(r.job_type);
     }

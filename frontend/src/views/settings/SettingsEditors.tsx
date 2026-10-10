@@ -335,9 +335,138 @@ function TouchPanel({
   );
 }
 
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function SelfSchedulingCard() {
+  const toast = useToast();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void api
+      .get<{ settings: SettingShape[] }>("/api/settings/category/scheduling")
+      .then((r) => {
+        const map: Record<string, string> = {};
+        for (const s of r.settings) map[s.key] = s.value;
+        setValues(map);
+      })
+      .catch((e) => toast.push("error", errMsg(e)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const set = (key: string, value: string) => setValues((prev) => ({ ...prev, [key]: value }));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const keys = [
+        "scheduling_enabled",
+        "scheduling_days",
+        "scheduling_start",
+        "scheduling_end",
+        "scheduling_visit_minutes",
+        "scheduling_buffer_minutes",
+        "scheduling_min_notice_hours",
+        "scheduling_horizon_days",
+        "scheduling_max_per_day",
+        "scheduling_slot_minutes",
+        "scheduling_blocked_dates",
+      ];
+      for (const key of keys) {
+        await api.put(`/api/settings/${encodeURIComponent(key)}`, { value: values[key] ?? "" });
+      }
+      toast.push("success", "Scheduling settings saved.");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <Spinner />;
+
+  const days = (values.scheduling_days ?? "1,2,3,4,5,6").split(",").map((d) => d.trim());
+  const toggleDay = (n: number) => {
+    const next = new Set(days.filter(Boolean));
+    const key = String(n);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    set("scheduling_days", [...next].sort().join(","));
+  };
+
+  return (
+    <div class="card" style={{ marginBottom: "var(--space-lg)" }}>
+      <div class="card__header">
+        <span class="card__title">Customer self-scheduling</span>
+        <span class="badge">{values.scheduling_enabled === "1" ? "ON" : "OFF"}</span>
+      </div>
+      <div class="card__body">
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-md)" }}>
+          Off until you turn it on. Visits book themselves into the same appointment path. Times are Central.
+        </p>
+        <label class="form-label" style={{ display: "flex", gap: "var(--space-sm)", alignItems: "center" }}>
+          <input
+            type="checkbox"
+            checked={values.scheduling_enabled === "1"}
+            onChange={(e) => set("scheduling_enabled", (e.target as HTMLInputElement).checked ? "1" : "0")}
+          />
+          Allow customers to book their own estimate visit
+        </label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-sm)", margin: "var(--space-md) 0" }}>
+          {DAY_LABELS.map((label, n) => (
+            <label key={label} class="form-label" style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+              <input type="checkbox" checked={days.includes(String(n))} onChange={() => toggleDay(n)} />
+              {label}
+            </label>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-sm)" }}>
+          <label class="form-label">Start
+            <input class="form-input" value={values.scheduling_start ?? "08:00"} onInput={(e) => set("scheduling_start", (e.target as HTMLInputElement).value)} />
+          </label>
+          <label class="form-label">End
+            <input class="form-input" value={values.scheduling_end ?? "17:00"} onInput={(e) => set("scheduling_end", (e.target as HTMLInputElement).value)} />
+          </label>
+          <label class="form-label">Visit minutes
+            <input class="form-input" value={values.scheduling_visit_minutes ?? "60"} onInput={(e) => set("scheduling_visit_minutes", (e.target as HTMLInputElement).value)} />
+          </label>
+          <label class="form-label">Travel buffer minutes
+            <input class="form-input" value={values.scheduling_buffer_minutes ?? "30"} onInput={(e) => set("scheduling_buffer_minutes", (e.target as HTMLInputElement).value)} />
+          </label>
+          <label class="form-label">Minimum notice hours
+            <input class="form-input" value={values.scheduling_min_notice_hours ?? "4"} onInput={(e) => set("scheduling_min_notice_hours", (e.target as HTMLInputElement).value)} />
+          </label>
+          <label class="form-label">Days ahead
+            <input class="form-input" value={values.scheduling_horizon_days ?? "14"} onInput={(e) => set("scheduling_horizon_days", (e.target as HTMLInputElement).value)} />
+          </label>
+          <label class="form-label">Max self-booked per day
+            <input class="form-input" value={values.scheduling_max_per_day ?? "2"} onInput={(e) => set("scheduling_max_per_day", (e.target as HTMLInputElement).value)} />
+          </label>
+          <label class="form-label">Slot increment minutes
+            <input class="form-input" value={values.scheduling_slot_minutes ?? "30"} onInput={(e) => set("scheduling_slot_minutes", (e.target as HTMLInputElement).value)} />
+          </label>
+        </div>
+        <label class="form-label" style={{ marginTop: "var(--space-sm)" }}>Blocked dates
+          <textarea
+            class="form-textarea"
+            rows={2}
+            placeholder="2026-12-25"
+            value={values.scheduling_blocked_dates ?? ""}
+            onInput={(e) => set("scheduling_blocked_dates", (e.target as HTMLTextAreaElement).value)}
+          />
+        </label>
+        <Button variant="primary" size="sm" disabled={saving} onClick={save}>
+          {saving ? "Saving…" : "Save scheduling"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Lead Outreach Tab (Sprint 27) ────────────────────────────────────────────
 
-const OUTREACH_MERGE_TAGS = ["{{client_first_name}}", "{{job_type}}"];
+const OUTREACH_MERGE_TAGS = ["{{client_first_name}}", "{{job_type}}", "{{booking_link}}"];
 const POST_VISIT_MERGE_TAGS = ["{{client_first_name}}", "{{job_type}}", "{{property_address}}"];
 
 function OutreachSmsPanel({
@@ -652,7 +781,11 @@ export function LeadOutreachTab() {
           Sends when a lead is moved to Contacted. Days 1, 2, and 3 go out between 9:00 AM and 7:00 PM Central.
           The sequence stops when they reply, an appointment is scheduled, or the lead leaves Contacted.
           Edit the SMS templates below. Changes are saved immediately and audit-logged.
+          Add {"{{booking_link}}"} to Day 1, 2, and 3 yourself. Saved template text is not changed from here.
+          The link stays blank until customer self-scheduling is turned on.
         </p>
+
+        <SelfSchedulingCard />
 
         <OutreachSmsPanel
           day={1}

@@ -930,6 +930,7 @@ export async function setAppointmentFromBooking(
   fields: {
     appointmentDate: string;
     appointmentTime: string;
+    estimatorUserId: string | null;
     propertyAddress?: string | null;
     visitMinutes: number;
     fromStatus: string;
@@ -957,6 +958,7 @@ export async function setAppointmentFromBooking(
        appointment_time = ?,
        status = 'appointment_set',
        booking_source = ?,
+       estimator_user_id = ?,
        property_address = CASE WHEN ? IS NULL THEN property_address ELSE ? END,
        updated_at = ?
      WHERE id = ?
@@ -975,6 +977,7 @@ export async function setAppointmentFromBooking(
       fields.appointmentDate,
       fields.appointmentTime,
       BOOKING_SOURCE,
+      fields.estimatorUserId,
       address,
       address,
       new Date().toISOString(),

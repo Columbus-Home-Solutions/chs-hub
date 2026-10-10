@@ -3,8 +3,9 @@
  * GET/POST /api/public/book/:token
  *
  * Availability is a live Google free/busy read of the primary calendar plus
- * CHS schedule entries, warranty calls, and other estimate visits. Event
- * titles are never returned. If Google cannot be read, the page fails closed.
+ * the estimator's CHS time: their unassigned or own schedule, warranty calls,
+ * and estimate visits, and the first day of each live job. Event titles are
+ * never returned. If Google cannot be read, the page fails closed.
  */
 
 import type { Env } from "../env.js";
@@ -14,17 +15,18 @@ import { setAppointmentFromBooking } from "./estimate-requests.js";
 import {
   BOOKABLE_STATUSES,
   BOOKING_PHONE,
-  BOOKING_SOURCE,
   type BusyInterval,
   type OpenSlot,
   type SchedulingRules,
-  appointmentToBusy,
+  BLOCKING_JOB_STATUSES,
+  type ChsEstimateVisit,
+  type ChsScheduleEntry,
+  type ChsWarrantyCall,
   centralDateKey,
+  chsBusyForEstimator,
   formatCentralWhen,
   formatSlotLabel,
   generateSlots,
-  parseClock,
-  rowToBusy,
 } from "../lib/self-scheduling.js";
 
 export interface BookingClock {
@@ -127,44 +129,67 @@ async function readGoogleBusy(env: Env, timeMin: string, timeMax: string): Promi
   });
 }
 
+const BLOCKING_STATUS_SQL = BLOCKING_JOB_STATUSES.map((s) => `'${s}'`).join(", ");
+
+async function ownerUserId(env: Env): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT id FROM users WHERE role = 'owner' AND is_active = 1 ORDER BY created_at ASC LIMIT 1",
+  ).first<{ id: string }>();
+  return row?.id ?? null;
+}
+
 async function loadChsBusy(
   env: Env,
   rules: SchedulingRules,
   leadId: string,
+  estimatorId: string | null,
   fromDate: string,
   toDate: string,
 ): Promise<{ busy: BusyInterval[]; selfBookedByDate: Record<string, number> }> {
-  const busy: BusyInterval[] = [];
   const schedule = await env.DB.prepare(
-    `SELECT scheduled_date, start_time, end_time, status
-       FROM schedule_entries
-      WHERE scheduled_date >= ? AND scheduled_date <= ?
-        AND COALESCE(status, 'scheduled') NOT IN ('cancelled', 'canceled')`,
+    `SELECT e.job_id, j.status AS job_status, e.scheduled_date, e.start_time, e.end_time,
+            e.sub_id, j.assigned_to, e.status
+       FROM schedule_entries e
+       JOIN jobs j ON j.id = e.job_id
+      WHERE e.scheduled_date >= ? AND e.scheduled_date <= ?
+        AND COALESCE(e.status, 'scheduled') NOT IN ('cancelled', 'canceled')
+        AND lower(COALESCE(j.status, '')) IN (${BLOCKING_STATUS_SQL})`,
   )
     .bind(fromDate, toDate + "T23:59:59")
-    .all<{ scheduled_date: string; start_time: string | null; end_time: string | null; status: string | null }>();
-  for (const row of schedule.results ?? []) {
-    const interval = rowToBusy(row.scheduled_date, row.start_time, row.end_time, rules);
-    if (interval) busy.push(interval);
-  }
+    .all<{
+      job_id: string;
+      job_status: string | null;
+      scheduled_date: string;
+      start_time: string | null;
+      end_time: string | null;
+      sub_id: string | null;
+      assigned_to: string | null;
+      status: string | null;
+    }>();
 
   const warranty = await env.DB.prepare(
-    `SELECT scheduled_date, scheduled_end, status
-       FROM warranty_calls
-      WHERE scheduled_date IS NOT NULL
-        AND substr(scheduled_date, 1, 10) >= ?
-        AND substr(scheduled_date, 1, 10) <= ?
-        AND status IN ('open', 'scheduled')`,
+    `SELECT j.status AS job_status, w.scheduled_date, w.scheduled_end,
+            w.assigned_to, w.assigned_sub_id, w.status
+       FROM warranty_calls w
+       JOIN jobs j ON j.id = w.job_id
+      WHERE w.scheduled_date IS NOT NULL
+        AND substr(w.scheduled_date, 1, 10) >= ?
+        AND substr(w.scheduled_date, 1, 10) <= ?
+        AND w.status IN ('open', 'scheduled')
+        AND lower(COALESCE(j.status, '')) IN (${BLOCKING_STATUS_SQL})`,
   )
     .bind(fromDate, toDate)
-    .all<{ scheduled_date: string; scheduled_end: string | null }>();
-  for (const row of warranty.results ?? []) {
-    const interval = rowToBusy(row.scheduled_date, null, row.scheduled_end, rules);
-    if (interval) busy.push(interval);
-  }
+    .all<{
+      job_status: string | null;
+      scheduled_date: string;
+      scheduled_end: string | null;
+      assigned_to: string | null;
+      assigned_sub_id: string | null;
+      status: string | null;
+    }>();
 
   const appointments = await env.DB.prepare(
-    `SELECT id, appointment_date, appointment_time, booking_source
+    `SELECT id, appointment_date, appointment_time, booking_source, estimator_user_id, status
        FROM estimate_requests
       WHERE appointment_date IS NOT NULL
         AND status NOT IN ('lost', 'declined')
@@ -172,34 +197,49 @@ async function loadChsBusy(
         AND substr(appointment_date, 1, 10) <= ?`,
   )
     .bind(fromDate, toDate)
-    .all<{ id: string; appointment_date: string; appointment_time: string | null; booking_source: string | null }>();
+    .all<{
+      id: string;
+      appointment_date: string;
+      appointment_time: string | null;
+      booking_source: string | null;
+      estimator_user_id: string | null;
+      status: string | null;
+    }>();
 
-  const selfBookedByDate: Record<string, number> = {};
-  for (const row of appointments.results ?? []) {
-    if (row.id === leadId) continue;
-    if (row.booking_source === BOOKING_SOURCE) {
-      const key = row.appointment_date.includes("T")
-        ? centralDateKey(new Date(row.appointment_date))
-        : row.appointment_date.slice(0, 10);
-      selfBookedByDate[key] = (selfBookedByDate[key] ?? 0) + 1;
-    }
-    if (row.appointment_date.includes("T")) {
-      const interval = appointmentToBusy(row.appointment_date, rules.visitMinutes);
-      if (interval) busy.push(interval);
-    } else {
-      const startMin = parseClock(row.appointment_time) ?? rules.startMin;
-      const endMin = Math.min(rules.endMin, startMin + rules.visitMinutes);
-      const interval = rowToBusy(row.appointment_date, minutesToHm(startMin), minutesToHm(endMin), rules);
-      if (interval) busy.push(interval);
-    }
-  }
-  return { busy, selfBookedByDate };
-}
-
-function minutesToHm(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  const scheduleRows: ChsScheduleEntry[] = (schedule.results ?? []).map((row) => ({
+    jobId: row.job_id,
+    jobStatus: row.job_status,
+    date: row.scheduled_date,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    subId: row.sub_id,
+    assignedTo: row.assigned_to,
+    entryStatus: row.status,
+  }));
+  const warrantyRows: ChsWarrantyCall[] = (warranty.results ?? []).map((row) => ({
+    jobStatus: row.job_status,
+    date: row.scheduled_date,
+    endTime: row.scheduled_end,
+    assignedTo: row.assigned_to,
+    assignedSubId: row.assigned_sub_id,
+    status: row.status,
+  }));
+  const visits: ChsEstimateVisit[] = (appointments.results ?? []).map((row) => ({
+    id: row.id,
+    appointmentDate: row.appointment_date,
+    appointmentTime: row.appointment_time,
+    estimatorUserId: row.estimator_user_id,
+    status: row.status,
+    bookingSource: row.booking_source,
+  }));
+  return chsBusyForEstimator({
+    estimatorId,
+    rules,
+    excludeLeadId: leadId,
+    schedule: scheduleRows,
+    warranty: warrantyRows,
+    visits,
+  });
 }
 
 async function openSlots(
@@ -223,7 +263,8 @@ async function openSlots(
       return "unavailable";
     }
   }
-  const chs = await loadChsBusy(env, rules, lead.id, today, toDate);
+  const estimatorId = await ownerUserId(env);
+  const chs = await loadChsBusy(env, rules, lead.id, estimatorId, today, toDate);
   return generateSlots({
     now,
     rules,
@@ -327,9 +368,11 @@ export async function handlePublicBookingPost(
     return json({ error: "address_required", slots, phone: BOOKING_PHONE }, 400);
   }
 
+  const estimatorId = await ownerUserId(env);
   const outcome = await setAppointmentFromBooking(env, lead.id, {
     appointmentDate: chosen.start,
     appointmentTime: chosen.label,
+    estimatorUserId: estimatorId,
     propertyAddress: address || null,
     visitMinutes: rules.visitMinutes,
     fromStatus: lead.status,

@@ -8,6 +8,8 @@
 ALTER TABLE estimate_requests ADD COLUMN booking_token TEXT;
 ALTER TABLE estimate_requests ADD COLUMN booking_token_expires_at TEXT;
 ALTER TABLE estimate_requests ADD COLUMN booking_source TEXT;
+-- Who the visit is for. NULL means the owner (existing and hand-set visits).
+ALTER TABLE estimate_requests ADD COLUMN estimator_user_id TEXT REFERENCES users(id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_estimate_requests_booking_token
   ON estimate_requests(booking_token);

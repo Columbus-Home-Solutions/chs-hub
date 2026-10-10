@@ -232,6 +232,165 @@ export function rowToBusy(
   };
 }
 
+/**
+ * Jobs whose schedule can block the estimator. The schedule's active set,
+ * plus `late`: that status is stored on open Jobber jobs that are past due.
+ * on_the_way, upcoming, and active are jobs-list filters only — this code
+ * never writes them onto jobs.
+ */
+export const BLOCKING_JOB_STATUSES = [
+  "deposit_paid",
+  "scheduled",
+  "in_progress",
+  "punch_list",
+  "late",
+] as const;
+
+export function jobBlocksAvailability(status: string | null | undefined): boolean {
+  return (BLOCKING_JOB_STATUSES as readonly string[]).includes((status ?? "").trim().toLowerCase());
+}
+
+export interface ChsScheduleEntry {
+  jobId: string;
+  jobStatus: string | null;
+  date: string;
+  startTime: string | null;
+  endTime: string | null;
+  subId: string | null;
+  /** jobs.assigned_to. Ignored when subId is set, except on the job's first day. */
+  assignedTo: string | null;
+  entryStatus?: string | null;
+}
+
+export interface ChsWarrantyCall {
+  jobStatus: string | null;
+  date: string;
+  endTime: string | null;
+  assignedTo: string | null;
+  assignedSubId: string | null;
+  status: string | null;
+}
+
+export interface ChsEstimateVisit {
+  id: string;
+  appointmentDate: string;
+  appointmentTime: string | null;
+  estimatorUserId: string | null;
+  status: string | null;
+  bookingSource: string | null;
+}
+
+function cleanId(value: string | null | undefined): string | null {
+  const s = (value ?? "").trim();
+  return s ? s : null;
+}
+
+function entryCancelled(status: string | null | undefined): boolean {
+  const s = (status ?? "").trim().toLowerCase();
+  return s === "cancelled" || s === "canceled";
+}
+
+function samePerson(assignedTo: string | null, estimatorId: string | null): boolean {
+  return !!estimatorId && assignedTo === estimatorId;
+}
+
+/** Block when the person is the estimator or nobody. A different user does not. */
+function personBlocks(assignedTo: string | null, estimatorId: string | null): boolean {
+  return assignedTo == null || samePerson(assignedTo, estimatorId);
+}
+
+function entryInterval(
+  date: string,
+  startTime: string | null,
+  endTime: string | null,
+  rules: SchedulingRules,
+  fullDay: boolean,
+): BusyInterval | null {
+  if (fullDay && !cleanId(startTime) && !cleanId(endTime)) {
+    return rowToBusy(date, null, null, rules);
+  }
+  return rowToBusy(date, startTime, endTime, rules);
+}
+
+/**
+ * CHS busy time for one estimator. Google is not included.
+ * First day of a job is the earliest non-cancelled schedule entry date.
+ */
+export function chsBusyForEstimator(args: {
+  estimatorId: string | null;
+  rules: SchedulingRules;
+  excludeLeadId?: string | null;
+  schedule: ChsScheduleEntry[];
+  warranty: ChsWarrantyCall[];
+  visits: ChsEstimateVisit[];
+}): { busy: BusyInterval[]; selfBookedByDate: Record<string, number> } {
+  const busy: BusyInterval[] = [];
+  const { rules, estimatorId } = args;
+
+  const byJob = new Map<string, ChsScheduleEntry[]>();
+  for (const row of args.schedule) {
+    if (!jobBlocksAvailability(row.jobStatus) || entryCancelled(row.entryStatus)) continue;
+    const date = row.date.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const list = byJob.get(row.jobId) ?? [];
+    list.push({ ...row, date });
+    byJob.set(row.jobId, list);
+  }
+  for (const rows of byJob.values()) {
+    const firstDate = rows.map((r) => r.date).sort()[0];
+    for (const row of rows) {
+      const onFirstDay = row.date === firstDate;
+      const subId = cleanId(row.subId);
+      if (!onFirstDay && subId) continue;
+      if (!onFirstDay && !personBlocks(cleanId(row.assignedTo), estimatorId)) continue;
+      const hasTimes = parseClock(row.startTime) != null && parseClock(row.endTime) != null;
+      const interval = entryInterval(row.date, row.startTime, row.endTime, rules, onFirstDay && !hasTimes);
+      if (interval) busy.push(interval);
+    }
+  }
+
+  for (const row of args.warranty) {
+    const status = (row.status ?? "").trim().toLowerCase();
+    if (status !== "open" && status !== "scheduled") continue;
+    if (!jobBlocksAvailability(row.jobStatus)) continue;
+    if (cleanId(row.assignedSubId)) continue;
+    if (!personBlocks(cleanId(row.assignedTo), estimatorId)) continue;
+    const interval = rowToBusy(row.date, null, row.endTime, rules);
+    if (interval) busy.push(interval);
+  }
+
+  const selfBookedByDate: Record<string, number> = {};
+  for (const row of args.visits) {
+    const status = (row.status ?? "").trim().toLowerCase();
+    if (status === "lost" || status === "declined") continue;
+    if (!row.appointmentDate) continue;
+    if (args.excludeLeadId && row.id === args.excludeLeadId) continue;
+    if (!personBlocks(cleanId(row.estimatorUserId), estimatorId)) continue;
+    if (row.bookingSource === BOOKING_SOURCE && row.appointmentDate) {
+      const key = row.appointmentDate.includes("T")
+        ? centralDateKey(new Date(row.appointmentDate))
+        : row.appointmentDate.slice(0, 10);
+      selfBookedByDate[key] = (selfBookedByDate[key] ?? 0) + 1;
+    }
+    if (row.appointmentDate.includes("T")) {
+      const interval = appointmentToBusy(row.appointmentDate, rules.visitMinutes);
+      if (interval) busy.push(interval);
+    } else {
+      const startMin = parseClock(row.appointmentTime) ?? rules.startMin;
+      const endMin = Math.min(rules.endMin, startMin + rules.visitMinutes);
+      const h = Math.floor(startMin / 60);
+      const m = startMin % 60;
+      const eh = Math.floor(endMin / 60);
+      const em = endMin % 60;
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const interval = rowToBusy(row.appointmentDate, `${pad(h)}:${pad(m)}`, `${pad(eh)}:${pad(em)}`, rules);
+      if (interval) busy.push(interval);
+    }
+  }
+
+  return { busy, selfBookedByDate };
+}
+
 export function appointmentToBusy(iso: string | null | undefined, visitMinutes: number): BusyInterval | null {
   if (!iso) return null;
   const start = new Date(iso.includes("T") ? iso : `${iso.slice(0, 10)}T00:00:00Z`);

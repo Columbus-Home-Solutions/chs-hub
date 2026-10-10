@@ -7,7 +7,16 @@ import { bookingLinkForLead } from "../src/lib/booking-link.js";
 import { renderTemplateText } from "../src/lib/merge-render.js";
 import { LEAD_OUTREACH_CANDIDATE_SQL } from "../src/lib/new-lead-outreach.js";
 import { resolveRequiredRoles } from "../src/lib/rbac.js";
-import { DEFAULT_RULES, generateSlots, TOKEN_TTL_MS, type BusyInterval } from "../src/lib/self-scheduling.js";
+import {
+  DEFAULT_RULES,
+  chsBusyForEstimator,
+  generateSlots,
+  TOKEN_TTL_MS,
+  type BusyInterval,
+  type ChsEstimateVisit,
+  type ChsScheduleEntry,
+  type ChsWarrantyCall,
+} from "../src/lib/self-scheduling.js";
 import { handleEstimateRequestBookingLink } from "../src/routes/estimate-requests.js";
 import { handlePublicBookingGet, handlePublicBookingPost } from "../src/routes/public-booking.js";
 
@@ -92,13 +101,15 @@ interface Lead {
   first_name: string | null;
   last_name: string | null;
   booking_source: string | null;
+  estimator_user_id: string | null;
 }
 
 function harness(opts: {
   enabled?: string;
   leads: Lead[];
   google?: "fail";
-  schedule?: { scheduled_date: string; start_time: string | null; end_time: string | null }[];
+  schedule?: Record<string, unknown>[];
+  warranty?: Record<string, unknown>[];
 }) {
   const leads = opts.leads.map((l) => ({ ...l }));
   const taken = new Set<string>();
@@ -121,7 +132,7 @@ function harness(opts: {
             return { meta: { changes: 1 } };
           }
           if (sql.includes("booking_source = ?") && sql.includes("appointment_date IS NULL")) {
-            const id = String(args[6]);
+            const id = args.map(String).find((a) => leads.some((l) => l.id === a));
             const start = String(args[0]);
             const lead = leads.find((l) => l.id === id);
             if (!lead || lead.appointment_date || taken.has(start)) return { meta: { changes: 0 } };
@@ -130,7 +141,8 @@ function harness(opts: {
             lead.appointment_time = String(args[1]);
             lead.status = "appointment_set";
             lead.booking_source = "customer_self_scheduled";
-            if (args[3]) lead.property_address = String(args[3]);
+            lead.estimator_user_id = args[3] == null ? null : String(args[3]);
+            if (args[4]) lead.property_address = String(args[4]);
             return { meta: { changes: 1 } };
           }
           if (sql.includes("lead_outreach_sequence_active = 0")) {
@@ -203,7 +215,7 @@ function harness(opts: {
             if (sql.includes("FROM schedule_entries")) {
               return { results: opts.schedule ?? [] };
             }
-            if (sql.includes("FROM warranty_calls")) return { results: [] };
+            if (sql.includes("FROM warranty_calls")) return { results: opts.warranty ?? [] };
             if (sql.includes("booking_source")) {
               return {
                 results: leads
@@ -213,6 +225,8 @@ function harness(opts: {
                     appointment_date: l.appointment_date,
                     appointment_time: l.appointment_time,
                     booking_source: l.booking_source,
+                    estimator_user_id: l.estimator_user_id,
+                    status: l.status,
                   })),
               };
             }
@@ -242,6 +256,7 @@ function lead(over: Partial<Lead> = {}): Lead {
     first_name: "Sam",
     last_name: "Lee",
     booking_source: null,
+    estimator_user_id: null,
     ...over,
   };
 }
@@ -306,6 +321,7 @@ describe("public booking", () => {
     expect(second.status).toBe(200);
     expect(h.leads[0].appointment_date).toBe("2026-10-12T13:00:00.000Z");
     expect(h.leads[0].status).toBe("appointment_set");
+    expect(h.leads[0].estimator_user_id).toBe("owner");
     expect(h.confirms()).toBe(1);
     expect(h.bell).toHaveLength(1);
     expect(h.bell[0]).toContain("8:00 AM");
@@ -342,7 +358,16 @@ describe("public booking", () => {
   it("blocks a CHS schedule entry that is not on Google", async () => {
     const h = harness({
       leads: [lead()],
-      schedule: [{ scheduled_date: "2026-10-12", start_time: "08:00", end_time: "09:00" }],
+      schedule: [{
+        job_id: "job-1",
+        job_status: "in_progress",
+        scheduled_date: "2026-10-12",
+        start_time: "08:00",
+        end_time: "09:00",
+        sub_id: null,
+        assigned_to: null,
+        status: "scheduled",
+      }],
     });
     const body = (await (await handlePublicBookingGet(new Request("http://x"), h.env, "tok-one", clock)).json()) as {
       slots: { date: string; label: string }[];
@@ -455,5 +480,146 @@ describe("copy booking link", () => {
     expect(denied.status).toBe(403);
     expect(pm.leads[0].booking_token).toBe("");
     quiet(pm.sqlLog);
+  });
+});
+
+const availNow = at("2026-10-10T15:00:00.000Z");
+const availRules = { ...DEFAULT_RULES, enabled: true };
+
+function dayLabels(date: string, busy: BusyInterval[]): string[] {
+  return generateSlots({ now: availNow, rules: availRules, busy })
+    .filter((s) => s.date === date)
+    .map((s) => s.label);
+}
+
+function scheduleRow(over: Partial<ChsScheduleEntry> = {}): ChsScheduleEntry {
+  return {
+    jobId: "job-1",
+    jobStatus: "in_progress",
+    date: "2026-10-14",
+    startTime: "08:00",
+    endTime: "09:00",
+    subId: null,
+    assignedTo: null,
+    entryStatus: "scheduled",
+    ...over,
+  };
+}
+
+function busyFor(schedule: ChsScheduleEntry[], extra?: { warranty?: ChsWarrantyCall[]; visits?: ChsEstimateVisit[] }) {
+  return chsBusyForEstimator({
+    estimatorId: "owner",
+    rules: availRules,
+    schedule,
+    warranty: extra?.warranty ?? [],
+    visits: extra?.visits ?? [],
+  }).busy;
+}
+
+describe("estimator availability", () => {
+  const firstDay = scheduleRow({ date: "2026-10-12", startTime: "13:00", endTime: "14:00", subId: null, assignedTo: "owner" });
+
+  it("does not block a crew entry on an owner-assigned job", () => {
+    const crew = scheduleRow({ date: "2026-10-14", subId: "sub-1", assignedTo: "owner" });
+    const labels = dayLabels("2026-10-14", busyFor([firstDay, crew]));
+    expect(labels).toContain("8:00 AM");
+    expect(labels).toContain("10:00 AM");
+  });
+
+  it("blocks an entry with no sub when the job is assigned to the owner, including the buffer", () => {
+    const own = scheduleRow({ date: "2026-10-14", subId: null, assignedTo: "owner" });
+    const labels = dayLabels("2026-10-14", busyFor([firstDay, own]));
+    expect(labels).not.toContain("8:00 AM");
+    expect(labels).not.toContain("9:00 AM");
+    expect(labels).toContain("10:00 AM");
+  });
+
+  it("does not block an entry with no sub when the job is assigned to someone else", () => {
+    const other = scheduleRow({ date: "2026-10-14", subId: null, assignedTo: "pm" });
+    expect(dayLabels("2026-10-14", busyFor([firstDay, other]))).toContain("8:00 AM");
+  });
+
+  it("blocks an unassigned entry", () => {
+    const open = scheduleRow({ date: "2026-10-14", subId: null, assignedTo: null });
+    expect(dayLabels("2026-10-14", busyFor([firstDay, open]))).not.toContain("8:00 AM");
+  });
+
+  it("blocks the first day even for a crew entry, with times and without", () => {
+    const timed = scheduleRow({
+      date: "2026-10-12",
+      startTime: "08:00",
+      endTime: "09:00",
+      subId: "sub-1",
+      assignedTo: "owner",
+    });
+    const timedLabels = dayLabels("2026-10-12", busyFor([timed]));
+    expect(timedLabels).not.toContain("8:00 AM");
+    expect(timedLabels).toContain("10:00 AM");
+
+    const allDay = scheduleRow({
+      jobId: "job-2",
+      date: "2026-10-13",
+      startTime: null,
+      endTime: null,
+      subId: "sub-1",
+      assignedTo: "pm",
+    });
+    expect(dayLabels("2026-10-13", busyFor([allDay]))).toEqual([]);
+    expect(dayLabels("2026-10-14", busyFor([allDay]))).toContain("8:00 AM");
+
+    const afternoon = scheduleRow({
+      date: "2026-10-12",
+      startTime: "15:00",
+      endTime: "16:00",
+      subId: "sub-2",
+      assignedTo: "pm",
+    });
+    const both = dayLabels("2026-10-12", busyFor([timed, afternoon]));
+    expect(both).not.toContain("8:00 AM");
+    expect(both).not.toContain("3:00 PM");
+    expect(both).toContain("10:00 AM");
+  });
+
+  it("does not block a complete or closed job", () => {
+    for (const status of ["complete", "closed", "cancelled", "archived"]) {
+      const row = scheduleRow({ jobStatus: status, date: "2026-10-12", subId: null, assignedTo: null });
+      expect(dayLabels("2026-10-12", busyFor([row]))).toContain("8:00 AM");
+    }
+    const late = scheduleRow({ jobStatus: "late", date: "2026-10-12", subId: null, assignedTo: null });
+    expect(dayLabels("2026-10-12", busyFor([late]))).not.toContain("8:00 AM");
+  });
+
+  it("does not block a warranty call assigned to a sub", () => {
+    const call: ChsWarrantyCall = {
+      jobStatus: "in_progress",
+      date: "2026-10-12",
+      endTime: "09:00",
+      assignedTo: "owner",
+      assignedSubId: "sub-1",
+      status: "scheduled",
+    };
+    expect(dayLabels("2026-10-12", busyFor([], { warranty: [call] }))).toContain("8:00 AM");
+  });
+
+  it("blocks an estimate visit whose estimator is null", () => {
+    const visit: ChsEstimateVisit = {
+      id: "other",
+      appointmentDate: "2026-10-12T13:00:00.000Z",
+      appointmentTime: "8:00 AM",
+      estimatorUserId: null,
+      status: "appointment_set",
+      bookingSource: null,
+    };
+    const labels = dayLabels("2026-10-12", busyFor([], { visits: [visit] }));
+    expect(labels).not.toContain("8:00 AM");
+    expect(labels).toContain("10:00 AM");
+  });
+
+  it("still blocks Google busy time", () => {
+    const labels = dayLabels("2026-10-12", [
+      { start: at("2026-10-12T13:00:00.000Z"), end: at("2026-10-12T14:00:00.000Z") },
+    ]);
+    expect(labels).not.toContain("8:00 AM");
+    expect(labels).toContain("10:00 AM");
   });
 });

@@ -226,7 +226,13 @@ export async function handleScheduleCreate(request: Request, env: Env, jobId: st
 
 // ─── PUT /api/schedule/:id (edit / reschedule / status) ──────────────────────
 
-export async function handleScheduleUpdate(request: Request, env: Env, id: string): Promise<Response> {
+/** opts is internal. The HTTP route never passes it, and the body cannot set it. */
+export async function handleScheduleUpdate(
+  request: Request,
+  env: Env,
+  id: string,
+  opts?: { suppressNotices?: boolean },
+): Promise<Response> {
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
 
@@ -277,8 +283,8 @@ export async function handleScheduleUpdate(request: Request, env: Env, id: strin
   const meaningful = ["scheduled_date", "trade_or_work", "start_time", "end_time", "status", "sub_id"].some(
     (field) => field in body,
   );
-  if (meaningful) await notifyDayRateSchedule(env, id, false);
-  if (subChangedToAssigned) await notifySubOnce(env, id);
+  if (meaningful && !opts?.suppressNotices) await notifyDayRateSchedule(env, id, false);
+  if (subChangedToAssigned && !opts?.suppressNotices) await notifySubOnce(env, id);
   await queueCalendarMirror(env, "schedule_entry", id);
 
   return json({ entry: shape((await loadEntry(env, id))!) });

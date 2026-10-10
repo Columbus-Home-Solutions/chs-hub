@@ -612,6 +612,8 @@ import {
   handleGcalWriteSync,
   handleGcalBackfillPreview,
   handleGcalBackfill,
+  handleGcalChangesEnabled,
+  handleGcalChangeAction,
   handleGcalConnect,
   handleGcalCallback,
   handleGcalDisconnect,
@@ -627,6 +629,7 @@ import {
 } from "./routes/google-business-profile.js";
 import { handleIcalFeed, handleIcalSettings, handleIcalRegenerate } from "./routes/calendar-ical.js";
 import { syncGoogleCalendarEvents } from "./lib/google-calendar-sync.js";
+import { pollGoogleCalendarChanges } from "./lib/google-calendar-changes.js";
 import { retryFailedCalendarWrites } from "./lib/google-calendar-writeback.js";
 import { runGbpReviewsSyncTick } from "./lib/google-reviews-sync.js";
 import { runHlLeadMirror, runHlLeadMirrorTick } from "./lib/hl-lead-mirror.js";
@@ -1779,6 +1782,13 @@ export default {
     }
     if (url.pathname === "/api/google-calendar/backfill" && request.method === "POST") {
       return handleGcalBackfill(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/changes-enabled" && request.method === "POST") {
+      return handleGcalChangesEnabled(request, env);
+    }
+    const gcalChange = url.pathname.match(/^\/api\/google-calendar\/changes\/([0-9a-fA-F-]{36})$/);
+    if (gcalChange && request.method === "POST") {
+      return handleGcalChangeAction(request, env, gcalChange[1]);
     }
     if (url.pathname === "/api/google-business-profile/status" && request.method === "GET") {
       return handleGbpStatus(request, env);
@@ -3220,6 +3230,16 @@ async function runNotificationProcessor(env: Env): Promise<void> {
     }
   } catch (err) {
     console.error("[cron */15 * * * *] gcal_sync failed:", (err as Error).message);
+  }
+
+  // Google change awareness — one events.list, only when that switch is on. Non-fatal.
+  try {
+    const c = await pollGoogleCalendarChanges(env);
+    if (!c.skipped && (c.scanned > 0 || c.opened > 0)) {
+      console.log(`[cron */15 * * * *] gcal_changes: scanned=${c.scanned} opened=${c.opened}`);
+    }
+  } catch (err) {
+    console.error("[cron */15 * * * *] gcal_changes failed:", (err as Error).message);
   }
 
   // Quote Follow-Up Sequence (Sprint 26) — automated dual-channel (SMS + email)

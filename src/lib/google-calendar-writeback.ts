@@ -352,7 +352,7 @@ async function visitMinutes(env: Env): Promise<number> {
   return Number.isFinite(n) && n >= 15 ? n : 60;
 }
 
-async function desiredEvent(
+export async function desiredCalendarEvent(
   env: Env,
   sourceType: SourceType,
   sourceId: string,
@@ -544,19 +544,21 @@ async function mirrorSourceInner(
   sourceId: string,
   fetchImpl: FetchLike,
   now: Date,
+  force: boolean,
 ): Promise<"skipped" | "unchanged" | "synced" | "deleted" | "failed"> {
   if (!(await writeEnabled(env))) return "skipped";
   const conn = await loadGcalConnection(env);
   if (!conn || conn.status === "disconnected" || !hasEventWriteScope(conn)) return "skipped";
 
-  const desired = await desiredEvent(env, sourceType, sourceId, now);
+  const desired = await desiredCalendarEvent(env, sourceType, sourceId, now);
   const link = await loadLink(env, sourceType, sourceId);
   const hash = desired ? eventHash(desired) : null;
-  if (desired && link?.status === "synced" && link.google_event_id && link.last_synced_hash === hash) {
+  if (!force && desired && link?.status === "synced" && link.google_event_id && link.last_synced_hash === hash) {
     return "unchanged";
   }
   // A hand-deleted Google event stays gone until CHS itself changes.
-  if (desired && link?.status === "deleted" && link.last_synced_hash === hash) {
+  // force is the owner's Ignore: put the CHS time back even when the hash matches.
+  if (!force && desired && link?.status === "deleted" && link.last_synced_hash === hash) {
     return "unchanged";
   }
   if (!desired && (!link?.google_event_id || link.status === "deleted")) return "unchanged";
@@ -594,7 +596,7 @@ async function mirrorSourceInner(
       const url = `${EVENTS_URL}/${encodeURIComponent(link!.google_event_id!)}?sendUpdates=none`;
       const result = await googleCall(fetchImpl, token, "PATCH", url, desired);
       if (result.status === 404 || result.status === 410) {
-        if (link!.last_synced_hash === hash) {
+        if (!force && link!.last_synced_hash === hash) {
           await saveLink(env, sourceType, sourceId, { status: "deleted", googleEventId: null, error: null });
           return "deleted";
         }
@@ -634,7 +636,7 @@ export async function mirrorSource(
   env: Env,
   sourceType: SourceType,
   sourceId: string,
-  deps?: { fetch?: FetchLike; now?: Date },
+  deps?: { fetch?: FetchLike; now?: Date; force?: boolean },
 ): Promise<"skipped" | "unchanged" | "synced" | "deleted" | "failed"> {
   return mirrorSourceInner(
     env,
@@ -642,6 +644,7 @@ export async function mirrorSource(
     sourceId,
     deps?.fetch ?? fetch,
     deps?.now ?? new Date(),
+    deps?.force === true,
   );
 }
 

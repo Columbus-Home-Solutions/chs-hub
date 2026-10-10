@@ -99,6 +99,8 @@ Role checks are documented per endpoint:
 | POST | `/api/google-calendar/write-sync` | O | Retry failed and pending calendar writes |
 | GET | `/api/google-calendar/backfill` | O | Count future CHS items not yet on Google |
 | POST | `/api/google-calendar/backfill` | O | Mirror a capped batch of future items. Body must include `confirm: true` |
+| POST | `/api/google-calendar/changes-enabled` | O | Turn Google-change alerts on or off. On requires the event-write scope |
+| POST | `/api/google-calendar/changes/:id` | O | Apply, apply without texting, cancel in CHS, or ignore one pending Google change |
 
 ### Dead Letter Queue
 
@@ -721,7 +723,7 @@ folded into these 5 handlers (see `dispatchCron` in `src/index.ts`). This table 
 
 | Schedule | Folded work (in dispatch order) |
 |----------|---------------------------------|
-| `*/15 * * * *` | Notification processor (queued/scheduled sends) **+** social-post publisher (Sprint 16 folded the due-post sweep here — no new cron). |
+| `*/15 * * * *` | Notification processor (queued/scheduled sends) **+** social-post publisher (Sprint 16 folded the due-post sweep here — no new cron) **+** Google change poll (one `events.list`, only while `google_calendar_changes_enabled` is on). |
 | `*/30 * * * *` | Jobber tick **+** WC Spreadsheet sync (Google Sheets carry-forward). |
 | `15 * * * *` | Reliability hourly: heartbeat **+** DLQ replay **+** Google Drive mirror (Sprint 15 added `documents` to the photos/job-files/company-docs batch loop). |
 | `15 7 * * *` | Nightly: D1→R2 backup → invoice billing (late-fee accrual + due/past-due notices) → **QBO dirty-flag push sweep** (Sprint 14 — no standalone QBO cron) → retry failed Google Calendar writes (non-fatal; skipped while the write switch is off). |

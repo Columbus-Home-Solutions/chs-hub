@@ -72,6 +72,15 @@ export function IntegrationsTab() {
     write_synced?: number;
     write_failed?: number;
     write_last_at?: string | null;
+    changes_enabled?: boolean;
+    pending_changes?: Array<{
+      id: string;
+      source_type: "estimate_request" | "schedule_entry";
+      source_id: string;
+      change_kind: "moved" | "deleted";
+      summary_label: string | null;
+      when_label: string | null;
+    }>;
   } | null>(null);
   const [gbp, setGbp] = useState<{
     connected: boolean;
@@ -119,6 +128,15 @@ export function IntegrationsTab() {
           write_synced?: number;
           write_failed?: number;
           write_last_at?: string | null;
+    changes_enabled?: boolean;
+    pending_changes?: Array<{
+      id: string;
+      source_type: "estimate_request" | "schedule_entry";
+      source_id: string;
+      change_kind: "moved" | "deleted";
+      summary_label: string | null;
+      when_label: string | null;
+    }>;
         }>("/api/google-calendar/status"),
         api.get<{ url: string }>("/api/calendar/ical/settings"),
         api.get<{
@@ -258,6 +276,33 @@ export function IntegrationsTab() {
       const r = await api.post<{ authorize_url: string }>("/api/integrations/google-calendar/connect");
       window.open(r.authorize_url, "_blank", "noopener,noreferrer");
       toast.push("info", "Complete Google authorization in the new tab, then refresh this page.");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const toggleCalendarChanges = async () => {
+    if (!gcal?.write_scope) return;
+    setGcalBusy(true);
+    try {
+      await api.post("/api/google-calendar/changes-enabled", { enabled: !gcal.changes_enabled });
+      toast.push("success", gcal.changes_enabled ? "Change alerts off" : "Change alerts on");
+      void load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const decideChange = async (id: string, action: string) => {
+    setGcalBusy(true);
+    try {
+      await api.post(`/api/google-calendar/changes/${id}`, { action });
+      toast.push("success", "Saved");
+      void load();
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -611,8 +656,9 @@ export function IntegrationsTab() {
           </div>
           <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
             Reads Google Meet events into CHS, and can show future CHS visits and schedule days on your
-            primary Google Calendar. CHS stays the source of truth. Edits you make on Google are not read
-            back, and the next CHS change can overwrite them.
+            primary Google Calendar. CHS stays the source of truth. With change alerts off, edits you make
+            on Google are not read back, and the next CHS change can overwrite them. With change alerts on,
+            a moved or deleted CHS item rings the bell so you can Apply or Ignore.
           </p>
           <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-sm)" }}>
             Calendar sync:{" "}
@@ -648,6 +694,57 @@ export function IntegrationsTab() {
               onChange={() => void toggleCalendarWrite()}
             />
           </div>
+          <div class="flex items-center gap-sm" style={{ marginBottom: "var(--space-sm)" }}>
+            <label class="form-label" style={{ margin: 0 }}>
+              Tell me when a CHS item moves on Google
+            </label>
+            <input
+              type="checkbox"
+              checked={!!gcal?.changes_enabled}
+              disabled={gcalBusy || !gcal?.write_scope}
+              onChange={() => void toggleCalendarChanges()}
+            />
+          </div>
+          {(gcal?.pending_changes ?? []).map((change) => (
+            <div key={change.id} style={{ marginBottom: "var(--space-sm)" }}>
+              <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-xs)" }}>
+                {change.change_kind === "deleted"
+                  ? `${change.summary_label ?? "A CHS item"} was removed on Google.`
+                  : `${change.summary_label ?? "A CHS item"} moved on Google to ${change.when_label ?? "a new time"}.`}
+              </p>
+              <div class="flex gap-sm">
+                {change.change_kind === "deleted" ? (
+                  <>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "cancel")}>
+                      Cancel in CHS
+                    </Button>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "ignore")}>
+                      Ignore (recreate on Google)
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "apply")}>
+                      Apply
+                    </Button>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "apply_silent")}>
+                      {change.source_type === "schedule_entry"
+                        ? "Apply without texting"
+                        : "Apply without texting the customer"}
+                    </Button>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "ignore")}>
+                      Ignore (keep CHS time)
+                    </Button>
+                  </>
+                )}
+              </div>
+              {change.source_type === "schedule_entry" && change.change_kind === "moved" && (
+                <p class="text--muted" style={{ fontSize: "var(--text-xs)", margin: "var(--space-xs) 0 0" }}>
+                  A normal schedule change texts the crew, not the customer. Apply without texting skips that crew text.
+                </p>
+              )}
+            </div>
+          ))}
           {(gcal?.write_synced != null || gcal?.write_failed != null) && (
             <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
               CHS items on Google: {gcal?.write_synced ?? 0} synced, {gcal?.write_failed ?? 0} failed

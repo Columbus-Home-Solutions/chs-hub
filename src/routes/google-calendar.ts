@@ -23,6 +23,11 @@ import {
 } from "../lib/google-calendar-auth.js";
 import { listAllCalendarEvents, listUpcomingMeetings, syncGoogleCalendarEvents } from "../lib/google-calendar-sync.js";
 import {
+  applyCalendarChange,
+  calendarChangesStatus,
+  setCalendarChangesEnabled,
+} from "../lib/google-calendar-changes.js";
+import {
   backfillFutureItems,
   calendarWriteStatus,
   countFutureUnsynced,
@@ -68,19 +73,29 @@ export async function handleGcalStatus(request: Request, env: Env): Promise<Resp
   const denied = await requireOwner(request, env);
   if (denied) return denied;
   const base = await getGcalStatus(env);
+  let write: Awaited<ReturnType<typeof calendarWriteStatus>> = {
+    write_enabled: false,
+    write_scope: false,
+    calendar_sync: "off",
+    write_synced: 0,
+    write_failed: 0,
+    write_last_at: null,
+  };
   try {
-    return json({ ...base, ...(await calendarWriteStatus(env)) });
+    write = await calendarWriteStatus(env);
   } catch {
-    return json({
-      ...base,
-      write_enabled: false,
-      write_scope: false,
-      calendar_sync: "off",
-      write_synced: 0,
-      write_failed: 0,
-      write_last_at: null,
-    });
+    /* The link table is missing until migration 0135. */
   }
+  let changes: Awaited<ReturnType<typeof calendarChangesStatus>> = {
+    changes_enabled: false,
+    pending_changes: [],
+  };
+  try {
+    changes = await calendarChangesStatus(env);
+  } catch {
+    /* The pending table is missing until migration 0136. */
+  }
+  return json({ ...base, ...write, ...changes });
 }
 
 export async function handleGcalWriteEnabled(request: Request, env: Env): Promise<Response> {
@@ -194,6 +209,33 @@ export async function handleGcalDisconnect(request: Request, env: Env): Promise<
   if (denied) return denied;
   await disconnectGcal(env);
   return json({ ok: true, status: "disconnected" });
+}
+
+export async function handleGcalChangesEnabled(request: Request, env: Env): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  const body = (await request.json().catch(() => null)) as { enabled?: unknown } | null;
+  if (!body || typeof body.enabled !== "boolean") {
+    return json({ error: "bad_request", message: "enabled must be true or false." }, { status: 400 });
+  }
+  const result = await setCalendarChangesEnabled(env, body.enabled);
+  if (!result.ok) {
+    return json(
+      { error: "needs_reconnect", message: "Reconnect Google to enable calendar sync." },
+      { status: 409 },
+    );
+  }
+  return json(await calendarChangesStatus(env));
+}
+
+export async function handleGcalChangeAction(request: Request, env: Env, id: string): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  const body = (await request.json().catch(() => null)) as { action?: unknown } | null;
+  const action = typeof body?.action === "string" ? body.action : "";
+  const result = await applyCalendarChange(env, id, action);
+  if (!result.ok) return json({ error: result.error, message: result.message }, { status: result.status });
+  return json({ ok: true, ...(await calendarChangesStatus(env)) });
 }
 
 export async function handleDashboardMeetings(env: Env): Promise<Response> {

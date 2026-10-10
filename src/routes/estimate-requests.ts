@@ -852,10 +852,12 @@ export async function handleEstimateRequestBookingLink(
 
 // ─── PUT /api/estimate-requests/:id/appointment ──────────────────────────────
 
+/** opts is internal. The HTTP route never passes it, and the body cannot set it. */
 export async function handleEstimateRequestAppointment(
   request: Request,
   env: Env,
   id: string,
+  opts?: { suppressCustomerNotice?: boolean },
 ): Promise<Response> {
   const guarded = await guard(request, env, [...WRITE_ROLES]);
   if (guarded instanceof Response) return guarded;
@@ -918,7 +920,7 @@ export async function handleEstimateRequestAppointment(
   }
 
   const updated = await loadShaped(env, id);
-  if (triggerAppointment && updated?.appointment_date) {
+  if (triggerAppointment && updated?.appointment_date && !opts?.suppressCustomerNotice) {
     await triggerNotification(env, "appointment_confirmed", {
       clientId: updated.client_id,
       estimateRequestId: id,

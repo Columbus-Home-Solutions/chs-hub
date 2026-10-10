@@ -90,6 +90,15 @@ Role checks are documented per endpoint:
 | POST | `/api/integrations/:service/test` | O | Test connection |
 | GET | `/api/integrations/stripe/callback` | O | Stripe OAuth callback |
 | GET | `/api/integrations/quickbooks/callback` | O | QBO OAuth callback |
+| POST | `/api/integrations/google-calendar/connect` | O | Start Google OAuth (`calendar.readonly` + `calendar.events`) |
+| GET | `/api/integrations/google-calendar/callback` | O | Finish Google OAuth and store tokens |
+| GET | `/api/google-calendar/status` | O | Connection, Meet sync, and calendar write-back status |
+| GET | `/api/google-calendar/events` | O | Stored Meet events |
+| POST | `/api/google-calendar/sync` | O | Pull Meet events now |
+| POST | `/api/google-calendar/write-enabled` | O | Turn CHS → Google mirroring on or off. On requires the event-write scope |
+| POST | `/api/google-calendar/write-sync` | O | Retry failed and pending calendar writes |
+| GET | `/api/google-calendar/backfill` | O | Count future CHS items not yet on Google |
+| POST | `/api/google-calendar/backfill` | O | Mirror a capped batch of future items. Body must include `confirm: true` |
 
 ### Dead Letter Queue
 
@@ -715,7 +724,7 @@ folded into these 5 handlers (see `dispatchCron` in `src/index.ts`). This table 
 | `*/15 * * * *` | Notification processor (queued/scheduled sends) **+** social-post publisher (Sprint 16 folded the due-post sweep here — no new cron). |
 | `*/30 * * * *` | Jobber tick **+** WC Spreadsheet sync (Google Sheets carry-forward). |
 | `15 * * * *` | Reliability hourly: heartbeat **+** DLQ replay **+** Google Drive mirror (Sprint 15 added `documents` to the photos/job-files/company-docs batch loop). |
-| `15 7 * * *` | Nightly: D1→R2 backup → invoice billing (late-fee accrual + due/past-due notices) → **QBO dirty-flag push sweep** (Sprint 14 — no standalone QBO cron). |
+| `15 7 * * *` | Nightly: D1→R2 backup → invoice billing (late-fee accrual + due/past-due notices) → **QBO dirty-flag push sweep** (Sprint 14 — no standalone QBO cron) → retry failed Google Calendar writes (non-fatal; skipped while the write switch is off). |
 | `0 12 * * *` | Daily summary email (via Resend). |
 
 > **Superseded standalone crons** (folded above, never deployed as their own trigger):

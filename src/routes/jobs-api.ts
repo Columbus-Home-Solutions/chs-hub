@@ -55,6 +55,7 @@ import {
 } from "../lib/close-eligibility.js";
 import { NON_TEST_CLIENT } from "../lib/non-test-client.js";
 import { loadScheduleSeedState, syncOverviewStartDate } from "../lib/overview-schedule-seed.js";
+import { queueJobCalendarMirror } from "../lib/google-calendar-writeback.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const REVERSE_ROLES = ["owner"] as const;
@@ -815,6 +816,7 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
 
   await logAudit(env, user.email, "job_status_changed", "job", id, { from, to: target });
   triggerJobStatusChanged(env, id, from, target);
+  await queueJobCalendarMirror(env, id);
 
   // Sprint 16 — Social Media auto-gen seam. On reaching `complete`, draft a
   // pending_approval job-completion post if the job has social-ready photos

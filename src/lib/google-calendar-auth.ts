@@ -1,5 +1,8 @@
 /**
- * Google Calendar OAuth token lifecycle (read-only calendar scope).
+ * Google Calendar OAuth. Read stays calendar.readonly so free/busy keeps
+ * working. Event create/update/delete adds calendar.events. Never the full
+ * calendar scope. A connection that only has the old read scope keeps reading;
+ * write-back stays off until Tony reconnects.
  * Reuses QBO_TOKEN_ENCRYPTION_KEY for token encryption at rest.
  */
 
@@ -7,7 +10,14 @@ import type { Env } from "../env.js";
 import { decryptToken, encryptToken } from "./qbo-auth.js";
 
 export const GCAL_SERVICE = "google_calendar";
-export const GCAL_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+export const GCAL_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+export const GCAL_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+export const GCAL_SCOPE = `${GCAL_READONLY_SCOPE} ${GCAL_EVENTS_SCOPE}`;
+
+export function hasEventWriteScope(conn: { configuration?: GcalConfiguration } | null | undefined): boolean {
+  const raw = String(conn?.configuration?.scopes ?? "");
+  return raw.split(/\s+/).filter(Boolean).includes(GCAL_EVENTS_SCOPE);
+}
 
 const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -166,7 +176,10 @@ export async function saveGcalState(env: Env, state: string): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO integration_connections (id, service, status, configuration, created_at, updated_at)
      VALUES (?, ?, 'pending', ?, datetime('now'), datetime('now'))
-     ON CONFLICT(id) DO UPDATE SET configuration = excluded.configuration, status = 'pending', updated_at = datetime('now')`,
+     ON CONFLICT(id) DO UPDATE SET
+       configuration = excluded.configuration,
+       status = CASE WHEN integration_connections.status = 'connected' THEN 'connected' ELSE 'pending' END,
+       updated_at = datetime('now')`,
   )
     .bind(GCAL_SERVICE, GCAL_SERVICE, JSON.stringify(configuration))
     .run();
@@ -196,6 +209,7 @@ export function buildAuthorizeUrl(env: Env, state: string): string {
     state,
     access_type: "offline",
     prompt: "consent",
+    include_granted_scopes: "true",
   });
   return `${AUTHORIZE_URL}?${params.toString()}`;
 }
@@ -204,6 +218,7 @@ interface TokenResponse {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  scope?: string;
   error?: string;
   error_description?: string;
 }
@@ -239,11 +254,16 @@ export async function exchangeAuthCode(env: Env, code: string): Promise<void> {
   const refresh = data.refresh_token ?? existing?.refresh_token;
   if (!refresh) throw new GcalReconnectError("No refresh token returned — try disconnect and reconnect.");
   const expiry = new Date(Date.now() + (data.expires_in ?? 3600) * 1000).toISOString();
+  const configuration: GcalConfiguration = {
+    ...(existing?.configuration ?? {}),
+    scopes: data.scope ?? GCAL_SCOPE,
+  };
+  delete configuration.state;
   await writeTokens(env, {
     accessToken: data.access_token,
     refreshToken: refresh,
     expiry,
-    configuration: existing?.configuration,
+    configuration,
     status: "connected",
   });
 }
@@ -265,10 +285,14 @@ async function refreshAccessToken(env: Env, refreshToken: string): Promise<strin
     throw new GcalReconnectError(data.error_description ?? data.error ?? "Refresh failed");
   }
   const expiry = new Date(Date.now() + (data.expires_in ?? 3600) * 1000).toISOString();
+  const current = await loadGcalConnection(env);
+  const configuration: GcalConfiguration = { ...(current?.configuration ?? {}) };
+  if (data.scope) configuration.scopes = data.scope;
   await writeTokens(env, {
     accessToken: data.access_token,
     refreshToken: data.refresh_token ?? refreshToken,
     expiry,
+    configuration,
     status: "connected",
   });
   return data.access_token;

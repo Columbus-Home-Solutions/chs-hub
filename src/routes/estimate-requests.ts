@@ -23,6 +23,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerLeadCreated, triggerAppointmentSet, triggerDealWon } from "../lib/wc/triggers.js";
+import { queueCalendarMirror } from "../lib/google-calendar-writeback.js";
 import { findClientByEmail, findClientByPhone } from "../lib/client-dedup.js";
 import { convertQuoteToJob, type DepositMethod } from "../lib/quote-to-job.js";
 import { createOwnerInApp, triggerNotification, triggerJobConversionNotifications } from "../lib/notification-engine.js";
@@ -806,6 +807,14 @@ export async function handleEstimateRequestUpdate(
     await syncEstimateTitleFromRequest(env, id);
   }
 
+  if (
+    ["appointment_date", "appointment_time", "status", "property_address", "property_city", "property_state", "property_zip", "job_type"].some(
+      (field) => field in body,
+    )
+  ) {
+    await queueCalendarMirror(env, "estimate_request", id);
+  }
+
   return json({ request: updated });
 }
 
@@ -916,6 +925,7 @@ export async function handleEstimateRequestAppointment(
       instanceKey: updated.appointment_date,
     });
   }
+  await queueCalendarMirror(env, "estimate_request", id);
   return json({ request: updated });
 }
 
@@ -1035,6 +1045,7 @@ export async function setAppointmentFromBooking(
     clientId: fields.clientId,
     triggerEvent: "customer_self_scheduled",
   });
+  await queueCalendarMirror(env, "estimate_request", id);
   return "set";
 }
 
@@ -1078,6 +1089,7 @@ export async function handleEstimateRequestLost(
   });
 
   const updated = await loadShaped(env, id);
+  await queueCalendarMirror(env, "estimate_request", id);
   return json({ request: updated });
 }
 

@@ -18,6 +18,7 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { triggerSubScheduled } from "../lib/notification-engine.js";
 import { queueDayRateNotice } from "../lib/day-rate-notify.js";
+import { queueCalendarMirror } from "../lib/google-calendar-writeback.js";
 import { resolveSubAccessToken, subAccessLink } from "../lib/sub-access-tokens.js";
 import { centralDate } from "../../shared/labor-week.js";
 import {
@@ -218,6 +219,7 @@ export async function handleScheduleCreate(request: Request, env: Env, jobId: st
 
   // Sub-notify fires once, only when a sub is assigned at creation (rule #5).
   if (subId) await notifySubOnce(env, id);
+  await queueCalendarMirror(env, "schedule_entry", id);
 
   return json({ entry: shape((await loadEntry(env, id))!) }, { status: 201 });
 }
@@ -277,6 +279,7 @@ export async function handleScheduleUpdate(request: Request, env: Env, id: strin
   );
   if (meaningful) await notifyDayRateSchedule(env, id, false);
   if (subChangedToAssigned) await notifySubOnce(env, id);
+  await queueCalendarMirror(env, "schedule_entry", id);
 
   return json({ entry: shape((await loadEntry(env, id))!) });
 }
@@ -290,6 +293,7 @@ export async function handleScheduleDelete(request: Request, env: Env, id: strin
   const existing = await loadEntry(env, id);
   if (!existing) return err(404, "not_found", "Schedule entry not found.");
   await env.DB.prepare("DELETE FROM schedule_entries WHERE id = ?").bind(id).run();
+  await queueCalendarMirror(env, "schedule_entry", id);
   return json({ ok: true, deleted: id });
 }
 

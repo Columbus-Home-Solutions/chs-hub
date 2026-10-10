@@ -22,6 +22,13 @@ import {
   verifyGcalState,
 } from "../lib/google-calendar-auth.js";
 import { listAllCalendarEvents, listUpcomingMeetings, syncGoogleCalendarEvents } from "../lib/google-calendar-sync.js";
+import {
+  backfillFutureItems,
+  calendarWriteStatus,
+  countFutureUnsynced,
+  retryFailedCalendarWrites,
+  setCalendarWriteEnabled,
+} from "../lib/google-calendar-writeback.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -60,7 +67,61 @@ async function requireOwner(request: Request, env: Env): Promise<Response | null
 export async function handleGcalStatus(request: Request, env: Env): Promise<Response> {
   const denied = await requireOwner(request, env);
   if (denied) return denied;
-  return json(await getGcalStatus(env));
+  const base = await getGcalStatus(env);
+  try {
+    return json({ ...base, ...(await calendarWriteStatus(env)) });
+  } catch {
+    return json({
+      ...base,
+      write_enabled: false,
+      write_scope: false,
+      calendar_sync: "off",
+      write_synced: 0,
+      write_failed: 0,
+      write_last_at: null,
+    });
+  }
+}
+
+export async function handleGcalWriteEnabled(request: Request, env: Env): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  const body = (await request.json().catch(() => null)) as { enabled?: unknown } | null;
+  if (!body || typeof body.enabled !== "boolean") {
+    return json({ error: "bad_request", message: "enabled must be true or false." }, { status: 400 });
+  }
+  const result = await setCalendarWriteEnabled(env, body.enabled);
+  if (!result.ok) {
+    return json(
+      { error: "needs_reconnect", message: "Reconnect Google to enable calendar sync." },
+      { status: 409 },
+    );
+  }
+  return json(await calendarWriteStatus(env));
+}
+
+export async function handleGcalWriteSync(request: Request, env: Env): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  const stats = await retryFailedCalendarWrites(env);
+  return json({ ok: true, ...stats, ...(await calendarWriteStatus(env)) });
+}
+
+export async function handleGcalBackfillPreview(request: Request, env: Env): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  return json({ count: await countFutureUnsynced(env) });
+}
+
+export async function handleGcalBackfill(request: Request, env: Env): Promise<Response> {
+  const denied = await requireOwner(request, env);
+  if (denied) return denied;
+  const body = (await request.json().catch(() => null)) as { confirm?: unknown } | null;
+  if (!body || body.confirm !== true) {
+    return json({ error: "confirm_required", message: "Confirm the number of events first." }, { status: 400 });
+  }
+  const result = await backfillFutureItems(env);
+  return json({ ok: true, ...result, ...(await calendarWriteStatus(env)) });
 }
 
 export async function handleGcalEvents(request: Request, env: Env): Promise<Response> {

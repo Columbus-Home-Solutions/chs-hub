@@ -608,6 +608,10 @@ import {
   handleGcalStatus,
   handleGcalEvents,
   handleGcalSync,
+  handleGcalWriteEnabled,
+  handleGcalWriteSync,
+  handleGcalBackfillPreview,
+  handleGcalBackfill,
   handleGcalConnect,
   handleGcalCallback,
   handleGcalDisconnect,
@@ -623,6 +627,7 @@ import {
 } from "./routes/google-business-profile.js";
 import { handleIcalFeed, handleIcalSettings, handleIcalRegenerate } from "./routes/calendar-ical.js";
 import { syncGoogleCalendarEvents } from "./lib/google-calendar-sync.js";
+import { retryFailedCalendarWrites } from "./lib/google-calendar-writeback.js";
 import { runGbpReviewsSyncTick } from "./lib/google-reviews-sync.js";
 import { runHlLeadMirror, runHlLeadMirrorTick } from "./lib/hl-lead-mirror.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
@@ -1762,6 +1767,18 @@ export default {
     }
     if (url.pathname === "/api/google-calendar/sync" && request.method === "POST") {
       return handleGcalSync(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/write-enabled" && request.method === "POST") {
+      return handleGcalWriteEnabled(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/write-sync" && request.method === "POST") {
+      return handleGcalWriteSync(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/backfill" && request.method === "GET") {
+      return handleGcalBackfillPreview(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/backfill" && request.method === "POST") {
+      return handleGcalBackfill(request, env);
     }
     if (url.pathname === "/api/google-business-profile/status" && request.method === "GET") {
       return handleGbpStatus(request, env);
@@ -3060,6 +3077,16 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
       // 5-cron cap means no standalone "0 0 * * * QBO Sync" trigger. Runs after
       // billing so freshly-accrued invoices/late-fees are included in the push.
       await runQboSyncSweep(env);
+      try {
+        const w = await retryFailedCalendarWrites(env);
+        if (w.scanned > 0 || w.notified) {
+          console.log(
+            `[cron 15 7 * * *] gcal_write: scanned=${w.scanned} synced=${w.synced} failed=${w.failed} notified=${w.notified}`,
+          );
+        }
+      } catch (err) {
+        console.error("[cron 15 7 * * *] gcal_write failed:", (err as Error).message);
+      }
       return;
     case "0 12 * * *":
       await runMorning(env);

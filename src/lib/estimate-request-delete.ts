@@ -12,6 +12,7 @@
 
 import type { Env } from "../env.js";
 import { cascadeDeleteClient, cascadeDeleteEstimateRequest } from "./cascade-delete.js";
+import { queueCalendarMirror } from "./google-calendar-writeback.js";
 
 export const CANNOT_DELETE_ACTIVE_LEAD = {
   error: "cannot_delete_active_lead",
@@ -238,6 +239,7 @@ export async function performEstimateRequestDelete(
 ): Promise<{ client_deleted: boolean; estimates_removed: number }> {
   const { estimates_removed } = await cascadeDeleteEstimateRequest(env, row.id);
   await env.DB.prepare("DELETE FROM estimate_requests WHERE id = ?").bind(row.id).run();
+  await queueCalendarMirror(env, "estimate_request", row.id);
 
   await writeAudit(env, userEmail, "estimate_request_deleted", "estimate_request", row.id, {
     request_number: row.request_number,

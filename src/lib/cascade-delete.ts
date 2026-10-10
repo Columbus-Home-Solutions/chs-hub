@@ -7,6 +7,7 @@
  */
 
 import type { Env } from "../env.js";
+import { queueCalendarMirror } from "./google-calendar-writeback.js";
 
 /** Native in-progress job statuses — matches clients.ts ACTIVE_JOB_STATUSES. */
 export const NATIVE_ACTIVE_JOB_STATUSES = [
@@ -178,6 +179,25 @@ export async function cascadeDeleteJobChildren(env: Env, jobId: string): Promise
   );
   await runDeleteRequired(env, "invoices", "DELETE FROM invoices WHERE job_id = ?", jobId);
   await runDeleteRequired(env, "change_orders", "DELETE FROM change_orders WHERE job_id = ?", jobId);
+  let scheduleIds: string[] = [];
+  let warrantyIds: string[] = [];
+  try {
+    scheduleIds =
+      (
+        await env.DB.prepare("SELECT id FROM schedule_entries WHERE job_id = ?")
+          .bind(jobId)
+          .all<{ id: string }>()
+      ).results?.map((row) => row.id) ?? [];
+    warrantyIds =
+      (
+        await env.DB.prepare("SELECT id FROM warranty_calls WHERE job_id = ?")
+          .bind(jobId)
+          .all<{ id: string }>()
+      ).results?.map((row) => row.id) ?? [];
+  } catch {
+    scheduleIds = [];
+    warrantyIds = [];
+  }
   await runDeleteRequired(env, "schedule_entries", "DELETE FROM schedule_entries WHERE job_id = ?", jobId);
   await runDeleteRequired(env, "tasks", "DELETE FROM tasks WHERE job_id = ?", jobId);
   await runDeleteRequired(env, "daily_logs", "DELETE FROM daily_logs WHERE job_id = ?", jobId);
@@ -194,6 +214,8 @@ export async function cascadeDeleteJobChildren(env: Env, jobId: string): Promise
   await runDeleteRequired(env, "billing_schedule", "DELETE FROM billing_schedule WHERE job_id = ?", jobId);
   await runDeleteRequired(env, "permits", "DELETE FROM permits WHERE job_id = ?", jobId);
   await runDeleteRequired(env, "warranty_calls", "DELETE FROM warranty_calls WHERE job_id = ?", jobId);
+  for (const entryId of scheduleIds) await queueCalendarMirror(env, "schedule_entry", entryId);
+  for (const callId of warrantyIds) await queueCalendarMirror(env, "warranty_call", callId);
   await runDeleteRequired(env, "smart_notes", "DELETE FROM smart_notes WHERE job_id = ?", jobId);
   await runDeleteRequired(env, "mileage", "DELETE FROM mileage WHERE job_id = ?", jobId);
   await runDeleteRequired(env, "documents", "DELETE FROM documents WHERE job_id = ?", jobId);

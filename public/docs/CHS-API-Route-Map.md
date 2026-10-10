@@ -169,6 +169,7 @@ Role checks are documented per endpoint:
 | POST | `/api/estimate-requests` | O/PM | Create new request (triggers lead acknowledgment notification, WC sync) |
 | PUT | `/api/estimate-requests/:id` | O/PM | Update request (status change triggers WC sync, notifications) |
 | PUT | `/api/estimate-requests/:id/appointment` | O/PM | Set/update appointment date (triggers confirmation notification) |
+| POST | `/api/estimate-requests/:id/booking-link` | O | Copy a 21-day booking URL for a New Request or Contacted lead with no appointment. Sends no text. |
 | PUT | `/api/estimate-requests/:id/lost` | O/PM | Mark as lost with reason |
 | DELETE | `/api/estimate-requests/:id` | O/PM/OA | Hard-delete a request (blocked if won/converted/approved). Orphan client cleaned up when nothing else remains. |
 | POST | `/api/estimate-requests/bulk-delete` | O/PM/OA | Body `{ ids }`. New Request only; ineligible ids are skipped with an error, not aborting the batch. |

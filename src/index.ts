@@ -342,6 +342,7 @@ import {
   handleEstimateRequestCreate,
   handleEstimateRequestUpdate,
   handleEstimateRequestAppointment,
+  handleEstimateRequestBookingLink,
   handleEstimateRequestLost,
   handleEstimateRequestWin,
   handleEstimateRequestDelete,
@@ -2584,6 +2585,10 @@ export default {
     const erAppointment = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/appointment$/);
     if (erAppointment && request.method === "PUT") {
       return handleEstimateRequestAppointment(request, env, decodeURIComponent(erAppointment[1]));
+    }
+    const erBookingLink = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/booking-link$/);
+    if (erBookingLink && request.method === "POST") {
+      return handleEstimateRequestBookingLink(request, env, decodeURIComponent(erBookingLink[1]));
     }
     const erLost = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/lost$/);
     if (erLost && request.method === "PUT") {

@@ -11,6 +11,7 @@
  *   POST /api/estimate-requests                 create (lead WC hook, repeat check)
  *   PUT  /api/estimate-requests/:id             update (status state machine)
  *   PUT  /api/estimate-requests/:id/appointment set/clear appointment
+ *   POST /api/estimate-requests/:id/booking-link  owner copies a booking URL (no text)
  *   PUT  /api/estimate-requests/:id/lost        mark lost (+ reason/notes)
  *   DELETE /api/estimate-requests/:id           hard delete (pre-conversion cleanup)
  *   POST /api/estimate-requests/bulk-delete     New Request only; per-id skip on failure
@@ -40,6 +41,7 @@ import { parseStoredScopeDraft } from "../lib/scope-draft.js";
 import { NON_TEST_OR_ORPHAN_CLIENT } from "../lib/non-test-client.js";
 import { jobTypeTitleFragment } from "../../shared/job-type-label.js";
 import { BOOKING_SOURCE, formatCentralWhen } from "../lib/self-scheduling.js";
+import { bookingLinkForLead, loadSchedulingRules } from "../lib/booking-link.js";
 
 // Write roles match the app-wide convention (clients/subs): owner, PM, and
 // office_admin — office_admin managing the pipeline is the realistic workflow.
@@ -805,6 +807,38 @@ export async function handleEstimateRequestUpdate(
   }
 
   return json({ request: updated });
+}
+
+// ─── POST /api/estimate-requests/:id/booking-link ────────────────────────────
+// Owner copies a booking URL. Same 21-day token as outreach. No text, and no
+// row in notification_logs or communications.
+
+export async function handleEstimateRequestBookingLink(
+  request: Request,
+  env: Env,
+  id: string,
+  now = new Date(),
+): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+
+  const url = await bookingLinkForLead(env, id, now);
+  if (url) return json({ url });
+
+  const rules = await loadSchedulingRules(env);
+  if (!rules.enabled) {
+    return json({ error: "scheduling_off", message: "Self-scheduling is off." }, { status: 403 });
+  }
+  const row = await env.DB.prepare(
+    "SELECT id FROM estimate_requests WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ id: string }>();
+  if (!row) return err(404, "not_found", "Estimate request not found");
+  return json(
+    { error: "ineligible", message: "This lead can't book a visit from a link." },
+    { status: 409 },
+  );
 }
 
 // ─── PUT /api/estimate-requests/:id/appointment ──────────────────────────────

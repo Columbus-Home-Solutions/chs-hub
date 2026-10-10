@@ -6,7 +6,9 @@ import type { Env } from "../src/env.js";
 import { bookingLinkForLead } from "../src/lib/booking-link.js";
 import { renderTemplateText } from "../src/lib/merge-render.js";
 import { LEAD_OUTREACH_CANDIDATE_SQL } from "../src/lib/new-lead-outreach.js";
-import { DEFAULT_RULES, generateSlots, type BusyInterval } from "../src/lib/self-scheduling.js";
+import { resolveRequiredRoles } from "../src/lib/rbac.js";
+import { DEFAULT_RULES, generateSlots, TOKEN_TTL_MS, type BusyInterval } from "../src/lib/self-scheduling.js";
+import { handleEstimateRequestBookingLink } from "../src/routes/estimate-requests.js";
 import { handlePublicBookingGet, handlePublicBookingPost } from "../src/routes/public-booking.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -147,13 +149,36 @@ function harness(opts: {
           },
           async first() {
             sqlLog.push(sql);
+            if (sql.includes("FROM users WHERE email")) {
+              if (args[0] === "owner@example.com") {
+                return {
+                  id: "owner",
+                  email: "owner@example.com",
+                  first_name: "Tony",
+                  last_name: "C",
+                  role: "owner",
+                  is_active: 1,
+                };
+              }
+              if (args[0] === "pm@example.com") {
+                return {
+                  id: "pm",
+                  email: "pm@example.com",
+                  first_name: "Pat",
+                  last_name: "M",
+                  role: "project_manager",
+                  is_active: 1,
+                };
+              }
+              return null;
+            }
             if (sql.includes("role = 'owner'")) {
               return { id: "owner", email: "owner@example.com", first_name: "Tony", last_name: "C", phone: null };
             }
             if (sql.includes("booking_token = ?") && sql.includes("FROM estimate_requests")) {
               return leads.find((l) => l.booking_token === args[0]) ?? null;
             }
-            if (sql.includes("FROM estimate_requests WHERE id = ?") && sql.includes("booking_token")) {
+            if (sql.includes("FROM estimate_requests WHERE id = ?")) {
               return leads.find((l) => l.id === args[0]) ?? null;
             }
             if (sql.includes("SELECT appointment_date, status")) {
@@ -338,9 +363,97 @@ describe("public booking", () => {
     expect(text).not.toContain("{{booking_link}}");
     const migration = readFileSync(join(root, "migrations/0134_customer_self_scheduling.sql"), "utf8");
     expect(migration).not.toMatch(/outreach_day1_sms/);
+    const detail = readFileSync(join(root, "frontend/src/views/estimating/EstimateRequestDetail.tsx"), "utf8");
+    expect(detail).toContain("Copy booking link");
+    expect(detail).toContain("Self-scheduling is off.");
+    expect(detail).toContain("This lead can't book a visit from a link.");
     const index = readFileSync(join(root, "src/index.ts"), "utf8");
     const allow = index.slice(index.indexOf('url.hostname === "client.homesolutionsar.com"'), index.indexOf("if (!allowed)"));
     expect(allow).toContain('p.startsWith("/book/")');
     expect(allow).toContain('p.startsWith("/api/public/book/")');
+  });
+});
+
+function quiet(sqlLog: string[]) {
+  expect(sqlLog.some((s) => /notification_logs|communications/i.test(s))).toBe(false);
+}
+
+function copyRequest(email: string, id = "lead-1") {
+  return new Request(`https://dashboard.homesolutionsar.com/api/estimate-requests/${id}/booking-link`, {
+    method: "POST",
+    headers: { "Cf-Access-Authenticated-User-Email": email },
+  });
+}
+
+describe("copy booking link", () => {
+  it("refuses while the switch is off and writes no token", async () => {
+    const h = harness({
+      enabled: "0",
+      leads: [lead({ booking_token: "", booking_token_expires_at: "" })],
+    });
+    const res = await handleEstimateRequestBookingLink(copyRequest("owner@example.com"), h.env, "lead-1", clock.now);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { message: string }).message).toBe("Self-scheduling is off.");
+    expect(h.leads[0].booking_token).toBe("");
+    expect(h.sqlLog.some((s) => s.includes("UPDATE"))).toBe(false);
+    quiet(h.sqlLog);
+    expect(resolveRequiredRoles("POST", "/api/estimate-requests/lead-1/booking-link")).toEqual(["owner"]);
+  });
+
+  it("returns a URL for an eligible lead and reuses the same token", async () => {
+    const h = harness({
+      enabled: "1",
+      leads: [lead({ status: "contacted", booking_token: "", booking_token_expires_at: "" })],
+    });
+    const first = await handleEstimateRequestBookingLink(copyRequest("owner@example.com"), h.env, "lead-1", clock.now);
+    const second = await handleEstimateRequestBookingLink(copyRequest("owner@example.com"), h.env, "lead-1", clock.now);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const url = ((await first.json()) as { url: string }).url;
+    expect(((await second.json()) as { url: string }).url).toBe(url);
+    expect(url).toBe(`https://client.homesolutionsar.com/book/${h.leads[0].booking_token}`);
+    expect(new Date(h.leads[0].booking_token_expires_at).getTime() - clock.now.getTime()).toBe(TOKEN_TTL_MS);
+    const updates = h.sqlLog.filter((s) => s.includes("UPDATE estimate_requests") && s.includes("booking_token"));
+    expect(updates).toHaveLength(1);
+    quiet(h.sqlLog);
+
+    const fresh = harness({
+      enabled: "1",
+      leads: [lead({ id: "new-1", status: "new_request", booking_token: "", booking_token_expires_at: "" })],
+    });
+    const created = await handleEstimateRequestBookingLink(copyRequest("owner@example.com", "new-1"), fresh.env, "new-1", clock.now);
+    expect(created.status).toBe(200);
+    expect(((await created.json()) as { url: string }).url).toContain("/book/");
+    quiet(fresh.sqlLog);
+  });
+
+  it("refuses an appointment-set or Lost lead and writes nothing", async () => {
+    const h = harness({
+      enabled: "1",
+      leads: [
+        lead({
+          id: "set",
+          status: "appointment_set",
+          appointment_date: "2026-10-12T13:00:00.000Z",
+          booking_token: "tok-set",
+        }),
+        lead({ id: "lost", status: "lost", booking_token: "tok-lost" }),
+      ],
+    });
+    const set = await handleEstimateRequestBookingLink(copyRequest("owner@example.com", "set"), h.env, "set", clock.now);
+    const lost = await handleEstimateRequestBookingLink(copyRequest("owner@example.com", "lost"), h.env, "lost", clock.now);
+    expect(set.status).toBe(409);
+    expect(lost.status).toBe(409);
+    expect(((await set.json()) as { message: string }).message).toBe("This lead can't book a visit from a link.");
+    expect(h.leads.find((l) => l.id === "set")?.booking_token).toBe("tok-set");
+    expect(h.leads.find((l) => l.id === "lost")?.booking_token).toBe("tok-lost");
+    expect(h.sqlLog.some((s) => s.includes("UPDATE"))).toBe(false);
+    quiet(h.sqlLog);
+
+    const pm = harness({ enabled: "1", leads: [lead({ booking_token: "", booking_token_expires_at: "" })] });
+    const denied = await handleEstimateRequestBookingLink(copyRequest("pm@example.com"), pm.env, "lead-1", clock.now);
+    expect(denied.status).toBe(403);
+    expect(pm.leads[0].booking_token).toBe("");
+    quiet(pm.sqlLog);
   });
 });

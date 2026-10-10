@@ -5,6 +5,7 @@ import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../store/toast";
+import { formatDateTime } from "../../lib/format";
 import { go } from "../../lib/nav";
 import { SiriShortcutCard } from "./SiriShortcutCard";
 
@@ -570,7 +571,7 @@ export function IntegrationsTab() {
           )}
           {gcal?.last_sync && (
             <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
-              Last sync: {new Date(gcal.last_sync).toLocaleString()}
+              Last sync: {formatDateTime(gcal.last_sync)}
             </p>
           )}
           <div class="flex gap-sm" style={{ marginTop: "var(--space-sm)" }}>
@@ -614,7 +615,7 @@ export function IntegrationsTab() {
           )}
           {gbp?.last_sync && (
             <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
-              Last sync: {new Date(gbp.last_sync).toLocaleString()}
+              Last sync: {formatDateTime(gbp.last_sync)}
             </p>
           )}
           {gbp?.last_error && (
@@ -711,7 +712,7 @@ export function IntegrationsTab() {
                     <div class="kv" style={{ marginTop: "var(--space-sm)" }}>
                       <div class="kv__row">
                         <span class="kv__label">Last sync</span>
-                        <span class="kv__value">{c.last_sync ? new Date(c.last_sync).toLocaleString() : "—"}</span>
+                        <span class="kv__value">{c.last_sync ? formatDateTime(c.last_sync) : "—"}</span>
                       </div>
                       {c.last_error && (
                         <div class="kv__row">

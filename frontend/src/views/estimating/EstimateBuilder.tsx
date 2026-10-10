@@ -13,6 +13,7 @@ import { go } from "../../lib/nav";
 import {
   formatCurrency,
   formatDate,
+  formatDateTime,
   formatPhone,
   formatPropertySlashLine,
   formatStatus,
@@ -1640,7 +1641,7 @@ function SentStatusCard({
               </strong>
               , awaiting confirmation
               {estimate.deposit_method_selected_at
-                ? ` (${new Date(estimate.deposit_method_selected_at).toLocaleString()})`
+                ? ` (${formatDateTime(estimate.deposit_method_selected_at)})`
                 : ""}
               . Use <strong>Mark Deposit Received</strong> when you have the funds.
             </div>

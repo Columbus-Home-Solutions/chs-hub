@@ -10,7 +10,7 @@ import { useEffect, useState } from "preact/hooks";
 import { Spinner } from "../../components/ui/Spinner";
 import { Button } from "../../components/ui/Button";
 import { useApi } from "../../hooks/useApi";
-import { formatCurrency } from "../../lib/format";
+import { formatCurrency, formatDateTime } from "../../lib/format";
 
 interface JobTypeGroup {
   job_type: string;
@@ -69,14 +69,7 @@ function formatJobType(t: string | null): string {
 }
 
 function formatTs(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString("en-US", {
-      month: "short", day: "numeric", year: "numeric",
-      hour: "numeric", minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
+  return formatDateTime(iso);
 }
 
 export function PricingIntelligence() {

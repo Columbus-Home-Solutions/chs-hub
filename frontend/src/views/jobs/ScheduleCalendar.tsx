@@ -1,5 +1,5 @@
 import type { RoutableProps } from "preact-router";
-import { useMemo, useState } from "preact/hooks";
+import { useMemo, useRef, useState } from "preact/hooks";
 import { useUrlTab } from "../../hooks/useUrlTab";
 import { useApi } from "../../hooks/useApi";
 import { Card } from "../../components/ui/Card";
@@ -24,6 +24,7 @@ import {
   subBadgeLabel,
 } from "../../lib/calendar-colors";
 import { countdownLabel, initials, startOfMondayWeek } from "../../lib/schedule-banner";
+import { MONTH_VISIBLE_CHIPS, monthChipTooltip } from "../../lib/schedule-chip";
 
 type Mode = "today" | "week" | "timeline" | "month";
 const MODES: Mode[] = ["today", "week", "timeline", "month"];
@@ -85,19 +86,70 @@ function jobLabel(job: ScheduleJob): string {
 
 function EventChip({ e, onOpen }: { e: CalendarEvent; onOpen: (e: CalendarEvent, ev: Event) => void }) {
   const sub = subBadgeLabel(e.assigned_sub_name);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const tipRef = useRef<HTMLDivElement>(null);
+  const tipId = `cal-chip-tip-${e.type}-${e.id}`;
+  const tip = monthChipTooltip(e);
+
+  const placeTip = () => {
+    const btn = btnRef.current;
+    const el = tipRef.current;
+    if (!btn || !el) return;
+    const rect = btn.getBoundingClientRect();
+    const maxWidth = 288;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - maxWidth - 8));
+    el.style.top = `${Math.round(rect.bottom + 4)}px`;
+    el.style.left = `${Math.round(left)}px`;
+  };
+
+  const tipOpen = (el: HTMLElement) => {
+    try {
+      return el.matches(":popover-open");
+    } catch {
+      return false;
+    }
+  };
+
+  const showTip = () => {
+    const el = tipRef.current as (HTMLDivElement & { showPopover?: () => void }) | null;
+    if (!el || typeof el.showPopover !== "function" || tipOpen(el)) return;
+    placeTip();
+    el.showPopover();
+  };
+
+  const hideTip = () => {
+    const el = tipRef.current as (HTMLDivElement & { hidePopover?: () => void }) | null;
+    if (!el || typeof el.hidePopover !== "function" || !tipOpen(el)) return;
+    el.hidePopover();
+  };
+
   return (
-    <button
-      class="cal-chip"
-      style={{ borderLeftColor: getCalendarColor(e) }}
-      title={e.title}
-      onClick={(ev) => onOpen(e, ev)}
-    >
-      <span class="cal-chip__work">{e.title}</span>
-      {sub && <span class="sched-sub-badge">{sub}</span>}
-      {e.job_number != null && (
-        <span class="cal-chip__job">JOB-{String(e.job_number).padStart(3, "0")}</span>
-      )}
-    </button>
+    <span class="cal-tip">
+      <button
+        ref={btnRef}
+        type="button"
+        class="cal-chip"
+        style={{ borderLeftColor: getCalendarColor(e) }}
+        aria-describedby={tipId}
+        onMouseEnter={showTip}
+        onMouseLeave={hideTip}
+        onFocus={showTip}
+        onBlur={hideTip}
+        onClick={(ev) => {
+          hideTip();
+          onOpen(e, ev);
+        }}
+      >
+        <span class="cal-chip__work">{e.title}</span>
+        {sub && <span class="sched-sub-badge">{sub}</span>}
+        {e.job_number != null && (
+          <span class="cal-chip__job">JOB-{String(e.job_number).padStart(3, "0")}</span>
+        )}
+      </button>
+      <div ref={tipRef} id={tipId} class="cal-tip__bubble" role="tooltip" popover="manual">
+        {tip}
+      </div>
+    </span>
   );
 }
 
@@ -457,10 +509,21 @@ export function ScheduleCalendar(_props: RoutableProps) {
                         )}
                       </div>
                       <div class="cal-cell__entries">
-                        {entries.slice(0, 3).map((e) => (
+                        {entries.slice(0, MONTH_VISIBLE_CHIPS).map((e) => (
                           <EventChip e={e} key={`${e.type}-${e.id}`} onOpen={openEvent} />
                         ))}
-                        {entries.length > 3 && <span class="cal-cell__more">+{entries.length - 3} more</span>}
+                        {entries.length > MONTH_VISIBLE_CHIPS && (
+                          <button
+                            type="button"
+                            class="cal-cell__more"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              setSelectedDay(day);
+                            }}
+                          >
+                            +{entries.length - MONTH_VISIBLE_CHIPS} more
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

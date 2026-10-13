@@ -442,10 +442,19 @@ Internal cost breakdown — NOT visible to client.
 | end_date_extension_days | INTEGER | DEFAULT 0 | Days added to `jobs.estimated_end_date` on apply |
 | signed_name | TEXT | | Client's typed name captured at portal signature |
 | signed_ip | TEXT | | Client IP captured at portal signature |
+| approval_source | TEXT | | NULL or `portal` = client e-sign; `manual_owner` = recorded by the owner. Existing rows stay NULL. |
+| manual_approval_method | TEXT | | `phone`, `text`, `in_person`, or `other` |
+| manual_approved_at | TEXT | | When the customer approved (UTC ISO). Also copied to `approved_date`. |
+| manual_approval_note | TEXT | | Required free text. Internal only — never sent to the portal. |
+| manual_approved_by | TEXT | | Owner email who recorded it. Internal only. |
+| manual_recorded_at | TEXT | | When it was recorded in CHS (UTC ISO). Audit only. |
+| manual_proof_r2_key | TEXT | | Optional internal screenshot/PDF. Not a `documents` row. |
 
 **Indexes:** `idx_change_orders_job_id (job_id)`, `idx_change_orders_job_number_unique (job_id, change_order_number)` UNIQUE — enforces sequential per-job numbering (added in migration 0035).
 
 `applied_at`/`end_date_extension_days`/`signed_name`/`signed_ip` and the unique index were added in **0035_change_orders_apply.sql** to support the digital-signature → auto-apply flow. The atomic `UPDATE ... WHERE applied_at IS NULL` makes `applyChangeOrder()` exactly-once even under concurrent portal signatures.
+
+`approval_source` and the `manual_*` columns were added in **0137_change_orders_manual_approval.sql**. A manual approval leaves `client_signature`, `signed_name`, and `signed_ip` NULL. NULL `approval_source` still means a portal e-signature.
 
 ### schedule_entries
 

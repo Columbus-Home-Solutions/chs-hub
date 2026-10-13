@@ -139,6 +139,7 @@ export interface PortalChangeOrder {
   approved_date: string | null;
   end_date_extension_days: number;
   signed_name: string | null;
+  approval_label: string | null;
   can_sign: boolean;
 }
 

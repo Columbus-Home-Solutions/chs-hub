@@ -309,6 +309,12 @@ export async function resolveMergeFields(
     fields[k] = v;
   }
 
+  // The override copy above puts the raw UTC instant back into the date tag.
+  // The change-order date line is "MMMM D, YYYY" in Central time.
+  if (templateType === "change_order" && /^\d{4}-\d{2}-\d{2}/.test(fields.client_approved_date ?? "")) {
+    fields.client_approved_date = formatDate(fields.client_approved_date);
+  }
+
   // Business rule 5: ensure all values are strings (not null/undefined)
   for (const k of Object.keys(fields)) {
     if (!fields[k]) fields[k] = "";

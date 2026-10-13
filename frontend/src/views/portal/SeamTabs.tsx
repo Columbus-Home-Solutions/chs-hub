@@ -79,9 +79,11 @@ export function ChangeOrdersTab({ token }: { token: string }) {
           <div class="portal-co__meta">
             <span>{c.is_credit ? "Credit: " : "Amount: "}{formatCurrency(c.amount)}</span>
             {c.end_date_extension_days > 0 && <span> · Adds {c.end_date_extension_days} day(s) to the timeline</span>}
-            {c.status === "approved" && c.signed_name && (
+            {c.approval_label ? (
+              <span> · {c.approval_label}</span>
+            ) : c.status === "approved" && c.signed_name ? (
               <span> · Signed by {c.signed_name}{c.approved_date ? ` on ${formatDate(c.approved_date)}` : ""}</span>
-            )}
+            ) : null}
           </div>
           {c.can_sign && (
             <button class="quote-btn quote-btn--primary portal-co__sign" onClick={() => setSigning(c)}>

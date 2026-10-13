@@ -290,8 +290,10 @@ Role checks are documented per endpoint:
 | PUT | `/api/change-orders/:id` | O/PM | Update change order (drafts only) |
 | POST | `/api/change-orders/:id/send` | O/PM | Mark `sent` and notify client (`change_order_sent`) for signature |
 | POST | `/api/change-orders/:id/reject` | O/PM | Mark a sent change order `rejected` |
+| POST | `/api/change-orders/:id/approve-manual` | Owner | Record an off-platform approval (`phone`/`text`/`in_person`/`other`), required note, optional proof. Does not write signature fields, does not email the client, does not send BoldSign. Then `applyChangeOrder()`. |
+| GET | `/api/change-orders/:id/approval-proof` | Owner | Stream the internal proof file. Not on the portal or the documents list. |
 
-Client approval is **not** an internal route — it happens when the client signs in the portal (`POST /api/portal/:token/change-orders/:id/sign`), which calls the idempotent `applyChangeOrder()`: stamps `applied_at` exactly once, revises `jobs.contract_total`, extends the end date, creates the CO task group, and fires `change_order_approved`.
+Client e-signature still happens in the portal (`POST /api/portal/:token/change-orders/:id/sign`), which calls the idempotent `applyChangeOrder()`: stamps `applied_at` exactly once, revises `jobs.contract_total`, extends the end date, creates the CO task group, and fires `change_order_approved`. An owner can instead record an off-platform approval with `POST /api/change-orders/:id/approve-manual`. That path uses the same apply, passes `suppressCustomerNotice`, and does not fire `change_order_approved`.
 
 ### Schedule
 

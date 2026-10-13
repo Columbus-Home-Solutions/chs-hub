@@ -164,6 +164,13 @@
   text-transform: none;
   letter-spacing: 0;
 }
+.badge--manual_approval {
+  color: #1e3a8a;
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.35);
+  text-transform: none;
+  letter-spacing: 0;
+}
 .badge--deposit_paid { color: var(--status-deposit-paid); background: rgba(139,92,246,0.1); border-color: rgba(139,92,246,0.25); }
 .badge--scheduled { color: var(--status-scheduled); background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.25); }
 .badge--in_progress { color: var(--status-in-progress); background: var(--color-brand-subtle); border-color: var(--color-brand-border); }

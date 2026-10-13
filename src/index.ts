@@ -471,6 +471,8 @@ import {
   handleChangeOrderUpdate,
   handleChangeOrderSend,
   handleChangeOrderReject,
+  handleChangeOrderApproveManual,
+  handleChangeOrderApprovalProof,
 } from "./routes/change-orders.js";
 // ── Document Management (Sprint 15) ──────────────────────────────────────────
 import {
@@ -1743,6 +1745,14 @@ export default {
     const coReject = url.pathname.match(/^\/api\/change-orders\/([^/]+)\/reject$/);
     if (coReject && request.method === "POST") {
       return handleChangeOrderReject(request, env, decodeURIComponent(coReject[1]));
+    }
+    const coApproveManual = url.pathname.match(/^\/api\/change-orders\/([^/]+)\/approve-manual$/);
+    if (coApproveManual && request.method === "POST") {
+      return handleChangeOrderApproveManual(request, env, decodeURIComponent(coApproveManual[1]), ctx);
+    }
+    const coProof = url.pathname.match(/^\/api\/change-orders\/([^/]+)\/approval-proof$/);
+    if (coProof && request.method === "GET") {
+      return handleChangeOrderApprovalProof(request, env, decodeURIComponent(coProof[1]));
     }
     const coById = url.pathname.match(/^\/api\/change-orders\/([^/]+)$/);
     if (coById && request.method === "PUT") {

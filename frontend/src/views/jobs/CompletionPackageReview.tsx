@@ -4,6 +4,7 @@ import { useApi } from "../../hooks/useApi";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { Modal } from "../../components/ui/Modal";
+import { useAuth } from "../../store/auth";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
@@ -93,6 +94,8 @@ function PackageSkeleton() {
 
 export function CompletionPackageReview({ id }: DetailProps) {
   const toast = useToast();
+  const { user } = useAuth();
+  const isOwner = user?.role === "owner";
   const jobId = id ?? "";
   const { data: jobDetail } = useApi<{ job: { client_email: string | null } }>(
     jobId ? `/api/jobs/${jobId}` : null,
@@ -101,6 +104,8 @@ export function CompletionPackageReview({ id }: DetailProps) {
     jobId ? `/api/jobs/${jobId}/completion-package` : null,
   );
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [recompileOpen, setRecompileOpen] = useState(false);
+  const [recompiling, setRecompiling] = useState(false);
   const [sending, setSending] = useState(false);
   const [localStatus, setLocalStatus] = useState<CompletionPackageData["package_status"] | null>(null);
   const [localSentAt, setLocalSentAt] = useState<string | null>(null);
@@ -160,6 +165,21 @@ export function CompletionPackageReview({ id }: DetailProps) {
       toast.push("error", errMsg(e));
     } finally {
       setSending(false);
+    }
+  }, [jobId, refetch, toast]);
+
+  const recompile = useCallback(async () => {
+    if (!jobId) return;
+    setRecompiling(true);
+    try {
+      await api.post(`/api/jobs/${jobId}/completion-package/recompile`, {});
+      setRecompileOpen(false);
+      toast.push("success", "Saved package updated");
+      refetch();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setRecompiling(false);
     }
   }, [jobId, refetch, toast]);
 
@@ -234,8 +254,20 @@ export function CompletionPackageReview({ id }: DetailProps) {
 
           <div class="completion-package-send">
             {packageStatus === "sent" ? (
-              <div class="completion-package-sent-confirm text--muted">
-                ✓ Sent{sentAt ? ` ${formatDateTime(sentAt)}` : ""}
+              <div class="stack">
+                <div class="completion-package-sent-confirm text--muted">
+                  ✓ Sent{sentAt ? ` ${formatDateTime(sentAt)}` : ""}
+                </div>
+                {isOwner && (
+                  <div class="stack">
+                    <Button variant="secondary" onClick={() => setRecompileOpen(true)}>
+                      Update saved package
+                    </Button>
+                    <p class="text--muted" style={{ margin: 0 }}>
+                      Replaces the package on the portal. Does not text or email the client.
+                    </p>
+                  </div>
+                )}
               </div>
             ) : (
               <Button
@@ -284,6 +316,26 @@ export function CompletionPackageReview({ id }: DetailProps) {
           Send completion package to {pkg?.job.client_name ?? "the client"} at {clientEmail}?           This will
           email the warranty certificate, final invoice, conditional lien waiver, and {photoTotal} photo
           {photoTotal === 1 ? "" : "s"}.
+        </p>
+      </Modal>
+
+      <Modal
+        open={recompileOpen}
+        title="Update saved package?"
+        onClose={() => setRecompileOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRecompileOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={recompiling} onClick={() => void recompile()}>
+              {recompiling ? "Updating…" : "Update saved package"}
+            </Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>
+          Replaces the package on the portal. Does not text or email the client.
         </p>
       </Modal>
     </div>

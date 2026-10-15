@@ -523,6 +523,7 @@ import {
 import {
   handleCompletionPackageCompile,
   handleCompletionPackageGet,
+  handleCompletionPackageRecompile,
   handleCompletionPackageSend,
   handleLienWaiverRetry,
 } from "./routes/completion-package.js";
@@ -1611,6 +1612,10 @@ export default {
     const jobCompletionSend = url.pathname.match(/^\/api\/jobs\/([^/]+)\/completion-package\/send$/);
     if (jobCompletionSend && request.method === "POST") {
       return handleCompletionPackageSend(request, env, decodeURIComponent(jobCompletionSend[1]));
+    }
+    const jobCompletionRecompile = url.pathname.match(/^\/api\/jobs\/([^/]+)\/completion-package\/recompile$/);
+    if (jobCompletionRecompile && request.method === "POST") {
+      return handleCompletionPackageRecompile(request, env, decodeURIComponent(jobCompletionRecompile[1]));
     }
     const jobLienWaiverRetry = url.pathname.match(/^\/api\/jobs\/([^/]+)\/lien-waiver\/retry$/);
     if (jobLienWaiverRetry && request.method === "POST") {

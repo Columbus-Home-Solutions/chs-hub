@@ -493,6 +493,89 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
   });
 }
 
+function supersededPackageKey(r2Key: string, stamp: string): string {
+  if (/\.html$/i.test(r2Key)) return r2Key.replace(/\.html$/i, `.superseded-${stamp}.html`);
+  return `${r2Key}.superseded-${stamp}.html`;
+}
+
+// ─── POST /api/jobs/:id/completion-package/recompile (owner) ────────────────
+// Replaces the HTML the portal already serves. Does not email, text, or move
+// completion_package_sent_at (review follow-ups are anchored to that time).
+
+export async function handleCompletionPackageRecompile(
+  request: Request,
+  env: Env,
+  jobId: string,
+): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const job = await env.DB.prepare(
+    "SELECT completion_package_sent_at FROM jobs WHERE id = ?",
+  )
+    .bind(jobId)
+    .first<{ completion_package_sent_at: string | null }>();
+  if (!job) return err(404, "job_not_found", "Job not found.");
+  if (!job.completion_package_sent_at) {
+    return err(409, "not_sent", "Completion package has not been sent.");
+  }
+
+  const pkg = await env.DB.prepare(
+    `SELECT id, r2_key
+       FROM documents
+      WHERE job_id = ? AND document_category = 'completion_package'
+        AND COALESCE(is_active, 1) = 1 AND COALESCE(is_signed, 0) = 1
+      ORDER BY datetime(signed_date) DESC
+      LIMIT 1`,
+  )
+    .bind(jobId)
+    .first<{ id: string; r2_key: string | null }>();
+  if (!pkg?.r2_key) {
+    return err(409, "not_sent", "No signed completion package is on file.");
+  }
+
+  const existing = await env.FILES.get(pkg.r2_key);
+  if (!existing) {
+    return err(409, "package_missing", "The saved completion package file is missing.");
+  }
+
+  const data = await buildCompletionPackageData(env, jobId);
+  if (!data) return err(404, "job_not_found", "Job not found.");
+  const html = renderCompletionPackageHtml(data);
+  const bytes = new TextEncoder().encode(html);
+  const prior = new Uint8Array(await existing.arrayBuffer());
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "");
+  const supersededKey = supersededPackageKey(pkg.r2_key, stamp);
+  const priorType = existing.httpMetadata?.contentType ?? "text/html; charset=utf-8";
+
+  await env.FILES.put(supersededKey, prior, {
+    httpMetadata: { contentType: priorType },
+  });
+  await env.FILES.put(pkg.r2_key, bytes, {
+    httpMetadata: { contentType: "text/html; charset=utf-8" },
+  });
+
+  const now = new Date().toISOString();
+  await env.DB.prepare("UPDATE documents SET file_size = ?, updated_at = ? WHERE id = ?")
+    .bind(bytes.byteLength, now, pkg.id)
+    .run();
+
+  await logAudit(env, user.email, "completion_package.recompile", jobId, {
+    document_id: pkg.id,
+    r2_key: pkg.r2_key,
+    superseded_r2_key: supersededKey,
+  });
+
+  return json({
+    ok: true,
+    document_id: pkg.id,
+    r2_key: pkg.r2_key,
+    superseded_r2_key: supersededKey,
+    summary: data.financial,
+  });
+}
+
 // ─── POST /api/jobs/:id/lien-waiver/retry  (O/PM) ─────────────────────────────
 //
 // Manually retry a failed client lien waiver send. Re-uses the existing

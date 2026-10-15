@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Env } from "../src/env.js";
+import { renderContract } from "../src/lib/contracts.js";
 import {
   addDays,
   convenienceFee,
@@ -242,6 +243,58 @@ describe("due date and past-due cadence", () => {
     expect(pastDueReminderApplies({ dueDate: due, today, status: "past_due", lateFeeHold: 1 })).toBe(false);
     expect(pastDueReminderApplies({ dueDate: due, today, status: "paid" })).toBe(false);
     expect(pastDueReminderApplies({ dueDate: due, today, status: "void" })).toBe(false);
+  });
+});
+
+describe("agreement late-fee wording", () => {
+  function settingsEnv(): Env {
+    return {
+      DB: {
+        prepare: () => ({
+          all: async () => ({ results: [] }),
+        }),
+      },
+    } as unknown as Env;
+  }
+
+  const ctx = {
+    client_name: "ZZTEST",
+    property_address: "1 Test St",
+    job_title: "Test project",
+    total: 1000,
+    deposit_amount: 100,
+    billing_model: "fifty_fifty",
+    payment_schedule_lines: ["Deposit"],
+  };
+
+  it("states a one-time 5% fee on a new service agreement", async () => {
+    const text = await renderContract(settingsEnv(), ctx);
+    expect(text).toContain("due within seven (7) days of the date the invoice is sent to Client");
+    expect(text).toContain("one-time late fee of five percent (5%) of the unpaid balance");
+    expect(text).toContain("Contractor may waive or delay this fee at its sole discretion");
+    expect(text).not.toContain("$50.00 per day");
+    expect(text).not.toContain("days of receipt");
+  });
+
+  it("keeps cost-plus free of a late fee and carves it out of the service agreement", async () => {
+    const text = await renderContract(settingsEnv(), { ...ctx, billing_model: "cost_plus" });
+    expect(text).toContain("due within twenty-four (24) hours");
+    expect(text).toContain("No late fee applies to Cost-Plus invoices");
+    expect(text).toContain("The Late Payment Fee in the Service Agreement does not apply to this Cost-Plus Billing Agreement");
+    expect(text).not.toContain("$50.00 per day");
+    expect(text).not.toContain("five percent (5%)");
+  });
+
+  it("uses the same 5% sentence in the working-agreement template source", () => {
+    const source = readFileSync(
+      new URL("../scripts/generate-working-agreement-template.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain(
+      "All invoices are due within seven (7) days of the date the invoice is sent. If an invoice is not paid within seven (7) days after its due date, Columbus Home Solutions may, at its discretion, add a one-time late fee of five percent (5%) of the unpaid balance, and may waive or delay it.",
+    );
+    expect(source).toContain("work will pause until the outstanding balance is received");
+    expect(source).not.toContain("$50.00 per day");
   });
 });
 

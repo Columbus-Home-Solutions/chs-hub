@@ -22,6 +22,7 @@
  */
 
 import type { Env } from "../env.js";
+import { centralDate } from "../../shared/labor-week.js";
 import { triggerNotification } from "./notification-engine.js";
 
 export const LATE_FEE_PER_DAY = 50;
@@ -113,6 +114,40 @@ export function computeTotalDue(
 /** The 3.5% convenience fee (revenue) on an electronic payment of `base`. */
 export function convenienceFee(base: number, rate = CONVENIENCE_FEE_RATE): number {
   return round2(base * rate);
+}
+
+/** Due date for a new invoice: 7 days after the Central send date. */
+export function defaultInvoiceDueDate(sentAt: Date = new Date()): string {
+  return addDays(centralDate(sentAt), DEFAULT_DUE_DAYS);
+}
+
+/**
+ * Past-due reminders go out on day 1, day 4, and day 8 after the due date,
+ * then every 7 days. Day 0 (the due date itself) is not a past-due day.
+ */
+export function isPastDueReminderDay(dueDate: string, today: string): boolean {
+  const due = dueDate.slice(0, 10);
+  const day = today.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due) || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  const elapsed = Math.round(
+    (Date.parse(`${day}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / 86_400_000,
+  );
+  if (elapsed === 1 || elapsed === 4) return true;
+  return elapsed >= 8 && (elapsed - 8) % 7 === 0;
+}
+
+/** Paid, void, and held invoices do not get a past-due reminder. */
+export function pastDueReminderApplies(input: {
+  dueDate: string | null;
+  today: string;
+  status: string | null;
+  billingHold?: number | null;
+  lateFeeHold?: number | null;
+}): boolean {
+  if (!input.dueDate) return false;
+  if (input.status === "paid" || input.status === "void" || input.status === "draft") return false;
+  if (Number(input.billingHold ?? 0) === 1 || Number(input.lateFeeHold ?? 0) === 1) return false;
+  return isPastDueReminderDay(input.dueDate, input.today);
 }
 
 /** Date `days` after a YYYY-MM-DD (or ISO) date, as YYYY-MM-DD. */
@@ -539,6 +574,7 @@ type BillingInvoice = InvoiceRow & {
   invoice_data_source?: string | null;
   job_data_source?: string | null;
   billing_hold?: number | null;
+  late_fee_hold?: number | null;
 };
 
 const BILLING_INVOICE_COLUMNS = `${INVOICE_COLUMNS.split(",")
@@ -572,24 +608,29 @@ function fmtDate(iso: string | null): string {
  * Invoice Due Check (daily cron): enqueue-only — the every-15-min engine drains.
  *   - reminder ~2 days before due_date for sent/viewed invoices (once per
  *     invoice via instanceKey 'due_reminder').
- *   - past-due notice daily after the grace period for overdue unpaid invoices
- *     (once per day via instanceKey = today's date), including the running late
- *     fee. Stays SIMULATED (dispatch mode unchanged).
+ *   - past-due notice on day 1, day 4, and day 8 after the due date, then
+ *     weekly. Held, paid, and void invoices are skipped. Dispatch mode unchanged.
  */
 export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
   const stats: DueCheckStats = { scanned: 0, reminders: 0, past_due: 0 };
-  const today = new Date().toISOString().slice(0, 10);
+  const today = centralDate();
   const reminderDay = addDays(today, 2); // due in ~2 days
 
-  const { results } = await env.DB.prepare(
-    `SELECT ${BILLING_INVOICE_COLUMNS}
+  const dueSql = `SELECT ${BILLING_INVOICE_COLUMNS}
        FROM invoices i
        LEFT JOIN jobs j ON j.id = i.job_id
       WHERE i.status IN ('sent','viewed','partial','past_due')
         AND i.due_date IS NOT NULL
         ${JOBBER_HISTORY_INVOICE_SQL}
-        ${BILLING_HOLD_SQL}`,
-  ).all<BillingInvoice>();
+        ${BILLING_HOLD_SQL}`;
+  let results: BillingInvoice[] = [];
+  try {
+    const held = await env.DB.prepare(`${dueSql} AND COALESCE(i.late_fee_hold, 0) = 0`).all<BillingInvoice>();
+    results = held.results ?? [];
+  } catch {
+    const plain = await env.DB.prepare(dueSql).all<BillingInvoice>();
+    results = plain.results ?? [];
+  }
 
   for (const inv of results ?? []) {
     if (
@@ -622,7 +663,15 @@ export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
       stats.reminders += res.enqueued;
     }
 
-    if (due < today) {
+    if (
+      pastDueReminderApplies({
+        dueDate: due,
+        today,
+        status: inv.status,
+        billingHold: inv.billing_hold,
+        lateFeeHold: inv.late_fee_hold,
+      })
+    ) {
       const res = await triggerNotification(env, "invoice_past_due", {
         clientId: inv.client_id,
         jobId: inv.job_id,

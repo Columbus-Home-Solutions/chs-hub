@@ -24,6 +24,7 @@ import {
   type InvoiceType,
   computeSuggestions,
   computeTotalDue,
+  defaultInvoiceDueDate,
   convenienceFee,
   CONVENIENCE_FEE_RATE,
   loadInvoice,
@@ -366,8 +367,8 @@ export async function handleInvoiceSend(request: Request, env: Env, id: string):
   const token = inv.payment_token ?? crypto.randomUUID().replace(/-/g, "");
   const link = paymentLink(env, token);
   const nowIso = new Date().toISOString();
-  // Default the due date to sent + 7 days if it wasn't set (the 7-day grace).
-  const dueDate = inv.due_date ?? new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  // Keep a due date the owner already chose. Otherwise due is 7 Central days after send.
+  const dueDate = (inv.due_date ?? "").slice(0, 10) || defaultInvoiceDueDate(new Date(nowIso));
 
   await env.DB.prepare(
     `UPDATE invoices SET status = CASE WHEN status = 'draft' THEN 'sent' ELSE status END,

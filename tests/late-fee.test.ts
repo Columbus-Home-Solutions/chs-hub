@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Env } from "../src/env.js";
-import { convenienceFee, runLateFeeCalculator } from "../src/lib/invoicing.js";
+import {
+  addDays,
+  convenienceFee,
+  defaultInvoiceDueDate,
+  isPastDueReminderDay,
+  pastDueReminderApplies,
+  runLateFeeCalculator,
+} from "../src/lib/invoicing.js";
 import {
   exclusionReason,
   handleLateFeeAction,
@@ -186,6 +193,30 @@ describe("late fee writes", () => {
     expect(body.late_fee_amount).toBe(50);
     expect(body.total_due).toBe(1050);
     expect(updates.some((sql) => sql.includes("late_fee_state = 'applied'"))).toBe(true);
+  });
+});
+
+describe("due date and past-due cadence", () => {
+  it("sets a blank due date to 7 days after the Central send date", () => {
+    expect(defaultInvoiceDueDate(new Date("2026-10-13T17:00:42.730Z"))).toBe("2026-10-20");
+    expect(defaultInvoiceDueDate(new Date("2026-10-14T04:30:00.000Z"))).toBe("2026-10-20");
+    expect(defaultInvoiceDueDate(new Date("2026-10-14T05:30:00.000Z"))).toBe("2026-10-21");
+  });
+
+  it("reminds on day 1, day 4, and day 8, then weekly, and never when held, paid, or void", () => {
+    const due = "2026-10-13";
+    for (const n of [1, 4, 8, 15, 22, 29]) {
+      expect(isPastDueReminderDay(due, addDays(due, n))).toBe(true);
+    }
+    for (const n of [0, 2, 3, 5, 6, 7, 9, 14, 16]) {
+      expect(isPastDueReminderDay(due, addDays(due, n))).toBe(false);
+    }
+    const today = addDays(due, 1);
+    expect(pastDueReminderApplies({ dueDate: due, today, status: "past_due" })).toBe(true);
+    expect(pastDueReminderApplies({ dueDate: due, today, status: "past_due", billingHold: 1 })).toBe(false);
+    expect(pastDueReminderApplies({ dueDate: due, today, status: "past_due", lateFeeHold: 1 })).toBe(false);
+    expect(pastDueReminderApplies({ dueDate: due, today, status: "paid" })).toBe(false);
+    expect(pastDueReminderApplies({ dueDate: due, today, status: "void" })).toBe(false);
   });
 });
 

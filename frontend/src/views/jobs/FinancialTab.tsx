@@ -27,6 +27,7 @@ import { HISTORICAL_INVOICE_BADGE } from "../../types";
 import { CycleManager } from "./CycleManager";
 import { LineItemBilling } from "./LineItemBilling";
 import { go } from "../../lib/nav";
+import { addDays, centralDate } from "@chs/shared/labor-week";
 import { JobLaborCard } from "./JobLaborCard";
 import type { QueueItem } from "../financial/ReceiptQueueView";
 import type { JobCard, Payer } from "../../types";
@@ -1338,7 +1339,7 @@ function InvoiceBuilder({
   const [tax, setTax] = useState("");
   const [credits, setCredits] = useState("");
   const [description, setDescription] = useState("");
-  const [dueDate, setDueDate] = useState("");
+  const [dueDate, setDueDate] = useState(addDays(centralDate(), 7));
   const [busy, setBusy] = useState(false);
   // Carried-through linkage (e.g. `co:<id>` for a change-order invoice) so the
   // server-side suggestion stops re-offering it once the invoice exists.
@@ -1446,7 +1447,7 @@ function InvoiceBuilder({
           />
         </FormField>
       </div>
-      <FormField label="Due date">
+      <FormField label="Due date" hint="7 days after today. Change it if this invoice is due on another day.">
         <input
           class="form-input"
           type="date"
@@ -1606,6 +1607,13 @@ function InvoiceDetailModal({
   const [feeBusy, setFeeBusy] = useState<string | null>(null);
   const [holdOpen, setHoldOpen] = useState(false);
   const [holdReason, setHoldReason] = useState("");
+  const [dueDraft, setDueDraft] = useState("");
+  const [dueSaving, setDueSaving] = useState(false);
+
+  useEffect(() => {
+    const raw = data?.invoice.due_date;
+    setDueDraft(raw ? raw.slice(0, 10) : "");
+  }, [data?.invoice.due_date]);
 
   if (loading || !data) {
     return (
@@ -1661,6 +1669,39 @@ function InvoiceDetailModal({
       <dl class="kv">
         <div class="kv__row"><dt>Type</dt><dd>{formatStatus(inv.invoice_type)}</dd></div>
         <div class="kv__row"><dt>Status</dt><dd>{formatStatus(inv.status)}</dd></div>
+        {user?.role === "owner" && inv.status !== "paid" && inv.status !== "void" ? (
+          <div class="kv__row">
+            <dt>Due date</dt>
+            <dd>
+              <input
+                class="form-input"
+                type="date"
+                value={dueDraft}
+                disabled={dueSaving}
+                aria-label="Due date"
+                onInput={(e) => {
+                  const next = (e.target as HTMLInputElement).value;
+                  setDueDraft(next);
+                  if (!next || next === (inv.due_date ?? "").slice(0, 10)) return;
+                  setDueSaving(true);
+                  void api
+                    .put(`/api/invoices/${invoiceId}`, { due_date: next })
+                    .then(() => {
+                      toast.push("success", "Due date updated");
+                      refetch();
+                      onChanged();
+                    })
+                    .catch((err) => {
+                      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+                    })
+                    .finally(() => setDueSaving(false));
+                }}
+              />
+            </dd>
+          </div>
+        ) : (
+          <div class="kv__row"><dt>Due date</dt><dd>{inv.due_date ? formatDate(inv.due_date) : "—"}</dd></div>
+        )}
         {inv.is_historical && (
           <div class="kv__row"><dt>Record</dt><dd>{HISTORICAL_INVOICE_BADGE}</dd></div>
         )}

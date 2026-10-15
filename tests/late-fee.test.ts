@@ -1,0 +1,199 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import type { Env } from "../src/env.js";
+import { convenienceFee, runLateFeeCalculator } from "../src/lib/invoicing.js";
+import {
+  exclusionReason,
+  handleLateFeeAction,
+  isPastGrace,
+  lateFeeAmount,
+  planLateFees,
+  type LateFeeCandidate,
+} from "../src/lib/late-fee.js";
+
+const TODAY = "2026-10-14";
+
+function row(over: Partial<LateFeeCandidate> = {}): LateFeeCandidate {
+  return {
+    id: "inv-1",
+    invoice_number: 1001,
+    status: "past_due",
+    amount: 1000,
+    tax_amount: 0,
+    credits_applied: 0,
+    late_fee_amount: 0,
+    total_due: 1000,
+    due_date: "2026-10-06",
+    billing_model: "fifty_fifty",
+    invoice_type: "final",
+    job_id: "job-1",
+    client_id: "client-1",
+    client_name: "Ada Client",
+    payment_token: "tok",
+    late_fee_state: "none",
+    late_fee_hold: 0,
+    late_fee_hold_reason: null,
+    late_fee_snooze_until: null,
+    late_fee_proposed_amount: null,
+    late_fee_waived_amount: null,
+    invoice_data_source: null,
+    job_data_source: null,
+    job_billing_model: "fifty_fifty",
+    billing_hold: 0,
+    collected: 0,
+    ...over,
+  };
+}
+
+describe("late fee eligibility and amount", () => {
+  it("is not eligible on day 7 after the due date and is eligible on day 8", () => {
+    expect(isPastGrace("2026-10-07", TODAY)).toBe(false);
+    expect(isPastGrace("2026-10-06", TODAY)).toBe(true);
+    expect(exclusionReason(row({ due_date: "2026-10-07" }), TODAY)).toBe("grace");
+    expect(exclusionReason(row({ due_date: "2026-10-06" }), TODAY)).toBeNull();
+  });
+
+  it("rounds 5% to the cent and uses the unpaid principal, not a prior fee", () => {
+    expect(lateFeeAmount(10.01)).toBe(0.5);
+    expect(lateFeeAmount(10.1)).toBe(0.51);
+    expect(lateFeeAmount(2150)).toBe(107.5);
+    const partial = row({ amount: 1000, collected: 400, total_due: 1000, late_fee_amount: 0 });
+    expect(lateFeeAmount(600)).toBe(30);
+    const plan = planLateFees([partial], TODAY, true);
+    expect(plan).toEqual([
+      expect.objectContaining({ kind: "propose", amount: 30, balance: 600 }),
+    ]);
+  });
+
+  it("excludes cost-plus, hold, snooze, waived, and an already applied fee", () => {
+    expect(exclusionReason(row({ billing_model: "cost_plus" }), TODAY)).toBe("cost_plus");
+    expect(exclusionReason(row({ invoice_type: "cost_plus_cycle" }), TODAY)).toBe("cost_plus");
+    expect(exclusionReason(row({ late_fee_hold: 1 }), TODAY)).toBe("hold");
+    expect(exclusionReason(row({ late_fee_snooze_until: TODAY }), TODAY)).toBe("snooze");
+    expect(exclusionReason(row({ late_fee_snooze_until: "2026-10-13" }), TODAY)).toBeNull();
+    expect(exclusionReason(row({ late_fee_state: "waived", late_fee_amount: 0 }), TODAY)).toBe("decided");
+    expect(exclusionReason(row({ late_fee_state: "applied", late_fee_amount: 50 }), TODAY)).toBe("decided");
+    expect(exclusionReason(row({ late_fee_amount: 50 }), TODAY)).toBe("decided");
+  });
+
+  it("cancels a proposal once the invoice is paid and does not propose twice", () => {
+    const proposed = row({ late_fee_state: "proposed", late_fee_proposed_amount: 50 });
+    expect(planLateFees([proposed], TODAY, true)).toEqual([]);
+    expect(planLateFees([{ ...proposed, status: "paid", collected: 1000 }], TODAY, true)).toEqual([
+      { kind: "cancel", row: { ...proposed, status: "paid", collected: 1000 } },
+    ]);
+  });
+
+  it("counts only while the switch is off", () => {
+    const plan = planLateFees([row()], TODAY, false);
+    expect(plan.map((item) => item.kind)).toEqual(["count"]);
+  });
+
+  it("keeps the 3.5% convenience fee on the remaining balance, including an applied late fee", () => {
+    const balance = 1000 + 50;
+    expect(convenienceFee(balance)).toBe(36.75);
+  });
+});
+
+describe("late fee writes", () => {
+  it("the old calculator adds nothing and does not touch the database", async () => {
+    let calls = 0;
+    const env = {
+      DB: {
+        prepare() {
+          calls++;
+          throw new Error("calculator must not query");
+        },
+      },
+    } as unknown as Env;
+    await expect(runLateFeeCalculator(env)).resolves.toEqual({
+      scanned: 0,
+      updated: 0,
+      marked_past_due: 0,
+    });
+    expect(calls).toBe(0);
+  });
+
+  it("rejects a non-owner and lets the owner add one fee", async () => {
+    const updates: string[] = [];
+    const users = new Map([
+      ["pm@example.com", { id: "u-pm", email: "pm@example.com", first_name: "Pat", last_name: "Pm", role: "project_manager", is_active: 1 }],
+      ["owner@example.com", { id: "u-own", email: "owner@example.com", first_name: "Ada", last_name: "Owner", role: "owner", is_active: 1 }],
+    ]);
+    const invoice = row();
+    const env = {
+      DB: {
+        prepare(sql: string) {
+          const bound: unknown[] = [];
+          return {
+            bind(...args: unknown[]) {
+              bound.splice(0, bound.length, ...args);
+              return this;
+            },
+            async first() {
+              if (sql.includes("FROM users")) return users.get(String(bound[0])) ?? null;
+              if (sql.includes("FROM invoices")) return invoice;
+              if (sql.includes("system_settings")) return { value: "false" };
+              return null;
+            },
+            async all() {
+              if (sql.includes("notification_templates")) return { results: [] };
+              if (sql.includes("FROM users")) return { results: [] };
+              return { results: [] };
+            },
+            async run() {
+              updates.push(sql);
+              return { success: true, meta: { changes: 1 } };
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+
+    const anon = await handleLateFeeAction(
+      new Request("https://app.example/api/invoices/inv-1/late-fee", {
+        method: "POST",
+        body: JSON.stringify({ action: "add" }),
+      }),
+      env,
+      "inv-1",
+    );
+    expect(anon.status).toBe(401);
+
+    const pm = await handleLateFeeAction(
+      new Request("https://app.example/api/invoices/inv-1/late-fee", {
+        method: "POST",
+        headers: { "Cf-Access-Authenticated-User-Email": "pm@example.com" },
+        body: JSON.stringify({ action: "add" }),
+      }),
+      env,
+      "inv-1",
+    );
+    expect(pm.status).toBe(403);
+    expect(updates).toEqual([]);
+
+    const owner = await handleLateFeeAction(
+      new Request("https://app.example/api/invoices/inv-1/late-fee", {
+        method: "POST",
+        headers: { "Cf-Access-Authenticated-User-Email": "owner@example.com" },
+        body: JSON.stringify({ action: "add" }),
+      }),
+      env,
+      "inv-1",
+    );
+    expect(owner.status).toBe(200);
+    const body = (await owner.json()) as { late_fee_amount: number; total_due: number };
+    expect(body.late_fee_amount).toBe(50);
+    expect(body.total_due).toBe(1050);
+    expect(updates.some((sql) => sql.includes("late_fee_state = 'applied'"))).toBe(true);
+  });
+});
+
+describe("late fee migration", () => {
+  it("does not put the old daily fee back into customer copy", () => {
+    const sql = readFileSync(new URL("../migrations/0138_late_fee_proposals.sql", import.meta.url), "utf8");
+    expect(sql).not.toMatch(/\$50/);
+    expect(sql).toContain("late_fee_proposals_enabled");
+    expect(sql).toContain("one-time late fee");
+  });
+});

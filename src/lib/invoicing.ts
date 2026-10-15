@@ -545,48 +545,9 @@ const BILLING_INVOICE_COLUMNS = `${INVOICE_COLUMNS.split(",")
   .map((c) => `i.${c.trim()}`)
   .join(", ")}, i.data_source AS invoice_data_source, j.data_source AS job_data_source, i.billing_hold`;
 
-export async function runLateFeeCalculator(env: Env): Promise<LateFeeStats> {
-  const stats: LateFeeStats = { scanned: 0, updated: 0, marked_past_due: 0 };
-  const today = new Date().toISOString().slice(0, 10);
-  const { results } = await env.DB.prepare(
-    `SELECT ${BILLING_INVOICE_COLUMNS}
-       FROM invoices i
-       LEFT JOIN jobs j ON j.id = i.job_id
-      WHERE i.status IN ('sent','viewed','partial','past_due')
-        AND i.due_date IS NOT NULL AND substr(i.due_date, 1, 10) < ?
-        ${JOBBER_HISTORY_INVOICE_SQL}
-        ${BILLING_HOLD_SQL}`,
-  )
-    .bind(today)
-    .all<BillingInvoice>();
-
-  for (const inv of results ?? []) {
-    if (
-      isJobberHistoryInvoice({
-        invoiceId: inv.id,
-        invoiceDataSource: inv.invoice_data_source,
-        jobDataSource: inv.job_data_source,
-      }) ||
-      isBillingHeld(inv.billing_hold)
-    ) {
-      continue;
-    }
-    stats.scanned++;
-    const fee = accruedLateFee(inv.due_date);
-    const newTotalDue = computeTotalDue(inv.amount ?? 0, inv.tax_amount ?? 0, fee, inv.credits_applied ?? 0);
-    const becomesPastDue = inv.status === "sent" || inv.status === "viewed";
-    const nextStatus = becomesPastDue ? "past_due" : inv.status ?? "past_due";
-    // Skip the write if nothing changed (idempotent daily re-run).
-    if (round2(inv.late_fee_amount ?? 0) === fee && nextStatus === inv.status) continue;
-    await env.DB.prepare(
-      "UPDATE invoices SET late_fee_amount = ?, total_due = ?, status = ? WHERE id = ?",
-    )
-      .bind(fee, newTotalDue, nextStatus, inv.id)
-      .run();
-    stats.updated++;
-    if (becomesPastDue) stats.marked_past_due++;
-  }
-  return stats;
+/** Retired. The $50/day accrual no longer writes. Proposals live in late-fee.ts. */
+export async function runLateFeeCalculator(_env: Env): Promise<LateFeeStats> {
+  return { scanned: 0, updated: 0, marked_past_due: 0 };
 }
 
 // ─── cron: invoice due check (reminders + past-due notices) ───────────────────

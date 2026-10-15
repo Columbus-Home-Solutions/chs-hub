@@ -22,6 +22,7 @@ import {
   getStripeConfig,
 } from "../lib/stripe.js";
 import { CONVENIENCE_FEE_RATE, invoiceLabel, loadInvoiceByToken, round2 } from "../lib/invoicing.js";
+import { lateFeeState } from "../lib/late-fee.js";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -95,6 +96,8 @@ export async function handlePublicPayGet(env: Env, token: string): Promise<Respo
       amount: round2(inv.amount ?? 0),
       tax_amount: round2(inv.tax_amount ?? 0),
       late_fee_amount: round2(inv.late_fee_amount ?? 0),
+      late_fee_label:
+        (await lateFeeState(env, inv.id)) === "applied" ? "Late fee (one time, 5%)" : "Late fee",
       credits_applied: round2(inv.credits_applied ?? 0),
       total_due: totalDue,
       collected,

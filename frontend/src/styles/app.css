@@ -8265,3 +8265,15 @@ button.mc-unassigned-row:hover {
   font-size: 11px;
   letter-spacing: 0;
 }
+
+.late-fee-card { margin-top: var(--space-md); }
+.late-fee-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+.late-fee-actions .btn {
+  min-height: 44px;
+  min-width: 44px;
+}

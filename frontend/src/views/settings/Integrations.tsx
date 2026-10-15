@@ -44,6 +44,9 @@ export function Integrations(_props: RoutableProps) {
   const [invoiceSyncBusy, setInvoiceSyncBusy] = useState(false);
   const [expenseSyncEnabled, setExpenseSyncEnabled] = useState(false);
   const [expenseSyncBusy, setExpenseSyncBusy] = useState(false);
+  const [lateFeeEnabled, setLateFeeEnabled] = useState(false);
+  const [lateFeeBusy, setLateFeeBusy] = useState(false);
+  const [lateFeeCount, setLateFeeCount] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -59,6 +62,15 @@ export function Integrations(_props: RoutableProps) {
       setInvoiceSyncEnabled((invFlag?.value ?? "false").toLowerCase() === "true");
       const expFlag = settings.settings?.find((s) => s.key === "qbo_expense_sync_enabled");
       setExpenseSyncEnabled((expFlag?.value ?? "false").toLowerCase() === "true");
+      const feeFlag = settings.settings?.find((s) => s.key === "late_fee_proposals_enabled");
+      const feeRaw = String(feeFlag?.value ?? "false").toLowerCase();
+      setLateFeeEnabled(feeRaw === "true" || feeRaw === "1");
+      try {
+        const preview = await api.get<{ count: number }>("/api/late-fees/preview");
+        setLateFeeCount(preview.count);
+      } catch {
+        setLateFeeCount(null);
+      }
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -152,6 +164,20 @@ export function Integrations(_props: RoutableProps) {
       await load();
     } finally {
       setBusy(null);
+    }
+  };
+
+  const toggleLateFees = async () => {
+    const next = !lateFeeEnabled;
+    setLateFeeBusy(true);
+    try {
+      await api.put(`/api/settings/${encodeURIComponent("late_fee_proposals_enabled")}`, { value: next });
+      setLateFeeEnabled(next);
+      toast.push("success", next ? "Late fee proposals on" : "Late fee proposals off");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setLateFeeBusy(false);
     }
   };
 
@@ -261,6 +287,28 @@ export function Integrations(_props: RoutableProps) {
           <h1 class="view-title">Integrations</h1>
           <p class="view-subtitle">Connect external systems. QuickBooks is sandbox-only this release.</p>
         </div>
+      </div>
+
+      <div class="late-fee-card">
+      <Card title="Late fees">
+        <p>
+          {loading
+            ? "Checking which invoices would be proposed."
+            : lateFeeCount == null
+              ? "Could not load the dry-run count."
+              : `${lateFeeCount} invoice${lateFeeCount === 1 ? "" : "s"} would be proposed right now.`}
+        </p>
+        <div class="late-fee-actions">
+          <Button
+            size="sm"
+            variant={lateFeeEnabled ? "secondary" : "primary"}
+            disabled={lateFeeBusy}
+            onClick={() => void toggleLateFees()}
+          >
+            {lateFeeEnabled ? "Turn proposals off" : "Turn proposals on"}
+          </Button>
+        </div>
+      </Card>
       </div>
 
       {loading && <Spinner center />}

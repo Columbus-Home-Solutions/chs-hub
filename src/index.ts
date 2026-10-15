@@ -322,7 +322,8 @@ import { processQuoteFollowUps } from "./lib/quote-follow-up.js";
 import { processNewLeadOutreach } from "./lib/new-lead-outreach.js";
 import { processProposalReviewReminders } from "./lib/proposal-reminders.js";
 import { processReviewFollowUps } from "./lib/review-followups.js";
-import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
+import { runInvoiceDueCheck } from "./lib/invoicing.js";
+import { handleLateFeeAction, handleLateFeePreview, runLateFeeProposals } from "./lib/late-fee.js";
 import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
 import { runImageGenSelfTest } from "./lib/image-gen-probe.js";
 import { runSocialTokenHealth } from "./lib/social-token-health.js";
@@ -1713,6 +1714,13 @@ export default {
     if (url.pathname === "/api/invoices") {
       if (request.method === "GET") return handleInvoiceList(env, url);
       if (request.method === "POST") return handleInvoiceCreate(request, env);
+    }
+    if (url.pathname === "/api/late-fees/preview" && request.method === "GET") {
+      return handleLateFeePreview(request, env);
+    }
+    const invoiceLateFee = url.pathname.match(/^\/api\/invoices\/([^/]+)\/late-fee$/);
+    if (invoiceLateFee && request.method === "POST") {
+      return handleLateFeeAction(request, env, decodeURIComponent(invoiceLateFee[1]));
     }
     const invoiceSend = url.pathname.match(/^\/api\/invoices\/([^/]+)\/send$/);
     if (invoiceSend && request.method === "POST") {
@@ -3118,16 +3126,15 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
   }
 }
 
-// Invoice billing (Sprint 9): accrue $50/day late fees on overdue invoices, then
-// enqueue due-reminder / past-due notices. Order matters — fees first so the
-// past-due notice carries the up-to-date balance. Runs inside the nightly
+// Invoice billing: propose one-time 5% late fees (no automatic charge), then
+// enqueue due-reminder / past-due notices. Runs inside the nightly
 // (15 7 * * *) tick because the account is capped at 5 cron triggers. Non-fatal.
 async function runInvoiceBilling(env: Env): Promise<void> {
   try {
-    const fees = await runLateFeeCalculator(env);
+    const fees = await runLateFeeProposals(env);
     const due = await runInvoiceDueCheck(env);
     console.log(
-      `[cron 15 7 * * *] invoice_billing: late_fees scanned=${fees.scanned} updated=${fees.updated} past_due=${fees.marked_past_due}; due_check scanned=${due.scanned} reminders=${due.reminders} past_due_notices=${due.past_due}`,
+      `[cron 15 7 * * *] invoice_billing: late_fee_proposals enabled=${fees.enabled} proposed=${fees.proposed} cancelled=${fees.cancelled} would_propose=${fees.would_propose}; due_check scanned=${due.scanned} reminders=${due.reminders} past_due_notices=${due.past_due}`,
     );
   } catch (err) {
     console.error("[cron 15 7 * * *] invoice_billing failed:", (err as Error).message);

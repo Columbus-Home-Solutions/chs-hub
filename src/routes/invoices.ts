@@ -38,6 +38,7 @@ import { createOffSessionPaymentIntent, getStripeConfig } from "../lib/stripe.js
 import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 import { checkAndFireLienWaiver } from "../lib/completion-triggers.js";
 import { recordPayment } from "./payments.js";
+import { lateFeeExtras } from "../lib/late-fee.js";
 import { notTestClientExists } from "../lib/non-test-client.js";
 import {
   HISTORICAL_NOTE_MARKER,
@@ -169,8 +170,9 @@ export async function handleInvoiceGet(env: Env, id: string): Promise<Response> 
     }
   }
 
+  const extra = (await lateFeeExtras(env, [id])).get(id);
   return json({
-    invoice: shapeInvoice(inv),
+    invoice: { ...shapeInvoice(inv), ...(extra ?? {}) },
     payer,
     line_items,
     payments: await paymentsForInvoice(env, id),
@@ -435,7 +437,8 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
       .bind(jobId, jobId)
       .all<InvoiceRow>()
   ).results ?? [];
-  const invoices = rows.map(shapeInvoice);
+  const extras = await lateFeeExtras(env, rows.map((r) => r.id));
+  const invoices = rows.map((r) => ({ ...shapeInvoice(r), ...(extras.get(r.id) ?? {}) }));
 
   // Summary bar: invoiced face (non-void, including bad debt), cash paid,
   // balance due. A bad-debt remainder is a write-off, not money still owed.

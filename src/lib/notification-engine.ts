@@ -73,6 +73,7 @@ const TRANSACTIONAL_EVENTS = new Set([
   "payment_received",
   "invoice_due_reminder",
   "invoice_past_due",
+  "invoice_late_fee_added",
   "cost_plus_cycle_report",
   // Completion-package send. Sprint 17 reconcile: the live send path
   // (routes/completion-package.ts) fires the key `completion_package_sent`

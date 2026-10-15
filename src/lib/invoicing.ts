@@ -25,6 +25,8 @@ import type { Env } from "../env.js";
 import { centralDate } from "../../shared/labor-week.js";
 import { triggerNotification } from "./notification-engine.js";
 
+export { defaultInvoiceDueDate, shortDueDateWarning, SHORT_DUE_WARNING } from "../../shared/invoice-due.js";
+
 export const LATE_FEE_PER_DAY = 50;
 
 /** Jobber GraphQL global ids are base64 of "gid://Jobber/...". */
@@ -114,11 +116,6 @@ export function computeTotalDue(
 /** The 3.5% convenience fee (revenue) on an electronic payment of `base`. */
 export function convenienceFee(base: number, rate = CONVENIENCE_FEE_RATE): number {
   return round2(base * rate);
-}
-
-/** Due date for a new invoice: 7 days after the Central send date. */
-export function defaultInvoiceDueDate(sentAt: Date = new Date()): string {
-  return addDays(centralDate(sentAt), DEFAULT_DUE_DAYS);
 }
 
 /**

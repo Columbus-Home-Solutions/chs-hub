@@ -27,7 +27,7 @@ import { HISTORICAL_INVOICE_BADGE } from "../../types";
 import { CycleManager } from "./CycleManager";
 import { LineItemBilling } from "./LineItemBilling";
 import { go } from "../../lib/nav";
-import { addDays, centralDate } from "@chs/shared/labor-week";
+import { SHORT_DUE_WARNING, shortDueDateWarning } from "@chs/shared/invoice-due";
 import { JobLaborCard } from "./JobLaborCard";
 import type { QueueItem } from "../financial/ReceiptQueueView";
 import type { JobCard, Payer } from "../../types";
@@ -288,6 +288,8 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   };
 
   const sendInvoice = async (inv: InvoiceRow) => {
+    const warning = shortDueDateWarning(inv.due_date);
+    if (warning && !confirm(`${warning}\n\nSend anyway?`)) return;
     try {
       await api.post(`/api/invoices/${inv.id}/send`, {});
       toast.push("success", `${inv.invoice_display} sent`);
@@ -1339,7 +1341,7 @@ function InvoiceBuilder({
   const [tax, setTax] = useState("");
   const [credits, setCredits] = useState("");
   const [description, setDescription] = useState("");
-  const [dueDate, setDueDate] = useState(addDays(centralDate(), 7));
+  const [dueDate, setDueDate] = useState("");
   const [busy, setBusy] = useState(false);
   // Carried-through linkage (e.g. `co:<id>` for a change-order invoice) so the
   // server-side suggestion stops re-offering it once the invoice exists.
@@ -1447,7 +1449,7 @@ function InvoiceBuilder({
           />
         </FormField>
       </div>
-      <FormField label="Due date" hint="7 days after today. Change it if this invoice is due on another day.">
+      <FormField label="Due date" hint="Defaults to 7 days after you send.">
         <input
           class="form-input"
           type="date"
@@ -1455,6 +1457,9 @@ function InvoiceBuilder({
           onInput={(e) => setDueDate((e.target as HTMLInputElement).value)}
         />
       </FormField>
+      {shortDueDateWarning(dueDate) && (
+        <p class="form-hint" role="status">{SHORT_DUE_WARNING}</p>
+      )}
       <FormField label="Description / notes">
         <textarea
           class="form-input"
@@ -1696,7 +1701,10 @@ function InvoiceDetailModal({
                     })
                     .finally(() => setDueSaving(false));
                 }}
-              />
+                />
+              {shortDueDateWarning(dueDraft) && (
+                <p class="form-hint" role="status">{SHORT_DUE_WARNING}</p>
+              )}
             </dd>
           </div>
         ) : (

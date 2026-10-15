@@ -8,6 +8,8 @@ import {
   isPastDueReminderDay,
   pastDueReminderApplies,
   runLateFeeCalculator,
+  SHORT_DUE_WARNING,
+  shortDueDateWarning,
 } from "../src/lib/invoicing.js";
 import {
   exclusionReason,
@@ -197,10 +199,33 @@ describe("late fee writes", () => {
 });
 
 describe("due date and past-due cadence", () => {
-  it("sets a blank due date to 7 days after the Central send date", () => {
-    expect(defaultInvoiceDueDate(new Date("2026-10-13T17:00:42.730Z"))).toBe("2026-10-20");
-    expect(defaultInvoiceDueDate(new Date("2026-10-14T04:30:00.000Z"))).toBe("2026-10-20");
-    expect(defaultInvoiceDueDate(new Date("2026-10-14T05:30:00.000Z"))).toBe("2026-10-21");
+  it("sets a blank due date to 7 days after the Central send date, including late evening", () => {
+    const noon = new Date("2026-10-13T17:00:42.730Z");
+    const lateEvening = new Date("2026-10-14T04:30:00.000Z");
+    const afterMidnightCentral = new Date("2026-10-14T05:30:00.000Z");
+    expect(defaultInvoiceDueDate(noon)).toBe("2026-10-20");
+    expect(defaultInvoiceDueDate(lateEvening)).toBe("2026-10-20");
+    expect(defaultInvoiceDueDate(afterMidnightCentral)).toBe("2026-10-21");
+    expect(shortDueDateWarning(null, lateEvening)).toBeNull();
+    expect(shortDueDateWarning("", lateEvening)).toBeNull();
+  });
+
+  it("keeps an explicit due date and warns when it is under 7 days after send", () => {
+    const sentAt = new Date("2026-10-13T17:00:42.730Z");
+    expect(shortDueDateWarning("2026-10-20", sentAt)).toBeNull();
+    expect(shortDueDateWarning("2026-10-15", sentAt)).toBe(SHORT_DUE_WARNING);
+    expect(shortDueDateWarning("2026-10-13", sentAt)).toBe(SHORT_DUE_WARNING);
+    const form = readFileSync(new URL("../frontend/src/views/jobs/FinancialTab.tsx", import.meta.url), "utf8");
+    expect(form).toContain('const [dueDate, setDueDate] = useState("");');
+    expect(form).toContain("Defaults to 7 days after you send.");
+    expect(form).toContain("shortDueDateWarning(dueDate)");
+    expect(form).toContain("shortDueDateWarning(inv.due_date)");
+    expect(form).toContain("{SHORT_DUE_WARNING}");
+    const dueHelper = readFileSync(new URL("../shared/invoice-due.ts", import.meta.url), "utf8");
+    expect(dueHelper).toContain(SHORT_DUE_WARNING);
+    const send = readFileSync(new URL("../src/routes/invoices.ts", import.meta.url), "utf8");
+    expect(send).toContain("defaultInvoiceDueDate(new Date(nowIso))");
+    expect(send).not.toContain("Date.now() + 7");
   });
 
   it("reminds on day 1, day 4, and day 8, then weekly, and never when held, paid, or void", () => {

@@ -47,6 +47,47 @@ export interface CompletionPackageData {
 const USD = (n: number): string =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 
+function money(n: number): number {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+export interface CompletionFinancialInput {
+  /** jobs.contract_total. Apply already added each applied change order once. */
+  storedContract: number;
+  /** Sum of change orders with applied_at set. Already inside storedContract. */
+  appliedChangeOrders: number;
+  /** Approved, not yet applied. Not inside storedContract. */
+  approvedUnappliedChangeOrders: number;
+  totalInvoiced: number;
+  totalPaid: number;
+}
+
+/**
+ * Contract total is the original contract. Approved change orders are listed
+ * once. Adjusted total is the original contract plus every approved change
+ * order, which equals the stored job value once every approved order is applied.
+ * Balance is that adjusted total minus what was paid, and it does not go below zero.
+ */
+export function completionFinancialSummary(
+  input: CompletionFinancialInput,
+): CompletionPackageData["financial"] {
+  const stored = money(input.storedContract);
+  const applied = money(input.appliedChangeOrders);
+  const unapplied = money(input.approvedUnappliedChangeOrders);
+  const contractTotal = money(stored - applied);
+  const changeOrderTotal = money(applied + unapplied);
+  const adjustedTotal = money(contractTotal + changeOrderTotal);
+  const totalPaid = money(input.totalPaid);
+  return {
+    contract_total: contractTotal,
+    change_order_total: changeOrderTotal,
+    adjusted_total: adjustedTotal,
+    total_invoiced: money(input.totalInvoiced),
+    total_paid: totalPaid,
+    balance: money(Math.max(0, adjustedTotal - totalPaid)),
+  };
+}
+
 function esc(s: string | null | undefined): string {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -103,14 +144,16 @@ export async function buildCompletionPackageData(
     .then((r) => (r?.value ?? "").trim() || "Columbus Home Solutions, LLC")
     .catch(() => "Columbus Home Solutions, LLC");
 
-  // ── Financial summary (canonical sums; mirrors the portal landing math) ──
-  const contractTotal = job.contract_total ?? 0;
+  // Applied change orders are already inside jobs.contract_total. Approved
+  // orders that are not applied yet are not. List every approved order once.
   const coRow = await env.DB.prepare(
-    "SELECT COALESCE(SUM(amount),0) AS co FROM change_orders WHERE job_id = ? AND applied_at IS NOT NULL",
+    `SELECT
+        COALESCE(SUM(CASE WHEN applied_at IS NOT NULL THEN amount ELSE 0 END), 0) AS applied,
+        COALESCE(SUM(CASE WHEN status = 'approved' AND applied_at IS NULL THEN amount ELSE 0 END), 0) AS unapplied
+       FROM change_orders WHERE job_id = ?`,
   )
     .bind(jobId)
-    .first<{ co: number }>();
-  const changeOrderTotal = coRow?.co ?? 0;
+    .first<{ applied: number; unapplied: number }>();
   const invRow = await env.DB.prepare(
     "SELECT COALESCE(SUM(COALESCE(total_due, amount, 0)),0) AS inv FROM invoices WHERE job_id = ? AND status != 'draft' AND status != 'void'",
   )
@@ -119,10 +162,13 @@ export async function buildCompletionPackageData(
   const paidRow = await env.DB.prepare("SELECT COALESCE(SUM(amount),0) AS paid FROM payments WHERE job_id = ?")
     .bind(jobId)
     .first<{ paid: number }>();
-  const totalInvoiced = invRow?.inv ?? 0;
-  const totalPaid = paidRow?.paid ?? 0;
-  const adjustedTotal = contractTotal + changeOrderTotal;
-  const balance = Math.max(0, adjustedTotal - totalPaid);
+  const financial = completionFinancialSummary({
+    storedContract: job.contract_total ?? 0,
+    appliedChangeOrders: coRow?.applied ?? 0,
+    approvedUnappliedChangeOrders: coRow?.unapplied ?? 0,
+    totalInvoiced: invRow?.inv ?? 0,
+    totalPaid: paidRow?.paid ?? 0,
+  });
 
   // ── Documents by category ──
   const docRows = (
@@ -173,14 +219,7 @@ export async function buildCompletionPackageData(
       .filter(Boolean)
       .join(", "),
     generated_at: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
-    financial: {
-      contract_total: contractTotal,
-      change_order_total: changeOrderTotal,
-      adjusted_total: adjustedTotal,
-      total_invoiced: totalInvoiced,
-      total_paid: totalPaid,
-      balance,
-    },
+    financial,
     documents,
     before_photos: beforeRows.map((p) => ({ id: p.id, caption: p.caption, url: photoUrl(p.id) })),
     after_photos: afterRows.map((p) => ({ id: p.id, caption: p.caption, url: photoUrl(p.id) })),

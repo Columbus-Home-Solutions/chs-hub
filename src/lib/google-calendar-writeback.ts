@@ -360,7 +360,7 @@ export async function desiredCalendarEvent(
 ): Promise<GcalEventBody | null> {
   if (sourceType === "estimate_request") {
     const row = await env.DB.prepare(
-      `SELECT er.id, er.status, er.appointment_date, er.job_type,
+      `SELECT er.id, er.status, er.appointment_date, er.appointment_time, er.job_type,
               er.property_address, er.property_city, er.property_state, er.property_zip,
               c.first_name, c.last_name, c.name AS client_name
          FROM estimate_requests er
@@ -372,6 +372,7 @@ export async function desiredCalendarEvent(
         id: string;
         status: string;
         appointment_date: string | null;
+        appointment_time: string | null;
         job_type: string | null;
         property_address: string | null;
         property_city: string | null;
@@ -386,9 +387,7 @@ export async function desiredCalendarEvent(
     if (status === "lost" || status === "declined") return null;
     const day = dateKeyOf(row.appointment_date, now);
     if (!day || !isCurrentOrFutureDay(day, now)) return null;
-    const start = row.appointment_date.includes("T")
-      ? new Date(row.appointment_date)
-      : centralClockToUtc(Number(day.slice(0, 4)), Number(day.slice(5, 7)), Number(day.slice(8, 10)), 8, 0);
+    const start = estimateVisitStart(row.appointment_date, row.appointment_time, day);
     if (Number.isNaN(start.getTime())) return null;
     return buildEstimateEvent({
       id: row.id,
@@ -502,6 +501,25 @@ export async function desiredCalendarEvent(
     startMin,
     endMin,
   });
+}
+
+/** A full instant wins. A date plus HH:MM is that Central clock. A date alone stays 8:00. */
+export function estimateVisitStart(
+  appointmentDate: string,
+  appointmentTime: string | null | undefined,
+  day: string,
+): Date {
+  if (appointmentDate.includes("T")) return new Date(appointmentDate);
+  const minutes = clockMinutes(appointmentTime);
+  const hour = minutes == null ? 8 : Math.floor(minutes / 60);
+  const minute = minutes == null ? 0 : minutes % 60;
+  return centralClockToUtc(
+    Number(day.slice(0, 4)),
+    Number(day.slice(5, 7)),
+    Number(day.slice(8, 10)),
+    hour,
+    minute,
+  );
 }
 
 function timePart(value: string | null | undefined): string | null {

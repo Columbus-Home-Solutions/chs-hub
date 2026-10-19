@@ -8,6 +8,7 @@ import {
   buildEstimateEvent,
   buildScheduleEvent,
   buildWarrantyEvent,
+  desiredCalendarEvent,
   calendarWriteStatus,
   mirrorSource,
   queueCalendarMirror,
@@ -257,6 +258,82 @@ describe("event bodies", () => {
 
   it("strips a phone number that slipped into a title", () => {
     expect(scrubPrivate("Ada 501-555-0199 Lane")).toBe("Ada Lane");
+  });
+});
+
+describe("hand-scheduled visit clocks", () => {
+  const lead = {
+    ...estimate,
+    id: "lead-1",
+    status: "appointment_set",
+  };
+
+  it("uses a date plus HH:MM as noon Central during daylight time", async () => {
+    const h = harness({
+      estimate: { ...lead, appointment_date: "2026-10-20", appointment_time: "12:00" },
+    });
+    const body = await desiredCalendarEvent(h.env, "estimate_request", "lead-1", new Date("2026-10-19T15:00:00.000Z"));
+    expect(body?.start).toEqual({ dateTime: "2026-10-20T12:00:00", timeZone: CHS_TIMEZONE });
+    expect(body?.end).toEqual({ dateTime: "2026-10-20T13:00:00", timeZone: CHS_TIMEZONE });
+  });
+
+  it("uses a date plus HH:MM as noon Central during standard time", async () => {
+    const h = harness({
+      estimate: { ...lead, appointment_date: "2027-01-20", appointment_time: "12:00" },
+    });
+    const body = await desiredCalendarEvent(h.env, "estimate_request", "lead-1", new Date("2027-01-19T15:00:00.000Z"));
+    expect(body?.start).toEqual({ dateTime: "2027-01-20T12:00:00", timeZone: CHS_TIMEZONE });
+    expect(body?.end).toEqual({ dateTime: "2027-01-20T13:00:00", timeZone: CHS_TIMEZONE });
+  });
+
+  it("keeps 8:00 when a date has no time", async () => {
+    const h = harness({
+      estimate: { ...lead, appointment_date: "2026-10-20", appointment_time: null },
+    });
+    const body = await desiredCalendarEvent(h.env, "estimate_request", "lead-1", new Date("2026-10-19T15:00:00.000Z"));
+    expect(body?.start).toEqual({ dateTime: "2026-10-20T08:00:00", timeZone: CHS_TIMEZONE });
+    expect(body?.end).toEqual({ dateTime: "2026-10-20T09:00:00", timeZone: CHS_TIMEZONE });
+  });
+
+  it("keeps a T instant even when appointment_time disagrees", async () => {
+    const h = harness({
+      estimate: {
+        ...lead,
+        appointment_date: "2026-10-20T17:00:00.000Z",
+        appointment_time: "08:00",
+      },
+    });
+    const body = await desiredCalendarEvent(h.env, "estimate_request", "lead-1", new Date("2026-10-19T15:00:00.000Z"));
+    expect(body?.start).toEqual({ dateTime: "2026-10-20T12:00:00", timeZone: CHS_TIMEZONE });
+    expect(body?.end).toEqual({ dateTime: "2026-10-20T13:00:00", timeZone: CHS_TIMEZONE });
+  });
+
+  it("keeps a job entry at 12:00–1:00 instead of the 8:00 visit default", async () => {
+    const h = harness({
+      schedule: {
+        id: "entry-1",
+        job_id: "job-1",
+        scheduled_date: "2026-10-20",
+        start_time: "12:00",
+        end_time: "13:00",
+        status: "scheduled",
+        trade_or_work: "Cabinets",
+        job_status: "in_progress",
+        job_title: "Kitchen",
+        property_address: "10 Oak St",
+        property_city: "Conway",
+        property_state: "AR",
+        property_zip: "72032",
+        first_name: "Ada",
+        last_name: "Lane",
+        client_name: null,
+        crew: null,
+      },
+    });
+    const body = await desiredCalendarEvent(h.env, "schedule_entry", "entry-1", new Date("2026-10-19T15:00:00.000Z"));
+    expect(body?.start).toEqual({ dateTime: "2026-10-20T12:00:00", timeZone: CHS_TIMEZONE });
+    expect(body?.end).toEqual({ dateTime: "2026-10-20T13:00:00", timeZone: CHS_TIMEZONE });
+    expect(body?.transparency).toBe("transparent");
   });
 });
 

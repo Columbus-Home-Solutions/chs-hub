@@ -30,6 +30,7 @@
  */
 
 import type { Env } from "../env.js";
+import { centralClockToUtc, centralParts } from "./central-send-window.js";
 import { dayRateConsentAllowsSend } from "./day-rate-notify.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "./twilio.js";
 import { renderTemplate } from "./merge-render.js";
@@ -410,7 +411,16 @@ async function buildMergeContext(env: Env, ctx: TriggerContext): Promise<Record<
       if (r.appointment_date) {
         m.appointment_date = formatDate(r.appointment_date);
         const storedTime = (r.appointment_time ?? "").trim();
-        m.appointment_time = storedTime || formatTime(r.appointment_date);
+        const formatted = formatAppointmentClock(storedTime);
+        if (formatted) m.appointment_time = formatted;
+        else if (storedTime) m.appointment_time = storedTime;
+        else if (r.appointment_date.includes("T")) {
+          const instant = new Date(r.appointment_date);
+          if (!Number.isNaN(instant.getTime())) {
+            const p = centralParts(instant);
+            m.appointment_time = clockLabel(p.hour, p.minute);
+          }
+        }
       }
       if (r.job_type) m.job_type = titleCase(r.job_type);
     }
@@ -1799,31 +1809,90 @@ async function scanQuoteFollowUps(env: Env): Promise<number> {
   return n;
 }
 
-/** Appointment reminders: appt within the next 24h gets a reminder enqueued. */
+/**
+ * One reminder per visit date.
+ * A visit before 10:00 AM Central is reminded at the first tick from 6:00 PM
+ * Central the evening before, and not after 9:00 PM. Every later visit is
+ * reminded at the first tick from 8:00 AM Central on the visit day, while the
+ * visit is still ahead. A visit booked on that same Central day gets none.
+ * The dedupe instance stays the stored appointment_date.
+ */
+export function planAppointmentReminder(input: {
+  appointmentDate: string;
+  appointmentTime?: string | null;
+  bookedAt?: string | null;
+  now?: Date;
+}): AppointmentReminderPlan | null {
+  const appointmentDate = input.appointmentDate?.trim() ?? "";
+  if (!appointmentDate) return null;
+  const visit = visitSchedule(appointmentDate, input.appointmentTime);
+  if (!visit) return null;
+  const now = input.now ?? new Date();
+  if (now.getTime() >= visit.at.getTime()) return null;
+
+  const booked = parseStoredUtc(input.bookedAt);
+  if (booked && centralDayKey(booked) === centralDayKey(visit.at)) return null;
+
+  const nowParts = centralParts(now);
+  const visitParts = centralParts(visit.at);
+  const early = visitParts.hour < 10;
+  if (early) {
+    if (centralDayKey(now) !== previousCentralDay(visitParts.year, visitParts.month, visitParts.day)) {
+      return null;
+    }
+    if (nowParts.hour < 18 || nowParts.hour >= 21) return null;
+    return { dayWord: "tomorrow", timeLabel: visit.label, instanceKey: appointmentDate };
+  }
+
+  if (centralDayKey(now) !== centralDayKey(visit.at)) return null;
+  if (nowParts.hour < 8 || nowParts.hour >= 21) return null;
+  return { dayWord: "today", timeLabel: visit.label, instanceKey: appointmentDate };
+}
+
+/** Appointment reminders: due on the visit morning, or the evening before an early visit. */
 async function scanAppointmentReminders(env: Env): Promise<number> {
   let n = 0;
-  const now = Date.now();
+  const now = new Date();
   const { results } = await env.DB.prepare(
-    `SELECT id AS request_id, client_id, appointment_date
-       FROM estimate_requests
-      WHERE appointment_date IS NOT NULL
-        AND COALESCE(appointment_completed, 0) = 0
-        AND status NOT IN ('won','lost')`,
-  ).all<{ request_id: string; client_id: string; appointment_date: string }>();
+    `SELECT er.id AS request_id, er.client_id, er.appointment_date, er.appointment_time,
+            (
+              SELECT MIN(COALESCE(nl.sent_at, nl.created_at))
+                FROM notification_logs nl
+               WHERE nl.estimate_request_id = er.id
+                 AND nl.trigger_event = 'appointment_confirmed'
+                 AND nl.dedupe_key LIKE 'appointment_confirmed:' || er.id || ':%:' || er.appointment_date
+            ) AS booked_at
+       FROM estimate_requests er
+      WHERE er.appointment_date IS NOT NULL
+        AND COALESCE(er.appointment_completed, 0) = 0
+        AND er.status NOT IN ('won','lost')`,
+  ).all<{
+    request_id: string;
+    client_id: string;
+    appointment_date: string;
+    appointment_time: string | null;
+    booked_at: string | null;
+  }>();
 
   for (const r of results ?? []) {
-    const appt = new Date(r.appointment_date).getTime();
-    if (Number.isNaN(appt)) continue;
-    const hoursUntil = (appt - now) / 3_600_000;
-    if (hoursUntil > 0 && hoursUntil <= 24) {
-      const res = await triggerNotification(env, "appointment_reminder", {
-        clientId: r.client_id,
-        estimateRequestId: r.request_id,
-        instanceKey: r.appointment_date, // one reminder per appointment instance
-        scheduledFor: new Date().toISOString(),
-      });
-      n += res.enqueued;
-    }
+    const plan = planAppointmentReminder({
+      appointmentDate: r.appointment_date,
+      appointmentTime: r.appointment_time,
+      bookedAt: r.booked_at,
+      now,
+    });
+    if (!plan) continue;
+    const res = await triggerNotification(env, "appointment_reminder", {
+      clientId: r.client_id,
+      estimateRequestId: r.request_id,
+      instanceKey: plan.instanceKey,
+      scheduledFor: now.toISOString(),
+      merge: {
+        appointment_day: plan.dayWord,
+        appointment_time: plan.timeLabel,
+      },
+    });
+    n += res.enqueued;
   }
   return n;
 }
@@ -1889,10 +1958,90 @@ function formatDate(iso: string): string {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
 }
-function formatTime(iso: string): string {
+
+export interface AppointmentReminderPlan {
+  dayWord: "today" | "tomorrow";
+  timeLabel: string;
+  /** Stored appointment_date. The dedupe key keeps this exact value. */
+  instanceKey: string;
+}
+
+/** "12:00" and "14:30" become "12:00 PM" and "2:30 PM". A label that already says AM/PM is kept. */
+export function formatAppointmentClock(raw: string | null | undefined): string | null {
+  const parsed = parseClock(raw);
+  if (!parsed) return null;
+  return clockLabel(parsed.hour, parsed.minute);
+}
+
+function clockLabel(hour24: number, minute: number): string {
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  let hour = hour24 % 12;
+  if (hour === 0) hour = 12;
+  return `${hour}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function parseClock(raw: string | null | undefined): { hour: number; minute: number } | null {
+  const s = (raw ?? "").trim();
+  const ampm = s.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
+  if (ampm) {
+    let hour = Number(ampm[1]);
+    const minute = Number(ampm[2]);
+    if (hour < 1 || hour > 12 || minute > 59) return null;
+    const pm = ampm[3].toUpperCase() === "PM";
+    if (hour === 12) hour = pm ? 12 : 0;
+    else if (pm) hour += 12;
+    return { hour, minute };
+  }
+  const hm = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!hm) return null;
+  const hour = Number(hm[1]);
+  const minute = Number(hm[2]);
+  if (hour > 23 || minute > 59) return null;
+  return { hour, minute };
+}
+
+function visitSchedule(
+  appointmentDate: string,
+  appointmentTime: string | null | undefined,
+): { at: Date; label: string } | null {
+  if (appointmentDate.includes("T")) {
+    const at = new Date(appointmentDate);
+    if (Number.isNaN(at.getTime())) return null;
+    const p = centralParts(at);
+    return { at, label: clockLabel(p.hour, p.minute) };
+  }
+  const day = appointmentDate.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const parsed = parseClock(appointmentTime);
+  const hour = parsed?.hour ?? 8;
+  const minute = parsed?.minute ?? 0;
+  return {
+    at: centralClockToUtc(Number(day.slice(0, 4)), Number(day.slice(5, 7)), Number(day.slice(8, 10)), hour, minute),
+    label: clockLabel(hour, minute),
+  };
+}
+
+function parseStoredUtc(raw: string | null | undefined): Date | null {
+  const s = (raw ?? "").trim();
+  if (!s) return null;
+  let iso = s;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) iso = `${s.replace(" ", "T")}Z`;
+  else if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/(?:Z|[+-]\d{2}:\d{2})$/.test(s)) iso = `${s}Z`;
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime()) || !iso.includes("T")) return "";
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function centralDayKey(d: Date): string {
+  const p = centralParts(d);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
+}
+
+function previousCentralDay(year: number, month: number, day: number): string {
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
 }
 function usd(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);

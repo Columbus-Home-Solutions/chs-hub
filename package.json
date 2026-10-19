@@ -17,6 +17,7 @@
     "tail": "wrangler tail",
     "prep:templates": "tsx scripts/prep-templates.ts",
     "generate:working-agreement-template": "tsx scripts/generate-working-agreement-template.ts",
+    "generate:agreement-late-fee-wording": "tsx scripts/generate-agreement-late-fee-wording.ts",
     "assets:generate": "capacitor-assets generate --ios --android",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

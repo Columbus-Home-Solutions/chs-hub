@@ -1,3 +1,5 @@
+import { centralParts } from "./central-send-window.js";
+
 /** Unified calendar event types for the cross-job schedule view. */
 
 export type CalendarEventType =
@@ -100,14 +102,43 @@ export function eventTypeLabel(type: CalendarEventType): string {
   }
 }
 
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** Sync stores a Google all-day `date` as this UTC midnight sentinel. It is not a clock time. */
+function isAllDaySentinel(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/.test(value);
+}
+
+function hasExplicitZone(value: string): boolean {
+  return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value);
+}
+
 export function datePart(isoOrDate: string | null): string | null {
   if (!isoOrDate) return null;
-  return isoOrDate.slice(0, 10);
+  const raw = isoOrDate.trim();
+  if (!raw) return null;
+  if (raw.length <= 10 || isAllDaySentinel(raw) || !hasExplicitZone(raw)) return raw.slice(0, 10);
+  const instant = new Date(raw);
+  if (Number.isNaN(instant.getTime())) return raw.slice(0, 10);
+  const p = centralParts(instant);
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
 }
 
 export function timePart(isoOrDate: string | null): string | null {
-  if (!isoOrDate || isoOrDate.length <= 10) return null;
-  const d = new Date(isoOrDate);
-  if (Number.isNaN(d.getTime())) return isoOrDate.slice(11, 16);
-  return d.toISOString().slice(11, 16);
+  if (!isoOrDate) return null;
+  const raw = isoOrDate.trim();
+  if (!raw || isAllDaySentinel(raw)) return null;
+  const clock = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (clock) return `${pad(Number(clock[1]))}:${clock[2]}`;
+  if (raw.length <= 10) return null;
+  if (!hasExplicitZone(raw)) {
+    const sliced = raw.slice(11, 16);
+    return /^\d{2}:\d{2}$/.test(sliced) ? sliced : null;
+  }
+  const instant = new Date(raw);
+  if (Number.isNaN(instant.getTime())) return null;
+  const p = centralParts(instant);
+  return `${pad(p.hour)}:${pad(p.minute)}`;
 }

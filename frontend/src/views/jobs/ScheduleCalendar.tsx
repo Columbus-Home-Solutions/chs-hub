@@ -24,6 +24,7 @@ import {
   subBadgeLabel,
 } from "../../lib/calendar-colors";
 import { countdownLabel, initials, startOfMondayWeek } from "../../lib/schedule-banner";
+import { pickNextUp, pickRightNow } from "../../lib/schedule-next";
 import { MONTH_VISIBLE_CHIPS, monthChipTooltip } from "../../lib/schedule-chip";
 
 type Mode = "today" | "week" | "timeline" | "month";
@@ -256,20 +257,10 @@ export function ScheduleCalendar(_props: RoutableProps) {
   };
 
   const todayEvents = (byDay.get(today) ?? []).slice().sort((a, b) =>
-    (a.start_time ?? "").localeCompare(b.start_time ?? ""),
+    (a.start_time ?? "99:99").localeCompare(b.start_time ?? "99:99"),
   );
-  const rightNow =
-    todayEvents.find((e) => e.status === "in_progress") ??
-    todayEvents.find((e) => e.start_time) ??
-    todayEvents[0] ??
-    null;
-  const nextUp =
-    filteredEvents
-      .filter((e) => e.date > today || (e.date === today && rightNow && e.id !== rightNow.id))
-      .sort((a, b) => {
-        const d = a.date.localeCompare(b.date);
-        return d !== 0 ? d : (a.start_time ?? "").localeCompare(b.start_time ?? "");
-      })[0] ?? null;
+  const rightNow = pickRightNow(todayEvents);
+  const nextUp = pickNextUp(filteredEvents, today, rightNow);
 
   return (
     <div class="view">

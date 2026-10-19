@@ -23,6 +23,7 @@ import {
 } from "../lib/non-test-client.js";
 import { boardJobWhere } from "../lib/jobber-board.js";
 import { centralDate, laborUnpaidAggregate, weekBounds } from "../../shared/labor-week.js";
+import { timePart } from "../lib/calendar-colors.js";
 import {
   buildingClientName,
   buildingIsStale,
@@ -1015,8 +1016,8 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
       type: "google_calendar",
       entry_type: "google_calendar",
       id: row.id,
-      startTime: row.start_time,
-      endTime: row.end_time ?? null,
+      startTime: timePart(row.start_time),
+      endTime: row.end_time ? timePart(row.end_time) : null,
       label: row.title,
       description: null,
       link: null,

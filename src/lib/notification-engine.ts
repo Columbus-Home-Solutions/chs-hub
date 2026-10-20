@@ -1292,6 +1292,19 @@ async function alertOwnerFailure(env: Env, row: LogRow, error: string): Promise<
  * surfacing and dead-letter alerts — these don't flow from a client trigger.
  * Reuses the generic 'tmpl-system-alert' template so template_id stays valid.
  */
+/** Mark the owner's unread bell read once the decision it points at is saved. */
+export async function markOwnerInAppRead(env: Env, dedupeKeyOrPrefix: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE notification_logs
+        SET is_read = 1, read_at = datetime('now')
+      WHERE channel = 'in_app'
+        AND is_read = 0
+        AND (dedupe_key = ? OR substr(dedupe_key, 1, length(?)) = ?)`,
+  )
+    .bind(dedupeKeyOrPrefix, dedupeKeyOrPrefix, dedupeKeyOrPrefix)
+    .run();
+}
+
 export async function createOwnerInApp(
   env: Env,
   opts: {

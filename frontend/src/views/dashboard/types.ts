@@ -10,6 +10,15 @@ export interface KpiTile {
   deltaPct?: number | null;
 }
 
+export interface DecisionAction {
+  id: string;
+  label: string;
+  path: string;
+  body: Record<string, unknown>;
+  confirm?: string;
+  needsReason?: boolean;
+}
+
 export interface ActionItem {
   id: string;
   priority: "high" | "medium" | "low";
@@ -18,6 +27,7 @@ export interface ActionItem {
   meta: Record<string, unknown>;
   link: string;
   createdAt: string;
+  actions?: DecisionAction[];
 }
 
 export interface PipelineStage {

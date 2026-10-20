@@ -1,7 +1,9 @@
 import { useState } from "preact/hooks";
 import { go } from "../../lib/nav";
 import { api, ApiError } from "../../api";
-import type { ActionItem } from "./types";
+import { Button } from "../../components/ui/Button";
+import { FormField } from "../../components/ui/FormField";
+import type { ActionItem, DecisionAction } from "./types";
 
 interface Props {
   items: ActionItem[];
@@ -31,6 +33,8 @@ const PRIORITY_ICON: Record<string, string> = {
   ai_extraction_failure: "🤖",
   labor_payroll_due: "👷",
   labor_checkins_pending: "👷",
+  google_calendar_change: "📅",
+  late_fee_proposed: "💰",
 };
 
 function relativeTime(iso: string): string {
@@ -47,6 +51,11 @@ function relativeTime(iso: string): string {
 export function ActionItems({ items, loading, error, mobile, onDismiss }: Props) {
   const [showAll, setShowAll] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const [holdId, setHoldId] = useState<string | null>(null);
+  const [holdReason, setHoldReason] = useState("");
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ id: string; message: string } | null>(null);
   const maxItems = mobile ? 5 : 8;
   const visible = showAll ? items : items.slice(0, maxItems);
   const overflow = items.length - maxItems;
@@ -63,6 +72,32 @@ export function ActionItems({ items, loading, error, mobile, onDismiss }: Props)
       }
       onDismiss?.(id);
     }, DISMISS_DELAY_MS);
+  };
+
+  const decide = async (item: ActionItem, action: DecisionAction, extra?: { reason?: string }) => {
+    const key = `${item.id}:${action.id}`;
+    if (action.confirm && confirmKey !== key) {
+      setConfirmKey(key);
+      setHoldId(null);
+      setActionError(null);
+      return;
+    }
+    setBusyKey(key);
+    setActionError(null);
+    try {
+      await api.post(action.path, { ...action.body, ...extra });
+      onDismiss?.(item.id);
+    } catch (err) {
+      setActionError({
+        id: item.id,
+        message: err instanceof ApiError ? err.message : "Could not save that decision.",
+      });
+    } finally {
+      setBusyKey(null);
+      setConfirmKey(null);
+      setHoldId(null);
+      setHoldReason("");
+    }
   };
 
   if (loading) {
@@ -109,21 +144,26 @@ export function ActionItems({ items, loading, error, mobile, onDismiss }: Props)
           </div>
         ) : (
           <>
-            {visible.map((item) => (
+            {visible.map((item) => {
+              const deciding = Boolean(item.actions?.length);
+              const confirming = item.actions?.find((action) => `${item.id}:${action.id}` === confirmKey);
+              return (
               <div
                 key={item.id}
-                class={`action-item-wrap${checkedIds.has(item.id) ? " action-item-wrap--dismissing" : ""}`}
+                class={`action-item-wrap${deciding ? " action-item-wrap--decision" : ""}${checkedIds.has(item.id) ? " action-item-wrap--dismissing" : ""}`}
               >
-                <button
-                  type="button"
-                  class={`action-item__checkbox${checkedIds.has(item.id) ? " action-item__checkbox--checked" : ""}`}
-                  title="Mark done"
-                  aria-label="Dismiss"
-                  onClick={(e) => dismiss(e, item.id)}
-                >
-                  {checkedIds.has(item.id) && <span class="action-item__checkmark">✓</span>}
-                </button>
-                <div class={`action-item action-item--${item.priority}`}>
+                {!deciding && (
+                  <button
+                    type="button"
+                    class={`action-item__checkbox${checkedIds.has(item.id) ? " action-item__checkbox--checked" : ""}`}
+                    title="Mark done"
+                    aria-label="Dismiss"
+                    onClick={(e) => dismiss(e, item.id)}
+                  >
+                    {checkedIds.has(item.id) && <span class="action-item__checkmark">✓</span>}
+                  </button>
+                )}
+                <div class={`action-item action-item--${item.priority}${deciding ? " action-item--decision" : ""}`}>
                   <button
                     type="button"
                     class="action-item__main"
@@ -133,9 +173,91 @@ export function ActionItems({ items, loading, error, mobile, onDismiss }: Props)
                     <span class="action-item__title">{item.title}</span>
                     <span class="action-item__time">{relativeTime(item.createdAt)}</span>
                   </button>
+                  {deciding && confirming?.confirm && (
+                    <p class="action-item__confirm">{confirming.confirm}</p>
+                  )}
+                  {deciding && holdId === item.id && (
+                    <div class="action-item__confirm">
+                      <FormField label="Why is this on hold?" required>
+                        <textarea
+                          class="form-input"
+                          rows={2}
+                          value={holdReason}
+                          onInput={(e) => setHoldReason((e.target as HTMLTextAreaElement).value)}
+                        />
+                      </FormField>
+                    </div>
+                  )}
+                  {deciding && (
+                    <div class="action-item__actions">
+                      {confirming ? (
+                        <>
+                          <Button
+                            size="sm"
+                            disabled={busyKey !== null}
+                            onClick={() => void decide(item, confirming)}
+                          >
+                            {busyKey === `${item.id}:${confirming.id}` ? "Saving…" : confirming.label}
+                          </Button>
+                          <Button size="sm" variant="tertiary" disabled={busyKey !== null} onClick={() => setConfirmKey(null)}>
+                            Cancel
+                          </Button>
+                        </>
+                      ) : holdId === item.id ? (
+                        <>
+                          <Button
+                            size="sm"
+                            disabled={busyKey !== null || holdReason.trim() === ""}
+                            onClick={() => {
+                              const hold = item.actions?.find((action) => action.needsReason);
+                              if (hold) void decide(item, hold, { reason: holdReason.trim() });
+                            }}
+                          >
+                            {busyKey?.endsWith(":hold") ? "Saving…" : "Save hold"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="tertiary"
+                            disabled={busyKey !== null}
+                            onClick={() => {
+                              setHoldId(null);
+                              setHoldReason("");
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        item.actions?.map((action) => (
+                          <Button
+                            key={action.id}
+                            size="sm"
+                            variant={action.id === "add" || action.id === "apply" ? "primary" : "secondary"}
+                            disabled={busyKey !== null}
+                            onClick={() => {
+                              if (action.needsReason) {
+                                setHoldId(item.id);
+                                setHoldReason("");
+                                setConfirmKey(null);
+                                setActionError(null);
+                                return;
+                              }
+                              void decide(item, action);
+                            }}
+                          >
+                            {busyKey === `${item.id}:${action.id}` ? "Saving…" : action.label}
+                          </Button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                  {actionError?.id === item.id && (
+                    <p class="form-error action-item__confirm">{actionError.message}</p>
+                  )}
                 </div>
               </div>
-            ))}
+              );
+            })}
             {!showAll && overflow > 0 && (
               <button
                 class="action-items__view-all"

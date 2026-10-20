@@ -18,7 +18,7 @@ import {
   hasEventWriteScope,
   loadGcalConnection,
 } from "./google-calendar-auth.js";
-import { createOwnerInApp, resolveOwner } from "./notification-engine.js";
+import { createOwnerInApp, markOwnerInAppRead, resolveOwner } from "./notification-engine.js";
 import { handleEstimateRequestAppointment } from "../routes/estimate-requests.js";
 import { handleScheduleUpdate } from "../routes/schedule.js";
 import { centralDateKey, formatCentralWhen, formatSlotLabel } from "./self-scheduling.js";
@@ -33,7 +33,7 @@ import {
 export const CHANGES_SETTING = "google_calendar_changes_enabled";
 const CURSOR_SETTING = "google_calendar_changes_cursor";
 const LIST_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
-const REVIEW_PATH = "/app/settings?tab=integrations";
+const REVIEW_PATH = "/app/";
 
 type FetchLike = typeof fetch;
 type ChangeSource = "estimate_request" | "schedule_entry";
@@ -251,7 +251,7 @@ async function recordChange(
     .run();
   const message =
     kind === "deleted"
-      ? `${label} was removed on Google. Open Settings to cancel it in CHS or put it back.`
+      ? `${label} was removed on Google. Cancel it in CHS or put it back.`
       : `${label} moved on Google to ${whenLabel} Central. Apply to CHS?`;
   await createOwnerInApp(env, {
     message,
@@ -393,6 +393,11 @@ async function markPending(env: Env, id: string, status: "applied" | "ignored"):
   )
     .bind(status, id)
     .run();
+  try {
+    await markOwnerInAppRead(env, `gcal-change-${id}`);
+  } catch (err) {
+    console.error(`[gcal-changes] bell read: ${(err as Error).message}`);
+  }
 }
 
 function estimateFields(row: PendingRow): { appointment_date: string; appointment_time: string } {

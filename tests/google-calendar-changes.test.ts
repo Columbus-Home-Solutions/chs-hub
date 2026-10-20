@@ -33,6 +33,7 @@ function harness(opts: {
   ]);
   const pending: Pending[] = [];
   const bells: string[] = [];
+  const bellLinks: string[] = [];
   const sqlLog: string[] = [];
   const links = [
     {
@@ -182,8 +183,9 @@ function harness(opts: {
             } else if (sql.includes("SET status = ?") && sql.includes("google_calendar_pending_changes")) {
               const row = pending.find((item) => item.id === args[1]);
               if (row) row.status = String(args[0]);
-            } else if (sql.includes("notification_logs")) {
+            } else if (sql.includes("INSERT") && sql.includes("notification_logs")) {
               bells.push(String(args[5] ?? ""));
+              bellLinks.push(String(args[7] ?? ""));
             } else if (sql.includes("INSERT INTO system_settings")) {
               settings.set(String(args[0]), String(args[1]));
             } else if (sql.startsWith("UPDATE estimate_requests SET") && sql.includes("appointment_date")) {
@@ -197,7 +199,7 @@ function harness(opts: {
       },
     },
   };
-  return { env: env as never, pending, bells, sqlLog, settings, estimate };
+  return { env: env as never, pending, bells, bellLinks, sqlLog, settings, estimate };
 }
 
 function listResponse(items: unknown[]) {
@@ -244,6 +246,7 @@ describe("google change poll", () => {
     expect(h.pending[0].summary_label).toBe("Estimate for Ada Lane");
     expect(h.bells).toHaveLength(1);
     expect(h.bells[0]).toContain("Apply to CHS?");
+    expect(h.bellLinks).toEqual(["/app/"]);
     expect(h.bells[0]).not.toContain("555");
     expect(g.calls).toHaveLength(2);
     expect(g.calls[0]).toContain("privateExtendedProperty=chs");
@@ -256,6 +259,7 @@ describe("google change poll", () => {
     await pollGoogleCalendarChanges(h.env, { fetch: g.fetchImpl, now: NOW });
     expect(h.pending[0].change_kind).toBe("deleted");
     expect(h.bells[0]).toContain("removed on Google");
+    expect(h.bellLinks).toEqual(["/app/"]);
   });
 
   it("makes no Google call when change alerts are off or the scope is read-only", async () => {

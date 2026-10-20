@@ -6,7 +6,7 @@
 import type { Env } from "../env.js";
 import { addDays, centralDate } from "../../shared/labor-week.js";
 import { guard } from "../middleware/guard.js";
-import { createOwnerInApp, triggerNotification } from "./notification-engine.js";
+import { createOwnerInApp, markOwnerInAppRead, triggerNotification } from "./notification-engine.js";
 import {
   computeTotalDue,
   invoiceLabel,
@@ -211,7 +211,7 @@ async function proposalsEnabled(env: Env): Promise<boolean> {
   return value === "1" || value === "true";
 }
 
-async function loadCandidates(env: Env): Promise<LateFeeCandidate[]> {
+export async function loadCandidates(env: Env): Promise<LateFeeCandidate[]> {
   const { results } = await env.DB.prepare(candidateSql()).all<LateFeeCandidate>();
   return results ?? [];
 }
@@ -244,6 +244,14 @@ async function writeDecision(
       JSON.stringify({ amount, reason, snooze_until: snoozeUntil }),
     )
     .run();
+}
+
+async function quietProposalBell(env: Env, invoiceId: string): Promise<void> {
+  try {
+    await markOwnerInAppRead(env, `late-fee-proposal-${invoiceId}-`);
+  } catch (err) {
+    console.error(`[late-fee] bell read: ${(err as Error).message}`);
+  }
 }
 
 function proposalMessage(row: LateFeeCandidate, amount: number, balance: number): string {
@@ -288,12 +296,9 @@ export async function runLateFeeProposals(env: Env, now = new Date()): Promise<{
       .bind(item.amount, item.row.id)
       .run();
     await writeDecision(env, item.row.id, "proposed", item.amount, null, null, null);
-    const link = item.row.job_id
-      ? `/app/jobs/${item.row.job_id}?tab=financial&invoice=${item.row.id}`
-      : "/app/financial";
     await createOwnerInApp(env, {
       message: proposalMessage(item.row, item.amount, item.balance),
-      linkPath: link,
+      linkPath: "/app/",
       dedupe: `late-fee-proposal-${item.row.id}-${today}`,
       clientId: item.row.client_id,
       triggerEvent: "late_fee_proposed",
@@ -408,11 +413,15 @@ export async function handleLateFeeAction(request: Request, env: Env, id: string
       .run();
     await writeDecision(env, id, "added", fee, user.email, null, null);
     await notifyFeeAdded(env, row, fee, totalDue);
+    await quietProposalBell(env, id);
     return json({ ok: true, action: "added", late_fee_amount: fee, total_due: totalDue });
   }
 
   if (action === "waive") {
-    if (stateOf(row) === "waived") return json({ ok: true, action: "waived", already: true });
+    if (stateOf(row) === "waived") {
+      await quietProposalBell(env, id);
+      return json({ ok: true, action: "waived", already: true });
+    }
     const waived = round2(row.late_fee_amount ?? 0);
     const totalDue = computeTotalDue(row.amount ?? 0, row.tax_amount ?? 0, 0, row.credits_applied ?? 0);
     await env.DB.prepare(
@@ -425,6 +434,7 @@ export async function handleLateFeeAction(request: Request, env: Env, id: string
       .bind(totalDue, waived, user.email, id)
       .run();
     await writeDecision(env, id, "waived", waived, user.email, body.reason ?? null, null);
+    await quietProposalBell(env, id);
     return json({ ok: true, action: "waived", waived_amount: waived, total_due: totalDue });
   }
 
@@ -446,6 +456,7 @@ export async function handleLateFeeAction(request: Request, env: Env, id: string
       .bind(until, user.email, id)
       .run();
     await writeDecision(env, id, "snoozed", null, user.email, null, until);
+    await quietProposalBell(env, id);
     return json({ ok: true, action: "snoozed", snooze_until: until });
   }
 
@@ -463,6 +474,7 @@ export async function handleLateFeeAction(request: Request, env: Env, id: string
       .bind(reason, user.email, id)
       .run();
     await writeDecision(env, id, "held", null, user.email, reason, null);
+    await quietProposalBell(env, id);
     return json({ ok: true, action: "held" });
   }
 

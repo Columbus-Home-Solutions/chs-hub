@@ -30,6 +30,7 @@ import {
   buildingPlace,
   daysInBuilding,
 } from "../lib/building-widget.js";
+import { loadOwnerDecisionItems, type DecisionAction } from "../lib/owner-decisions.js";
 
 const DISMISSED_SETTING_KEY = "dashboard_dismissed_action_items";
 const DISMISS_ROLES = ["owner", "office_admin"] as const;
@@ -83,9 +84,10 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
       return "/estimating?status=follow_up";
     case "lead_no_response":
       return meta.requestId ? `/estimating/${meta.requestId}` : "/estimating?tab=chs&stage=contacted";
+    case "change_order_pending":
+      return meta.jobId ? `/jobs/${meta.jobId}?tab=change_orders` : "/jobs";
     case "cost_plus_cycle":
     case "job_budget_alert":
-    case "change_order_pending":
     case "warranty_checkin":
     case "lien_waiver_sent":
     case "completion_package_ready":
@@ -338,6 +340,7 @@ interface ActionItem {
   meta: Record<string, unknown>;
   link: string;
   createdAt: string;
+  actions?: DecisionAction[];
 }
 
 /** Days between two ISO date strings. */
@@ -818,7 +821,10 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
   });
 
-  return json({ items: visible.slice(0, 8) });
+  // Decisions stay even when the informational list is full, and a dismiss
+  // check does not count as Apply, Add, Waive, Snooze, or Hold.
+  const decisions = await loadOwnerDecisionItems(env);
+  return json({ items: [...decisions, ...visible.slice(0, 8)] });
 }
 
 export async function handleDashboardActionItemDismiss(

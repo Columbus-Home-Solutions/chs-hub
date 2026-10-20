@@ -115,19 +115,20 @@ export function lateFeeDecisionTitle(row: LateFeeCandidate, amount: number, bala
   return `Add a one-time 5% late fee of ${usd(amount)} to invoice ${invoiceLabel(row.invoice_number)} for ${who}. Balance ${usd(balance)}.`;
 }
 
-/** Eligible invoices, including ones already proposed and ones the nightly job has only counted. */
+/**
+ * Only invoices the nightly job has marked proposed. While the switch is off
+ * that job only counts, so a would-propose invoice does not appear here.
+ */
 export function lateFeeDecisionRows(
   rows: LateFeeCandidate[],
   today: string,
 ): { row: LateFeeCandidate; amount: number; balance: number }[] {
   const out: { row: LateFeeCandidate; amount: number; balance: number }[] = [];
   for (const row of rows) {
-    const proposed = (row.late_fee_state ?? "none") === "proposed";
-    if (proposed && (row.status === "paid" || row.status === "void" || openBalance(row) <= 0)) continue;
+    if ((row.late_fee_state ?? "none") !== "proposed") continue;
+    if (row.status === "paid" || row.status === "void" || openBalance(row) <= 0) continue;
     if (exclusionReason(row, today)) continue;
-    const amount = proposed
-      ? roundAmount(row.late_fee_proposed_amount ?? lateFeeAmount(unpaidPrincipal(row)))
-      : lateFeeAmount(unpaidPrincipal(row));
+    const amount = roundAmount(row.late_fee_proposed_amount ?? lateFeeAmount(unpaidPrincipal(row)));
     if (amount <= 0) continue;
     out.push({ row, amount, balance: openBalance(row) });
   }

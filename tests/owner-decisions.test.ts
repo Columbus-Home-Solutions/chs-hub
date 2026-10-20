@@ -80,9 +80,23 @@ describe("calendar decision rows", () => {
   });
 });
 
+function proposed(over: Partial<LateFeeCandidate> = {}): LateFeeCandidate {
+  return fee({ late_fee_state: "proposed", late_fee_proposed_amount: 50, ...over });
+}
+
 describe("late-fee decision rows", () => {
-  it("lists a would-be proposal while nothing has been written yet", () => {
-    const [item] = lateFeeDecisionItems([fee()], TODAY);
+  it("shows no row while the switch is off, even when an invoice would be proposed", async () => {
+    const { env } = dashboardEnv({
+      proposalsEnabled: false,
+      invoices: [fee()],
+    });
+    const items = await loadOwnerDecisionItems(env, new Date("2026-10-20T15:00:00.000Z"));
+    expect(items.filter((item) => item.type === "late_fee_proposed")).toEqual([]);
+    expect(lateFeeDecisionItems([fee()], TODAY)).toEqual([]);
+  });
+
+  it("shows Add, Waive, Snooze, and Hold once the nightly job has proposed it", () => {
+    const [item] = lateFeeDecisionItems([proposed()], TODAY);
     expect(item.id).toBe("late_fee_inv-1");
     expect(item.title).toContain("Karen Perry");
     expect(item.title).toContain("INV-012");
@@ -103,15 +117,18 @@ describe("late-fee decision rows", () => {
     expect(item.actions.find((action) => action.id === "hold")?.needsReason).toBe(true);
   });
 
-  it("drops the row after waive, snooze, or hold", () => {
-    expect(lateFeeDecisionItems([fee({ late_fee_state: "waived" })], TODAY)).toEqual([]);
-    expect(lateFeeDecisionItems([fee({ late_fee_snooze_until: "2026-10-25" })], TODAY)).toEqual([]);
-    expect(lateFeeDecisionItems([fee({ late_fee_hold: 1 })], TODAY)).toEqual([]);
-    expect(lateFeeDecisionItems([fee({ late_fee_state: "applied", late_fee_amount: 50 })], TODAY)).toEqual([]);
+  it("drops the row after waive, snooze, hold, or add", () => {
+    expect(lateFeeDecisionItems([proposed()], TODAY)).toHaveLength(1);
+    expect(lateFeeDecisionItems([proposed({ late_fee_state: "waived" })], TODAY)).toEqual([]);
+    expect(lateFeeDecisionItems([proposed({ late_fee_state: "none", late_fee_snooze_until: "2026-10-25" })], TODAY)).toEqual([]);
+    expect(lateFeeDecisionItems([proposed({ late_fee_state: "none", late_fee_hold: 1 })], TODAY)).toEqual([]);
+    expect(lateFeeDecisionItems([proposed({ late_fee_state: "applied", late_fee_amount: 50 })], TODAY)).toEqual([]);
   });
 
   it("keeps a job-less invoice on Home with a real link", () => {
-    const [item] = lateFeeDecisionItems([fee({ id: "inv-loose", job_id: null, invoice_number: 7 })], TODAY);
+    const [item] = lateFeeDecisionItems([
+      proposed({ id: "inv-loose", job_id: null, invoice_number: 7 }),
+    ], TODAY);
     expect(item.link).toBe("/");
     expect(item.link).not.toContain("null");
     expect(item.link).not.toContain("undefined");
@@ -126,7 +143,7 @@ describe("home action items", () => {
   it("keeps the decision when the list is full and when it was dismissed", async () => {
     const { env, sql } = dashboardEnv({
       calendar: [moved()],
-      invoices: [fee()],
+      invoices: [proposed()],
       pastDue: Array.from({ length: 9 }, (_, i) => ({
         id: `pd-${i}`,
         job_id: `job-${i}`,
@@ -227,6 +244,7 @@ function dashboardEnv(opts: {
   followUps?: unknown[];
   changeOrders?: unknown[];
   dismissed?: string[];
+  proposalsEnabled?: boolean;
 }): { env: Env; sql: string[] } {
   const sql: string[] = [];
   const env = {

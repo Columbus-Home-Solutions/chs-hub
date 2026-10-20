@@ -153,6 +153,28 @@ export function exclusionReason(row: LateFeeCandidate, today: string): string | 
   return null;
 }
 
+const ADD_REFUSAL: Record<string, { error: string; details: string }> = {
+  closed: { error: "closed", details: "This invoice is already paid or void." },
+  jobber: { error: "jobber", details: "Old Jobber invoices don't get a late fee." },
+  billing_hold: { error: "billing_hold", details: "This invoice is on a billing hold." },
+  cost_plus: { error: "cost_plus", details: "Cost-plus jobs do not get a late fee." },
+  hold: { error: "hold", details: "This invoice is on hold." },
+  snooze: { error: "snooze", details: "This late fee is snoozed." },
+  decided: { error: "already_decided", details: "This invoice already has a late fee decision." },
+  grace: { error: "grace", details: "This invoice isn't 7 days past due yet" },
+  paid: { error: "nothing_due", details: "There is no unpaid balance to assess." },
+};
+
+/** Add uses the nightly exclusion rules. The proposals switch is not one of them. */
+export function addRefusal(
+  row: LateFeeCandidate,
+  today: string,
+): { error: string; details: string } | null {
+  const reason = exclusionReason(row, today);
+  if (!reason) return null;
+  return ADD_REFUSAL[reason] ?? { error: reason, details: "This invoice isn't eligible for a late fee." };
+}
+
 export function planLateFees(
   rows: LateFeeCandidate[],
   today: string,
@@ -395,10 +417,8 @@ export async function handleLateFeeAction(request: Request, env: Env, id: string
   const today = centralDate();
 
   if (action === "add") {
-    if (feeAlreadyOnRecord(row) || stateOf(row) === "waived") {
-      return json({ error: "already_decided", details: "This invoice already has a late fee decision." }, 409);
-    }
-    if (isCostPlus(row)) return json({ error: "cost_plus", details: "Cost-plus jobs do not get a late fee." }, 409);
+    const refusal = addRefusal(row, today);
+    if (refusal) return json(refusal, 409);
     const base = unpaidPrincipal(row);
     const fee = lateFeeAmount(base);
     if (fee <= 0) return json({ error: "nothing_due", details: "There is no unpaid balance to assess." }, 409);

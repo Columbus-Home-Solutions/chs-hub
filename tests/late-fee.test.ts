@@ -13,7 +13,9 @@ import {
   SHORT_DUE_WARNING,
   shortDueDateWarning,
 } from "../src/lib/invoicing.js";
+import { centralDate } from "../shared/labor-week.js";
 import {
+  addRefusal,
   exclusionReason,
   handleLateFeeAction,
   isPastGrace,
@@ -198,7 +200,90 @@ describe("late fee writes", () => {
     expect(body.total_due).toBe(1050);
     expect(updates.some((sql) => sql.includes("late_fee_state = 'applied'"))).toBe(true);
   });
+
+  it("refuses Add on an ineligible invoice and still allows waive, snooze, and hold", async () => {
+    const today = centralDate();
+    const early = row({ due_date: today });
+    expect(addRefusal(early, today)?.details).toBe("This invoice isn't 7 days past due yet");
+    expect(addRefusal(row({ due_date: addDays(today, -7) }), today)?.error).toBe("grace");
+    expect(addRefusal(row({ due_date: addDays(today, -8) }), today)).toBeNull();
+    expect(addRefusal(row({ late_fee_hold: 1 }), today)?.details).toBe("This invoice is on hold.");
+    expect(addRefusal(row({ billing_model: "cost_plus" }), today)?.error).toBe("cost_plus");
+    expect(addRefusal(row({ collected: 1000 }), today)?.details).toBe("There is no unpaid balance to assess.");
+    expect(addRefusal(row({ late_fee_state: "applied", late_fee_amount: 50 }), today)?.error).toBe("already_decided");
+
+    const { env, updates } = ownerEnv(early, "false");
+    const add = await postLateFee(env, "add");
+    expect(add.status).toBe(409);
+    expect(((await add.json()) as { details: string }).details).toBe("This invoice isn't 7 days past due yet");
+    expect(updates.some((sql) => sql.includes("late_fee_state = 'applied'"))).toBe(false);
+
+    const waive = await postLateFee(env, "waive");
+    const snooze = await postLateFee(env, "snooze", { days: 3 });
+    const hold = await postLateFee(env, "hold", { reason: "Waiting on a dispute" });
+    expect(waive.status).toBe(200);
+    expect(snooze.status).toBe(200);
+    expect(hold.status).toBe(200);
+  });
+
+  it("lets the owner add an eligible fee by hand while the switch is off", async () => {
+    const today = centralDate();
+    const eligible = row({ due_date: addDays(today, -8) });
+    expect(addRefusal(eligible, today)).toBeNull();
+    const { env, updates } = ownerEnv(eligible, "false");
+    const add = await postLateFee(env, "add");
+    expect(add.status).toBe(200);
+    const body = (await add.json()) as { late_fee_amount: number };
+    expect(body.late_fee_amount).toBe(50);
+    expect(updates.some((sql) => sql.includes("late_fee_state = 'applied'"))).toBe(true);
+  });
 });
+
+function ownerEnv(invoice: LateFeeCandidate, setting: string): { env: Env; updates: string[] } {
+  const updates: string[] = [];
+  const users = new Map([
+    ["owner@example.com", { id: "u-own", email: "owner@example.com", first_name: "Ada", last_name: "Owner", role: "owner", is_active: 1 }],
+  ]);
+  const env = {
+    DB: {
+      prepare(sql: string) {
+        const bound: unknown[] = [];
+        return {
+          bind(...args: unknown[]) {
+            bound.splice(0, bound.length, ...args);
+            return this;
+          },
+          async first() {
+            if (sql.includes("FROM users")) return users.get(String(bound[0])) ?? null;
+            if (sql.includes("FROM invoices")) return invoice;
+            if (sql.includes("system_settings")) return { value: setting };
+            return null;
+          },
+          async all() {
+            return { results: [] };
+          },
+          async run() {
+            updates.push(sql);
+            return { success: true, meta: { changes: 1 } };
+          },
+        };
+      },
+    },
+  } as unknown as Env;
+  return { env, updates };
+}
+
+function postLateFee(env: Env, action: string, extra: Record<string, unknown> = {}): Promise<Response> {
+  return handleLateFeeAction(
+    new Request("https://app.example/api/invoices/inv-1/late-fee", {
+      method: "POST",
+      headers: { "Cf-Access-Authenticated-User-Email": "owner@example.com" },
+      body: JSON.stringify({ action, ...extra }),
+    }),
+    env,
+    "inv-1",
+  );
+}
 
 describe("due date and past-due cadence", () => {
   it("sets a blank due date to 7 days after the Central send date, including late evening", () => {

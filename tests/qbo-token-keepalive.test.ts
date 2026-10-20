@@ -250,7 +250,7 @@ describe("runQboTokenKeepalive", () => {
     expect(alerts).toEqual([
       {
         message: "QuickBooks connection needs attention — token refresh failing",
-        link: "/app/settings",
+        link: "/app/settings/integrations",
       },
     ]);
 

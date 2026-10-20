@@ -173,7 +173,7 @@ export async function runQboTokenKeepalive(
     if (decided.notify) {
       await createOwnerInApp(env, {
         message: ALERT_MESSAGE,
-        linkPath: "/app/settings",
+        linkPath: "/app/settings/integrations",
         dedupe: `qbo_token_keepalive:${now.toISOString().slice(0, 10)}`,
         triggerEvent: "qbo_token_keepalive",
       });

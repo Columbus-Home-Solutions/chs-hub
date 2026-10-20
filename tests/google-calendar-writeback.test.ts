@@ -79,6 +79,15 @@ function harness(opts: {
             if (sql.includes("COUNT(*) AS n FROM google_calendar_event_links")) {
               return { n: links.filter((l) => l.status === "failed").length };
             }
+            if (sql.includes("FROM users WHERE role = 'owner'")) {
+              return {
+                id: "owner-1",
+                email: "tony@homesolutionsar.com",
+                first_name: "Tony",
+                last_name: "Columbus",
+                phone: null,
+              };
+            }
             if (sql.includes("FROM estimate_requests")) return opts.estimate ?? null;
             if (sql.includes("FROM schedule_entries")) return opts.schedule ?? null;
             if (sql.includes("FROM warranty_calls")) return opts.warranty ?? null;
@@ -450,6 +459,7 @@ describe("mirror", () => {
     expect(first.notified).toBe(false);
     const second = await retryFailedCalendarWrites(h.env, { fetch: g.fetchImpl, now: NOW });
     expect(second.notified).toBe(true);
+    expect(h.bells).toContain("/app/settings?tab=integrations");
     const third = await retryFailedCalendarWrites(h.env, { fetch: g.fetchImpl, now: NOW });
     expect(third.notified).toBe(false);
     fail = false;

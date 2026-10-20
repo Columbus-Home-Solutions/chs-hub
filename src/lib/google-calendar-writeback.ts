@@ -763,7 +763,7 @@ export async function retryFailedCalendarWrites(
   if (decision.notify) {
     await createOwnerInApp(env, {
       message: "Google Calendar isn't updating. CHS items may be missing from your calendar until sync works again.",
-      linkPath: "/app/settings",
+      linkPath: "/app/settings?tab=integrations",
       triggerEvent: "google_calendar_write_failed",
       dedupe: `gcal-write-alert-${decision.state.streak}`,
     });

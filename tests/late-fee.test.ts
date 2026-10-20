@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { unzipSync, strFromU8 } from "fflate";
 import { describe, expect, it } from "vitest";
 import type { Env } from "../src/env.js";
 import { renderContract } from "../src/lib/contracts.js";
@@ -296,7 +297,50 @@ describe("agreement late-fee wording", () => {
     expect(source).toContain("work will pause until the outstanding balance is received");
     expect(source).not.toContain("$50.00 per day");
   });
+
+  it("keeps the live five-year warranty and states the 5% fee in the service-agreement files", () => {
+    const payment =
+      "A convenience fee of 3.5% will be added to credit/debit card payments. No fee is charged for check or ACH payments. All invoices are due within seven (7) days of the date the invoice is sent to Client. If an invoice is not paid in full within seven (7) days after its due date, Contractor may, at its discretion, add a one-time late fee of five percent (5%) of the unpaid balance. Contractor may waive or delay this fee at its sole discretion. Contractor reserves the right to suspend work if payment is more than fourteen (14) days past due. Work will resume once all outstanding balances and any late fee are paid in full.";
+    const warranty =
+      "Contractor warrants all workmanship for a period of five (5) years from the date of substantial completion. This warranty covers defects in workmanship only; the full list of exclusions and the limitation of liability are set forth in the Warranty Certificate issued at project completion. Manufacturer warranties apply separately to materials and products. Warranty claims must be submitted in writing within the warranty period.";
+    for (const rel of [
+      "../src/templates/prepped/service-agreement.docx",
+      "../src/templates/CHS-Service-Agreement-Template.docx",
+    ]) {
+      const paras = docxParagraphs(rel);
+      expect(paras.filter((p) => p === payment)).toEqual([payment]);
+      expect(paras.filter((p) => p === warranty)).toEqual([warranty]);
+      expect(paras.join("\n")).not.toContain("1.5% monthly");
+      expect(paras.join("\n")).not.toContain("one (1) year");
+    }
+    const prepped = unzipSync(
+      new Uint8Array(readFileSync(new URL("../src/templates/prepped/service-agreement.docx", import.meta.url))),
+    );
+    expect(strFromU8(prepped["word/document.xml"])).toContain("{{sign|1|*| |client_sig}}");
+    expect(strFromU8(prepped["word/document.xml"])).toContain("{{date|1|*| |client_date}}");
+    expect(prepped["word/media/contractor-sig.png"]?.length).toBeGreaterThan(1000);
+  });
 });
+
+function docxParagraphs(rel: string): string[] {
+  const xml = strFromU8(
+    unzipSync(new Uint8Array(readFileSync(new URL(rel, import.meta.url))))["word/document.xml"],
+  );
+  return [...xml.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/g)]
+    .map((m) =>
+      [...m[0].matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)]
+        .map((t) =>
+          t[1]
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&apos;/g, "'")
+            .replace(/&quot;/g, '"'),
+        )
+        .join(""),
+    )
+    .filter((p) => p.trim());
+}
 
 describe("late fee migration", () => {
   it("does not put the old daily fee back into customer copy", () => {

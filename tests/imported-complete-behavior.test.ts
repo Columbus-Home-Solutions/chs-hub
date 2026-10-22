@@ -10,7 +10,7 @@ import { formatDatePlusFiveYears } from "../src/lib/document-generator.js";
 import { warrantyExpirationDate } from "../src/lib/invoicing.js";
 import { ensureJobPortalToken } from "../src/lib/job-portal-token.js";
 import { handleJobDetail, handleJobList, handleJobPipeline, handleJobStatus } from "../src/routes/jobs-api.js";
-import { correctionStatements } from "../scripts/jobber-import/correct-imported-status.js";
+import { correctionStatements, hiddenCompletionStatements } from "../scripts/jobber-import/correct-imported-status.js";
 import { JOB_106, OWNER, openProductionReplay } from "./production-replay-db.js";
 
 const JOB_110 = "ba9f5359-d69f-45ed-a086-61dbb547a28d";
@@ -21,6 +21,9 @@ const JOB_107 = "0f80002e-29e6-4eb4-8021-ab67ee81f086";
 const JOB_109 = "99190438-f0a8-4d36-ae78-f8b19a805931";
 const JOB_111 = "17522999-ad05-427d-9f5a-6428ed4b506e";
 const JOB_105 = "8fb106bc-321b-4342-bbd4-d31bc26318e2";
+const JOB_78 = "Z2lkOi8vSm9iYmVyL0pvYi8xMzM0Njk0Mjg=";
+const JOB_96 = "Z2lkOi8vSm9iYmVyL0pvYi8xNDM1ODQwMTg=";
+const JOB_99 = "Z2lkOi8vSm9iYmVyL0pvYi8xNDM4ODAxNjI=";
 
 let env: Env;
 let dispose: () => Promise<void>;
@@ -243,14 +246,38 @@ describe("imported status correction against the replay", () => {
   it("applies once, leaves dates null, and does nothing the second time", async () => {
     await apply();
     const rows = await env.DB.prepare(
-      `SELECT id, status, actual_end_date, start_date FROM jobs WHERE id IN (?, ?, ?, ?, ?, ?)`,
+      `SELECT id, status, source, actual_end_date, start_date FROM jobs WHERE id IN (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-      .bind(JOB_107, JOB_109, JOB_111, JOB_105, JOB_106, JOB_110)
-      .all<{ id: string; status: string; actual_end_date: string | null; start_date: string | null }>();
+      .bind(JOB_107, JOB_109, JOB_111, JOB_105, JOB_106, JOB_110, JOB_78, JOB_96, JOB_99)
+      .all<{
+        id: string;
+        status: string;
+        source: string;
+        actual_end_date: string | null;
+        start_date: string | null;
+      }>();
     const byId = new Map((rows.results ?? []).map((row) => [row.id, row]));
     expect(byId.get(JOB_107)).toMatchObject({ status: "complete", actual_end_date: null, start_date: null });
     expect(byId.get(JOB_109)).toMatchObject({ status: "complete", actual_end_date: null, start_date: null });
     expect(byId.get(JOB_111)).toMatchObject({ status: "scheduled", actual_end_date: null, start_date: null });
+    expect(byId.get(JOB_78)).toMatchObject({
+      status: "complete",
+      source: "GQL_API",
+      actual_end_date: null,
+      start_date: null,
+    });
+    expect(byId.get(JOB_96)).toMatchObject({
+      status: "complete",
+      source: "QUOTE_CONVERT",
+      actual_end_date: null,
+      start_date: null,
+    });
+    expect(byId.get(JOB_99)).toMatchObject({
+      status: "complete",
+      source: "QUOTE_CONVERT",
+      actual_end_date: null,
+      start_date: null,
+    });
     expect(byId.get(JOB_105)?.status).toBe("action_required");
     expect(byId.get(JOB_106)?.status).toBe("cancelled");
     expect(byId.get(JOB_110)?.status).toBe("complete");
@@ -258,20 +285,74 @@ describe("imported status correction against the replay", () => {
     const audits = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM audit_logs WHERE user_email = 'correction-script'",
     ).first<{ n: number }>();
-    expect(audits?.n).toBe(3);
+    expect(audits?.n).toBe(6);
 
     await apply();
     const again = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM audit_logs WHERE user_email = 'correction-script'",
     ).first<{ n: number }>();
-    expect(again?.n).toBe(3);
+    expect(again?.n).toBe(6);
 
     const visible = await listJobs();
     expect(visible.map((card) => card.job_number).sort((a, b) => a - b)).toEqual(
-      expect.arrayContaining([105, 107, 109, 110, 111]),
+      expect.arrayContaining([78, 96, 99, 105, 107, 109, 110, 111]),
     );
     expect(visible.map((card) => card.id)).not.toContain(JOB_91);
     expect(visible.map((card) => card.id)).not.toContain(JOB_108);
+  });
+
+  it("completes a late hidden import once and does not rewrite the other jobs", async () => {
+    const before = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM audit_logs WHERE user_email = 'correction-script'",
+    ).first<{ n: number }>();
+    const prior = await env.DB.prepare(
+      "SELECT id, status, actual_end_date FROM jobs WHERE id IN (?, ?, ?, ?)",
+    )
+      .bind(JOB_78, JOB_96, JOB_105, JOB_106)
+      .all<{ id: string; status: string; actual_end_date: string | null }>();
+    const priorById = new Map((prior.results ?? []).map((row) => [row.id, row]));
+    for (const statement of hiddenCompletionStatements()) {
+      await env.DB.prepare(statement.replace(/;\s*$/, "")).run();
+    }
+    const hidden = await env.DB.prepare(
+      "SELECT status, source, actual_end_date FROM jobs WHERE id = ?",
+    )
+      .bind(JOB_91)
+      .first<{ status: string; source: string; actual_end_date: string | null }>();
+    expect(hidden).toMatchObject({ status: "complete", source: "GQL_API", actual_end_date: null });
+    const kept = await env.DB.prepare(
+      "SELECT id, status, actual_end_date FROM jobs WHERE id IN (?, ?, ?, ?)",
+    )
+      .bind(JOB_78, JOB_96, JOB_105, JOB_106)
+      .all<{ id: string; status: string; actual_end_date: string | null }>();
+    for (const row of kept.results ?? []) {
+      expect(row).toMatchObject({
+        status: priorById.get(row.id)?.status,
+        actual_end_date: priorById.get(row.id)?.actual_end_date ?? null,
+      });
+    }
+    const audits = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM audit_logs WHERE user_email = 'correction-script' AND entity_id = ?",
+    )
+      .bind(JOB_91)
+      .first<{ n: number }>();
+    expect(audits?.n).toBe(1);
+    expect((before?.n ?? 0) + 1).toBe(
+      (
+        await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM audit_logs WHERE user_email = 'correction-script'",
+        ).first<{ n: number }>()
+      )?.n,
+    );
+    for (const statement of hiddenCompletionStatements()) {
+      await env.DB.prepare(statement.replace(/;\s*$/, "")).run();
+    }
+    const again = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM audit_logs WHERE user_email = 'correction-script' AND entity_id = ?",
+    )
+      .bind(JOB_91)
+      .first<{ n: number }>();
+    expect(again?.n).toBe(1);
   });
 
   it("refuses --remote and --apply", () => {

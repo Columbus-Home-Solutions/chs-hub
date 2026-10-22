@@ -4,9 +4,14 @@ import { SIDEBAR_NAV } from "../frontend/src/lib/sidebar-nav";
 import { scheduledImportVisibleWhere } from "../src/lib/native-jobs.js";
 import {
   CORRECTIONS,
+  HIDDEN_COMPLETIONS,
+  HIDDEN_PREVIEW_SQL,
+  HIDDEN_REMOTE_APPLY_COMMAND,
+  OLDER_COMPLETIONS,
   PREVIEW_SQL,
   REMOTE_APPLY_COMMAND,
   correctionStatements,
+  hiddenCompletionStatements,
 } from "../scripts/jobber-import/correct-imported-status.js";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
@@ -115,11 +120,57 @@ describe("imported status correction", () => {
       expect(statement).toContain("source = 'jobber_import'");
       expect(statement).not.toMatch(/actual_end_date\s*=/);
     }
+    expect(OLDER_COMPLETIONS.map((row) => row.jobNumber)).toEqual([78, 96, 99]);
+    expect(OLDER_COMPLETIONS.map((row) => row.toStatus)).toEqual(["complete", "complete", "complete"]);
+    for (const row of OLDER_COMPLETIONS) {
+      expect(row.actualEndDate).toBeNull();
+      expect(sqlFile).toContain(row.id);
+      expect(sqlFile).toContain(
+        `id = '${row.id}' AND data_source = 'jobber_import' AND status IN ('unscheduled', 'action_required')`,
+      );
+    }
+    expect(sqlFile).not.toContain("source = 'GQL_API'");
+    expect(sqlFile).not.toContain("source = 'QUOTE_CONVERT'");
     expect(PREVIEW_SQL).toContain("SELECT");
+    expect(PREVIEW_SQL).toContain("Z2lkOi8vSm9iYmVyL0pvYi8xMzM0Njk0Mjg=");
     expect(REMOTE_APPLY_COMMAND).toContain("--remote --file=scripts/jobber-import/correct-imported-status.sql");
     expect(script).toContain('arg === "--remote"');
     expect(script).toContain("Refusing --apply");
     expect(script).not.toContain("better-sqlite3");
     expect(script).not.toContain("env.DB");
+  });
+
+  it("puts each hidden job in its own block and leaves the other corrections alone", () => {
+    const hiddenSql = read("../scripts/jobber-import/correct-imported-status-hidden.sql");
+    expect(HIDDEN_COMPLETIONS.map((row) => row.jobNumber)).toEqual([75, 91, 92, 93, 97]);
+    expect(hiddenCompletionStatements()).toHaveLength(10);
+    for (const row of HIDDEN_COMPLETIONS) {
+      expect(row.actualEndDate).toBeNull();
+      expect(row.toStatus).toBe("complete");
+      const where =
+        `id = '${row.id}' AND data_source = 'jobber_import' AND status IN ('late', 'requires_invoicing')`;
+      expect(hiddenSql).toContain(`-- #${row.jobNumber}`);
+      expect(hiddenSql.split(where)).toHaveLength(3);
+      expect(HIDDEN_PREVIEW_SQL).toContain(row.id);
+    }
+    expect(hiddenSql).not.toContain("actual_end_date =");
+    expect(hiddenSql).not.toContain("8fb106bc-321b-4342-bbd4-d31bc26318e2");
+    expect(hiddenSql).not.toContain("18c37ead-7a58-496d-b8f3-0a1ab7a51527");
+    expect(hiddenSql).not.toContain("0f80002e-29e6-4eb4-8021-ab67ee81f086");
+    expect(hiddenSql).not.toContain("99190438-f0a8-4d36-ae78-f8b19a805931");
+    expect(hiddenSql).not.toContain("ba9f5359-d69f-45ed-a086-61dbb547a28d");
+    expect(hiddenSql).not.toContain("17522999-ad05-427d-9f5a-6428ed4b506e");
+    expect(hiddenSql).not.toContain("Z2lkOi8vSm9iYmVyL0pvYi8xMzM0Njk0Mjg=");
+    expect(hiddenSql).not.toContain("Z2lkOi8vSm9iYmVyL0pvYi8xNDM1ODQwMTg=");
+    expect(hiddenSql).not.toContain("Z2lkOi8vSm9iYmVyL0pvYi8xNDM4ODAxNjI=");
+    expect(sqlFile).not.toContain("Z2lkOi8vSm9iYmVyL0pvYi8xMzMzMzg5NTc=");
+    expect(HIDDEN_REMOTE_APPLY_COMMAND).toContain(
+      "--remote --file=scripts/jobber-import/correct-imported-status-hidden.sql",
+    );
+    for (const statement of hiddenCompletionStatements()) {
+      expect(statement).toContain("data_source = 'jobber_import'");
+      expect(statement).toContain("status IN ('late', 'requires_invoicing')");
+      expect(statement).not.toMatch(/actual_end_date\s*=/);
+    }
   });
 });

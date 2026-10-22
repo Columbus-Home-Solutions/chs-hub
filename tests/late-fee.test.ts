@@ -40,6 +40,7 @@ function row(over: Partial<LateFeeCandidate> = {}): LateFeeCandidate {
     billing_model: "fifty_fifty",
     invoice_type: "final",
     job_id: "job-1",
+    job_status: "in_progress",
     client_id: "client-1",
     client_name: "Ada Client",
     payment_token: "tok",

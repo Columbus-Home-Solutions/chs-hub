@@ -33,6 +33,8 @@ export interface LateFeeCandidate {
   billing_model: string | null;
   invoice_type: string | null;
   job_id: string | null;
+  /** jobs.status. Home uses this so a held job does not promise a customer text. */
+  job_status: string | null;
   client_id: string | null;
   client_name: string | null;
   payment_token: string | null;
@@ -207,7 +209,7 @@ function candidateSql(extra = ""): string {
   return `
   SELECT i.id, i.invoice_number, i.status, i.amount, i.tax_amount, i.credits_applied,
          i.late_fee_amount, i.total_due, i.due_date, i.billing_model, i.invoice_type,
-         i.job_id, i.client_id, i.payment_token,
+         i.job_id, j.status AS job_status, i.client_id, i.payment_token,
          i.late_fee_state, i.late_fee_hold, i.late_fee_hold_reason, i.late_fee_snooze_until,
          i.late_fee_proposed_amount, i.late_fee_waived_amount,
          i.data_source AS invoice_data_source, j.data_source AS job_data_source,

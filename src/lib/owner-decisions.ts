@@ -106,8 +106,16 @@ export function calendarDecisionItems(rows: CalendarDecisionRow[]): OwnerDecisio
     }));
 }
 
-export function lateFeeAddConfirm(invoiceDisplay: string, amountLabel: string): string {
-  return `Add a ${amountLabel} late fee to invoice ${invoiceDisplay}. This sends the customer one text.`;
+export function lateFeeAddConfirm(
+  invoiceDisplay: string,
+  amountLabel: string,
+  jobStatus?: string | null,
+): string {
+  const lead = `Add a ${amountLabel} late fee to invoice ${invoiceDisplay}.`;
+  if (jobStatus === "on_hold") {
+    return `${lead} The job is on hold, so the customer will not be texted.`;
+  }
+  return `${lead} This sends the customer one text.`;
 }
 
 export function lateFeeDecisionTitle(row: LateFeeCandidate, amount: number, balance: number): string {
@@ -167,7 +175,7 @@ export function lateFeeDecisionItems(
           label: "Add fee",
           path,
           body: { action: "add" },
-          confirm: lateFeeAddConfirm(display, amountLabel),
+          confirm: lateFeeAddConfirm(display, amountLabel, row.job_status),
         },
         { id: "waive", label: "Waive", path, body: { action: "waive" } },
         { id: "snooze_3", label: "Snooze 3 days", path, body: { action: "snooze", days: 3 } },

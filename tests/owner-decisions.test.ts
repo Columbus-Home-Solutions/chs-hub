@@ -28,6 +28,7 @@ function fee(over: Partial<LateFeeCandidate> = {}): LateFeeCandidate {
     billing_model: "fifty_fifty",
     invoice_type: "final",
     job_id: "job-1",
+    job_status: "in_progress",
     client_id: "client-1",
     client_name: "Karen Perry",
     payment_token: "tok",
@@ -113,6 +114,10 @@ describe("late-fee decision rows", () => {
     expect(add.confirm).toContain("INV-012");
     expect(add.confirm).toContain("$50.00");
     expect(add.confirm?.toLowerCase()).toContain("this sends the customer one text");
+    const held = lateFeeDecisionItems([proposed({ job_status: "on_hold" })], TODAY)[0];
+    expect(held.actions[0].confirm).toBe(lateFeeAddConfirm("INV-012", "$50.00", "on_hold"));
+    expect(held.actions[0].confirm?.toLowerCase()).toContain("will not be texted");
+    expect(held.actions[0].confirm?.toLowerCase()).not.toContain("sends the customer one text");
     expect(item.actions.filter((action) => action.id !== "add").every((action) => !action.confirm)).toBe(true);
     expect(item.actions.find((action) => action.id === "hold")?.needsReason).toBe(true);
   });

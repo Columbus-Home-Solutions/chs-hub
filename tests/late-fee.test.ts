@@ -237,6 +237,26 @@ describe("late fee writes", () => {
     expect(body.late_fee_amount).toBe(50);
     expect(updates.some((sql) => sql.includes("late_fee_state = 'applied'"))).toBe(true);
   });
+
+  it("refuses Add on a Jobber import and does not write the fee", async () => {
+    const today = centralDate();
+    const imported = row({
+      job_data_source: "jobber_import",
+      due_date: addDays(today, -8),
+    });
+    const invoiceOnly = row({
+      invoice_data_source: "jobber_import",
+      job_data_source: null,
+      due_date: addDays(today, -8),
+    });
+    expect(exclusionReason(imported, today)).toBe("jobber");
+    expect(addRefusal(imported, today)?.details).toBe("Old Jobber invoices don't get a late fee.");
+    expect(addRefusal(invoiceOnly, today)?.error).toBe("jobber");
+    const { env, updates } = ownerEnv(imported, "true");
+    const add = await postLateFee(env, "add");
+    expect(add.status).toBe(409);
+    expect(updates.some((sql) => sql.includes("late_fee_state = 'applied'"))).toBe(false);
+  });
 });
 
 function ownerEnv(invoice: LateFeeCandidate, setting: string): { env: Env; updates: string[] } {

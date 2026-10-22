@@ -177,6 +177,36 @@ describe("complete import stays visible", () => {
     const cancelled = await listJobs("http://replay.local/api/jobs?status=cancelled");
     expect(cancelled.map((card) => card.job_number)).toEqual([106]);
   });
+
+  it("finds cancelled #106 by first name, last name, job number, and title", async () => {
+    // Newer than #106. A cap taken before the query match would hide Clayton.
+    await env.DB.prepare(
+      "UPDATE jobs SET created_at = '2026-09-01T00:00:00Z' WHERE id = ?",
+    )
+      .bind(JOB_106)
+      .run();
+    for (let n = 0; n < 30; n++) {
+      await env.DB.prepare(
+        `INSERT INTO jobs (
+          id, job_number, title, status, client_id, source, data_source,
+          created_at, updated_at
+        ) VALUES (?, ?, 'Newer native job', 'in_progress', NULL, 'estimate', NULL, '2026-10-21T00:00:00Z', '2026-10-21T00:00:00Z')`,
+      )
+        .bind(`newer-job-${n}`, 2000 + n)
+        .run();
+    }
+
+    for (const q of ["clayton", "price", "106", "deck repairs"]) {
+      const hits = await listJobs(`http://replay.local/api/jobs?q=${encodeURIComponent(q)}`);
+      expect(hits.map((card) => card.job_number), q).toEqual([106]);
+      expect(hits[0]).toMatchObject({
+        id: JOB_106,
+        title: "Deck Repairs",
+        client_name: "Clayton Price",
+        status: "cancelled",
+      });
+    }
+  });
 });
 
 describe("warranty term and portal token on package send", () => {

@@ -39,6 +39,20 @@ describe("complete imports stay on the jobs surfaces", () => {
     const nav = SIDEBAR_NAV.find((item) => item.id === "jobs");
     const cancelled = nav?.children?.find((child) => child.label === "Cancelled");
     expect(cancelled?.href).toContain("?status=cancelled");
+    const labels = nav?.children?.map((child) => child.label) ?? [];
+    const completed = nav?.children?.find((child) => child.label === "Completed");
+    expect(completed?.href).toContain("?status=complete");
+    expect(labels.indexOf("Completed")).toBe(labels.indexOf("Closed") - 1);
+    expect(nav?.children?.find((child) => child.label === "Active")?.href).not.toContain("status=");
+    expect(nav?.children?.find((child) => child.label === "Every Job")?.href).toContain("?status=all");
+    expect(labels).not.toContain("Needs Reconciliation");
+    expect(labels).not.toContain("All Jobs");
+    const jobsPath = "/app/jobs";
+    expect(completed?.activeTest?.(jobsPath, "stage=complete")).toBe(true);
+    expect(completed?.activeTest?.(jobsPath, "status=complete")).toBe(true);
+    expect(nav?.children?.find((child) => child.label === "Active")?.activeTest?.(jobsPath, "stage=complete")).toBe(false);
+    expect(nav?.children?.find((child) => child.label === "Active")?.activeTest?.(jobsPath, "")).toBe(true);
+    expect(nav?.children?.find((child) => child.label === "In Progress")?.activeTest?.(jobsPath, "status=in_progress")).toBe(true);
   });
 
   it("keeps detail on the same job query with the id swap", () => {

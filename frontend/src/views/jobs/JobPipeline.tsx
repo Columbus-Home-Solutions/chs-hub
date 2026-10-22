@@ -11,7 +11,7 @@ import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { loadStoredView, storeView, truncate, useClientSort } from "../../lib/list-view";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
-import { MOVABLE_JOB_STATUSES } from "@chs/shared/job-pipeline";
+import { isOpenPipelineStatus, MOVABLE_JOB_STATUSES, OPEN_PIPELINE_STATUSES } from "@chs/shared/job-pipeline";
 import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
@@ -69,7 +69,8 @@ const STATUS_LABELS: Record<string, string> = {
   scheduled: "Scheduled",
   in_progress: "In Progress",
   punch_list: "Punch List",
-  complete: "Needs Reconciliation",
+  complete: "Completed",
+  all: "Every Job",
   closed: "Closed",
   cancelled: "Cancelled",
   on_hold: "On Hold",
@@ -105,7 +106,7 @@ export function JobPipeline(_props: RoutableProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<JobStatus | null>(null);
   const [activeStage, setActiveStage] = useState<JobStatus>("deposit_paid");
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "cancelled" | "on_hold" | "">("");
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "cancelled" | "on_hold" | "all" | "">("");
   const [listSearch, setListSearch] = useState("");
 
   // Re-run whenever the search string changes so clicking different sidebar
@@ -118,6 +119,8 @@ export function JobPipeline(_props: RoutableProps) {
       setStatusFilter("cancelled");
     } else if (s === "on_hold") {
       setStatusFilter("on_hold");
+    } else if (s === "all") {
+      setStatusFilter("all");
     } else if (s && JOB_STAGES.some((st) => st.key === s)) {
       setActiveStage(s as JobStatus);
       setStatusFilter(s as JobStatus);
@@ -133,6 +136,7 @@ export function JobPipeline(_props: RoutableProps) {
 
   const cancelledView = statusFilter === "cancelled";
   const onHoldView = statusFilter === "on_hold";
+  const everyJobView = statusFilter === "all";
   const listOnlyView = cancelledView || onHoldView;
 
   const listJobs = useMemo(() => {
@@ -140,9 +144,11 @@ export function JobPipeline(_props: RoutableProps) {
       ? (data?.cancelled ?? [])
       : onHoldView
         ? (data?.on_hold ?? [])
-        : statusFilter
-        ? allJobs.filter((j) => j.status === statusFilter)
-        : allJobs;
+        : everyJobView
+          ? [...allJobs, ...(data?.cancelled ?? []), ...(data?.on_hold ?? [])]
+          : statusFilter
+            ? allJobs.filter((j) => j.status === statusFilter)
+            : allJobs.filter((j) => isOpenPipelineStatus(j.status));
     const q = listSearch.trim().toLowerCase();
     if (q) {
       jobs = jobs.filter((j) => {
@@ -164,7 +170,7 @@ export function JobPipeline(_props: RoutableProps) {
       });
     }
     return jobs;
-  }, [allJobs, data, cancelledView, onHoldView, statusFilter, listSearch]);
+  }, [allJobs, data, cancelledView, onHoldView, everyJobView, statusFilter, listSearch]);
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(listJobs, "job_number", "desc");
 
@@ -205,9 +211,17 @@ export function JobPipeline(_props: RoutableProps) {
                 ? data
                   ? `${sorted.length} job${sorted.length === 1 ? "" : "s"} on hold`
                   : "Jobs on hold"
-                : data
-                  ? `${total(data)} active jobs in the pipeline`
-                  : "Job pipeline"}
+                : statusFilter === "complete"
+                  ? `${sorted.length} completed job${sorted.length === 1 ? "" : "s"}`
+                  : statusFilter === "closed"
+                    ? `${sorted.length} closed job${sorted.length === 1 ? "" : "s"}`
+                    : everyJobView
+                      ? `${sorted.length} job${sorted.length === 1 ? "" : "s"}`
+                      : statusFilter
+                        ? `${sorted.length} job${sorted.length === 1 ? "" : "s"}`
+                        : data
+                          ? `${activeTotal(data)} active job${activeTotal(data) === 1 ? "" : "s"} in the pipeline`
+                          : "Job pipeline"}
           </p>
         </div>
         <div class="view-header__right flex gap-sm items-center">
@@ -630,8 +644,8 @@ function JobPipelineCard({
   );
 }
 
-function total(data: JobPipelineResponse): number {
-  return Object.values(data.counts).reduce((a, b) => a + b, 0);
+function activeTotal(data: JobPipelineResponse): number {
+  return OPEN_PIPELINE_STATUSES.reduce((sum, status) => sum + (data.counts[status] ?? 0), 0);
 }
 
 function findStatus(data: JobPipelineResponse | null, id: string): JobStatus | null {

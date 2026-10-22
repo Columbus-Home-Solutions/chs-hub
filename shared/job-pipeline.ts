@@ -16,6 +16,24 @@ export const BOARD_PIPELINE_STATUSES = [
 
 export type BoardPipelineStatus = (typeof BOARD_PIPELINE_STATUSES)[number];
 
+/**
+ * Open work on the default Jobs list and the active-job count.
+ * Complete and closed stay on the Kanban. On hold, cancelled, and archived
+ * stay off this list.
+ */
+export const OPEN_PIPELINE_STATUSES = [
+  "action_required",
+  "unscheduled",
+  "deposit_paid",
+  "scheduled",
+  "in_progress",
+  "punch_list",
+] as const;
+
+export function isOpenPipelineStatus(status: string | null | undefined): boolean {
+  return (OPEN_PIPELINE_STATUSES as readonly string[]).includes((status ?? "").trim());
+}
+
 /** Statuses the job page can drag between. The two live extras are view-only. */
 export const MOVABLE_JOB_STATUSES = [
   "deposit_paid",

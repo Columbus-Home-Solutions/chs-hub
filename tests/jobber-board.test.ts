@@ -10,8 +10,10 @@ import {
 } from "../src/lib/jobber-board.js";
 import {
   BOARD_PIPELINE_STATUSES,
+  OPEN_PIPELINE_STATUSES,
   clientDisplayName,
   groupJobPipeline,
+  isOpenPipelineStatus,
 } from "../shared/job-pipeline.js";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
@@ -64,6 +66,23 @@ describe("jobber board visibility", () => {
     const shown = BOARD_PIPELINE_STATUSES.flatMap((status) => grouped.pipeline[status]);
     expect(shown.map((job) => job.id)).toEqual(["jon", "abdul", "alicia", "roof"]);
     expect(shown.map((job) => job.id)).not.toContain("clayton");
+  });
+
+  it("counts open work without complete, closed, hold, cancelled, or archived", () => {
+    expect([...OPEN_PIPELINE_STATUSES]).toEqual([
+      "action_required",
+      "unscheduled",
+      "deposit_paid",
+      "scheduled",
+      "in_progress",
+      "punch_list",
+    ]);
+    expect(BOARD_PIPELINE_STATUSES).toContain("complete");
+    expect(BOARD_PIPELINE_STATUSES).toContain("closed");
+    for (const status of ["complete", "closed", "on_hold", "cancelled", "archived"]) {
+      expect(isOpenPipelineStatus(status)).toBe(false);
+    }
+    expect(isOpenPipelineStatus("in_progress")).toBe(true);
   });
 
   it("builds the list name from the client joined on jobs.client_id", () => {

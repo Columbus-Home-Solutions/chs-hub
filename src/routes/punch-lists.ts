@@ -729,7 +729,7 @@ export async function handlePunchListSend(
     jobId: punchList.job_id,
     merge: { job_title: jobTitle },
     linkPath: `/app/jobs/${punchList.job_id}`,
-  });
+  }, { manual: true });
 
   return json({ ok: true, subs_notified: subIds.length });
 }

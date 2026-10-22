@@ -176,6 +176,13 @@ export const SIDEBAR_NAV: NavSection[] = [
           new URLSearchParams(s).get("status") === "cancelled",
       },
       {
+        label: "On Hold",
+        href: to("/jobs") + "?status=on_hold",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "on_hold",
+      },
+      {
         label: "Warranty Calls",
         href: to("/warranty-calls"),
         activeTest: (p) =>

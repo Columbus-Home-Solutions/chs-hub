@@ -659,7 +659,7 @@ export interface JobCard {
   job_number: number | null;
   job_display: string | null;
   title: string | null;
-  status: JobStatus;
+  status: JobStatus | "cancelled" | "on_hold";
   client_id: string | null;
   client_name: string | null;
   billing_model: BillingModel | null;
@@ -689,6 +689,10 @@ export interface JobCard {
   overdue: boolean;
   payments_received?: number | null;
   cancelled_on?: string | null;
+  hold_reason?: string | null;
+  hold_previous_status?: string | null;
+  held_at?: string | null;
+  days_held?: number | null;
   created_at: string | null;
   updated_at: string | null;
   assigned_to?: string | null;
@@ -704,6 +708,8 @@ export interface JobPipelineResponse {
   pipeline: Record<JobStatus, JobCard[]>;
   /** status=cancelled. Not a board column. */
   cancelled?: JobCard[];
+  /** status=on_hold. Not a board column. */
+  on_hold?: JobCard[];
 }
 
 export interface Task {

@@ -482,7 +482,7 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
       warranty_expiry_date: warrantyExpiry,
       google_review_link: googleReviewLink,
     },
-  });
+  }, { manual: true });
 
   await logAudit(env, user.email, "completion_package.send", jobId, {
     sent_at: sentAt,

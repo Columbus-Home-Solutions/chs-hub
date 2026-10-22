@@ -37,6 +37,7 @@ import { handlePhotoStream } from "./photos.js";
 import { createOwnerInApp } from "../lib/notification-engine.js";
 import { applyChangeOrder, portalApprovalLabel } from "./change-orders.js";
 import { isWithinWarrantyExpiration } from "../lib/warranty.js";
+import { customerFacingJobStatus } from "../lib/job-hold.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -241,7 +242,9 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
       property_address: fullAddress(job),
       job_title: job.title,
       job_display: job.job_number != null ? `JOB-${String(job.job_number).padStart(3, "0")}` : null,
-      status: onHold ? "on_hold" : job.status,
+      status: job.status === "on_hold"
+        ? customerFacingJobStatus(job.status)
+        : (onHold ? "on_hold" : job.status),
     },
     quick_stats: {
       contract_total: contractTotal,

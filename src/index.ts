@@ -62,6 +62,8 @@ import {
   handleJobUpdate,
   handleJobDelete,
   handleJobStatus,
+  handleJobHold,
+  handleJobRelease,
   handleJobReverseConversion,
   handleJobCloseEligibility,
   handleJobReviewReceived,
@@ -1448,6 +1450,14 @@ export default {
       const jid = decodeURIComponent(jobTasks[1]);
       if (request.method === "GET") return handleTaskList(env, jid, url);
       if (request.method === "POST") return handleTaskCreate(request, env, jid);
+    }
+    const jobHold = url.pathname.match(/^\/api\/jobs\/([^/]+)\/hold$/);
+    if (jobHold && request.method === "POST") {
+      return handleJobHold(request, env, decodeURIComponent(jobHold[1]));
+    }
+    const jobRelease = url.pathname.match(/^\/api\/jobs\/([^/]+)\/release$/);
+    if (jobRelease && request.method === "POST") {
+      return handleJobRelease(request, env, decodeURIComponent(jobRelease[1]));
     }
     const jobStatus = url.pathname.match(/^\/api\/jobs\/([^/]+)\/status$/);
     if (jobStatus && request.method === "PUT") {

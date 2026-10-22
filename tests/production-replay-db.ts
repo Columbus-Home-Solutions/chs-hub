@@ -59,7 +59,8 @@ CREATE TABLE jobs (
   start_date TEXT, target_end_date TEXT, actual_end_date TEXT, warranty_expiration TEXT,
   portal_token TEXT, portal_type TEXT, conversion_complete INTEGER, estimate_id TEXT, payer_id TEXT,
   created_at TEXT, updated_at TEXT,
-  conversion_reversed INTEGER, reversal_reason TEXT, reversed_at TEXT, assigned_to TEXT
+  conversion_reversed INTEGER, reversal_reason TEXT, reversed_at TEXT, assigned_to TEXT,
+  hold_reason TEXT, hold_previous_status TEXT, held_at TEXT
 );
 CREATE TABLE invoices (
   id TEXT PRIMARY KEY, invoice_number INTEGER, jobber_invoice_number INTEGER,

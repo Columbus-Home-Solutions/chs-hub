@@ -15,10 +15,10 @@ export const LIVE_JOBBER_STATUSES = [
 ] as const;
 
 /**
- * Returned by the jobs query so search and the Cancelled list can find them.
- * groupJobPipeline drops this status, so it never becomes a board column.
+ * Returned by the jobs query so search and the sidebar lists can find them.
+ * groupJobPipeline drops these statuses, so neither becomes a board column.
  */
-export const LIST_ONLY_JOBBER_STATUSES = ["cancelled"] as const;
+export const LIST_ONLY_JOBBER_STATUSES = ["cancelled", "on_hold"] as const;
 
 /** Imported jobs that must not email or text a client or sub. */
 export const QUIET_JOBBER_STATUSES = ["archived", "closed", "cancelled"] as const;
@@ -31,10 +31,11 @@ const VISIBLE_SQL = [...LIVE_JOBBER_STATUSES, ...LIST_ONLY_JOBBER_STATUSES]
   .join(", ");
 
 /**
- * Native jobs stay visible in every status. A jobber_import job shows on the
- * board while it is live work or complete. Cancelled imports stay in this
- * same predicate so header search and the Cancelled list can find them; the
- * board grouping omits cancelled, so it is not a column.
+ * Native jobs stay visible in every status, including on_hold. A jobber_import
+ * job shows on the board while it is live work or complete. Cancelled and
+ * on_hold imports stay in this same predicate so header search and the
+ * sidebar lists can find them; the board grouping omits both, so neither
+ * is a column.
  * Archived, late, closed, and requires_invoicing imports stay hidden.
  */
 export function boardJobWhere(alias = "j"): string {

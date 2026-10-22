@@ -26,7 +26,7 @@
 
 import type { Env } from "../env.js";
 import { boardJobWhere, jobberQuietSendBlock, skipImportedCompletionEffects } from "../lib/jobber-board.js";
-import { clientDisplayName, groupJobPipeline } from "../../shared/job-pipeline.js";
+import { clientDisplayName, groupJobPipeline, isHoldableJobStatus } from "../../shared/job-pipeline.js";
 import { nativeJobSourceWhere } from "../lib/native-jobs.js";
 import { guard } from "../middleware/guard.js";
 import { triggerJobStatusChanged } from "../lib/wc/triggers.js";
@@ -134,6 +134,9 @@ interface JobListRow {
   client_company_name: string | null;
   payments_received: number | null;
   cancelled_on: string | null;
+  hold_reason: string | null;
+  hold_previous_status: string | null;
+  held_at: string | null;
   billing_model: string | null;
   job_type: string | null;
   job_type_detail: string | null;
@@ -172,6 +175,7 @@ const JOB_SELECT = `
          j.start_date, j.target_end_date, j.actual_end_date, j.warranty_expiration,
          j.portal_token, j.portal_type, j.conversion_complete, j.estimate_id, j.payer_id,
          j.created_at, j.updated_at,
+         j.hold_reason, j.hold_previous_status, j.held_at,
          (SELECT COALESCE(SUM(pay.amount), 0) FROM payments pay WHERE pay.job_id = j.id) AS payments_received,
          (SELECT MAX(a2.created_at) FROM audit_logs a2
            WHERE a2.entity_type = 'job' AND a2.entity_id = j.id
@@ -212,6 +216,10 @@ function shapeJobCard(r: JobListRow) {
     ),
     payments_received: r.payments_received ?? 0,
     cancelled_on: r.cancelled_on,
+    hold_reason: r.hold_reason,
+    hold_previous_status: r.hold_previous_status,
+    held_at: r.held_at,
+    days_held: r.held_at ? daysSince(r.held_at) : null,
     billing_model: r.billing_model,
     job_type: r.job_type,
     job_type_detail: r.job_type_detail ?? null,
@@ -309,6 +317,7 @@ export async function handleJobPipeline(env: Env): Promise<Response> {
   const cards = rows.map(shapeJobCard);
   const grouped = groupJobPipeline(cards);
   const cancelled = cards.filter((card) => card.status === "cancelled");
+  const on_hold = cards.filter((card) => card.status === "on_hold");
 
   return json({
     as_of: new Date().toISOString(),
@@ -316,6 +325,7 @@ export async function handleJobPipeline(env: Env): Promise<Response> {
     counts: grouped.counts,
     pipeline: grouped.pipeline,
     cancelled,
+    on_hold,
   });
 }
 
@@ -768,6 +778,100 @@ export async function handleJobCloseEligibility(request: Request, env: Env, id: 
   return json(result);
 }
 
+// ─── POST /api/jobs/:id/hold and /release ────────────────────────────────────
+// Owner only. These write status directly. They do not call the transition
+// machine, so they do not stamp actual_end_date or fire completion side effects.
+
+export async function handleJobHold(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const body = await readJson(request);
+  if (!body) return err(400, "bad_request", "Body must be JSON");
+  const reason = str(body.reason);
+  if (!reason) return err(400, "reason_required", "A reason is required.");
+
+  const job = await env.DB.prepare(
+    "SELECT id, status, actual_end_date FROM jobs WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ id: string; status: string; actual_end_date: string | null }>();
+  if (!job) return err(404, "not_found", "Job not found.");
+  if (job.status === "on_hold") return err(409, "already_on_hold", "This job is already on hold.");
+  if (!isHoldableJobStatus(job.status)) {
+    return err(400, "not_holdable", "This job can't be put on hold from its current status.");
+  }
+
+  const heldAt = new Date().toISOString();
+  const previous = job.status;
+  const res = await env.DB.prepare(
+    `UPDATE jobs
+        SET status = 'on_hold',
+            hold_previous_status = ?,
+            hold_reason = ?,
+            held_at = ?,
+            updated_at = ?
+      WHERE id = ? AND status = ?`,
+  )
+    .bind(previous, reason, heldAt, heldAt, id, previous)
+    .run();
+  if ((res.meta?.changes ?? 0) === 0) {
+    return err(409, "conflict", "The job status changed. Refresh and try again.");
+  }
+
+  await logAudit(env, user.email, "job_on_hold", "job", id, {
+    reason,
+    previous_status: previous,
+    held_at: heldAt,
+  });
+  return handleJobDetail(env, id);
+}
+
+export async function handleJobRelease(request: Request, env: Env, id: string): Promise<Response> {
+  const guarded = await guard(request, env, ["owner"]);
+  if (guarded instanceof Response) return guarded;
+  const { user } = guarded;
+
+  const job = await env.DB.prepare(
+    "SELECT id, status, hold_previous_status, hold_reason, actual_end_date FROM jobs WHERE id = ?",
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      status: string;
+      hold_previous_status: string | null;
+      hold_reason: string | null;
+      actual_end_date: string | null;
+    }>();
+  if (!job) return err(404, "not_found", "Job not found.");
+  if (job.status !== "on_hold") return err(409, "not_on_hold", "This job is not on hold.");
+  const restore = (job.hold_previous_status ?? "").trim();
+  if (!restore) return err(409, "missing_previous_status", "This hold has no status to restore.");
+
+  const now = new Date().toISOString();
+  const res = await env.DB.prepare(
+    `UPDATE jobs
+        SET status = ?,
+            hold_previous_status = NULL,
+            hold_reason = NULL,
+            held_at = NULL,
+            updated_at = ?
+      WHERE id = ? AND status = 'on_hold'`,
+  )
+    .bind(restore, now, id)
+    .run();
+  if ((res.meta?.changes ?? 0) === 0) {
+    return err(409, "conflict", "The job status changed. Refresh and try again.");
+  }
+
+  await logAudit(env, user.email, "job_released", "job", id, {
+    restored_status: restore,
+    previous_reason: job.hold_reason,
+  });
+  return handleJobDetail(env, id);
+}
+
 // ─── PUT /api/jobs/:id/status ─────────────────────────────────────────────────
 
 export async function handleJobStatus(request: Request, env: Env, id: string, ctx: ExecutionContext): Promise<Response> {
@@ -778,6 +882,9 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   const body = await readJson(request);
   if (!body) return err(400, "bad_request", "Body must be JSON");
   const target = str(body.status);
+  if (target === "on_hold") {
+    return err(400, "use_hold_endpoint", "Put a job on hold from the job page.");
+  }
   if (!target || !(target in STATUS_INDEX)) {
     return err(400, "bad_request", `status must be one of: ${JOB_STATUSES.join(", ")}`);
   }
@@ -790,6 +897,13 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   if (!job) return err(404, "not_found", "Job not found.");
 
   const from = job.status;
+  if (from === "on_hold") {
+    return err(
+      400,
+      "use_hold_endpoint",
+      "Release this job from the job page. That restores the status it had before the hold.",
+    );
+  }
   if (from === target) return err(400, "no_change", "Job is already in that status.");
 
   const fromIdx = STATUS_INDEX[from] ?? -1;

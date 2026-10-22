@@ -26,6 +26,23 @@ export const MOVABLE_JOB_STATUSES = [
   "closed",
 ] as const;
 
+/**
+ * Statuses that can move onto on_hold. Complete, closed, cancelled, and
+ * archived stay out. on_hold itself is not in this list.
+ */
+export const HOLDABLE_JOB_STATUSES = [
+  "deposit_paid",
+  "scheduled",
+  "in_progress",
+  "punch_list",
+  "action_required",
+  "unscheduled",
+] as const;
+
+export function isHoldableJobStatus(status: string | null | undefined): boolean {
+  return (HOLDABLE_JOB_STATUSES as readonly string[]).includes((status ?? "").trim());
+}
+
 export function groupJobPipeline<T extends { status?: string | null }>(
   cards: T[],
 ): {

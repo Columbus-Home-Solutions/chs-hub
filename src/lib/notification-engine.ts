@@ -30,6 +30,7 @@
  */
 
 import type { Env } from "../env.js";
+import { isCustomerAutomationEvent, jobIsOnHold } from "./job-hold.js";
 import { centralClockToUtc, centralParts } from "./central-send-window.js";
 import { dayRateConsentAllowsSend } from "./day-rate-notify.js";
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "./twilio.js";
@@ -164,6 +165,11 @@ export interface TriggerOptions {
    * inside processNotifications (the same cron drain sends those rows).
    */
   skipImmediate?: boolean;
+  /**
+   * Tony triggered this send from a button. Customer automations stay
+   * suppressed on a held job; a manual send still goes out.
+   */
+  manual?: boolean;
 }
 
 /**
@@ -180,6 +186,13 @@ export async function triggerNotification(
 ): Promise<TriggerResult> {
   const result: TriggerResult = { enqueued: 0, skipped: 0, reasons: [], enqueuedIds: [] };
   try {
+    if (!opts?.manual && isCustomerAutomationEvent(event) && ctx.jobId) {
+      if (await jobIsOnHold(env.DB, ctx.jobId)) {
+        result.skipped++;
+        result.reasons.push("job_on_hold");
+        return result;
+      }
+    }
     const { results } = await env.DB.prepare(
       "SELECT * FROM notification_templates WHERE trigger_event = ? AND is_active = 1",
     )
@@ -1671,7 +1684,7 @@ export async function triggerInvoiceSent(
       jobId: inv.job_id,
       instanceKey: `sent:${invoiceId}`,
       merge,
-    });
+    }, { manual: true });
   } catch (err) {
     console.error("[notify] triggerInvoiceSent failed:", (err as Error).message);
   }

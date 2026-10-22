@@ -47,7 +47,7 @@ CREATE TABLE users (
   role TEXT, is_active INTEGER, business_phone TEXT
 );
 CREATE TABLE clients (
-  id TEXT PRIMARY KEY, name TEXT, first_name TEXT, last_name TEXT,
+  id TEXT PRIMARY KEY, name TEXT, first_name TEXT, last_name TEXT, company_name TEXT,
   phone TEXT, email TEXT, is_test INTEGER DEFAULT 0
 );
 CREATE TABLE jobs (
@@ -88,7 +88,7 @@ CREATE TABLE job_documents (
 );
 CREATE TABLE tasks (
   id TEXT PRIMARY KEY, job_id TEXT, task_group TEXT, task_group_order INTEGER, title TEXT,
-  status TEXT, sort_order INTEGER, created_at TEXT
+  status TEXT, sort_order INTEGER, is_punch_list INTEGER DEFAULT 0, created_at TEXT
 );
 CREATE TABLE billing_schedule (
   id TEXT PRIMARY KEY, job_id TEXT, billing_model TEXT, sequence INTEGER, label TEXT,

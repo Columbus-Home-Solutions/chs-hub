@@ -14,7 +14,9 @@ import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { buildCompletionPackageData, renderCompletionPackageHtml } from "../lib/completion-package.js";
 import { notifySignatureNeeded, triggerNotification } from "../lib/notification-engine.js";
-import { formatDate, formatDatePlusOneYear } from "../lib/document-generator.js";
+import { formatDate, formatDatePlusFiveYears } from "../lib/document-generator.js";
+import { warrantyExpirationDate } from "../lib/invoicing.js";
+import { completionPackageUrl, ensureJobPortalToken } from "../lib/job-portal-token.js";
 import { sendImmediateReviewRequest } from "../lib/review-followups.js";
 import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 import {
@@ -412,12 +414,11 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
     }>();
 
   const origin = (env.APP_PUBLIC_ORIGIN ?? "https://client.homesolutionsar.com").replace(/\/$/, "");
-  const portalUrl = job?.portal_token ? `${origin}/portal/${job.portal_token}/completion-package` : `${origin}/portal`;
+  const portalToken = await ensureJobPortalToken(env.DB, jobId, job?.portal_token);
+  const portalUrl = completionPackageUrl(origin, portalToken);
   const completionRaw = job?.actual_end_date ?? job?.target_end_date ?? null;
-  const warrantyExpiry =
-    job?.warranty_expiration != null
-      ? formatDate(job.warranty_expiration)
-      : formatDatePlusOneYear(completionRaw);
+  const expiryDate = (job?.warranty_expiration ?? "").trim().slice(0, 10) || warrantyExpirationDate(completionRaw);
+  const warrantyExpiry = formatDate(expiryDate) || formatDatePlusFiveYears(completionRaw);
   const googleReviewLink =
     (await settingValue(env, "google_review_link")) ||
     (await settingValue(env, "google_review_url")) ||
@@ -452,9 +453,13 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
 
   const sentAt = new Date().toISOString();
   await env.DB.prepare(
-    `UPDATE jobs SET completion_package_sent_at = ?, updated_at = ? WHERE id = ?`,
+    `UPDATE jobs
+        SET completion_package_sent_at = ?,
+            warranty_expiration = COALESCE(NULLIF(TRIM(warranty_expiration), ''), ?),
+            updated_at = ?
+      WHERE id = ?`,
   )
-    .bind(sentAt.slice(0, 19).replace("T", " "), sentAt, jobId)
+    .bind(sentAt.slice(0, 19).replace("T", " "), expiryDate, sentAt, jobId)
     .run();
 
   // Fire the Google review request immediately after stamping sent_at.
@@ -470,7 +475,7 @@ export async function handleCompletionPackageSend(request: Request, env: Env, jo
   const trigger = await triggerNotification(env, "completion_package_sent", {
     jobId,
     clientId: job?.client_id ?? null,
-    linkPath: job?.portal_token ? `/portal/${job.portal_token}/completion-package` : null,
+    linkPath: `/portal/${portalToken}/completion-package`,
     instanceKey: jobId,
     merge: {
       portal_url: portalUrl,

@@ -1,6 +1,9 @@
 import type { Env } from "../env.js";
 
-/** Imported jobs that belong on the jobs list, pipeline, and active dashboard. */
+/**
+ * Imported jobs that belong on the jobs board.
+ * `complete` is the Complete column. Cancelled is not a column.
+ */
 export const LIVE_JOBBER_STATUSES = [
   "in_progress",
   "unscheduled",
@@ -8,7 +11,14 @@ export const LIVE_JOBBER_STATUSES = [
   "punch_list",
   "deposit_paid",
   "action_required",
+  "complete",
 ] as const;
+
+/**
+ * Returned by the jobs query so search and the Cancelled list can find them.
+ * groupJobPipeline drops this status, so it never becomes a board column.
+ */
+export const LIST_ONLY_JOBBER_STATUSES = ["cancelled"] as const;
 
 /** Imported jobs that must not email or text a client or sub. */
 export const QUIET_JOBBER_STATUSES = ["archived", "closed", "cancelled"] as const;
@@ -16,16 +26,29 @@ export const QUIET_JOBBER_STATUSES = ["archived", "closed", "cancelled"] as cons
 export const JOBBER_QUIET_SEND_MESSAGE =
   "Send skipped. This Jobber job is archived, closed, or cancelled, so no client or sub message was sent.";
 
-const LIVE_SQL = LIVE_JOBBER_STATUSES.map((s) => `'${s}'`).join(", ");
+const VISIBLE_SQL = [...LIVE_JOBBER_STATUSES, ...LIST_ONLY_JOBBER_STATUSES]
+  .map((s) => `'${s}'`)
+  .join(", ");
 
 /**
- * Native jobs stay visible in every status. Jobber history shows only while
- * the job is still live work. Late, archived, cancelled, closed, and complete
- * imports stay off the board.
+ * Native jobs stay visible in every status. A jobber_import job shows on the
+ * board while it is live work or complete. Cancelled imports stay in this
+ * same predicate so header search and the Cancelled list can find them; the
+ * board grouping omits cancelled, so it is not a column.
+ * Archived, late, closed, and requires_invoicing imports stay hidden.
  */
 export function boardJobWhere(alias = "j"): string {
   const p = alias ? `${alias}.` : "";
-  return `(${p}source IN ('estimate', 'quick_job') OR (${p}data_source = 'jobber_import' AND ${p}status IN (${LIVE_SQL})))`;
+  return `(${p}source IN ('estimate', 'quick_job') OR (${p}data_source = 'jobber_import' AND ${p}status IN (${VISIBLE_SQL})))`;
+}
+
+/**
+ * Automatic Complete side effects (review, warranty, completion package,
+ * social draft, lien waiver, WC, customer text or email) stay off for every
+ * Jobber import. Manual sends are unchanged.
+ */
+export function skipImportedCompletionEffects(source: string | null | undefined): boolean {
+  return (source ?? "").trim() === "jobber_import";
 }
 
 export function isJobberImportQuiet(row: {

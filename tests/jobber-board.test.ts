@@ -6,6 +6,7 @@ import {
   JOBBER_QUIET_SEND_MESSAGE,
   boardJobWhere,
   isJobberImportQuiet,
+  skipImportedCompletionEffects,
 } from "../src/lib/jobber-board.js";
 import {
   BOARD_PIPELINE_STATUSES,
@@ -21,12 +22,14 @@ describe("jobber board visibility", () => {
     expect(sql).toContain("j.source IN ('estimate', 'quick_job')");
     expect(sql).toContain("j.data_source = 'jobber_import'");
     for (const status of LIVE_JOBBER_STATUSES) expect(sql).toContain(`'${status}'`);
-    for (const hidden of ["archived", "late", "cancelled", "closed", "complete"]) {
+    expect(sql).toContain("'cancelled'");
+    for (const hidden of ["archived", "late", "closed", "requires_invoicing"]) {
       expect(sql).not.toContain(`'${hidden}'`);
     }
+    expect(BOARD_PIPELINE_STATUSES).not.toContain("cancelled");
   });
 
-  it("lists the six live jobs and hides the rest", () => {
+  it("lists live jobs including complete, and keeps cancelled off the board", () => {
     expect([...LIVE_JOBBER_STATUSES]).toEqual([
       "in_progress",
       "unscheduled",
@@ -34,6 +37,7 @@ describe("jobber board visibility", () => {
       "punch_list",
       "deposit_paid",
       "action_required",
+      "complete",
     ]);
   });
 
@@ -45,16 +49,21 @@ describe("jobber board visibility", () => {
       { id: "alicia", status: "in_progress" },
       { id: "abdul", status: "unscheduled" },
       { id: "jon", status: "action_required" },
+      { id: "roof", status: "complete" },
+      { id: "clayton", status: "cancelled" },
       { id: "archived", status: "archived" },
       { id: "late", status: "late" },
     ]);
     expect(grouped.counts.in_progress).toBe(1);
     expect(grouped.counts.unscheduled).toBe(1);
     expect(grouped.counts.action_required).toBe(1);
+    expect(grouped.counts.complete).toBe(1);
     expect(grouped.pipeline.unscheduled.map((job) => job.id)).toEqual(["abdul"]);
     expect(grouped.pipeline.action_required.map((job) => job.id)).toEqual(["jon"]);
+    expect(grouped.pipeline.complete.map((job) => job.id)).toEqual(["roof"]);
     const shown = BOARD_PIPELINE_STATUSES.flatMap((status) => grouped.pipeline[status]);
-    expect(shown.map((job) => job.id)).toEqual(["jon", "abdul", "alicia"]);
+    expect(shown.map((job) => job.id)).toEqual(["jon", "abdul", "alicia", "roof"]);
+    expect(shown.map((job) => job.id)).not.toContain("clayton");
   });
 
   it("builds the list name from the client joined on jobs.client_id", () => {
@@ -63,10 +72,22 @@ describe("jobber board visibility", () => {
     expect(clientDisplayName("Connie Schenk", "Connie", "Schenk")).toBe("Connie Schenk");
     expect(clientDisplayName(null, "Guardian", null)).toBe("Guardian");
     expect(clientDisplayName(null, null, null)).toBeNull();
+    expect(clientDisplayName(null, null, null, "Acme Roofing")).toBe("Acme Roofing");
     const jobsApi = read("../src/routes/jobs-api.ts");
     expect(jobsApi).toContain("LEFT JOIN clients c ON c.id = j.client_id");
     expect(jobsApi).toContain("c.first_name AS client_first_name");
-    expect(jobsApi).toContain("clientDisplayName(r.client_name, r.client_first_name, r.client_last_name)");
+    expect(jobsApi).toContain("c.company_name AS client_company_name");
+    expect(jobsApi).toContain("r.client_company_name");
+  });
+});
+
+describe("imported completion stays quiet", () => {
+  it("skips automatic complete effects for jobber_import only", () => {
+    expect(skipImportedCompletionEffects("jobber_import")).toBe(true);
+    expect(skipImportedCompletionEffects(" estimate ")).toBe(false);
+    expect(skipImportedCompletionEffects("estimate")).toBe(false);
+    expect(skipImportedCompletionEffects("quick_job")).toBe(false);
+    expect(skipImportedCompletionEffects(null)).toBe(false);
   });
 });
 

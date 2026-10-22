@@ -363,12 +363,22 @@ function applyImport(
       `Created by Jobber historical import (${why}).`,
     ].filter(Boolean).join("\n");
     db.prepare(
-      `INSERT INTO clients (id, first_name, last_name, phone, email, lead_source, notes, data_source, is_test, sms_opt_out, synced_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'jobber_import', 0, 0, datetime('now'), datetime('now'), datetime('now'))`,
-    ).run(id, first, last, blank(phone) ? null : phone, blank(email) ? null : email, mapped, extra || null);
+      `INSERT INTO clients (id, name, first_name, last_name, phone, email, lead_source, notes, data_source, is_test, sms_opt_out, synced_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'jobber_import', 0, 0, datetime('now'), datetime('now'), datetime('now'))`,
+    ).run(
+      id,
+      [first, last].filter(Boolean).join(" ") || null,
+      first,
+      last,
+      blank(phone) ? null : phone,
+      blank(email) ? null : email,
+      mapped,
+      extra || null,
+    );
     stats.inserts++;
     const row: ClientRow = {
-      id, first_name: first, last_name: last, company_name: null, name: null,
+      id, first_name: first, last_name: last, company_name: null,
+      name: [first, last].filter(Boolean).join(" ") || null,
       phone: blank(phone) ? null : phone, email: blank(email) ? null : email, notes: extra || null,
       data_source: "jobber_import", display: [first, last].filter(Boolean).join(" "),
       names: [normName(display), normName([first, last].filter(Boolean).join(" "))].filter(Boolean),

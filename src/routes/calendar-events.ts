@@ -11,7 +11,7 @@ import {
   datePart,
   timePart,
 } from "../lib/calendar-colors.js";
-import { boardJobWhere } from "../lib/jobber-board.js";
+import { scheduledImportVisibleWhere } from "../lib/native-jobs.js";
 import { ACTIVE_SCHEDULE_JOB_STATUSES, computeJobRag } from "../lib/schedule-rag.js";
 import { normalizeScheduleEntryType } from "../lib/schedule-entry-type.js";
 
@@ -437,7 +437,7 @@ async function assembleCalendarEvents(env: Env, url: URL): Promise<Response> {
                 u.calendar_color AS assigned_color
            FROM jobs j
            LEFT JOIN users u ON u.id = j.assigned_to
-          WHERE ${boardJobWhere("j")}
+          WHERE ${scheduledImportVisibleWhere("j")}
             AND j.status IN (${statusList})
           ORDER BY j.start_date ASC, j.job_number ASC`,
       ).all<{

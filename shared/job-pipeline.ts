@@ -56,9 +56,12 @@ export function clientDisplayName(
   name: string | null | undefined,
   firstName: string | null | undefined,
   lastName: string | null | undefined,
+  companyName?: string | null,
 ): string | null {
   const stored = (name ?? "").trim();
   if (stored) return stored;
   const joined = [firstName, lastName].map((part) => (part ?? "").trim()).filter(Boolean).join(" ");
-  return joined || null;
+  if (joined) return joined;
+  const company = (companyName ?? "").trim();
+  return company || null;
 }

@@ -687,6 +687,8 @@ export interface JobCard {
   days_in_status: number;
   photo_count: number;
   overdue: boolean;
+  payments_received?: number | null;
+  cancelled_on?: string | null;
   created_at: string | null;
   updated_at: string | null;
   assigned_to?: string | null;
@@ -700,6 +702,8 @@ export interface JobPipelineResponse {
   statuses: JobStatus[];
   counts: Record<JobStatus, number>;
   pipeline: Record<JobStatus, JobCard[]>;
+  /** status=cancelled. Not a board column. */
+  cancelled?: JobCard[];
 }
 
 export interface Task {

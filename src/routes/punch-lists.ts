@@ -32,7 +32,7 @@ import {
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "../lib/twilio.js";
 import { streamObject, putImage } from "../lib/r2.js";
 import { resolveSubAccessToken, subAccessLink } from "../lib/sub-access-tokens.js";
-import { jobberQuietSendBlock } from "../lib/jobber-board.js";
+import { jobberQuietSendBlock, skipImportedCompletionEffects } from "../lib/jobber-board.js";
 import { queueDayRateNotice } from "../lib/day-rate-notify.js";
 
 const MAX_COMPLETION_PHOTO_BYTES = 10 * 1024 * 1024;
@@ -220,10 +220,10 @@ async function maybeCompleteJobAfterPunchListsClosed(
     .first<{ n: number }>();
   if (openLists && openLists.n > 0) return false;
 
-  const job = await env.DB.prepare("SELECT status FROM jobs WHERE id = ?")
+  const job = await env.DB.prepare("SELECT status, source FROM jobs WHERE id = ?")
     .bind(jobId)
-    .first<{ status: string }>();
-  if (job?.status !== "punch_list") return false;
+    .first<{ status: string; source: string | null }>();
+  if (!job || job.status !== "punch_list") return false;
 
   const today = new Date().toISOString().slice(0, 10);
   await env.DB.prepare(
@@ -247,6 +247,8 @@ async function maybeCompleteJobAfterPunchListsClosed(
       JSON.stringify({ from: "punch_list", to: "complete", via: "punch_list_close" }),
     )
     .run();
+
+  if (skipImportedCompletionEffects(job.source)) return true;
 
   // Same completion-package triggers as handleJobStatus → complete (was previously skipped).
   const fire = async () => {

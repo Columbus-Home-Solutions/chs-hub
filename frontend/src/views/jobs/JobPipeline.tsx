@@ -71,6 +71,7 @@ const STATUS_LABELS: Record<string, string> = {
   punch_list: "Punch List",
   complete: "Needs Reconciliation",
   closed: "Closed",
+  cancelled: "Cancelled",
 };
 
 // A drop is allowed if it moves strictly forward, or matches one of the two
@@ -103,7 +104,7 @@ export function JobPipeline(_props: RoutableProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<JobStatus | null>(null);
   const [activeStage, setActiveStage] = useState<JobStatus>("deposit_paid");
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "">("");
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "cancelled" | "">("");
   const [listSearch, setListSearch] = useState("");
 
   // Re-run whenever the search string changes so clicking different sidebar
@@ -112,7 +113,9 @@ export function JobPipeline(_props: RoutableProps) {
     const params = new URLSearchParams(currentSearch);
     // Accept both ?stage= (from dashboard pipeline taps) and ?status= (sidebar).
     const s = params.get("stage") ?? params.get("status");
-    if (s && JOB_STAGES.some((st) => st.key === s)) {
+    if (s === "cancelled") {
+      setStatusFilter("cancelled");
+    } else if (s && JOB_STAGES.some((st) => st.key === s)) {
       setActiveStage(s as JobStatus);
       setStatusFilter(s as JobStatus);
     } else {
@@ -125,8 +128,14 @@ export function JobPipeline(_props: RoutableProps) {
     return JOB_STAGES.flatMap((s) => data.pipeline[s.key] ?? []);
   }, [data]);
 
+  const cancelledView = statusFilter === "cancelled";
+
   const listJobs = useMemo(() => {
-    let jobs = statusFilter ? allJobs.filter((j) => j.status === statusFilter) : allJobs;
+    let jobs = cancelledView
+      ? (data?.cancelled ?? [])
+      : statusFilter
+        ? allJobs.filter((j) => j.status === statusFilter)
+        : allJobs;
     const q = listSearch.trim().toLowerCase();
     if (q) {
       jobs = jobs.filter((j) => {
@@ -146,7 +155,7 @@ export function JobPipeline(_props: RoutableProps) {
       });
     }
     return jobs;
-  }, [allJobs, statusFilter, listSearch]);
+  }, [allJobs, data, cancelledView, statusFilter, listSearch]);
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(listJobs, "job_number", "desc");
 
@@ -181,11 +190,15 @@ export function JobPipeline(_props: RoutableProps) {
         <div>
           <h1 class="view-title">Jobs</h1>
           <p class="view-subtitle">
-            {data ? `${total(data)} active jobs in the pipeline` : "Job pipeline"}
+            {cancelledView
+              ? `${sorted.length} cancelled job${sorted.length === 1 ? "" : "s"}`
+              : data
+                ? `${total(data)} active jobs in the pipeline`
+                : "Job pipeline"}
           </p>
         </div>
         <div class="view-header__right flex gap-sm items-center">
-          {viewMode === "list" && (
+          {(viewMode === "list" || cancelledView) && (
             <input
               class="form-input"
               type="search"
@@ -224,7 +237,64 @@ export function JobPipeline(_props: RoutableProps) {
         </div>
       )}
 
-      {!loading && !error && data && viewMode === "list" && (
+      {!loading && !error && data && cancelledView && (
+        <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 240px)" }}>
+          <div class="job-filter-badge">
+            <span class="job-filter-badge__label">Showing: Cancelled</span>
+            <button
+              class="job-filter-badge__clear"
+              onClick={() => {
+                setStatusFilter("");
+                route("/app/jobs");
+              }}
+              aria-label="Clear status filter"
+            >
+              ✕
+            </button>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Job #</th>
+                  <th>Title</th>
+                  <th>Client</th>
+                  <th>Cancelled</th>
+                  <th>Payments received</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.length === 0 && (
+                  <tr>
+                    <td colSpan={6} class="text--muted">
+                      {listSearch.trim() ? "No jobs match your search." : "No cancelled jobs."}
+                    </td>
+                  </tr>
+                )}
+                {sorted.map((j) => (
+                  <tr key={j.id}>
+                    <td>
+                      <button type="button" class="link-btn" onClick={() => go(`/jobs/${j.id}`)}>
+                        {j.job_display ?? "JOB"}
+                      </button>
+                    </td>
+                    <td>{truncate(j.title)}</td>
+                    <td>{j.client_name ?? "—"}</td>
+                    <td>{j.cancelled_on ? formatDate(j.cancelled_on) : "—"}</td>
+                    <td>{formatCurrency(j.payments_received ?? 0)}</td>
+                    <td>
+                      <Button size="sm" variant="tertiary" onClick={() => go(`/jobs/${j.id}`)}>View</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!loading && !error && data && !cancelledView && viewMode === "list" && (
         <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 240px)" }}>
         {statusFilter && (
           <div class="job-filter-badge">
@@ -291,7 +361,7 @@ export function JobPipeline(_props: RoutableProps) {
         </div>
       )}
 
-      {viewMode === "health" && (
+      {!cancelledView && viewMode === "health" && (
         <>
           {health.loading && <Spinner center />}
           {health.error && <div class="empty-state">Couldn't load job health: {health.error}</div>}
@@ -350,7 +420,7 @@ export function JobPipeline(_props: RoutableProps) {
         </>
       )}
 
-      {!loading && !error && data && viewMode === "kanban" && (
+      {!loading && !error && data && !cancelledView && viewMode === "kanban" && (
         <>
           {statusFilter && (
             <div class="job-filter-badge">

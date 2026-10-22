@@ -25,7 +25,7 @@
  */
 
 import type { Env } from "../env.js";
-import { boardJobWhere, jobberQuietSendBlock } from "../lib/jobber-board.js";
+import { boardJobWhere, jobberQuietSendBlock, skipImportedCompletionEffects } from "../lib/jobber-board.js";
 import { clientDisplayName, groupJobPipeline } from "../../shared/job-pipeline.js";
 import { nativeJobSourceWhere } from "../lib/native-jobs.js";
 import { guard } from "../middleware/guard.js";
@@ -131,6 +131,9 @@ interface JobListRow {
   client_name: string | null;
   client_first_name: string | null;
   client_last_name: string | null;
+  client_company_name: string | null;
+  payments_received: number | null;
+  cancelled_on: string | null;
   billing_model: string | null;
   job_type: string | null;
   job_type_detail: string | null;
@@ -162,12 +165,18 @@ const JOB_LIST_WHERE = `${boardJobWhere("j")} AND (${NON_TEST_CLIENT})`;
 const JOB_SELECT = `
   SELECT j.id, j.job_number, j.title, j.status, j.client_id,
          c.name AS client_name, c.first_name AS client_first_name, c.last_name AS client_last_name,
+         c.company_name AS client_company_name,
          j.billing_model, j.job_type, j.job_type_detail, j.lead_source, j.source,
          j.property_address, j.property_city, j.property_state, j.property_zip,
          j.contract_total, j.deposit_amount, j.deposit_paid,
          j.start_date, j.target_end_date, j.actual_end_date, j.warranty_expiration,
          j.portal_token, j.portal_type, j.conversion_complete, j.estimate_id, j.payer_id,
          j.created_at, j.updated_at,
+         (SELECT COALESCE(SUM(pay.amount), 0) FROM payments pay WHERE pay.job_id = j.id) AS payments_received,
+         (SELECT MAX(a2.created_at) FROM audit_logs a2
+           WHERE a2.entity_type = 'job' AND a2.entity_id = j.id
+             AND a2.action = 'job_status_changed'
+             AND a2.details LIKE '%"to":"cancelled"%') AS cancelled_on,
          COALESCE((
            SELECT MAX(a.created_at) FROM audit_logs a
            WHERE a.entity_type = 'job' AND a.entity_id = j.id
@@ -195,7 +204,14 @@ function shapeJobCard(r: JobListRow) {
     title: r.title,
     status: r.status,
     client_id: r.client_id,
-    client_name: clientDisplayName(r.client_name, r.client_first_name, r.client_last_name),
+    client_name: clientDisplayName(
+      r.client_name,
+      r.client_first_name,
+      r.client_last_name,
+      r.client_company_name,
+    ),
+    payments_received: r.payments_received ?? 0,
+    cancelled_on: r.cancelled_on,
     billing_model: r.billing_model,
     job_type: r.job_type,
     job_type_detail: r.job_type_detail ?? null,
@@ -231,11 +247,33 @@ function shapeJobCard(r: JobListRow) {
 
 // ─── GET /api/jobs ──────────────────────────────────────────────────────────
 
+function jobMatchesQuery(row: JobListRow, q: string): boolean {
+  const firstLast = [row.client_first_name, row.client_last_name].filter(Boolean).join(" ");
+  const hay = [
+    row.job_number,
+    row.title,
+    row.client_name,
+    row.client_first_name,
+    row.client_last_name,
+    firstLast,
+    row.client_company_name,
+    row.property_address,
+    row.property_city,
+    row.property_state,
+    row.property_zip,
+  ]
+    .filter((part) => part != null && String(part).trim() !== "")
+    .join(" ")
+    .toLowerCase();
+  return hay.includes(q);
+}
+
 export async function handleJobList(env: Env, url: URL): Promise<Response> {
   const status = url.searchParams.get("status");
   const jobType = url.searchParams.get("job_type");
   const clientId = url.searchParams.get("client_id");
   const billingModel = url.searchParams.get("billing_model");
+  const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
 
   const where: string[] = [];
   const binds: unknown[] = [];
@@ -258,8 +296,9 @@ export async function handleJobList(env: Env, url: URL): Promise<Response> {
 
   const sql = `${JOB_SELECT}${where.length ? " AND " + where.join(" AND ") : ""} ORDER BY j.created_at DESC`;
   const rows = (await env.DB.prepare(sql).bind(...binds).all<JobListRow>()).results ?? [];
+  const matched = q ? rows.filter((row) => jobMatchesQuery(row, q)).slice(0, 25) : rows;
 
-  return json({ as_of: new Date().toISOString(), total: rows.length, jobs: rows.map(shapeJobCard) });
+  return json({ as_of: new Date().toISOString(), total: matched.length, jobs: matched.map(shapeJobCard) });
 }
 
 // ─── GET /api/jobs/pipeline ───────────────────────────────────────────────────
@@ -269,12 +308,14 @@ export async function handleJobPipeline(env: Env): Promise<Response> {
     .results ?? [];
   const cards = rows.map(shapeJobCard);
   const grouped = groupJobPipeline(cards);
+  const cancelled = cards.filter((card) => card.status === "cancelled");
 
   return json({
     as_of: new Date().toISOString(),
     statuses: grouped.statuses,
     counts: grouped.counts,
     pipeline: grouped.pipeline,
+    cancelled,
   });
 }
 
@@ -742,10 +783,10 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   }
 
   const job = await env.DB.prepare(
-    "SELECT id, status FROM jobs WHERE id = ?",
+    "SELECT id, status, source FROM jobs WHERE id = ?",
   )
     .bind(id)
-    .first<{ id: string; status: string }>();
+    .first<{ id: string; status: string; source: string | null }>();
   if (!job) return err(404, "not_found", "Job not found.");
 
   const from = job.status;
@@ -815,6 +856,14 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   }
 
   await logAudit(env, user.email, "job_status_changed", "job", id, { from, to: target });
+
+  // One check. Imported jobs still change status, stamp actual_end_date, and audit.
+  // Review, warranty, completion package, social, lien waiver, WC, and customer
+  // messages stay off. A person can still send the package or a review by hand.
+  if (target === "complete" && skipImportedCompletionEffects(job.source)) {
+    return handleJobDetail(env, id);
+  }
+
   triggerJobStatusChanged(env, id, from, target);
   await queueJobCalendarMirror(env, id);
 

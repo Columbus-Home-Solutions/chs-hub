@@ -26,7 +26,7 @@ __pycache__/
 venv/
 
 # D1 backups / rollback safety nets (kept locally, never committed)
-backup_pre_sprint1*.sql
+backup_*.sql
 
 # OS
 .DS_Store

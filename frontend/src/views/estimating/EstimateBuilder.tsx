@@ -19,14 +19,19 @@ import {
   formatStatus,
 } from "../../lib/format";
 import {
+  applyTypedDeposit,
   buildDefaultMilestones,
-  defaultDepositAmount,
+  clearDepositPatch,
+  depositEnabledToast,
   depositFromSchedule,
+  depositZeroNote,
   effectiveDeposit,
+  enableDepositPatch,
   isCostPlusSchedule,
   isScheduleUnconfigured,
   milestoneAmount,
   milestonePercentage,
+  requireDepositChecked,
   shouldAutoPopulateSchedule,
   isPerLineItemBilling,
 } from "../../lib/estimate-milestones";
@@ -1053,16 +1058,14 @@ function PerLineItemDeposit({
   estimate: Estimate;
   patchHeader: (body: Record<string, unknown>, msg?: string) => Promise<void>;
 }) {
-  const requireDeposit = (estimate.deposit_amount ?? 0) > 0;
-  const defaultAmount = defaultDepositAmount(estimate.total, estimate.billing_model);
-  const [amountStr, setAmountStr] = useState(
-    String((estimate.deposit_amount ?? 0) > 0 ? estimate.deposit_amount : defaultAmount),
-  );
+  const [pending, setPending] = useState<ReturnType<typeof enableDepositPatch> | null>(null);
+  const displayed = pending ? { ...estimate, ...pending } : estimate;
+  const requireDeposit = requireDepositChecked(displayed);
+  const zeroNote = depositZeroNote(displayed);
+  const [amountStr, setAmountStr] = useState(String(estimate.deposit_amount ?? 0));
 
   useEffect(() => {
-    if ((estimate.deposit_amount ?? 0) > 0) {
-      setAmountStr(String(estimate.deposit_amount));
-    }
+    setAmountStr(String(estimate.deposit_amount ?? 0));
   }, [estimate.deposit_amount, estimate.id]);
 
   const persistAmount = () => {
@@ -1071,8 +1074,29 @@ function PerLineItemDeposit({
     if (Number.isNaN(parsed) || parsed < 0) return;
     const rounded = Math.round(parsed * 100) / 100;
     if (Math.abs(rounded - (estimate.deposit_amount ?? 0)) > 0.009) {
-      void patchHeader({ deposit_amount: rounded, deposit_type: "fixed" }, "Deposit updated");
+      // Fixed dollars. Leaves deposit_percentage in place, so a typed $0 stays
+      // checked. Price changes stop updating this amount once the type is fixed.
+      const next = applyTypedDeposit(
+        {
+          deposit_amount: estimate.deposit_amount,
+          deposit_type: estimate.deposit_type,
+          deposit_percentage: estimate.deposit_percentage,
+        },
+        rounded,
+      );
+      void patchHeader(
+        { deposit_amount: next.deposit_amount, deposit_type: next.deposit_type },
+        "Deposit updated",
+      );
     }
+  };
+
+  const toggleDeposit = (checked: boolean) => {
+    const next = checked ? enableDepositPatch(estimate.total) : clearDepositPatch();
+    setPending(next);
+    if (checked) setAmountStr(String(next.deposit_amount));
+    const message = checked ? depositEnabledToast(estimate.total) : "Deposit removed";
+    void patchHeader(next, message).finally(() => setPending(null));
   };
 
   return (
@@ -1081,28 +1105,7 @@ function PerLineItemDeposit({
         <input
           type="checkbox"
           checked={requireDeposit}
-          onChange={(ev) => {
-            const checked = (ev.target as HTMLInputElement).checked;
-            if (checked) {
-              void patchHeader(
-                {
-                  deposit_amount: defaultAmount,
-                  deposit_type: "percentage",
-                  deposit_percentage: 33,
-                },
-                "Deposit enabled",
-              );
-            } else {
-              void patchHeader(
-                {
-                  deposit_amount: 0,
-                  deposit_type: "fixed",
-                  deposit_percentage: null,
-                },
-                "Deposit removed",
-              );
-            }
-          }}
+          onChange={(ev) => toggleDeposit((ev.target as HTMLInputElement).checked)}
         />
         Require deposit
       </label>
@@ -1117,6 +1120,11 @@ function PerLineItemDeposit({
             onBlur={persistAmount}
           />
         </FormField>
+      )}
+      {zeroNote && (
+        <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginTop: "var(--space-sm)" }}>
+          {zeroNote}
+        </p>
       )}
       <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginTop: "var(--space-sm)" }}>
         Single upfront amount due at signing, applied toward the first invoice.

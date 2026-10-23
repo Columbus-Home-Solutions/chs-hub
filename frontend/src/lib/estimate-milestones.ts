@@ -39,6 +39,83 @@ export function isPerLineItemBilling(billingModel: string | null | undefined): b
   return billingModel === "per_line_item";
 }
 
+/** Standard default written when "Require deposit" is checked on Pay-As-Completed. */
+export const PER_LINE_ITEM_DEFAULT_DEPOSIT_PERCENT = 33;
+
+export type DepositFlagFields = {
+  deposit_amount: number | null;
+  deposit_type: string | null;
+  deposit_percentage: number | null;
+};
+
+function percentageIsSet(percentage: number | null | undefined): boolean {
+  return percentage != null && Number.isFinite(percentage);
+}
+
+/**
+ * Pay-As-Completed "Require deposit".
+ * Checked when a percentage is stored or the dollar amount is above $0.
+ * A $0 amount with a stored percentage stays checked.
+ */
+export function requireDepositChecked(row: {
+  deposit_amount?: number | null;
+  deposit_percentage?: number | null;
+}): boolean {
+  return percentageIsSet(row.deposit_percentage) || (row.deposit_amount ?? 0) > 0;
+}
+
+export function enableDepositPatch(total: number): DepositFlagFields {
+  return {
+    deposit_amount: defaultDepositAmount(total, "per_line_item"),
+    deposit_type: "percentage",
+    deposit_percentage: PER_LINE_ITEM_DEFAULT_DEPOSIT_PERCENT,
+  };
+}
+
+export function clearDepositPatch(): DepositFlagFields {
+  return {
+    deposit_amount: 0,
+    deposit_type: "fixed",
+    deposit_percentage: null,
+  };
+}
+
+/**
+ * A typed amount becomes a fixed dollar deposit and leaves `deposit_percentage`
+ * as it was. Typing $0 does not uncheck the box when a percentage is still set.
+ * Recalculation on later price changes only runs while `deposit_type` is
+ * "percentage", so a typed $0 stops tracking the percentage.
+ */
+export function applyTypedDeposit<T extends DepositFlagFields>(row: T, amount: number): T {
+  return { ...row, deposit_amount: amount, deposit_type: "fixed" };
+}
+
+export function depositEnabledToast(total: number): string {
+  if (defaultDepositAmount(total, "per_line_item") > 0) return "Deposit enabled";
+  return `Deposit enabled. It will be ${PER_LINE_ITEM_DEFAULT_DEPOSIT_PERCENT}% once line items are priced.`;
+}
+
+/**
+ * Shown under a checked $0 amount.
+ * Percentage deposits explain that the dollars fill in when lines are priced.
+ * A fixed $0 does not. Unchecked (no percentage, amount $0) shows nothing.
+ */
+export function depositZeroNote(row: {
+  deposit_amount?: number | null;
+  deposit_type?: string | null;
+  deposit_percentage?: number | null;
+}): string | null {
+  if ((row.deposit_amount ?? 0) > 0) return null;
+  if (!requireDepositChecked(row)) return null;
+  if (row.deposit_type === "percentage" && percentageIsSet(row.deposit_percentage)) {
+    const pct = row.deposit_percentage as number;
+    const label = String(Math.round(pct * 100) / 100);
+    return `Deposit will be ${label}% once line items are priced`;
+  }
+  if (row.deposit_type === "fixed") return "Deposit set to $0";
+  return null;
+}
+
 export function buildDefaultMilestones(estimate: Estimate): MilestoneDraft[] {
   if (isPerLineItemBilling(estimate.billing_model)) {
     return [];

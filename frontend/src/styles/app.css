@@ -1600,6 +1600,20 @@
   font-size: var(--text-sm);
   cursor: pointer;
 }
+.form-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.form-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--color-info);
+}
 
 /* Line item table rows (estimate builder) */
 .li-table-wrap {

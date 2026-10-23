@@ -38,6 +38,15 @@ export interface NavSection {
 
 // ─── Active-detection helpers ─────────────────────────────────────────────────
 
+/** Jobs sidebar items: dashboard bars use ?stage=, the sidebar uses ?status=. */
+function jobsQueryActive(status: string): NavChild["activeTest"] {
+  return (path, search) => {
+    if (path !== to("/jobs")) return false;
+    const q = new URLSearchParams(search);
+    return q.get("status") === status || q.get("stage") === status;
+  };
+}
+
 export function childActive(child: NavChild, path: string, search: string): boolean {
   if (child.external || child.placeholder) return false;
   if (child.activeTest) return child.activeTest(path, search);
@@ -121,52 +130,64 @@ export const SIDEBAR_NAV: NavSection[] = [
     // No navPath — label + chevron both toggle only
     children: [
       {
-        label: "All Jobs",
+        label: "Active",
         href: to("/jobs"),
-        activeTest: (p, s) =>
-          p === to("/jobs") && !new URLSearchParams(s).has("status"),
+        activeTest: (p, s) => {
+          if (p !== to("/jobs")) return false;
+          const q = new URLSearchParams(s);
+          return !q.has("status") && !q.has("stage");
+        },
       },
       {
         label: "Needs Scheduling",
         href: to("/jobs") + "?status=deposit_paid",
-        activeTest: (p, s) =>
-          p === to("/jobs") &&
-          new URLSearchParams(s).get("status") === "deposit_paid",
+        activeTest: jobsQueryActive("deposit_paid"),
       },
       {
         label: "Scheduled",
         href: to("/jobs") + "?status=scheduled",
-        activeTest: (p, s) =>
-          p === to("/jobs") &&
-          new URLSearchParams(s).get("status") === "scheduled",
+        activeTest: jobsQueryActive("scheduled"),
       },
       {
         label: "In Progress",
         href: to("/jobs") + "?status=in_progress",
-        activeTest: (p, s) =>
-          p === to("/jobs") &&
-          new URLSearchParams(s).get("status") === "in_progress",
+        activeTest: jobsQueryActive("in_progress"),
       },
       {
         label: "Punch List",
         href: to("/jobs") + "?status=punch_list",
-        activeTest: (p, s) =>
-          p === to("/jobs") &&
-          new URLSearchParams(s).get("status") === "punch_list",
+        activeTest: jobsQueryActive("punch_list"),
       },
       {
-        label: "Needs Reconciliation",
+        label: "Completed",
         href: to("/jobs") + "?status=complete",
-        activeTest: (p, s) =>
-          p === to("/jobs") &&
-          new URLSearchParams(s).get("status") === "complete",
+        activeTest: jobsQueryActive("complete"),
       },
       {
         label: "Closed",
         href: to("/jobs") + "?status=closed",
+        activeTest: jobsQueryActive("closed"),
+      },
+      {
+        label: "Cancelled",
+        href: to("/jobs") + "?status=cancelled",
         activeTest: (p, s) =>
           p === to("/jobs") &&
-          new URLSearchParams(s).get("status") === "closed",
+          new URLSearchParams(s).get("status") === "cancelled",
+      },
+      {
+        label: "On Hold",
+        href: to("/jobs") + "?status=on_hold",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "on_hold",
+      },
+      {
+        label: "Every Job",
+        href: to("/jobs") + "?status=all",
+        activeTest: (p, s) =>
+          p === to("/jobs") &&
+          new URLSearchParams(s).get("status") === "all",
       },
       {
         label: "Warranty Calls",

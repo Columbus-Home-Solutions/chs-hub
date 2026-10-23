@@ -15,12 +15,14 @@
  * Stop conditions (checked at query/send time):
  *   review_enabled = 0  → skip all sends for that job
  *   review_received = 1 → skip all follow-up sends
+ *   job status on_hold  → skip until the job is released
  *
  * All sends respect NOTIFICATIONS_DISPATCH_MODE. Failures are non-fatal —
  * the caller must wrap in try/catch so other processors are not disrupted.
  */
 
 import type { Env } from "../env.js";
+import { jobIsOnHold } from "./job-hold.js";
 import { sendSms, getTwilioConfig, isConfigured as twilioConfigured } from "./twilio.js";
 import { renderTemplateText } from "./merge-render.js";
 
@@ -73,6 +75,8 @@ export async function sendImmediateReviewRequest(
   jobId: string,
   clientId: string | null,
 ): Promise<void> {
+  if (await jobIsOnHold(env.DB, jobId)) return;
+
   const dedupeKey = `google_review_request_${jobId}`;
 
   // Idempotent — skip if already logged (resend protection).
@@ -227,6 +231,7 @@ export async function processReviewFollowUps(env: Env): Promise<ReviewFollowUpSt
 }
 
 async function processOneJobFollowUp(env: Env, row: JobReviewRow): Promise<boolean> {
+  if (await jobIsOnHold(env.DB, row.id)) return false;
   if (!row.completion_package_sent_at || !row.client_id) return false;
 
   // Sprint 36: skip if the client already has a confirmed-matched Google review.

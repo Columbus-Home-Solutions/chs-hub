@@ -11,6 +11,7 @@
 
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
+import { queueCalendarMirror } from "../lib/google-calendar-writeback.js";
 
 const WRITE_ROLES = ["owner", "project_manager", "office_admin"] as const;
 const STATUSES = new Set(["open", "scheduled", "completed", "cancelled"]);
@@ -208,6 +209,7 @@ export async function handleWarrantyCallCreate(request: Request, env: Env): Prom
     )
     .run();
 
+  await queueCalendarMirror(env, "warranty_call", id);
   return json({ warranty_call: (await loadOne(env, id))! }, { status: 201 });
 }
 
@@ -268,6 +270,7 @@ export async function handleWarrantyCallUpdate(request: Request, env: Env, id: s
   binds.push(id);
   await env.DB.prepare(`UPDATE warranty_calls SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
 
+  await queueCalendarMirror(env, "warranty_call", id);
   return json({ warranty_call: (await loadOne(env, id))! });
 }
 
@@ -283,5 +286,6 @@ export async function handleWarrantyCallDelete(request: Request, env: Env, id: s
   )
     .bind(id)
     .run();
+  await queueCalendarMirror(env, "warranty_call", id);
   return json({ ok: true, id, status: "cancelled" });
 }

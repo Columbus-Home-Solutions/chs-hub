@@ -6,6 +6,7 @@
  */
 
 import type { Env } from "../env.js";
+import { queueCalendarMirror } from "./google-calendar-writeback.js";
 
 export interface BidRequestAssignmentContext {
   id: string;
@@ -79,6 +80,7 @@ export async function ensureBidAwardScheduleEntry(
   )
     .bind(entryId, jobId, scheduledDate, br.title, subId, noteParts.join("\n\n"), br.id)
     .run();
+  await queueCalendarMirror(env, "schedule_entry", entryId);
 
   return { created: true, entryId };
 }

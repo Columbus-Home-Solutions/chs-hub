@@ -34,6 +34,7 @@ import { isOwner } from "../../lib/rbac";
 import { go } from "../../lib/nav";
 import { formatCurrency, formatDate, formatDateTime, formatPhone, formatStatus } from "../../lib/format";
 import { jobTypeDisplayLabel } from "@chs/shared/job-type-label";
+import { isHoldableJobStatus } from "@chs/shared/job-pipeline";
 import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
@@ -140,6 +141,9 @@ export function JobDetail({ id }: DetailProps) {
   const compactTabs = tier === "mobile" || tier === "tablet";
   const [tab, setTab] = useUrlTab([...TAB_KEYS], "overview");
   const [moreOpen, setMoreOpen] = useState(false);
+  const [holdOpen, setHoldOpen] = useState(false);
+  const [holdReason, setHoldReason] = useState("");
+  const [holdBusy, setHoldBusy] = useState(false);
 
   if (loading) return <Spinner center />;
   if (error || !data) {
@@ -158,10 +162,42 @@ export function JobDetail({ id }: DetailProps) {
   }
 
   const job = data.job;
+  const canHold = isOwner(user) && isHoldableJobStatus(job.status);
+  const held = job.status === "on_hold";
   const fullAddress = [job.property_address, job.property_city, job.property_state, job.property_zip]
     .filter(Boolean)
     .join(", ");
   const moreTabActive = compactTabs && MORE_TAB_KEYS.has(tab as TabKey);
+
+  async function submitHold() {
+    if (!id || !holdReason.trim() || holdBusy) return;
+    setHoldBusy(true);
+    try {
+      await api.post(`/api/jobs/${id}/hold`, { reason: holdReason.trim() });
+      setHoldOpen(false);
+      setHoldReason("");
+      toast.push("success", "Job is on hold");
+      refetch();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setHoldBusy(false);
+    }
+  }
+
+  async function releaseHold() {
+    if (!id || holdBusy) return;
+    setHoldBusy(true);
+    try {
+      await api.post(`/api/jobs/${id}/release`, {});
+      toast.push("success", "Job released");
+      refetch();
+    } catch (err) {
+      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setHoldBusy(false);
+    }
+  }
 
   return (
     <div class="job-detail">
@@ -191,12 +227,40 @@ export function JobDetail({ id }: DetailProps) {
           </p>
         </div>
         <div class="view-header__right">
+          {canHold && (
+            <Button variant="secondary" onClick={() => setHoldOpen(true)}>
+              Put on hold
+            </Button>
+          )}
           {isOwner(user) && id && <WeeklyRecapButton jobId={id} />}
           <Button variant="tertiary" onClick={() => go("/jobs")}>
             ← Pipeline
           </Button>
         </div>
       </div>
+
+      {held && (
+        <div
+          class="job-detail__hold-banner callout callout--warning"
+          role="status"
+          style={{ display: "flex", flexDirection: "column", gap: "var(--space-sm)", alignItems: "flex-start" }}
+        >
+          <div>
+            <Badge tone="warning">On hold</Badge>
+            {job.held_at ? ` since ${formatDate(job.held_at)}` : ""}
+            {job.days_held != null ? ` · ${job.days_held} day${job.days_held === 1 ? "" : "s"}` : ""}
+          </div>
+          {job.hold_reason && <div>Reason: {job.hold_reason}</div>}
+          {job.hold_previous_status && (
+            <div>Release restores {formatStatus(job.hold_previous_status)}.</div>
+          )}
+          {isOwner(user) && (
+            <Button size="sm" variant="primary" disabled={holdBusy} onClick={() => { void releaseHold(); }}>
+              Release
+            </Button>
+          )}
+        </div>
+      )}
 
       {job.conversion_reversed && (
         <div class="job-detail__reversal-banner callout callout--warning" role="status">
@@ -312,6 +376,29 @@ export function JobDetail({ id }: DetailProps) {
       {tab === "activity" && (
         <ActivityTab activity={data.activity} jobId={id} clientId={data.job.client_id} />
       )}
+      <Modal
+        open={holdOpen}
+        title="Put on hold"
+        onClose={() => { if (!holdBusy) setHoldOpen(false); }}
+        footer={
+          <>
+            <Button variant="tertiary" disabled={holdBusy} onClick={() => setHoldOpen(false)}>Cancel</Button>
+            <Button variant="primary" disabled={holdBusy || !holdReason.trim()} onClick={() => { void submitHold(); }}>
+              Put on hold
+            </Button>
+          </>
+        }
+      >
+        <FormField label="Reason" required hint="This stays on the staff job page. Customers do not see it.">
+          <textarea
+            class="form-input"
+            rows={4}
+            value={holdReason}
+            onInput={(e) => setHoldReason((e.target as HTMLTextAreaElement).value)}
+            style={{ width: "100%", resize: "vertical" }}
+          />
+        </FormField>
+      </Modal>
     </div>
   );
 }
@@ -340,7 +427,7 @@ function OverviewTab({
   onViewCosts: () => void;
 }) {
   const job = data.job;
-  const allTargets = statusTargets(job.status);
+  const allTargets = job.status === "on_hold" || job.status === "cancelled" ? [] : statusTargets(job.status);
   // Remove "closed" from dropdown — it gets its own dedicated Close Job button.
   const dropdownTargets = allTargets.filter((t) => t !== "closed");
 

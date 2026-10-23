@@ -49,6 +49,7 @@ export default defineConfig({
         portal: "portal.html",
         punch: "punch.html",
         sub: "sub.html",
+        book: "book.html",
       },
     },
   },

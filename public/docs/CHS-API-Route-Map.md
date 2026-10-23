@@ -90,6 +90,17 @@ Role checks are documented per endpoint:
 | POST | `/api/integrations/:service/test` | O | Test connection |
 | GET | `/api/integrations/stripe/callback` | O | Stripe OAuth callback |
 | GET | `/api/integrations/quickbooks/callback` | O | QBO OAuth callback |
+| POST | `/api/integrations/google-calendar/connect` | O | Start Google OAuth (`calendar.readonly` + `calendar.events`) |
+| GET | `/api/integrations/google-calendar/callback` | O | Finish Google OAuth and store tokens |
+| GET | `/api/google-calendar/status` | O | Connection, Meet sync, and calendar write-back status |
+| GET | `/api/google-calendar/events` | O | Stored Meet events |
+| POST | `/api/google-calendar/sync` | O | Pull Meet events now |
+| POST | `/api/google-calendar/write-enabled` | O | Turn CHS → Google mirroring on or off. On requires the event-write scope |
+| POST | `/api/google-calendar/write-sync` | O | Retry failed and pending calendar writes |
+| GET | `/api/google-calendar/backfill` | O | Count future CHS items not yet on Google |
+| POST | `/api/google-calendar/backfill` | O | Mirror a capped batch of future items. Body must include `confirm: true` |
+| POST | `/api/google-calendar/changes-enabled` | O | Turn Google-change alerts on or off. On requires the event-write scope |
+| POST | `/api/google-calendar/changes/:id` | O | Apply, apply without texting, cancel in CHS, or ignore one pending Google change |
 
 ### Dead Letter Queue
 
@@ -143,7 +154,9 @@ Role checks are documented per endpoint:
 
 | Method | Route | Role | Description |
 |--------|-------|------|-------------|
-| POST | `/api/webhooks/twilio/inbound` | PUBLIC (verified by Twilio signature) | Inbound SMS — auto-logs to client by phone match |
+| POST | `/api/webhooks/twilio/inbound` | PUBLIC (verified by Twilio signature) | Inbound SMS. Active workers are matched before clients. Public URL: `https://client.homesolutionsar.com/api/webhooks/twilio/inbound` |
+| GET | `/api/public/book/:token` | public token | Open estimate-visit slots for one lead. No calendar titles. |
+| POST | `/api/public/book/:token` | public token | Book one slot through the existing appointment path. Page: `https://client.homesolutionsar.com/book/:token` |
 
 ### High Level Sync
 
@@ -167,6 +180,7 @@ Role checks are documented per endpoint:
 | POST | `/api/estimate-requests` | O/PM | Create new request (triggers lead acknowledgment notification, WC sync) |
 | PUT | `/api/estimate-requests/:id` | O/PM | Update request (status change triggers WC sync, notifications) |
 | PUT | `/api/estimate-requests/:id/appointment` | O/PM | Set/update appointment date (triggers confirmation notification) |
+| POST | `/api/estimate-requests/:id/booking-link` | O | Copy a 21-day booking URL for a New Request or Contacted lead with no appointment. Sends no text. |
 | PUT | `/api/estimate-requests/:id/lost` | O/PM | Mark as lost with reason |
 | DELETE | `/api/estimate-requests/:id` | O/PM/OA | Hard-delete a request (blocked if won/converted/approved). Orphan client cleaned up when nothing else remains. |
 | POST | `/api/estimate-requests/bulk-delete` | O/PM/OA | Body `{ ids }`. New Request only; ineligible ids are skipped with an error, not aborting the batch. |
@@ -276,8 +290,10 @@ Role checks are documented per endpoint:
 | PUT | `/api/change-orders/:id` | O/PM | Update change order (drafts only) |
 | POST | `/api/change-orders/:id/send` | O/PM | Mark `sent` and notify client (`change_order_sent`) for signature |
 | POST | `/api/change-orders/:id/reject` | O/PM | Mark a sent change order `rejected` |
+| POST | `/api/change-orders/:id/approve-manual` | Owner | Record an off-platform approval (`phone`/`text`/`in_person`/`other`), required note, optional proof. Does not write signature fields, does not email the client, does not send BoldSign. Then `applyChangeOrder()`. |
+| GET | `/api/change-orders/:id/approval-proof` | Owner | Stream the internal proof file. Not on the portal or the documents list. |
 
-Client approval is **not** an internal route — it happens when the client signs in the portal (`POST /api/portal/:token/change-orders/:id/sign`), which calls the idempotent `applyChangeOrder()`: stamps `applied_at` exactly once, revises `jobs.contract_total`, extends the end date, creates the CO task group, and fires `change_order_approved`.
+Client e-signature still happens in the portal (`POST /api/portal/:token/change-orders/:id/sign`), which calls the idempotent `applyChangeOrder()`: stamps `applied_at` exactly once, revises `jobs.contract_total`, extends the end date, creates the CO task group, and fires `change_order_approved`. An owner can instead record an off-platform approval with `POST /api/change-orders/:id/approve-manual`. That path uses the same apply, passes `suppressCustomerNotice`, and does not fire `change_order_approved`.
 
 ### Schedule
 
@@ -376,6 +392,21 @@ Day-rate labor (`subcontractors.worker_type = day_rate_labor`). Weeks are Monday
 | DELETE | `/api/labor/entries/:id` | O/PM | Soft-delete an unpaid entry (`delete_reason` optional). Writes audit_logs |
 | POST | `/api/labor/batches/pay` | O/PM | Pay chosen closed days. `groups` is `{ sub_id, job_id, action: create\|link, expense_id, difference_decision }`. `create` writes a labor expense. `link` attaches the days to one expense for that worker and job. A shortfall without `difference_decision` is rejected. `add_difference` writes the shortfall; `accept_as_paid` writes nothing extra. Logged above earned is allowed. Omitting `groups` keeps the older `skip` behavior |
 | POST | `/api/labor/batches/:week_start/pay` | O/PM | Mark a whole closed week paid. Idempotent if a batch already exists for that week |
+| GET | `/api/labor/pending` | O/PM | Check-ins waiting on confirmation |
+| POST | `/api/labor/pending/confirm` | O/PM | Confirm one or many. Optional per-entry job, days, or day_rate. Refuses a zero rate |
+| POST | `/api/labor/pending/reject` | O/PM | Soft-delete a pending check-in. Reason required |
+| GET/POST/DELETE | `/api/labor/workers/:id/checkin-link` | O/PM | Copy, regenerate, or disable the worker's `/sub/:token` link. Regenerate and disable also replace the punch-list link |
+| GET | `/api/labor/workers/:id/checkin-qr` | O/PM | SVG QR of that link |
+| PUT | `/api/labor/workers/:id/text-updates` | O/PM | Turn schedule and punch texts on or off. Off by default |
+| GET/POST | `/api/sub/:token/checkin` | public token | Worker check-in. Today or yesterday only. No dollar amounts |
+| DELETE | `/api/sub/:token/checkin/:id` | public token | Undo a pending check-in submitted today |
+| GET | `/api/sub/:token/schedule` | public token | This worker's next 14 days. Job number, title, street only |
+| GET | `/api/sub/:token/punch` | public token | Open punch items for a day-rate worker |
+| GET | `/api/sub/:token/manifest.webmanifest` | public token | Home-screen manifest whose start_url is this worker's page. Name stays CHS Check In. `lang` follows the worker |
+| PUT | `/api/sub/:token/language` | public token | Body `{ language: "en" \| "es" }`. Day-rate only. Saves `preferred_language` and rewrites a held text. Bad token is the generic 404 |
+| PUT | `/api/subcontractors/:id` | O/PM | Also accepts `preferred_language` (`en` or `es`) |
+
+Day-rate schedule and punch texts use templates `day_rate_schedule` and `day_rate_punch`. The copy is chosen from `preferred_language` when the text is built and again if the worker switches before a held text goes out. English: `CHS: Tony added 102 Kitchen Repair to your schedule for Mon Oct 5. See it: <link>/schedule`, `CHS: Tony updated your schedule (3 changes). See it: <link>/schedule`, `CHS: Schedule change. 104 Bath Remodel on Mon Oct 5 is on a weather delay. <link>/schedule`, `CHS: New punch list item on 101 Pergola Repair. <link>/punch`, `CHS: Reminder. Open punch items on 101 Pergola Repair. <link>/punch`, `CHS: Punch items on 101 Pergola Repair were due yesterday. <link>/punch`, each ending with `Reply STOP to opt out`. A new-items resend uses the new-item sentence. The nightly day-of and day-after reminders use the reminder and yesterday sentences. All three go through the same queue, so Text updates off skips a new notice and logs `text_updates_off`, and a second notice for the same held text updates that one row. Dispatch checks the switch again before send and skips with `text_updates_off` if it is off or the worker is inactive. STOP and unchecking the box cancel rows already queued (`inbound_stop` and `text_updates_off`). True subcontractors keep the older punch wording on send, resend, and reminder, and are not checked against Text updates. Spanish draft: `CHS: Tony agregó 102 Kitchen Repair a tu horario para el lun 5 oct. Míralo aquí: <link>/schedule`, `CHS: Tony actualizó tu horario (3 cambios). Míralo aquí: <link>/schedule`, `CHS: Cambio de horario. 104 Bath Remodel el lun 5 oct tiene retraso por clima. <link>/schedule`, `CHS: Nuevo pendiente en 101 Pergola Repair. <link>/punch`, `CHS: Recordatorio. Pendientes abiertos en 101 Pergola Repair. <link>/punch`, `CHS: Los pendientes en 101 Pergola Repair vencieron ayer. <link>/punch`, each ending with `Responde STOP para cancelar.` STOP stays the English keyword. Job titles are copied as typed. Several changes in one hold window become one queued text. Quiet hours 8 PM–7 AM Central hold until 7 AM. The shared SMS gate stays 8:00 AM–9:00 PM Central for customer, lead, and true subcontractor texts. These day-rate schedule and punch texts, including the new-items resend and the nightly reminders, pass a 7:00 AM morning floor on that gate, so a held text is released at 7:00 AM. The 9:00 PM end of the gate and the 8:00 PM day-rate evening cutoff are unchanged. Local dispatch stays SIMULATE. Check-in, confirm, and pay do not send a text. There is no separate notification-templates file in this repo; this paragraph is the template store. Spanish is a draft until a fluent speaker reviews it.
 
 ### Cost-Plus Billing Cycles
 
@@ -570,6 +601,8 @@ remains a labeled seam. Push is **exactly-once**, keyed on the `qbo_*_id` column
 
 ## 9. Notifications
 
+SMS that flows through the notification dispatcher is held outside 8:00 AM–9:00 PM America/Chicago and released at the next 8:00 AM. Day-rate schedule and punch texts (`day_rate_schedule`, `day_rate_punch`) pass a 7:00 AM morning floor on that same call. That covers the schedule queue, the punch queue, the new-items resend, and the nightly punch reminder. Customer, lead, and true subcontractor texts keep 8:00 AM. The 9:00 PM end does not move.
+
 ### Templates (Admin)
 
 | Method | Route | Role | Description |
@@ -692,10 +725,10 @@ folded into these 5 handlers (see `dispatchCron` in `src/index.ts`). This table 
 
 | Schedule | Folded work (in dispatch order) |
 |----------|---------------------------------|
-| `*/15 * * * *` | Notification processor (queued/scheduled sends) **+** social-post publisher (Sprint 16 folded the due-post sweep here — no new cron). |
+| `*/15 * * * *` | Notification processor (queued/scheduled sends) **+** social-post publisher (Sprint 16 folded the due-post sweep here — no new cron) **+** Google change poll (one `events.list`, only while `google_calendar_changes_enabled` is on). |
 | `*/30 * * * *` | Jobber tick **+** WC Spreadsheet sync (Google Sheets carry-forward). |
 | `15 * * * *` | Reliability hourly: heartbeat **+** DLQ replay **+** Google Drive mirror (Sprint 15 added `documents` to the photos/job-files/company-docs batch loop). |
-| `15 7 * * *` | Nightly: D1→R2 backup → invoice billing (late-fee accrual + due/past-due notices) → **QBO dirty-flag push sweep** (Sprint 14 — no standalone QBO cron). |
+| `15 7 * * *` | Nightly: D1→R2 backup → invoice billing (late-fee accrual + due/past-due notices) → **QBO dirty-flag push sweep** (Sprint 14 — no standalone QBO cron) → retry failed Google Calendar writes (non-fatal; skipped while the write switch is off). |
 | `0 12 * * *` | Daily summary email (via Resend). |
 
 > **Superseded standalone crons** (folded above, never deployed as their own trigger):

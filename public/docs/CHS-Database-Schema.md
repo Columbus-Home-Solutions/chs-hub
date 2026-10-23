@@ -442,10 +442,19 @@ Internal cost breakdown — NOT visible to client.
 | end_date_extension_days | INTEGER | DEFAULT 0 | Days added to `jobs.estimated_end_date` on apply |
 | signed_name | TEXT | | Client's typed name captured at portal signature |
 | signed_ip | TEXT | | Client IP captured at portal signature |
+| approval_source | TEXT | | NULL or `portal` = client e-sign; `manual_owner` = recorded by the owner. Existing rows stay NULL. |
+| manual_approval_method | TEXT | | `phone`, `text`, `in_person`, or `other` |
+| manual_approved_at | TEXT | | When the customer approved (UTC ISO). Also copied to `approved_date`. |
+| manual_approval_note | TEXT | | Required free text. Internal only — never sent to the portal. |
+| manual_approved_by | TEXT | | Owner email who recorded it. Internal only. |
+| manual_recorded_at | TEXT | | When it was recorded in CHS (UTC ISO). Audit only. |
+| manual_proof_r2_key | TEXT | | Optional internal screenshot/PDF. Not a `documents` row. |
 
 **Indexes:** `idx_change_orders_job_id (job_id)`, `idx_change_orders_job_number_unique (job_id, change_order_number)` UNIQUE — enforces sequential per-job numbering (added in migration 0035).
 
 `applied_at`/`end_date_extension_days`/`signed_name`/`signed_ip` and the unique index were added in **0035_change_orders_apply.sql** to support the digital-signature → auto-apply flow. The atomic `UPDATE ... WHERE applied_at IS NULL` makes `applyChangeOrder()` exactly-once even under concurrent portal signatures.
+
+`approval_source` and the `manual_*` columns were added in **0137_change_orders_manual_approval.sql**. A manual approval leaves `client_signature`, `signed_name`, and `signed_ip` NULL. NULL `approval_source` still means a portal e-signature.
 
 ### schedule_entries
 
@@ -613,7 +622,7 @@ One row per **pay event**. A week can have several. Draft weeks are computed and
 
 ### labor_entries
 
-One worker, one job, one date, 0.5 or 1 day. `day_rate` is snapshotted at entry time. `expense_id` is a single expense: set when that day is included in a pay event, or linked to one hand-entered labor, subcontractor, or other expense. If that expense is short of the days earned, a second labor expense can be written for the difference; the day's `expense_id` stays the linked expense. Accepting the logged amount as full payment links the day and writes nothing extra. Unpaid rows (`expense_id IS NULL` and `deleted_at IS NULL`) are accrued labor in job costing and are not counted again after payment. Removed rows stay for the dispute ledger and are left out of totals.
+One worker, one job, one date, 0.5 or 1 day. `day_rate` is snapshotted at entry time. `expense_id` is a single expense: set when that day is included in a pay event, or linked to one hand-entered labor, subcontractor, or other expense. If that expense is short of the days earned, a second labor expense can be written for the difference; the day's `expense_id` stays the linked expense. Accepting the logged amount as full payment links the day and writes nothing extra. Unpaid rows (`expense_id IS NULL`, `deleted_at IS NULL`, and `status = 'confirmed'`) are accrued labor in job costing and are not counted again after payment. `status = 'pending'` is a worker check-in that does not count toward pay, job cost, statements, or the dashboard payroll total until confirmed. Removed rows stay for the dispute ledger and are left out of totals. A check-in with no worker rate stores `day_rate` 0 and cannot be confirmed until a positive rate is saved.
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
@@ -634,6 +643,12 @@ One worker, one job, one date, 0.5 or 1 day. `day_rate` is snapshotted at entry 
 | updated_by | TEXT | | |
 | created_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 | created_by | TEXT | | |
+| status | TEXT | NOT NULL DEFAULT 'confirmed' CHECK (pending, confirmed) | Worker check-ins start pending. Existing rows stay confirmed |
+| submitted_at | TEXT | | Central date the worker submitted |
+| confirmed_at | TEXT | | |
+| confirmed_by | TEXT | | |
+
+`sub_access_tokens` gains `schedule_seen_at`, `punch_seen_at`, and `disabled_at`. A disabled or replaced token 404s for check-in and for the punch page. `subcontractors` gains `text_updates_enabled` (default 0), `text_updates_enabled_at`, and `text_updates_enabled_by`. STOP on a matching phone turns text updates off. `preferred_language` is `en` or `es`, default `en`. It changes the worker's public pages, texts, and invite. Tony's screens stay English.
 
 ### billing_cycles
 

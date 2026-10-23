@@ -27,6 +27,7 @@ import { HISTORICAL_INVOICE_BADGE } from "../../types";
 import { CycleManager } from "./CycleManager";
 import { LineItemBilling } from "./LineItemBilling";
 import { go } from "../../lib/nav";
+import { SHORT_DUE_WARNING, shortDueDateWarning } from "@chs/shared/invoice-due";
 import { JobLaborCard } from "./JobLaborCard";
 import type { QueueItem } from "../financial/ReceiptQueueView";
 import type { JobCard, Payer } from "../../types";
@@ -57,7 +58,15 @@ interface InvoiceRow {
   line_item_ids?: string | null;
   payer_id?: string | null;
   notes?: string | null;
+  billing_model?: string | null;
   is_historical?: boolean;
+  late_fee_state?: string | null;
+  late_fee_proposed_amount?: number | null;
+  late_fee_waived_amount?: number | null;
+  late_fee_hold?: number | null;
+  late_fee_hold_reason?: string | null;
+  late_fee_snooze_until?: string | null;
+  late_fee_grace_end?: string | null;
 }
 interface MilestoneSuggestion {
   billing_schedule_id: string;
@@ -225,6 +234,11 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(null);
   const canRecordHistorical = user?.role === "owner";
 
+  useEffect(() => {
+    const invoiceId = new URLSearchParams(window.location.search).get("invoice");
+    if (invoiceId) setDetailInvoiceId(invoiceId);
+  }, []);
+
   if (loading) return <Spinner center />;
   if (error || !data) {
     return (
@@ -274,6 +288,8 @@ export function FinancialTab({ jobId }: { jobId: string }) {
   };
 
   const sendInvoice = async (inv: InvoiceRow) => {
+    const warning = shortDueDateWarning(inv.due_date);
+    if (warning && !confirm(`${warning}\n\nSend anyway?`)) return;
     try {
       await api.post(`/api/invoices/${inv.id}/send`, {});
       toast.push("success", `${inv.invoice_display} sent`);
@@ -459,6 +475,8 @@ export function FinancialTab({ jobId }: { jobId: string }) {
                     {inv.is_historical && (
                       <Badge tone="info">{HISTORICAL_INVOICE_BADGE}</Badge>
                     )}
+                    {inv.late_fee_state === "proposed" && <Badge tone="warning">Late fee proposed</Badge>}
+                    {Number(inv.late_fee_hold) === 1 && <Badge tone="neutral">Late fee hold</Badge>}
                   </div>
                   <div class="invoice-row__meta">
                     {inv.title ?? formatStatus(inv.invoice_type)}
@@ -1431,7 +1449,7 @@ function InvoiceBuilder({
           />
         </FormField>
       </div>
-      <FormField label="Due date">
+      <FormField label="Due date" hint="Defaults to 7 days after you send.">
         <input
           class="form-input"
           type="date"
@@ -1439,6 +1457,9 @@ function InvoiceBuilder({
           onInput={(e) => setDueDate((e.target as HTMLInputElement).value)}
         />
       </FormField>
+      {shortDueDateWarning(dueDate) && (
+        <p class="form-hint" role="status">{SHORT_DUE_WARNING}</p>
+      )}
       <FormField label="Description / notes">
         <textarea
           class="form-input"
@@ -1586,7 +1607,18 @@ function InvoiceDetailModal({
   toast: ToastApi;
 }) {
   const { data, loading, refetch } = useApi<InvoiceDetailPayload>(`/api/invoices/${invoiceId}`);
+  const { user } = useAuth();
   const [charging, setCharging] = useState(false);
+  const [feeBusy, setFeeBusy] = useState<string | null>(null);
+  const [holdOpen, setHoldOpen] = useState(false);
+  const [holdReason, setHoldReason] = useState("");
+  const [dueDraft, setDueDraft] = useState("");
+  const [dueSaving, setDueSaving] = useState(false);
+
+  useEffect(() => {
+    const raw = data?.invoice.due_date;
+    setDueDraft(raw ? raw.slice(0, 10) : "");
+  }, [data?.invoice.due_date]);
 
   if (loading || !data) {
     return (
@@ -1642,6 +1674,42 @@ function InvoiceDetailModal({
       <dl class="kv">
         <div class="kv__row"><dt>Type</dt><dd>{formatStatus(inv.invoice_type)}</dd></div>
         <div class="kv__row"><dt>Status</dt><dd>{formatStatus(inv.status)}</dd></div>
+        {user?.role === "owner" && inv.status !== "paid" && inv.status !== "void" ? (
+          <div class="kv__row">
+            <dt>Due date</dt>
+            <dd>
+              <input
+                class="form-input"
+                type="date"
+                value={dueDraft}
+                disabled={dueSaving}
+                aria-label="Due date"
+                onInput={(e) => {
+                  const next = (e.target as HTMLInputElement).value;
+                  setDueDraft(next);
+                  if (!next || next === (inv.due_date ?? "").slice(0, 10)) return;
+                  setDueSaving(true);
+                  void api
+                    .put(`/api/invoices/${invoiceId}`, { due_date: next })
+                    .then(() => {
+                      toast.push("success", "Due date updated");
+                      refetch();
+                      onChanged();
+                    })
+                    .catch((err) => {
+                      toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+                    })
+                    .finally(() => setDueSaving(false));
+                }}
+                />
+              {shortDueDateWarning(dueDraft) && (
+                <p class="form-hint" role="status">{SHORT_DUE_WARNING}</p>
+              )}
+            </dd>
+          </div>
+        ) : (
+          <div class="kv__row"><dt>Due date</dt><dd>{inv.due_date ? formatDate(inv.due_date) : "—"}</dd></div>
+        )}
         {inv.is_historical && (
           <div class="kv__row"><dt>Record</dt><dd>{HISTORICAL_INVOICE_BADGE}</dd></div>
         )}
@@ -1656,6 +1724,31 @@ function InvoiceDetailModal({
           </div>
         )}
       </dl>
+      <LateFeeCard
+        invoice={inv}
+        owner={user?.role === "owner"}
+        busy={feeBusy}
+        holdOpen={holdOpen}
+        holdReason={holdReason}
+        onHoldReason={setHoldReason}
+        onOpenHold={() => setHoldOpen(true)}
+        onCloseHold={() => setHoldOpen(false)}
+        onAct={async (action, extra) => {
+          setFeeBusy(action);
+          try {
+            await api.post(`/api/invoices/${invoiceId}/late-fee`, { action, ...extra });
+            toast.push("success", "Late fee updated");
+            setHoldOpen(false);
+            setHoldReason("");
+            refetch();
+            onChanged();
+          } catch (err) {
+            toast.push("error", err instanceof ApiError ? err.message : (err as Error).message);
+          } finally {
+            setFeeBusy(null);
+          }
+        }}
+      />
       {data.line_items.length > 0 && (
         <>
           <h4 style={{ marginBottom: "var(--space-sm)" }}>Line items</h4>
@@ -1710,6 +1803,127 @@ function InvoiceDetailModal({
         </>
       )}
     </Modal>
+  );
+}
+
+function LateFeeCard({
+  invoice,
+  owner,
+  busy,
+  holdOpen,
+  holdReason,
+  onHoldReason,
+  onOpenHold,
+  onCloseHold,
+  onAct,
+}: {
+  invoice: InvoiceRow;
+  owner: boolean;
+  busy: string | null;
+  holdOpen: boolean;
+  holdReason: string;
+  onHoldReason: (value: string) => void;
+  onOpenHold: () => void;
+  onCloseHold: () => void;
+  onAct: (action: string, extra?: { days?: number; reason?: string }) => Promise<void>;
+}) {
+  const state = invoice.late_fee_state ?? "none";
+  const held = Number(invoice.late_fee_hold) === 1;
+  const costPlus = invoice.billing_model === "cost_plus" || invoice.invoice_type === "cost_plus_cycle";
+  const show = Boolean(invoice.due_date) || state !== "none" || (invoice.late_fee_amount ?? 0) > 0 || held;
+  if (!show) return null;
+  const decided = state === "applied" || state === "waived";
+  const historical = (invoice.late_fee_amount ?? 0) > 0 && state !== "proposed";
+  const shownAmount =
+    state === "applied"
+      ? invoice.late_fee_amount
+      : state === "waived"
+        ? invoice.late_fee_waived_amount
+        : invoice.late_fee_proposed_amount;
+  const statusLabel = held
+    ? "On hold"
+    : state === "proposed"
+      ? "Proposed"
+      : state === "applied"
+        ? "Added"
+        : state === "waived"
+          ? "Waived"
+          : invoice.late_fee_snooze_until
+            ? `Snoozed until ${formatDate(invoice.late_fee_snooze_until)}`
+            : "None";
+  return (
+    <div class="late-fee-card">
+    <Card title="Late fee">
+      {costPlus ? (
+        <p>No late fee on a cost-plus job. Non-payment pauses work instead.</p>
+      ) : (
+        <>
+          <dl class="kv">
+            <div class="kv__row"><dt>Status</dt><dd>{statusLabel}</dd></div>
+            <div class="kv__row"><dt>Due date</dt><dd>{invoice.due_date ? formatDate(invoice.due_date) : "—"}</dd></div>
+            <div class="kv__row"><dt>Grace ends</dt><dd>{invoice.late_fee_grace_end ? formatDate(invoice.late_fee_grace_end) : "—"}</dd></div>
+            {shownAmount != null && shownAmount > 0 && (
+              <div class="kv__row"><dt>{state === "proposed" ? "Proposed" : "Amount"}</dt><dd>{formatCurrency(shownAmount)}</dd></div>
+            )}
+            {held && invoice.late_fee_hold_reason && (
+              <div class="kv__row"><dt>Hold reason</dt><dd>{invoice.late_fee_hold_reason}</dd></div>
+            )}
+          </dl>
+          {owner && !costPlus && (
+            <div class="late-fee-actions">
+              {!decided && !held && !historical && (
+                <Button size="sm" disabled={busy !== null} onClick={() => void onAct("add")}>
+                  {busy === "add" ? "Adding…" : "Add fee"}
+                </Button>
+              )}
+              {state !== "waived" && (
+                <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => void onAct("waive")}>
+                  {busy === "waive" ? "Waiving…" : "Waive"}
+                </Button>
+              )}
+              {!decided && (
+                <>
+                  <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => void onAct("snooze", { days: 3 })}>
+                    Snooze 3 days
+                  </Button>
+                  <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => void onAct("snooze", { days: 7 })}>
+                    Snooze 7 days
+                  </Button>
+                </>
+              )}
+              {!held && !decided && (
+                <Button size="sm" variant="tertiary" disabled={busy !== null} onClick={onOpenHold}>
+                  Hold
+                </Button>
+              )}
+              {held && (
+                <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => void onAct("release")}>
+                  Remove hold
+                </Button>
+              )}
+            </div>
+          )}
+          {holdOpen && (
+            <div style={{ marginTop: "var(--space-sm)" }}>
+              <FormField label="Why is this on hold?" required>
+                <textarea class="form-input" rows={3} value={holdReason} onInput={(e) => onHoldReason((e.target as HTMLTextAreaElement).value)} />
+              </FormField>
+              <div class="late-fee-actions">
+                <Button
+                  size="sm"
+                  disabled={busy !== null || holdReason.trim() === ""}
+                  onClick={() => void onAct("hold", { reason: holdReason.trim() })}
+                >
+                  Save hold
+                </Button>
+                <Button size="sm" variant="tertiary" onClick={onCloseHold}>Cancel</Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+    </div>
   );
 }
 

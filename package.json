@@ -17,6 +17,7 @@
     "tail": "wrangler tail",
     "prep:templates": "tsx scripts/prep-templates.ts",
     "generate:working-agreement-template": "tsx scripts/generate-working-agreement-template.ts",
+    "generate:agreement-late-fee-wording": "tsx scripts/generate-agreement-late-fee-wording.ts",
     "assets:generate": "capacitor-assets generate --ios --android",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -56,6 +57,7 @@
     "@capgo/capacitor-audio-recorder": "^8.2.6",
     "fflate": "^0.8.3",
     "pdf-lib": "^1.17.1",
-    "postal-mime": "^3.0.0"
+    "postal-mime": "^3.0.0",
+    "uqr": "^0.1.3"
   }
 }

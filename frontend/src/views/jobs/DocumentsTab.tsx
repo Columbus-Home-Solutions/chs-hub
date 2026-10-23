@@ -10,7 +10,7 @@ import { useApi } from "../../hooks/useApi";
 import { go } from "../../lib/nav";
 import { useToast } from "../../store/toast";
 import { api, ApiError } from "../../api";
-import { formatStatus } from "../../lib/format";
+import { formatDateTime, formatStatus } from "../../lib/format";
 import { DocViewerModal } from "../../components/DocViewerModal";
 
 const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : (e as Error).message);
@@ -1055,7 +1055,7 @@ function CompletionPackageCard({ jobId }: { jobId: string }) {
           <Badge tone={tone}>{packageStatusLabel(status)}</Badge>
           {summary?.sent_at && (
             <span class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
-              {new Date(summary.sent_at).toLocaleString()}
+              {formatDateTime(summary.sent_at)}
             </span>
           )}
         </div>

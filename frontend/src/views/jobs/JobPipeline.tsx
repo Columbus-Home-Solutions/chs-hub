@@ -11,6 +11,7 @@ import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
 import { loadStoredView, storeView, truncate, useClientSort } from "../../lib/list-view";
 import { formatCurrency, formatDate, formatStatus } from "../../lib/format";
+import { isOpenPipelineStatus, MOVABLE_JOB_STATUSES, OPEN_PIPELINE_STATUSES } from "@chs/shared/job-pipeline";
 import {
   JOB_STAGES,
   JOB_BACKWARD_EXCEPTIONS,
@@ -62,12 +63,17 @@ const HEALTH_DOT_COLORS: Record<HealthColor, string> = {
 
 // Human-readable label for each status value as it appears in the new sidebar nav.
 const STATUS_LABELS: Record<string, string> = {
+  action_required: "Action Required",
+  unscheduled: "Unscheduled",
   deposit_paid: "Needs Scheduling",
   scheduled: "Scheduled",
   in_progress: "In Progress",
   punch_list: "Punch List",
-  complete: "Needs Reconciliation",
+  complete: "Completed",
+  all: "Every Job",
   closed: "Closed",
+  cancelled: "Cancelled",
+  on_hold: "On Hold",
 };
 
 // A drop is allowed if it moves strictly forward, or matches one of the two
@@ -75,9 +81,10 @@ const STATUS_LABELS: Record<string, string> = {
 // (no error toast on an obviously-illegal drop); the API is the real gate.
 function canMove(from: JobStatus, to: JobStatus): boolean {
   if (from === to) return false;
-  const order = JOB_STAGES.map((s) => s.key);
+  const order: readonly string[] = MOVABLE_JOB_STATUSES;
   const fi = order.indexOf(from);
   const ti = order.indexOf(to);
+  if (fi < 0 || ti < 0) return false;
   if (ti > fi) return true;
   return JOB_BACKWARD_EXCEPTIONS[from] === to;
 }
@@ -99,7 +106,7 @@ export function JobPipeline(_props: RoutableProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<JobStatus | null>(null);
   const [activeStage, setActiveStage] = useState<JobStatus>("deposit_paid");
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "">("");
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "cancelled" | "on_hold" | "all" | "">("");
   const [listSearch, setListSearch] = useState("");
 
   // Re-run whenever the search string changes so clicking different sidebar
@@ -108,7 +115,13 @@ export function JobPipeline(_props: RoutableProps) {
     const params = new URLSearchParams(currentSearch);
     // Accept both ?stage= (from dashboard pipeline taps) and ?status= (sidebar).
     const s = params.get("stage") ?? params.get("status");
-    if (s && JOB_STAGES.some((st) => st.key === s)) {
+    if (s === "cancelled") {
+      setStatusFilter("cancelled");
+    } else if (s === "on_hold") {
+      setStatusFilter("on_hold");
+    } else if (s === "all") {
+      setStatusFilter("all");
+    } else if (s && JOB_STAGES.some((st) => st.key === s)) {
       setActiveStage(s as JobStatus);
       setStatusFilter(s as JobStatus);
     } else {
@@ -121,8 +134,21 @@ export function JobPipeline(_props: RoutableProps) {
     return JOB_STAGES.flatMap((s) => data.pipeline[s.key] ?? []);
   }, [data]);
 
+  const cancelledView = statusFilter === "cancelled";
+  const onHoldView = statusFilter === "on_hold";
+  const everyJobView = statusFilter === "all";
+  const listOnlyView = cancelledView || onHoldView;
+
   const listJobs = useMemo(() => {
-    let jobs = statusFilter ? allJobs.filter((j) => j.status === statusFilter) : allJobs;
+    let jobs = cancelledView
+      ? (data?.cancelled ?? [])
+      : onHoldView
+        ? (data?.on_hold ?? [])
+        : everyJobView
+          ? [...allJobs, ...(data?.cancelled ?? []), ...(data?.on_hold ?? [])]
+          : statusFilter
+            ? allJobs.filter((j) => j.status === statusFilter)
+            : allJobs.filter((j) => isOpenPipelineStatus(j.status));
     const q = listSearch.trim().toLowerCase();
     if (q) {
       jobs = jobs.filter((j) => {
@@ -131,6 +157,8 @@ export function JobPipeline(_props: RoutableProps) {
           j.job_number != null ? String(j.job_number) : "",
           j.title,
           j.client_name,
+          j.hold_reason,
+          j.hold_previous_status,
           j.property_address,
           j.property_city,
           j.property_state,
@@ -142,7 +170,7 @@ export function JobPipeline(_props: RoutableProps) {
       });
     }
     return jobs;
-  }, [allJobs, statusFilter, listSearch]);
+  }, [allJobs, data, cancelledView, onHoldView, everyJobView, statusFilter, listSearch]);
 
   const { sorted, sortKey, sortDir, toggle } = useClientSort(listJobs, "job_number", "desc");
 
@@ -177,11 +205,27 @@ export function JobPipeline(_props: RoutableProps) {
         <div>
           <h1 class="view-title">Jobs</h1>
           <p class="view-subtitle">
-            {data ? `${total(data)} active jobs in the pipeline` : "Job pipeline"}
+            {cancelledView
+              ? `${sorted.length} cancelled job${sorted.length === 1 ? "" : "s"}`
+              : onHoldView
+                ? data
+                  ? `${sorted.length} job${sorted.length === 1 ? "" : "s"} on hold`
+                  : "Jobs on hold"
+                : statusFilter === "complete"
+                  ? `${sorted.length} completed job${sorted.length === 1 ? "" : "s"}`
+                  : statusFilter === "closed"
+                    ? `${sorted.length} closed job${sorted.length === 1 ? "" : "s"}`
+                    : everyJobView
+                      ? `${sorted.length} job${sorted.length === 1 ? "" : "s"}`
+                      : statusFilter
+                        ? `${sorted.length} job${sorted.length === 1 ? "" : "s"}`
+                        : data
+                          ? `${activeTotal(data)} active job${activeTotal(data) === 1 ? "" : "s"} in the pipeline`
+                          : "Job pipeline"}
           </p>
         </div>
         <div class="view-header__right flex gap-sm items-center">
-          {viewMode === "list" && (
+          {(viewMode === "list" || listOnlyView) && (
             <input
               class="form-input"
               type="search"
@@ -220,7 +264,135 @@ export function JobPipeline(_props: RoutableProps) {
         </div>
       )}
 
-      {!loading && !error && data && viewMode === "list" && (
+      {!loading && !error && data && cancelledView && (
+        <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 240px)" }}>
+          <div class="job-filter-badge">
+            <span class="job-filter-badge__label">Showing: Cancelled</span>
+            <button
+              class="job-filter-badge__clear"
+              onClick={() => {
+                setStatusFilter("");
+                route("/app/jobs");
+              }}
+              aria-label="Clear status filter"
+            >
+              ✕
+            </button>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Job #</th>
+                  <th>Title</th>
+                  <th>Client</th>
+                  <th>Cancelled</th>
+                  <th>Payments received</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.length === 0 && (
+                  <tr>
+                    <td colSpan={6} class="text--muted">
+                      {listSearch.trim() ? "No jobs match your search." : "No cancelled jobs."}
+                    </td>
+                  </tr>
+                )}
+                {sorted.map((j) => (
+                  <tr key={j.id}>
+                    <td>
+                      <button type="button" class="link-btn" onClick={() => go(`/jobs/${j.id}`)}>
+                        {j.job_display ?? "JOB"}
+                      </button>
+                    </td>
+                    <td>{truncate(j.title)}</td>
+                    <td>{j.client_name ?? "—"}</td>
+                    <td>{j.cancelled_on ? formatDate(j.cancelled_on) : "—"}</td>
+                    <td>{formatCurrency(j.payments_received ?? 0)}</td>
+                    <td>
+                      <Button size="sm" variant="tertiary" onClick={() => go(`/jobs/${j.id}`)}>View</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!loading && !error && data && onHoldView && (
+        <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 240px)" }}>
+          <div class="job-filter-badge">
+            <span class="job-filter-badge__label">Showing: On Hold</span>
+            <button
+              class="job-filter-badge__clear"
+              onClick={() => {
+                setStatusFilter("");
+                route("/app/jobs");
+              }}
+              aria-label="Clear status filter"
+            >
+              ✕
+            </button>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Job #</th>
+                  <th>Title</th>
+                  <th>Client</th>
+                  <th>Previous status</th>
+                  <th>Held since</th>
+                  <th>Reason</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.length === 0 && (
+                  <tr>
+                    <td colSpan={7} class="text--muted">
+                      {listSearch.trim() ? "No jobs match your search." : "No jobs on hold."}
+                    </td>
+                  </tr>
+                )}
+                {sorted.map((j) => (
+                  <tr key={j.id}>
+                    <td>
+                      <button type="button" class="link-btn" onClick={() => go(`/jobs/${j.id}`)}>
+                        {j.job_display ?? "JOB"}
+                      </button>
+                    </td>
+                    <td>{truncate(j.title)}</td>
+                    <td>{j.client_name ?? "—"}</td>
+                    <td>
+                      <Badge tone="warning">{formatStatus(j.hold_previous_status ?? "")}</Badge>
+                    </td>
+                    <td>
+                      {j.held_at ? formatDate(j.held_at) : "—"}
+                      {j.days_held != null ? ` · ${j.days_held}d` : ""}
+                    </td>
+                    <td>
+                      <span
+                        title={j.hold_reason ?? ""}
+                        style={{ display: "inline-block", maxWidth: "240px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      >
+                        {j.hold_reason ?? "—"}
+                      </span>
+                    </td>
+                    <td>
+                      <Button size="sm" variant="tertiary" onClick={() => go(`/jobs/${j.id}`)}>View</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!loading && !error && data && !listOnlyView && viewMode === "list" && (
         <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 240px)" }}>
         {statusFilter && (
           <div class="job-filter-badge">
@@ -287,7 +459,7 @@ export function JobPipeline(_props: RoutableProps) {
         </div>
       )}
 
-      {viewMode === "health" && (
+      {!listOnlyView && viewMode === "health" && (
         <>
           {health.loading && <Spinner center />}
           {health.error && <div class="empty-state">Couldn't load job health: {health.error}</div>}
@@ -346,7 +518,7 @@ export function JobPipeline(_props: RoutableProps) {
         </>
       )}
 
-      {!loading && !error && data && viewMode === "kanban" && (
+      {!loading && !error && data && !listOnlyView && viewMode === "kanban" && (
         <>
           {statusFilter && (
             <div class="job-filter-badge">
@@ -472,8 +644,8 @@ function JobPipelineCard({
   );
 }
 
-function total(data: JobPipelineResponse): number {
-  return Object.values(data.counts).reduce((a, b) => a + b, 0);
+function activeTotal(data: JobPipelineResponse): number {
+  return OPEN_PIPELINE_STATUSES.reduce((sum, status) => sum + (data.counts[status] ?? 0), 0);
 }
 
 function findStatus(data: JobPipelineResponse | null, id: string): JobStatus | null {

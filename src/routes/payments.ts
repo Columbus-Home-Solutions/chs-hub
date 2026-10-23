@@ -22,6 +22,7 @@ import { guard } from "../middleware/guard.js";
 import { triggerPaymentReceived } from "../lib/notification-engine.js";
 import { recomputeInvoiceStatus, round2 } from "../lib/invoicing.js";
 import { checkAndFireLienWaiver } from "../lib/completion-triggers.js";
+import { JOBBER_QUIET_SEND_MESSAGE, isJobberImportQuiet } from "../lib/jobber-board.js";
 
 const PAYMENT_ROLES = ["owner", "office_admin"] as const;
 const JOB_READ_ROLES = ["owner", "project_manager", "office_admin"] as const;
@@ -227,6 +228,10 @@ export async function handlePaymentCreate(request: Request, env: Env, ctx: Execu
   }
   if (!jobId) return err(400, "bad_request", "job_id (or invoice_id) is required.");
 
+  const gate = await env.DB.prepare("SELECT data_source, status FROM jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ data_source: string | null; status: string | null }>();
+  const quiet = isJobberImportQuiet(gate);
   const result = await recordPayment(env, {
     jobId,
     invoiceId,
@@ -235,7 +240,8 @@ export async function handlePaymentCreate(request: Request, env: Env, ctx: Execu
     method, // no convenience fee, no stripe fee → net_amount = amount
     receivedDate: str(body.received_date),
     notes: str(body.notes),
-    ctx,
+    ctx: quiet ? undefined : ctx,
+    skipNotifications: quiet,
   });
 
   await env.DB.prepare(
@@ -254,7 +260,12 @@ export async function handlePaymentCreate(request: Request, env: Env, ctx: Execu
   // from recordPayment when an invoice flips to paid + job is complete/fully paid).
   // Do NOT auto-gen per payment — that created duplicate waivers per payment row.
 
-  return json({ payment_id: result.paymentId, invoice_status: result.invoiceStatus }, { status: 201 });
+  return json({
+    payment_id: result.paymentId,
+    invoice_status: result.invoiceStatus,
+    receipt_skipped: quiet,
+    message: quiet ? JOBBER_QUIET_SEND_MESSAGE : undefined,
+  }, { status: 201 });
 }
 
 // ─── GET /api/jobs/:id/payments ───────────────────────────────────────────────

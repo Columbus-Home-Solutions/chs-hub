@@ -21,13 +21,16 @@ import {
   NON_TEST_OR_ORPHAN_CLIENT,
   notTestClientExists,
 } from "../lib/non-test-client.js";
+import { boardJobWhere } from "../lib/jobber-board.js";
 import { centralDate, laborUnpaidAggregate, weekBounds } from "../../shared/labor-week.js";
+import { timePart } from "../lib/calendar-colors.js";
 import {
   buildingClientName,
   buildingIsStale,
   buildingPlace,
   daysInBuilding,
 } from "../lib/building-widget.js";
+import { loadOwnerDecisionItems, type DecisionAction } from "../lib/owner-decisions.js";
 
 const DISMISSED_SETTING_KEY = "dashboard_dismissed_action_items";
 const DISMISS_ROLES = ["owner", "office_admin"] as const;
@@ -73,15 +76,18 @@ function actionItemLink(type: string, meta: Record<string, unknown>): string {
       return "/financial?tab=invoices&filter=due_soon";
     case "labor_payroll_due":
       return "/financial?tab=labor&view=weeks&status=unpaid";
+    case "labor_checkins_pending":
+      return "/financial?tab=labor";
     case "social_approval":
       return "/social?tab=queue";
     case "follow_up_due":
       return "/estimating?status=follow_up";
     case "lead_no_response":
       return meta.requestId ? `/estimating/${meta.requestId}` : "/estimating?tab=chs&stage=contacted";
+    case "change_order_pending":
+      return meta.jobId ? `/jobs/${meta.jobId}?tab=change_orders` : "/jobs";
     case "cost_plus_cycle":
     case "job_budget_alert":
-    case "change_order_pending":
     case "warranty_checkin":
     case "lien_waiver_sent":
     case "completion_package_ready":
@@ -334,6 +340,7 @@ interface ActionItem {
   meta: Record<string, unknown>;
   link: string;
   createdAt: string;
+  actions?: DecisionAction[];
 }
 
 /** Days between two ISO date strings. */
@@ -750,6 +757,7 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
         WHERE le.expense_id IS NULL
           AND le.batch_id IS NULL
           AND le.deleted_at IS NULL
+          AND COALESCE(le.status, 'confirmed') = 'confirmed'
           AND ${notTestClientExists("j.client_id")}`,
     ).all<{ work_date: string; days: number; day_rate: number }>();
     const byWeek = new Map<string, { week_start: string; week_end: string; unpaid: number }>();
@@ -782,6 +790,27 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     if (!/no such (table|column)/i.test(msg)) throw e;
   }
 
+  try {
+    const pendingCheckins = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM labor_entries WHERE status = 'pending' AND deleted_at IS NULL`,
+    ).first<{ n: number }>();
+    const n = pendingCheckins?.n ?? 0;
+    if (n > 0) {
+      items.push({
+        id: "labor_checkins_pending",
+        priority: "medium",
+        type: "labor_checkins_pending",
+        title: n === 1 ? "1 check-in to confirm" : `${n} check-ins to confirm`,
+        meta: { count: n },
+        link: actionItemLink("labor_checkins_pending", {}),
+        createdAt: centralDate(),
+      });
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/no such (table|column)/i.test(msg)) throw e;
+  }
+
   const visible = items.filter((i) => !dismissed.has(i.id));
 
   // Sort: high → medium → low, then oldest-first within each tier.
@@ -792,7 +821,10 @@ export async function handleDashboardActionItems(env: Env): Promise<Response> {
     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
   });
 
-  return json({ items: visible.slice(0, 8) });
+  // Decisions stay even when the informational list is full, and a dismiss
+  // check does not count as Apply, Add, Waive, Snooze, or Hold.
+  const decisions = await loadOwnerDecisionItems(env);
+  return json({ items: [...decisions, ...visible.slice(0, 8)] });
 }
 
 export async function handleDashboardActionItemDismiss(
@@ -853,6 +885,7 @@ export async function handleDashboardPipeline(env: Env): Promise<Response> {
       `SELECT status, COUNT(*) as count
        FROM jobs
        WHERE status NOT IN ('closed')
+         AND ${boardJobWhere("")}
          AND ${notTestClientExists("client_id")}
        GROUP BY status`
     ).all<{ status: string; count: number }>(),
@@ -989,8 +1022,8 @@ export async function handleDashboardSchedule(env: Env): Promise<Response> {
       type: "google_calendar",
       entry_type: "google_calendar",
       id: row.id,
-      startTime: row.start_time,
-      endTime: row.end_time ?? null,
+      startTime: timePart(row.start_time),
+      endTime: row.end_time ? timePart(row.end_time) : null,
       label: row.title,
       description: null,
       link: null,

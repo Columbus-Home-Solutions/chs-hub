@@ -5,6 +5,7 @@ import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../store/toast";
+import { formatDateTime } from "../../lib/format";
 import { go } from "../../lib/nav";
 import { SiriShortcutCard } from "./SiriShortcutCard";
 
@@ -65,6 +66,21 @@ export function IntegrationsTab() {
     credentials_present: boolean;
     client_id_configured: boolean;
     client_secret_configured: boolean;
+    write_enabled?: boolean;
+    write_scope?: boolean;
+    calendar_sync?: "off" | "needs_reconnect" | "on";
+    write_synced?: number;
+    write_failed?: number;
+    write_last_at?: string | null;
+    changes_enabled?: boolean;
+    pending_changes?: Array<{
+      id: string;
+      source_type: "estimate_request" | "schedule_entry";
+      source_id: string;
+      change_kind: "moved" | "deleted";
+      summary_label: string | null;
+      when_label: string | null;
+    }>;
   } | null>(null);
   const [gbp, setGbp] = useState<{
     connected: boolean;
@@ -106,6 +122,21 @@ export function IntegrationsTab() {
           credentials_present: boolean;
           client_id_configured: boolean;
           client_secret_configured: boolean;
+          write_enabled?: boolean;
+          write_scope?: boolean;
+          calendar_sync?: "off" | "needs_reconnect" | "on";
+          write_synced?: number;
+          write_failed?: number;
+          write_last_at?: string | null;
+    changes_enabled?: boolean;
+    pending_changes?: Array<{
+      id: string;
+      source_type: "estimate_request" | "schedule_entry";
+      source_id: string;
+      change_kind: "moved" | "deleted";
+      summary_label: string | null;
+      when_label: string | null;
+    }>;
         }>("/api/google-calendar/status"),
         api.get<{ url: string }>("/api/calendar/ical/settings"),
         api.get<{
@@ -245,6 +276,90 @@ export function IntegrationsTab() {
       const r = await api.post<{ authorize_url: string }>("/api/integrations/google-calendar/connect");
       window.open(r.authorize_url, "_blank", "noopener,noreferrer");
       toast.push("info", "Complete Google authorization in the new tab, then refresh this page.");
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const toggleCalendarChanges = async () => {
+    if (!gcal?.write_scope) return;
+    setGcalBusy(true);
+    try {
+      await api.post("/api/google-calendar/changes-enabled", { enabled: !gcal.changes_enabled });
+      toast.push("success", gcal.changes_enabled ? "Change alerts off" : "Change alerts on");
+      void load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const decideChange = async (id: string, action: string) => {
+    setGcalBusy(true);
+    try {
+      await api.post(`/api/google-calendar/changes/${id}`, { action });
+      toast.push("success", "Saved");
+      void load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const toggleCalendarWrite = async () => {
+    if (!gcal?.write_scope) return;
+    setGcalBusy(true);
+    try {
+      await api.post("/api/google-calendar/write-enabled", { enabled: !gcal.write_enabled });
+      toast.push("success", gcal.write_enabled ? "Calendar sync off" : "Calendar sync on");
+      void load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const syncChsItems = async () => {
+    setGcalBusy(true);
+    try {
+      const r = await api.post<{ failed?: number }>("/api/google-calendar/write-sync");
+      toast.push("success", r.failed ? `${r.failed} still need another try` : "CHS calendar items synced");
+      void load();
+    } catch (e) {
+      toast.push("error", errMsg(e));
+    } finally {
+      setGcalBusy(false);
+    }
+  };
+
+  const backfillChsItems = async () => {
+    setGcalBusy(true);
+    try {
+      const preview = await api.get<{ count: number }>("/api/google-calendar/backfill");
+      const count = preview.count ?? 0;
+      if (count === 0) {
+        toast.push("info", "No future CHS items are waiting to be added.");
+        return;
+      }
+      const ok = window.confirm(
+        `This will add ${count} future CHS item${count === 1 ? "" : "s"} to your Google Calendar. Estimate visits show as busy. Job days and warranty calls show as free. Continue?`,
+      );
+      if (!ok) return;
+      const r = await api.post<{ attempted: number; remaining: number }>("/api/google-calendar/backfill", {
+        confirm: true,
+      });
+      toast.push(
+        "success",
+        r.remaining > 0
+          ? `Added a batch of ${r.attempted}. ${r.remaining} still waiting — press again.`
+          : `Added ${r.attempted} future item${r.attempted === 1 ? "" : "s"}.`,
+      );
+      void load();
     } catch (e) {
       toast.push("error", errMsg(e));
     } finally {
@@ -540,9 +655,102 @@ export function IntegrationsTab() {
             </Badge>
           </div>
           <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "var(--space-sm) 0" }}>
-            Read-only sync of Google Meet events into CHS. Uses the same Google OAuth Web client as dashboard
-            sign-in.
+            Reads Google Meet events into CHS, and can show future CHS visits and schedule days on your
+            primary Google Calendar. CHS stays the source of truth. With change alerts off, edits you make
+            on Google are not read back, and the next CHS change can overwrite them. With change alerts on,
+            a moved or deleted CHS item rings the bell so you can Apply or Ignore.
           </p>
+          <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-sm)" }}>
+            Calendar sync:{" "}
+            <Badge
+              tone={
+                gcal?.calendar_sync === "on"
+                  ? "success"
+                  : gcal?.calendar_sync === "needs_reconnect"
+                    ? "warning"
+                    : "neutral"
+              }
+            >
+              {gcal?.calendar_sync === "on"
+                ? "On"
+                : gcal?.calendar_sync === "needs_reconnect"
+                  ? "Needs reconnect"
+                  : "Off"}
+            </Badge>
+          </p>
+          {gcal?.calendar_sync === "needs_reconnect" && (
+            <p class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
+              Reconnect Google to enable calendar sync.
+            </p>
+          )}
+          <div class="flex items-center gap-sm" style={{ marginBottom: "var(--space-sm)" }}>
+            <label class="form-label" style={{ margin: 0 }}>
+              Show CHS items on my Google Calendar
+            </label>
+            <input
+              type="checkbox"
+              checked={!!gcal?.write_enabled}
+              disabled={gcalBusy || !gcal?.write_scope}
+              onChange={() => void toggleCalendarWrite()}
+            />
+          </div>
+          <div class="flex items-center gap-sm" style={{ marginBottom: "var(--space-sm)" }}>
+            <label class="form-label" style={{ margin: 0 }}>
+              Tell me when a CHS item moves on Google
+            </label>
+            <input
+              type="checkbox"
+              checked={!!gcal?.changes_enabled}
+              disabled={gcalBusy || !gcal?.write_scope}
+              onChange={() => void toggleCalendarChanges()}
+            />
+          </div>
+          {(gcal?.pending_changes ?? []).map((change) => (
+            <div key={change.id} style={{ marginBottom: "var(--space-sm)" }}>
+              <p class="text--muted" style={{ fontSize: "var(--text-sm)", margin: "0 0 var(--space-xs)" }}>
+                {change.change_kind === "deleted"
+                  ? `${change.summary_label ?? "A CHS item"} was removed on Google.`
+                  : `${change.summary_label ?? "A CHS item"} moved on Google to ${change.when_label ?? "a new time"}.`}
+              </p>
+              <div class="flex gap-sm">
+                {change.change_kind === "deleted" ? (
+                  <>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "cancel")}>
+                      Cancel in CHS
+                    </Button>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "ignore")}>
+                      Ignore (recreate on Google)
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "apply")}>
+                      Apply
+                    </Button>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "apply_silent")}>
+                      {change.source_type === "schedule_entry"
+                        ? "Apply without texting"
+                        : "Apply without texting the customer"}
+                    </Button>
+                    <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void decideChange(change.id, "ignore")}>
+                      Ignore (keep CHS time)
+                    </Button>
+                  </>
+                )}
+              </div>
+              {change.source_type === "schedule_entry" && change.change_kind === "moved" && (
+                <p class="text--muted" style={{ fontSize: "var(--text-xs)", margin: "var(--space-xs) 0 0" }}>
+                  A normal schedule change texts the crew, not the customer. Apply without texting skips that crew text.
+                </p>
+              )}
+            </div>
+          ))}
+          {(gcal?.write_synced != null || gcal?.write_failed != null) && (
+            <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
+              CHS items on Google: {gcal?.write_synced ?? 0} synced, {gcal?.write_failed ?? 0} failed
+              {gcal?.write_last_at ? ` · last write ${formatDateTime(gcal.write_last_at)}` : ""}
+            </p>
+          )}
           {gcal && !gcal.credentials_present && (
             <div
               class="text--muted"
@@ -570,7 +778,7 @@ export function IntegrationsTab() {
           )}
           {gcal?.last_sync && (
             <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
-              Last sync: {new Date(gcal.last_sync).toLocaleString()}
+              Last sync: {formatDateTime(gcal.last_sync)}
             </p>
           )}
           <div class="flex gap-sm" style={{ marginTop: "var(--space-sm)" }}>
@@ -581,7 +789,18 @@ export function IntegrationsTab() {
             ) : (
               <>
                 <Button size="sm" variant="secondary" disabled={gcalBusy} onClick={() => void syncGcal()}>
+                  Sync Meet events
+                </Button>
+                {gcal?.calendar_sync === "needs_reconnect" && (
+                  <Button size="sm" variant="primary" disabled={gcalBusy} onClick={() => void connectGcal()}>
+                    Reconnect Google
+                  </Button>
+                )}
+                <Button size="sm" variant="secondary" disabled={gcalBusy || !gcal?.write_enabled} onClick={() => void syncChsItems()}>
                   Sync now
+                </Button>
+                <Button size="sm" variant="secondary" disabled={gcalBusy || !gcal?.write_enabled} onClick={() => void backfillChsItems()}>
+                  Sync existing future items
                 </Button>
                 <Button size="sm" variant="tertiary" disabled={busy === "google_calendar"} onClick={() => void disconnect("google_calendar")}>
                   Disconnect
@@ -614,7 +833,7 @@ export function IntegrationsTab() {
           )}
           {gbp?.last_sync && (
             <p class="text--muted" style={{ fontSize: "var(--text-xs)" }}>
-              Last sync: {new Date(gbp.last_sync).toLocaleString()}
+              Last sync: {formatDateTime(gbp.last_sync)}
             </p>
           )}
           {gbp?.last_error && (
@@ -711,7 +930,7 @@ export function IntegrationsTab() {
                     <div class="kv" style={{ marginTop: "var(--space-sm)" }}>
                       <div class="kv__row">
                         <span class="kv__label">Last sync</span>
-                        <span class="kv__value">{c.last_sync ? new Date(c.last_sync).toLocaleString() : "—"}</span>
+                        <span class="kv__value">{c.last_sync ? formatDateTime(c.last_sync) : "—"}</span>
                       </div>
                       {c.last_error && (
                         <div class="kv__row">

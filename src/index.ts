@@ -30,6 +30,7 @@ import { replayDeadLetters } from "./lib/ops/dlq.js";
 import { syncWorkbook } from "./lib/wc/sync.js";
 import { runWcSpreadsheetSync, getWcStatus } from "./services/wc-spreadsheet.js";
 import { runQboSweep, getQboStatus } from "./lib/qbo-sync.js";
+import { runQboTokenKeepalive } from "./lib/qbo-token-keepalive.js";
 import {
   handleIntegrationsList,
   handleImageGenStatus,
@@ -44,6 +45,7 @@ import {
   handleQboDefaultCustomerPut,
   handleQboStatus,
   handleQboSync,
+  handleQboRefresh,
 } from "./routes/integrations.js";
 import {
   handleWcSpreadsheetSync,
@@ -60,6 +62,8 @@ import {
   handleJobUpdate,
   handleJobDelete,
   handleJobStatus,
+  handleJobHold,
+  handleJobRelease,
   handleJobReverseConversion,
   handleJobCloseEligibility,
   handleJobReviewReceived,
@@ -210,6 +214,22 @@ import {
   handleLaborWorkers,
 } from "./routes/labor.js";
 import {
+  handleCheckinCounts,
+  handleCheckinDelete,
+  handleCheckinGet,
+  handleCheckinLink,
+  handleCheckinManifest,
+  handleCheckinPost,
+  handleWorkerLanguage,
+  handleCheckinPunch,
+  handleCheckinQr,
+  handleCheckinSchedule,
+  handleLaborConfirm,
+  handleLaborPending,
+  handleLaborReject,
+  handleTextUpdates,
+} from "./routes/labor-checkin.js";
+import {
   handleTimeEntryClockIn,
   handleTimeEntryUpdate,
   handleJobTimeEntries,
@@ -304,7 +324,8 @@ import { processQuoteFollowUps } from "./lib/quote-follow-up.js";
 import { processNewLeadOutreach } from "./lib/new-lead-outreach.js";
 import { processProposalReviewReminders } from "./lib/proposal-reminders.js";
 import { processReviewFollowUps } from "./lib/review-followups.js";
-import { runLateFeeCalculator, runInvoiceDueCheck } from "./lib/invoicing.js";
+import { runInvoiceDueCheck } from "./lib/invoicing.js";
+import { handleLateFeeAction, handleLateFeePreview, runLateFeeProposals } from "./lib/late-fee.js";
 import { runWeeklyPhotoSummary } from "./lib/weekly-photo-summary.js";
 import { runImageGenSelfTest } from "./lib/image-gen-probe.js";
 import { runSocialTokenHealth } from "./lib/social-token-health.js";
@@ -324,6 +345,7 @@ import {
   handleEstimateRequestCreate,
   handleEstimateRequestUpdate,
   handleEstimateRequestAppointment,
+  handleEstimateRequestBookingLink,
   handleEstimateRequestLost,
   handleEstimateRequestWin,
   handleEstimateRequestDelete,
@@ -408,6 +430,7 @@ import {
   handleStripeWebhook,
 } from "./routes/public-quote.js";
 import { handlePublicCompanyAsset } from "./routes/public-company-assets.js";
+import { handlePublicBookingGet, handlePublicBookingPost } from "./routes/public-booking.js";
 import {
   handleInvoiceList,
   handleInvoiceGet,
@@ -451,6 +474,8 @@ import {
   handleChangeOrderUpdate,
   handleChangeOrderSend,
   handleChangeOrderReject,
+  handleChangeOrderApproveManual,
+  handleChangeOrderApprovalProof,
 } from "./routes/change-orders.js";
 // ── Document Management (Sprint 15) ──────────────────────────────────────────
 import {
@@ -500,6 +525,7 @@ import {
 import {
   handleCompletionPackageCompile,
   handleCompletionPackageGet,
+  handleCompletionPackageRecompile,
   handleCompletionPackageSend,
   handleLienWaiverRetry,
 } from "./routes/completion-package.js";
@@ -588,6 +614,12 @@ import {
   handleGcalStatus,
   handleGcalEvents,
   handleGcalSync,
+  handleGcalWriteEnabled,
+  handleGcalWriteSync,
+  handleGcalBackfillPreview,
+  handleGcalBackfill,
+  handleGcalChangesEnabled,
+  handleGcalChangeAction,
   handleGcalConnect,
   handleGcalCallback,
   handleGcalDisconnect,
@@ -603,6 +635,8 @@ import {
 } from "./routes/google-business-profile.js";
 import { handleIcalFeed, handleIcalSettings, handleIcalRegenerate } from "./routes/calendar-ical.js";
 import { syncGoogleCalendarEvents } from "./lib/google-calendar-sync.js";
+import { pollGoogleCalendarChanges } from "./lib/google-calendar-changes.js";
+import { retryFailedCalendarWrites } from "./lib/google-calendar-writeback.js";
 import { runGbpReviewsSyncTick } from "./lib/google-reviews-sync.js";
 import { runHlLeadMirror, runHlLeadMirrorTick } from "./lib/hl-lead-mirror.js";
 import { maybeInjectDashboardHtml } from "./lib/dashboard-inject.js";
@@ -742,11 +776,16 @@ export default {
         // Sprint 39 Run 1: sub-facing onboarding packet (token auth, no Access).
         p === "/packet" || p.startsWith("/packet/") ||
         p.startsWith("/api/packet/") ||
+        // Customer self-scheduling. Token is the only credential. No wildcard.
+        p === "/book" || p.startsWith("/book/") ||
+        p.startsWith("/api/public/book/") ||
         p === "/api/webhooks/stripe" ||
         p === "/api/webhooks/twilio/call-whisper" ||
         p === "/api/webhooks/twilio/call-intake" ||
         p === "/api/webhooks/twilio/call-status" ||
         p === "/api/webhooks/twilio/voice-lsa" ||
+        // Inbound SMS only. Signature-checked in the handler. Status callback stays off this host.
+        p === "/api/webhooks/twilio/inbound" ||
         p === "/api/integrations/boldsign/webhook" ||
         // Legal pages — required on custom domain for A2P 10DLC compliance (unauthenticated).
         p === "/privacy-policy" ||
@@ -823,6 +862,13 @@ export default {
     // UNAUTHENTICATED on purpose: gated only by the estimate's portal_token
     // (or, for the webhook, the Stripe signature). No guard()/Access here.
     // Matched early so the token paths never fall through to auth'd routes.
+    const publicBook = url.pathname.match(/^\/api\/public\/book\/([^/]+)$/);
+    if (publicBook && request.method === "GET") {
+      return handlePublicBookingGet(request, env, decodeURIComponent(publicBook[1]));
+    }
+    if (publicBook && request.method === "POST") {
+      return handlePublicBookingPost(request, env, decodeURIComponent(publicBook[1]));
+    }
     const publicCompanyAsset = url.pathname.match(
       /^\/api\/public\/company-assets\/([a-z0-9-]+)$/,
     );
@@ -925,6 +971,36 @@ export default {
     const subItemDone = url.pathname.match(/^\/api\/sub\/([^/]+)\/items\/([^/]+)\/done$/);
     if (subItemDone && request.method === "PUT") {
       return handleSubItemDone(env, request, decodeURIComponent(subItemDone[1]), decodeURIComponent(subItemDone[2]));
+    }
+    const subCheckin = url.pathname.match(/^\/api\/sub\/([^/]+)\/checkin(?:\/([^/]+))?$/);
+    if (subCheckin && request.method === "GET" && !subCheckin[2]) {
+      return handleCheckinGet(env, decodeURIComponent(subCheckin[1]));
+    }
+    if (subCheckin && request.method === "POST" && !subCheckin[2]) {
+      return handleCheckinPost(env, decodeURIComponent(subCheckin[1]), request);
+    }
+    if (subCheckin && request.method === "DELETE" && subCheckin[2]) {
+      return handleCheckinDelete(env, decodeURIComponent(subCheckin[1]), decodeURIComponent(subCheckin[2]));
+    }
+    const subLanguage = url.pathname.match(/^\/api\/sub\/([^/]+)\/language$/);
+    if (subLanguage && request.method === "PUT") {
+      return handleWorkerLanguage(env, decodeURIComponent(subLanguage[1]), request);
+    }
+    const subSchedule = url.pathname.match(/^\/api\/sub\/([^/]+)\/schedule$/);
+    if (subSchedule && request.method === "GET") {
+      return handleCheckinSchedule(env, decodeURIComponent(subSchedule[1]));
+    }
+    const subPunch = url.pathname.match(/^\/api\/sub\/([^/]+)\/punch$/);
+    if (subPunch && request.method === "GET") {
+      return handleCheckinPunch(env, decodeURIComponent(subPunch[1]));
+    }
+    const subCounts = url.pathname.match(/^\/api\/sub\/([^/]+)\/counts$/);
+    if (subCounts && request.method === "GET") {
+      return handleCheckinCounts(env, decodeURIComponent(subCounts[1]));
+    }
+    const subManifest = url.pathname.match(/^\/api\/sub\/([^/]+)\/manifest\.webmanifest$/);
+    if (subManifest && request.method === "GET") {
+      return handleCheckinManifest(env, decodeURIComponent(subManifest[1]));
     }
     const subGet = url.pathname.match(/^\/api\/sub\/([^/]+)$/);
     if (subGet && request.method === "GET") {
@@ -1230,6 +1306,9 @@ export default {
     if (url.pathname === "/api/quickbooks/sync" && request.method === "POST") {
       return handleQboSync(request, env);
     }
+    if (url.pathname === "/api/quickbooks/refresh-token" && request.method === "POST") {
+      return handleQboRefresh(request, env);
+    }
 
     // ── WC Spreadsheet (Sprint 14 rebuild) ───────────────────────────
     if (url.pathname === "/api/wc-spreadsheet/sync" && request.method === "POST") {
@@ -1371,6 +1450,14 @@ export default {
       const jid = decodeURIComponent(jobTasks[1]);
       if (request.method === "GET") return handleTaskList(env, jid, url);
       if (request.method === "POST") return handleTaskCreate(request, env, jid);
+    }
+    const jobHold = url.pathname.match(/^\/api\/jobs\/([^/]+)\/hold$/);
+    if (jobHold && request.method === "POST") {
+      return handleJobHold(request, env, decodeURIComponent(jobHold[1]));
+    }
+    const jobRelease = url.pathname.match(/^\/api\/jobs\/([^/]+)\/release$/);
+    if (jobRelease && request.method === "POST") {
+      return handleJobRelease(request, env, decodeURIComponent(jobRelease[1]));
     }
     const jobStatus = url.pathname.match(/^\/api\/jobs\/([^/]+)\/status$/);
     if (jobStatus && request.method === "PUT") {
@@ -1536,6 +1623,10 @@ export default {
     if (jobCompletionSend && request.method === "POST") {
       return handleCompletionPackageSend(request, env, decodeURIComponent(jobCompletionSend[1]));
     }
+    const jobCompletionRecompile = url.pathname.match(/^\/api\/jobs\/([^/]+)\/completion-package\/recompile$/);
+    if (jobCompletionRecompile && request.method === "POST") {
+      return handleCompletionPackageRecompile(request, env, decodeURIComponent(jobCompletionRecompile[1]));
+    }
     const jobLienWaiverRetry = url.pathname.match(/^\/api\/jobs\/([^/]+)\/lien-waiver\/retry$/);
     if (jobLienWaiverRetry && request.method === "POST") {
       return handleLienWaiverRetry(request, env, decodeURIComponent(jobLienWaiverRetry[1]));
@@ -1639,6 +1730,13 @@ export default {
       if (request.method === "GET") return handleInvoiceList(env, url);
       if (request.method === "POST") return handleInvoiceCreate(request, env);
     }
+    if (url.pathname === "/api/late-fees/preview" && request.method === "GET") {
+      return handleLateFeePreview(request, env);
+    }
+    const invoiceLateFee = url.pathname.match(/^\/api\/invoices\/([^/]+)\/late-fee$/);
+    if (invoiceLateFee && request.method === "POST") {
+      return handleLateFeeAction(request, env, decodeURIComponent(invoiceLateFee[1]));
+    }
     const invoiceSend = url.pathname.match(/^\/api\/invoices\/([^/]+)\/send$/);
     if (invoiceSend && request.method === "POST") {
       return handleInvoiceSend(request, env, decodeURIComponent(invoiceSend[1]));
@@ -1671,6 +1769,14 @@ export default {
     if (coReject && request.method === "POST") {
       return handleChangeOrderReject(request, env, decodeURIComponent(coReject[1]));
     }
+    const coApproveManual = url.pathname.match(/^\/api\/change-orders\/([^/]+)\/approve-manual$/);
+    if (coApproveManual && request.method === "POST") {
+      return handleChangeOrderApproveManual(request, env, decodeURIComponent(coApproveManual[1]), ctx);
+    }
+    const coProof = url.pathname.match(/^\/api\/change-orders\/([^/]+)\/approval-proof$/);
+    if (coProof && request.method === "GET") {
+      return handleChangeOrderApprovalProof(request, env, decodeURIComponent(coProof[1]));
+    }
     const coById = url.pathname.match(/^\/api\/change-orders\/([^/]+)$/);
     if (coById && request.method === "PUT") {
       return handleChangeOrderUpdate(request, env, decodeURIComponent(coById[1]));
@@ -1697,6 +1803,25 @@ export default {
     }
     if (url.pathname === "/api/google-calendar/sync" && request.method === "POST") {
       return handleGcalSync(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/write-enabled" && request.method === "POST") {
+      return handleGcalWriteEnabled(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/write-sync" && request.method === "POST") {
+      return handleGcalWriteSync(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/backfill" && request.method === "GET") {
+      return handleGcalBackfillPreview(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/backfill" && request.method === "POST") {
+      return handleGcalBackfill(request, env);
+    }
+    if (url.pathname === "/api/google-calendar/changes-enabled" && request.method === "POST") {
+      return handleGcalChangesEnabled(request, env);
+    }
+    const gcalChange = url.pathname.match(/^\/api\/google-calendar\/changes\/([0-9a-fA-F-]{36})$/);
+    if (gcalChange && request.method === "POST") {
+      return handleGcalChangeAction(request, env, gcalChange[1]);
     }
     if (url.pathname === "/api/google-business-profile/status" && request.method === "GET") {
       return handleGbpStatus(request, env);
@@ -1987,6 +2112,33 @@ export default {
       return handleActiveTimeEntries(env, url);
     }
     // ── Labor tracker (day-rate) ─────────────────────────────────────
+    if (url.pathname === "/api/labor/pending" && request.method === "GET") {
+      return handleLaborPending(request, env);
+    }
+    if (url.pathname === "/api/labor/pending/confirm" && request.method === "POST") {
+      return handleLaborConfirm(request, env);
+    }
+    if (url.pathname === "/api/labor/pending/reject" && request.method === "POST") {
+      return handleLaborReject(request, env);
+    }
+    const laborCheckinLink = url.pathname.match(/^\/api\/labor\/workers\/([^/]+)\/checkin-link$/);
+    if (laborCheckinLink && request.method === "GET") {
+      return handleCheckinLink(request, env, decodeURIComponent(laborCheckinLink[1]), "get");
+    }
+    if (laborCheckinLink && request.method === "POST") {
+      return handleCheckinLink(request, env, decodeURIComponent(laborCheckinLink[1]), "regenerate");
+    }
+    if (laborCheckinLink && request.method === "DELETE") {
+      return handleCheckinLink(request, env, decodeURIComponent(laborCheckinLink[1]), "disable");
+    }
+    const laborCheckinQr = url.pathname.match(/^\/api\/labor\/workers\/([^/]+)\/checkin-qr$/);
+    if (laborCheckinQr && request.method === "GET") {
+      return handleCheckinQr(request, env, decodeURIComponent(laborCheckinQr[1]));
+    }
+    const laborTexts = url.pathname.match(/^\/api\/labor\/workers\/([^/]+)\/text-updates$/);
+    if (laborTexts && request.method === "PUT") {
+      return handleTextUpdates(request, env, decodeURIComponent(laborTexts[1]));
+    }
     if (url.pathname === "/api/labor/workers" && request.method === "GET") {
       return handleLaborWorkers(request, env);
     }
@@ -2494,6 +2646,10 @@ export default {
     if (erAppointment && request.method === "PUT") {
       return handleEstimateRequestAppointment(request, env, decodeURIComponent(erAppointment[1]));
     }
+    const erBookingLink = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/booking-link$/);
+    if (erBookingLink && request.method === "POST") {
+      return handleEstimateRequestBookingLink(request, env, decodeURIComponent(erBookingLink[1]));
+    }
     const erLost = url.pathname.match(/^\/api\/estimate-requests\/([^/]+)\/lost$/);
     if (erLost && request.method === "PUT") {
       return handleEstimateRequestLost(request, env, decodeURIComponent(erLost[1]));
@@ -2873,6 +3029,14 @@ export default {
       return env.ASSETS.fetch(new Request(bidHtmlUrl.toString(), { method: "GET" }));
     }
 
+    // ── Customer self-scheduling (token-gated, no Access) ────────────
+    // /book/:token — standalone page. Calls /api/public/book/:token.
+    if (url.pathname === "/book" || url.pathname.startsWith("/book/")) {
+      const bookHtmlUrl = new URL(request.url);
+      bookHtmlUrl.pathname = "/app/book.html";
+      return env.ASSETS.fetch(new Request(bookHtmlUrl.toString(), { method: "GET" }));
+    }
+
     // ── Sub onboarding packet (Sprint 39 Run 1) ──────────────────────
     // /packet/:token — token-gated, no-auth, reuses sub.html Vite entry.
     if (url.pathname === "/packet" || url.pathname.startsWith("/packet/")) {
@@ -2956,6 +3120,16 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
       // 5-cron cap means no standalone "0 0 * * * QBO Sync" trigger. Runs after
       // billing so freshly-accrued invoices/late-fees are included in the push.
       await runQboSyncSweep(env);
+      try {
+        const w = await retryFailedCalendarWrites(env);
+        if (w.scanned > 0 || w.notified) {
+          console.log(
+            `[cron 15 7 * * *] gcal_write: scanned=${w.scanned} synced=${w.synced} failed=${w.failed} notified=${w.notified}`,
+          );
+        }
+      } catch (err) {
+        console.error("[cron 15 7 * * *] gcal_write failed:", (err as Error).message);
+      }
       return;
     case "0 12 * * *":
       await runMorning(env);
@@ -2967,16 +3141,15 @@ async function dispatchCron(cron: string, env: Env): Promise<void> {
   }
 }
 
-// Invoice billing (Sprint 9): accrue $50/day late fees on overdue invoices, then
-// enqueue due-reminder / past-due notices. Order matters — fees first so the
-// past-due notice carries the up-to-date balance. Runs inside the nightly
+// Invoice billing: propose one-time 5% late fees (no automatic charge), then
+// enqueue due-reminder / past-due notices. Runs inside the nightly
 // (15 7 * * *) tick because the account is capped at 5 cron triggers. Non-fatal.
 async function runInvoiceBilling(env: Env): Promise<void> {
   try {
-    const fees = await runLateFeeCalculator(env);
+    const fees = await runLateFeeProposals(env);
     const due = await runInvoiceDueCheck(env);
     console.log(
-      `[cron 15 7 * * *] invoice_billing: late_fees scanned=${fees.scanned} updated=${fees.updated} past_due=${fees.marked_past_due}; due_check scanned=${due.scanned} reminders=${due.reminders} past_due_notices=${due.past_due}`,
+      `[cron 15 7 * * *] invoice_billing: late_fee_proposals enabled=${fees.enabled} proposed=${fees.proposed} cancelled=${fees.cancelled} would_propose=${fees.would_propose}; due_check scanned=${due.scanned} reminders=${due.reminders} past_due_notices=${due.past_due}`,
     );
   } catch (err) {
     console.error("[cron 15 7 * * *] invoice_billing failed:", (err as Error).message);
@@ -3020,6 +3193,19 @@ async function runInvoiceBilling(env: Env): Promise<void> {
 // disconnected/error connection is a no-op; per-record failures land in the
 // qbo_sync DLQ and the next sweep retries.
 async function runQboSyncSweep(env: Env): Promise<void> {
+  // Keepalive first, even when every push gate is off, so the sweep sees a
+  // fresh access token and the in-isolate refresh lock prevents a second call.
+  try {
+    const keep = await runQboTokenKeepalive(env);
+    if (keep.ran) {
+      console.log(
+        `[cron 15 7 * * *] qbo_token_keepalive: ok=${keep.ok} notified=${keep.notified ?? false} ` +
+          `expiry=${keep.token_expiry ?? ""} access_len=${keep.access_token_len ?? 0} refresh_len=${keep.refresh_token_len ?? 0}`,
+      );
+    }
+  } catch (err) {
+    console.error(`[cron 15 7 * * *] qbo_token_keepalive failed: ${(err as Error).message}`);
+  }
   try {
     const r = await runQboSweep(env);
     if (!r.ran) {
@@ -3076,6 +3262,16 @@ async function runNotificationProcessor(env: Env): Promise<void> {
     }
   } catch (err) {
     console.error("[cron */15 * * * *] gcal_sync failed:", (err as Error).message);
+  }
+
+  // Google change awareness — one events.list, only when that switch is on. Non-fatal.
+  try {
+    const c = await pollGoogleCalendarChanges(env);
+    if (!c.skipped && (c.scanned > 0 || c.opened > 0)) {
+      console.log(`[cron */15 * * * *] gcal_changes: scanned=${c.scanned} opened=${c.opened}`);
+    }
+  } catch (err) {
+    console.error("[cron */15 * * * *] gcal_changes failed:", (err as Error).message);
   }
 
   // Quote Follow-Up Sequence (Sprint 26) — automated dual-channel (SMS + email)

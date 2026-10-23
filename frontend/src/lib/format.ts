@@ -25,8 +25,38 @@ export function formatDate(dateStr: string | null | undefined): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+const CENTRAL_DATE_TIME: Intl.DateTimeFormatOptions = {
+  timeZone: "America/Chicago",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+};
+
+/** A stored clock time, not a calendar date alone. */
+function hasTimeOfDay(value: string): boolean {
+  return /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value.trim());
+}
+
+/**
+ * Stored instants are UTC. D1 `datetime('now')` is `YYYY-MM-DD HH:MM:SS` with
+ * no zone. ISO strings may end in `Z` or an offset. Both mean the same moment.
+ */
+export function parseStoredUtc(value: string): Date | null {
+  const raw = value.trim();
+  if (!hasTimeOfDay(raw)) return null;
+  let iso = raw.includes("T") ? raw : raw.replace(" ", "T");
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso)) iso += "Z";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Clock time in America/Chicago, including daylight saving. */
 export function formatDateTime(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
+  const timed = parseStoredUtc(dateStr);
+  if (timed) return timed.toLocaleString("en-US", CENTRAL_DATE_TIME);
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return "—";
   return d.toLocaleString("en-US", {

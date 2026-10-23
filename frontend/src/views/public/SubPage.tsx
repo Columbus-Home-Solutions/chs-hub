@@ -16,6 +16,7 @@ import {
   PunchPublicHeader,
   PunchPublicLoading,
 } from "./punchPublicUi";
+import { CheckInPage } from "./CheckInPage";
 
 interface SubPublicItem {
   id: string;
@@ -94,7 +95,7 @@ async function markItemDone(
 
 export function SubPage() {
   const token = useMemo(subToken, []);
-  const [data, setData] = useState<SubPublicPayload | null>(null);
+  const [checkin, setCheckin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
@@ -158,6 +159,19 @@ export function SubPage() {
     setLoading(true);
     setError(null);
     try {
+      const checkinRes = await fetch(`/api/sub/${encodeURIComponent(token)}/checkin`, { headers: { Accept: "application/json" } });
+      if (checkinRes.ok) {
+        setCheckin(true);
+        setLoading(false);
+        return;
+      }
+      const checkinBody = await checkinRes.json().catch(() => ({}));
+      if (checkinBody?.error !== "not_available") {
+        setError(checkinBody?.message || "invalid_token");
+        setErrorStatus(checkinRes.status);
+        setLoading(false);
+        return;
+      }
       const payload = await getSubData<SubPublicPayload>(token);
       setData(payload);
     } catch (e) {
@@ -194,6 +208,8 @@ export function SubPage() {
   if (loading) {
     return <PunchPublicLoading label="Loading your items…" />;
   }
+
+  if (checkin) return <CheckInPage token={token} />;
 
   if (error || !data) {
     const inactive = errorStatus === 404 || error === "invalid_token";

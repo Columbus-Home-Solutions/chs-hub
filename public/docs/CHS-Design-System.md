@@ -344,6 +344,7 @@ Add to `public/index.html` `<head>`:
 .badge--punch_list    { color: var(--status-punch-list); background: rgba(249,115,22,0.10); border-color: rgba(249,115,22,0.25); }
 .badge--complete      { color: var(--status-complete); background: var(--color-success-subtle); border-color: var(--color-success-border); }
 .badge--closed        { color: var(--status-closed); background: rgba(100,116,139,0.10); border-color: rgba(100,116,139,0.25); }
+.badge--action_required { color: var(--color-error); background: transparent; border-color: var(--color-error); }
 
 .badge--paid          { color: var(--color-success); background: var(--color-success-subtle); border-color: var(--color-success-border); }
 .badge--sent          { color: var(--color-info); background: var(--color-info-subtle); border-color: var(--color-info-border); }

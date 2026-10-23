@@ -150,6 +150,7 @@ const ROUTE_RULES: RouteRule[] = [
   { method: "POST", pattern: /^\/api\/estimates\/[^/]+\/mark-external-deposit$/, roles: O },
   { method: "*", pattern: /^\/api\/estimates(\/.*)?$/, roles: O_PM },
   { method: "*", pattern: /^\/api\/estimate-templates(\/.*)?$/, roles: O_PM },
+  { method: "POST", pattern: /^\/api\/estimate-requests\/[^/]+\/booking-link$/, roles: O },
   { method: "*", pattern: /^\/api\/estimate-requests(\/.*)?$/, roles: O_PM },
   { method: "*", pattern: /^\/api\/line-items(\/.*)?$/, roles: O_PM },
   { method: "*", pattern: /^\/api\/sub-items(\/.*)?$/, roles: O_PM },

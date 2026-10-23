@@ -14,6 +14,7 @@ import { ClientForm } from "./ClientForm";
 import { useToast } from "../../store/toast";
 import { EstimateStatusBadge } from "../../components/EstimateStatusBadge";
 import { formatCurrency, formatDate, formatPhone, formatStatus } from "../../lib/format";
+import { buildClientLedgerRows, clientInvoiceBalance, clientInvoiceJobPath } from "./client-balance";
 import { go } from "../../lib/nav";
 import {
   COMM_CHANNELS,
@@ -59,10 +60,11 @@ interface InvoiceLite {
   title: string | null;
   job_id: string | null;
   amount: number | null;
+  total: number | null;
   total_due: number | null;
   status: string | null;
   due_date: string | null;
-  created_at: string;
+  created_at: string | null;
 }
 
 interface PaymentLite {
@@ -70,7 +72,7 @@ interface PaymentLite {
   invoice_id: string;
   amount: number;
   received_date: string | null;
-  created_at: string;
+  created_at: string | null;
   invoice_number: number | null;
 }
 
@@ -564,32 +566,8 @@ function InvoicesCard({
   payments: PaymentLite[];
   totalRevenue: number;
 }) {
-  const totalPaid = payments.reduce((sum, p) => sum + (p.amount ?? 0), 0);
-  const totalInvoiced = invoices.reduce((sum, i) => sum + (i.total_due ?? i.amount ?? 0), 0);
-  const balance = totalInvoiced - totalPaid;
-
-  type LedgerRow =
-    | { kind: "invoice"; id: string; label: string; date: string; amount: number | null; status: string | null }
-    | { kind: "payment"; id: string; label: string; date: string; amount: number; invoiceNum: number | null };
-
-  const rows: LedgerRow[] = [
-    ...invoices.map((inv): LedgerRow => ({
-      kind: "invoice",
-      id: inv.id,
-      label: inv.title ?? (inv.invoice_number ? `Invoice #${inv.invoice_number}` : "Invoice"),
-      date: inv.created_at,
-      amount: inv.total_due ?? inv.amount,
-      status: inv.status,
-    })),
-    ...payments.map((p): LedgerRow => ({
-      kind: "payment",
-      id: p.id,
-      label: `Payment${p.invoice_number ? ` on Invoice #${p.invoice_number}` : ""}`,
-      date: p.received_date ?? p.created_at,
-      amount: p.amount,
-      invoiceNum: p.invoice_number,
-    })),
-  ].sort((a, b) => b.date.localeCompare(a.date));
+  const { collected: totalPaid, writtenOff, balance } = clientInvoiceBalance(invoices, payments);
+  const rows = buildClientLedgerRows(invoices, payments);
 
   return (
     <Card title={`Invoices${invoices.length > 0 ? ` (${invoices.length})` : ""}`}>
@@ -607,15 +585,19 @@ function InvoicesCard({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {rows.map((row) => {
+                  const jobPath = row.kind === "invoice"
+                    ? clientInvoiceJobPath(invoices.find((i) => i.id === row.id)?.job_id)
+                    : null;
+                  return (
                   <tr
                     key={row.id}
-                    style={{ borderBottom: "1px solid var(--color-border-subtle)", cursor: row.kind === "invoice" ? "pointer" : "default" }}
-                    onClick={() => row.kind === "invoice" && go(`/jobs/${(invoices.find(i => i.id === row.id))?.job_id}`)}
+                    style={{ borderBottom: "1px solid var(--color-border-subtle)", cursor: jobPath ? "pointer" : "default" }}
+                    onClick={() => jobPath && go(jobPath)}
                   >
                     <td style={{ padding: "6px 8px 6px 0" }}>
                       <span class="text--muted" style={{ fontSize: "var(--text-xs)", marginRight: "6px" }}>
-                        {row.kind === "invoice" ? "INV" : "PAY"}
+                        {row.kind === "invoice" ? "INV" : row.kind === "writeoff" ? "W/O" : "PAY"}
                       </span>
                       {row.label}
                       {row.kind === "invoice" && row.status && (
@@ -634,16 +616,29 @@ function InvoicesCard({
                       </span>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
           {/* Pinned balance — not inside the scroll container */}
-          <div style={{ borderTop: "2px solid var(--color-border)", marginTop: "var(--space-sm)", paddingTop: "var(--space-sm)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>Current balance</span>
-            <span style={{ fontWeight: 700, color: balance > 0 ? "var(--color-error, #dc2626)" : "var(--color-success, #16a34a)" }}>
-              {formatCurrency(balance)}
-            </span>
+          <div style={{ borderTop: "2px solid var(--color-border)", marginTop: "var(--space-sm)", paddingTop: "var(--space-sm)", display: "grid", gap: "4px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ fontSize: "var(--text-sm)" }}>Collected</span>
+              <span style={{ fontWeight: 600 }}>{formatCurrency(totalPaid)}</span>
+            </div>
+            {writtenOff > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ fontSize: "var(--text-sm)" }}>Written off</span>
+                <span style={{ fontWeight: 600 }}>{formatCurrency(writtenOff)}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>Current balance</span>
+              <span style={{ fontWeight: 700, color: balance > 0 ? "var(--color-error, #dc2626)" : "var(--color-success, #16a34a)" }}>
+                {formatCurrency(balance)}
+              </span>
+            </div>
           </div>
         </>
       )}

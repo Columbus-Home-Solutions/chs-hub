@@ -19,6 +19,7 @@ interface PublicInvoice {
   amount: number;
   tax_amount: number;
   late_fee_amount: number;
+  late_fee_label?: string;
   credits_applied: number;
   total_due: number;
   collected: number;
@@ -160,7 +161,7 @@ export function PayPage() {
               )}
               {inv.late_fee_amount > 0 && (
                 <div class="preview__total-row">
-                  <span>Late fee</span>
+                  <span>{inv.late_fee_label || "Late fee"}</span>
                   <span>{formatCurrency(inv.late_fee_amount)}</span>
                 </div>
               )}

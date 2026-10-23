@@ -635,6 +635,7 @@ export async function handleJobRevenue(request: Request, env: Env): Promise<Resp
               COALESCE((
                 SELECT SUM(le.days * le.day_rate) FROM labor_entries le
                 WHERE le.job_id = j.id AND le.expense_id IS NULL AND le.deleted_at IS NULL
+                  AND COALESCE(le.status, 'confirmed') = 'confirmed'
               ), 0) AS accrued_labor
        FROM jobs j
        JOIN clients c ON j.client_id = c.id

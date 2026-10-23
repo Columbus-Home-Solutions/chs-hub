@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useState, useEffect } from "preact/hooks";
 import { useRouter } from "preact-router";
 import { route } from "preact-router";
 import { go } from "../../lib/nav";
@@ -8,6 +8,7 @@ import {
   parentActive,
 } from "../../lib/sidebar-nav";
 import { UntouchedLeadsBadge } from "./UntouchedLeadsBadge";
+import { api } from "../../api";
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,10 @@ export function Sidebar({
     ).map((s) => s.id),
   );
   const [expanded, setExpanded] = useState<Set<string>>(initiallyOpen);
+  const [checkins, setCheckins] = useState(0);
+  useEffect(() => {
+    api.get<{ count: number }>("/api/labor/pending").then((data) => setCheckins(data.count)).catch(() => setCheckins(0));
+  }, [currentPath]);
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -161,6 +166,9 @@ export function Sidebar({
                     >
                       {child.label}
                       {child.label === "Leads" && <UntouchedLeadsBadge />}
+                      {child.label === "Labor Tracker" && checkins > 0 && (
+                        <span class="sidebar__soon">{checkins}</span>
+                      )}
                     </div>
                   );
                 })}

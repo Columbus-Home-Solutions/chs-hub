@@ -22,7 +22,11 @@
  */
 
 import type { Env } from "../env.js";
+import { centralDate } from "../../shared/labor-week.js";
+import { isJobberImportJob } from "./jobber-board.js";
 import { triggerNotification } from "./notification-engine.js";
+
+export { defaultInvoiceDueDate, shortDueDateWarning, SHORT_DUE_WARNING } from "../../shared/invoice-due.js";
 
 export const LATE_FEE_PER_DAY = 50;
 
@@ -34,15 +38,17 @@ export const JOBBER_GID_PREFIX = "Z2lkOi8vSm9iYmVy";
  * receive due / past-due notices. Not a setting and not a column.
  *
  * A missing job (NULL job_id) is still excluded when the invoice id is a
- * Jobber GraphQL id or invoices.data_source is jobber_import.
+ * Jobber GraphQL id, invoices.data_source is jobber_import, or the job is an
+ * import on either `data_source` or `source`.
  */
 export function isJobberHistoryInvoice(opts: {
   invoiceId: string;
   invoiceDataSource?: string | null;
   jobDataSource?: string | null;
+  jobSource?: string | null;
 }): boolean {
   if ((opts.invoiceDataSource ?? "").trim() === "jobber_import") return true;
-  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  if (isJobberImportJob({ data_source: opts.jobDataSource, source: opts.jobSource })) return true;
   if ((opts.invoiceId ?? "").startsWith(JOBBER_GID_PREFIX)) return true;
   return false;
 }
@@ -51,8 +57,24 @@ export function isJobberHistoryInvoice(opts: {
 export const JOBBER_HISTORY_INVOICE_SQL = `
   AND i.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
   AND COALESCE(i.data_source, '') != 'jobber_import'
-  AND COALESCE(j.data_source, '') != 'jobber_import'`;
+  AND COALESCE(j.data_source, '') != 'jobber_import'
+  AND COALESCE(j.source, '') != 'jobber_import'`;
 
+/** Native invoices Tony has put on hold. Jobber history is excluded separately. */
+export function isBillingHeld(billingHold: number | null | undefined): boolean {
+  return Number(billingHold ?? 0) === 1;
+}
+
+/**
+ * Historical Jobber estimates keep the Jobber Total as the header price.
+ * Line math can be higher when Jobber excluded optional items or applied a
+ * discount. Native estimates are not protected.
+ */
+export function jobberImportHeaderIsProtected(dataSource: string | null | undefined): boolean {
+  return (dataSource ?? "").trim() === "jobber_import";
+}
+
+export const BILLING_HOLD_SQL = `AND COALESCE(i.billing_hold, 0) = 0`;
 export const DEFAULT_DUE_DAYS = 7;
 export const CONVENIENCE_FEE_RATE = 0.035;
 
@@ -98,6 +120,35 @@ export function computeTotalDue(
 /** The 3.5% convenience fee (revenue) on an electronic payment of `base`. */
 export function convenienceFee(base: number, rate = CONVENIENCE_FEE_RATE): number {
   return round2(base * rate);
+}
+
+/**
+ * Past-due reminders go out on day 1, day 4, and day 8 after the due date,
+ * then every 7 days. Day 0 (the due date itself) is not a past-due day.
+ */
+export function isPastDueReminderDay(dueDate: string, today: string): boolean {
+  const due = dueDate.slice(0, 10);
+  const day = today.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due) || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  const elapsed = Math.round(
+    (Date.parse(`${day}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / 86_400_000,
+  );
+  if (elapsed === 1 || elapsed === 4) return true;
+  return elapsed >= 8 && (elapsed - 8) % 7 === 0;
+}
+
+/** Paid, void, and held invoices do not get a past-due reminder. */
+export function pastDueReminderApplies(input: {
+  dueDate: string | null;
+  today: string;
+  status: string | null;
+  billingHold?: number | null;
+  lateFeeHold?: number | null;
+}): boolean {
+  if (!input.dueDate) return false;
+  if (input.status === "paid" || input.status === "void" || input.status === "draft") return false;
+  if (Number(input.billingHold ?? 0) === 1 || Number(input.lateFeeHold ?? 0) === 1) return false;
+  return isPastDueReminderDay(input.dueDate, input.today);
 }
 
 /** Date `days` after a YYYY-MM-DD (or ISO) date, as YYYY-MM-DD. */
@@ -154,6 +205,7 @@ export interface InvoiceRow {
   title: string | null;
   description: string | null;
   amount: number | null;
+  total: number | null;
   tax_amount: number | null;
   late_fee_amount: number | null;
   credits_applied: number | null;
@@ -179,7 +231,7 @@ export interface InvoiceRow {
 }
 
 export const INVOICE_COLUMNS = `id, invoice_number, job_id, client_id, billing_model, invoice_type,
-  title, description, amount, tax_amount, late_fee_amount, credits_applied, total_due,
+  title, description, amount, total, tax_amount, late_fee_amount, credits_applied, total_due,
   status, sent_date, viewed_date, due_date, paid_date, paid_amount, payment_method,
   stripe_payment_id, portal_link, payment_token, cost_plus_cycle_id, milestone_number,
   trade_line_item_id, line_item_ids, payer_id, notes, created_at, created_by`;
@@ -196,6 +248,7 @@ export function shapeInvoice(r: InvoiceRow) {
     title: r.title,
     description: r.description,
     amount: r.amount,
+    total: r.total,
     tax_amount: r.tax_amount ?? 0,
     late_fee_amount: r.late_fee_amount ?? 0,
     credits_applied: r.credits_applied ?? 0,
@@ -521,52 +574,18 @@ export interface LateFeeStats {
 type BillingInvoice = InvoiceRow & {
   invoice_data_source?: string | null;
   job_data_source?: string | null;
+  job_source?: string | null;
+  billing_hold?: number | null;
+  late_fee_hold?: number | null;
 };
 
 const BILLING_INVOICE_COLUMNS = `${INVOICE_COLUMNS.split(",")
   .map((c) => `i.${c.trim()}`)
-  .join(", ")}, i.data_source AS invoice_data_source, j.data_source AS job_data_source`;
+  .join(", ")}, i.data_source AS invoice_data_source, j.data_source AS job_data_source, j.source AS job_source, i.billing_hold`;
 
-export async function runLateFeeCalculator(env: Env): Promise<LateFeeStats> {
-  const stats: LateFeeStats = { scanned: 0, updated: 0, marked_past_due: 0 };
-  const today = new Date().toISOString().slice(0, 10);
-  const { results } = await env.DB.prepare(
-    `SELECT ${BILLING_INVOICE_COLUMNS}
-       FROM invoices i
-       LEFT JOIN jobs j ON j.id = i.job_id
-      WHERE i.status IN ('sent','viewed','partial','past_due')
-        AND i.due_date IS NOT NULL AND substr(i.due_date, 1, 10) < ?
-        ${JOBBER_HISTORY_INVOICE_SQL}`,
-  )
-    .bind(today)
-    .all<BillingInvoice>();
-
-  for (const inv of results ?? []) {
-    if (
-      isJobberHistoryInvoice({
-        invoiceId: inv.id,
-        invoiceDataSource: inv.invoice_data_source,
-        jobDataSource: inv.job_data_source,
-      })
-    ) {
-      continue;
-    }
-    stats.scanned++;
-    const fee = accruedLateFee(inv.due_date);
-    const newTotalDue = computeTotalDue(inv.amount ?? 0, inv.tax_amount ?? 0, fee, inv.credits_applied ?? 0);
-    const becomesPastDue = inv.status === "sent" || inv.status === "viewed";
-    const nextStatus = becomesPastDue ? "past_due" : inv.status ?? "past_due";
-    // Skip the write if nothing changed (idempotent daily re-run).
-    if (round2(inv.late_fee_amount ?? 0) === fee && nextStatus === inv.status) continue;
-    await env.DB.prepare(
-      "UPDATE invoices SET late_fee_amount = ?, total_due = ?, status = ? WHERE id = ?",
-    )
-      .bind(fee, newTotalDue, nextStatus, inv.id)
-      .run();
-    stats.updated++;
-    if (becomesPastDue) stats.marked_past_due++;
-  }
-  return stats;
+/** Retired. The $50/day accrual no longer writes. Proposals live in late-fee.ts. */
+export async function runLateFeeCalculator(_env: Env): Promise<LateFeeStats> {
+  return { scanned: 0, updated: 0, marked_past_due: 0 };
 }
 
 // ─── cron: invoice due check (reminders + past-due notices) ───────────────────
@@ -591,23 +610,29 @@ function fmtDate(iso: string | null): string {
  * Invoice Due Check (daily cron): enqueue-only — the every-15-min engine drains.
  *   - reminder ~2 days before due_date for sent/viewed invoices (once per
  *     invoice via instanceKey 'due_reminder').
- *   - past-due notice daily after the grace period for overdue unpaid invoices
- *     (once per day via instanceKey = today's date), including the running late
- *     fee. Stays SIMULATED (dispatch mode unchanged).
+ *   - past-due notice on day 1, day 4, and day 8 after the due date, then
+ *     weekly. Held, paid, and void invoices are skipped. Dispatch mode unchanged.
  */
 export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
   const stats: DueCheckStats = { scanned: 0, reminders: 0, past_due: 0 };
-  const today = new Date().toISOString().slice(0, 10);
+  const today = centralDate();
   const reminderDay = addDays(today, 2); // due in ~2 days
 
-  const { results } = await env.DB.prepare(
-    `SELECT ${BILLING_INVOICE_COLUMNS}
+  const dueSql = `SELECT ${BILLING_INVOICE_COLUMNS}
        FROM invoices i
        LEFT JOIN jobs j ON j.id = i.job_id
       WHERE i.status IN ('sent','viewed','partial','past_due')
         AND i.due_date IS NOT NULL
-        ${JOBBER_HISTORY_INVOICE_SQL}`,
-  ).all<BillingInvoice>();
+        ${JOBBER_HISTORY_INVOICE_SQL}
+        ${BILLING_HOLD_SQL}`;
+  let results: BillingInvoice[] = [];
+  try {
+    const held = await env.DB.prepare(`${dueSql} AND COALESCE(i.late_fee_hold, 0) = 0`).all<BillingInvoice>();
+    results = held.results ?? [];
+  } catch {
+    const plain = await env.DB.prepare(dueSql).all<BillingInvoice>();
+    results = plain.results ?? [];
+  }
 
   for (const inv of results ?? []) {
     if (
@@ -615,7 +640,9 @@ export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
         invoiceId: inv.id,
         invoiceDataSource: inv.invoice_data_source,
         jobDataSource: inv.job_data_source,
-      })
+        jobSource: inv.job_source,
+      }) ||
+      isBillingHeld(inv.billing_hold)
     ) {
       continue;
     }
@@ -639,7 +666,15 @@ export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
       stats.reminders += res.enqueued;
     }
 
-    if (due < today) {
+    if (
+      pastDueReminderApplies({
+        dueDate: due,
+        today,
+        status: inv.status,
+        billingHold: inv.billing_hold,
+        lateFeeHold: inv.late_fee_hold,
+      })
+    ) {
       const res = await triggerNotification(env, "invoice_past_due", {
         clientId: inv.client_id,
         jobId: inv.job_id,

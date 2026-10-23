@@ -562,9 +562,11 @@ describe("statements, no-costs flag, and job delete guard", () => {
   });
 
   it("blocks deleting a real job that has labor entries", async () => {
+    const laborSql: string[] = [];
     const env = {
       DB: {
         prepare(sql: string) {
+          if (sql.includes("FROM labor_entries")) laborSql.push(sql);
           return {
             bind() {
               return this;
@@ -581,14 +583,17 @@ describe("statements, no-costs flag, and job delete guard", () => {
     } as unknown as Env;
     const message = await jobFinancialDeleteBlock(env, "job-1", "client-1");
     expect(message).toContain("labor days");
+    expect(laborSql[0]).toBe("SELECT COUNT(*) AS n FROM labor_entries WHERE job_id = ?");
   });
 });
 
 describe("labor delete guard and nav", () => {
   it("blocks deleting a worker who has labor entries", async () => {
+    const laborSql: string[] = [];
     const env = {
       DB: {
         prepare(sql: string) {
+          if (sql.includes("labor_entries")) laborSql.push(sql);
           return {
             bind() {
               return this;
@@ -621,6 +626,8 @@ describe("labor delete guard and nav", () => {
       "w1",
     );
     expect(res.status).toBe(409);
+    expect(laborSql.some((sql) => sql.includes("COUNT(*) FROM labor_entries WHERE sub_id = ?"))).toBe(true);
+    expect(laborSql.some((sql) => /deleted_at|status/.test(sql))).toBe(false);
   });
 
   it("highlights Financial → Labor Tracker only on that tab and the statement", () => {

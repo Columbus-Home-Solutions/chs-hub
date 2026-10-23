@@ -51,10 +51,10 @@ export function PunchListTab({
 }: {
   jobId: string;
   jobTitle: string;
-  jobStatus: JobStatus;
+  jobStatus: string;
   refetchJob?: () => void;
 }) {
-  const active = ACTIVE_STATUSES.includes(jobStatus);
+  const active = (ACTIVE_STATUSES as readonly string[]).includes(jobStatus);
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -178,7 +178,7 @@ function PunchListDetail({
 }: {
   jobId: string;
   jobTitle: string;
-  jobStatus: JobStatus;
+  jobStatus: string;
   data: PunchListResponse;
   onBack: () => void;
   refetch: () => void;

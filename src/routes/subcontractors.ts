@@ -16,6 +16,7 @@
  */
 
 import type { Env } from "../env.js";
+import { retranslateQueuedDayRate, workerLang } from "../lib/day-rate-notify.js";
 import { guard } from "../middleware/guard.js";
 
 const WRITE_ROLES = ["owner", "project_manager"] as const;
@@ -86,6 +87,10 @@ interface RawSub {
   license_expiration_date: string | null;
   worker_type: string | null;
   day_rate: number | null;
+  preferred_language?: string | null;
+  text_updates_enabled?: number | null;
+  text_updates_enabled_at?: string | null;
+  text_updates_enabled_by?: string | null;
 }
 
 /** Normalize a raw row (legacy + canonical columns) into the canonical shape. */
@@ -115,6 +120,10 @@ function shape(row: RawSub) {
     license_expiration_date: row.license_expiration_date ?? null,
     worker_type: workerType,
     day_rate: row.day_rate ?? null,
+    preferred_language: workerLang(row.preferred_language),
+    text_updates_enabled: (row.text_updates_enabled ?? 0) === 1,
+    text_updates_enabled_at: row.text_updates_enabled_at ?? null,
+    text_updates_enabled_by: row.text_updates_enabled_by ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -426,6 +435,13 @@ export async function handleSubcontractorUpdate(
     }
     set("day_rate", dayRate);
   }
+  if ("preferred_language" in body) {
+    const language = str(body.preferred_language);
+    if (language !== "en" && language !== "es") {
+      return err(422, "validation_error", "preferred_language must be en or es");
+    }
+    set("preferred_language", language);
+  }
   if ("is_active" in body) {
     const v = bool(body.is_active);
     set("is_active", v);
@@ -440,6 +456,7 @@ export async function handleSubcontractorUpdate(
   await env.DB.prepare(`UPDATE subcontractors SET ${updates.join(", ")} WHERE id = ?`)
     .bind(...binds)
     .run();
+  if ("preferred_language" in body) await retranslateQueuedDayRate(env, id);
   await logAudit(env, user.email, "subcontractor_updated", id, { fields: Object.keys(body) });
 
   const row = await env.DB.prepare("SELECT * FROM subcontractors WHERE id = ?").bind(id).first<RawSub>();

@@ -70,7 +70,7 @@ export function GlobalSearch({
         .then(([cRes, jRes]) => {
           if (cancelled) return;
           setClients(cRes.clients ?? []);
-          setJobs((jRes.jobs ?? []).slice(0, 8));
+          setJobs(jRes.jobs ?? []);
         })
         .catch(() => {
           if (cancelled) return;

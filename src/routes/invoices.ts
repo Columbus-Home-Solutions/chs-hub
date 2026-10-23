@@ -17,7 +17,6 @@
 import type { Env } from "../env.js";
 import { allocateNextInvoiceNumber } from "../lib/number-counters.js";
 import { guard } from "../middleware/guard.js";
-import { nativeJobSourceWhere } from "../lib/native-jobs.js";
 import { triggerInvoiceSent } from "../lib/notification-engine.js";
 import {
   INVOICE_COLUMNS,
@@ -25,6 +24,7 @@ import {
   type InvoiceType,
   computeSuggestions,
   computeTotalDue,
+  defaultInvoiceDueDate,
   convenienceFee,
   CONVENIENCE_FEE_RATE,
   loadInvoice,
@@ -36,8 +36,10 @@ import {
   type InvoiceRow,
 } from "../lib/invoicing.js";
 import { createOffSessionPaymentIntent, getStripeConfig } from "../lib/stripe.js";
-import { recordPayment } from "./payments.js";
+import { jobberQuietSendBlock } from "../lib/jobber-board.js";
 import { checkAndFireLienWaiver } from "../lib/completion-triggers.js";
+import { recordPayment } from "./payments.js";
+import { lateFeeExtras } from "../lib/late-fee.js";
 import { notTestClientExists } from "../lib/non-test-client.js";
 import {
   HISTORICAL_NOTE_MARKER,
@@ -169,8 +171,9 @@ export async function handleInvoiceGet(env: Env, id: string): Promise<Response> 
     }
   }
 
+  const extra = (await lateFeeExtras(env, [id])).get(id);
   return json({
-    invoice: shapeInvoice(inv),
+    invoice: { ...shapeInvoice(inv), ...(extra ?? {}) },
     payer,
     line_items,
     payments: await paymentsForInvoice(env, id),
@@ -203,7 +206,7 @@ export async function handleInvoiceCreate(request: Request, env: Env): Promise<R
   }
 
   const job = await env.DB.prepare(
-    `SELECT id, client_id, billing_model, conversion_reversed FROM jobs WHERE id = ? AND ${nativeJobSourceWhere()}`,
+    "SELECT id, client_id, billing_model, conversion_reversed FROM jobs WHERE id = ?",
   )
     .bind(jobId)
     .first<JobCtx>();
@@ -347,6 +350,9 @@ export async function handleInvoiceSend(request: Request, env: Env, id: string):
   if (inv.status === "void") return err(409, "invoice_void", "Voided invoices cannot be sent.");
   if (inv.status === "paid") return err(409, "invoice_paid", "This invoice is already paid.");
 
+  const quiet = await jobberQuietSendBlock(env, inv.job_id);
+  if (quiet) return quiet;
+
   // Business rule #1: an invoice cannot be sent without a valid client email.
   const client = inv.client_id
     ? await env.DB.prepare("SELECT email FROM clients WHERE id = ?")
@@ -361,8 +367,8 @@ export async function handleInvoiceSend(request: Request, env: Env, id: string):
   const token = inv.payment_token ?? crypto.randomUUID().replace(/-/g, "");
   const link = paymentLink(env, token);
   const nowIso = new Date().toISOString();
-  // Default the due date to sent + 7 days if it wasn't set (the 7-day grace).
-  const dueDate = inv.due_date ?? new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  // Keep a due date the owner already chose. Otherwise due is 7 Central days after send.
+  const dueDate = (inv.due_date ?? "").slice(0, 10) || defaultInvoiceDueDate(new Date(nowIso));
 
   await env.DB.prepare(
     `UPDATE invoices SET status = CASE WHEN status = 'draft' THEN 'sent' ELSE status END,
@@ -432,11 +438,14 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
       .bind(jobId, jobId)
       .all<InvoiceRow>()
   ).results ?? [];
-  const invoices = rows.map(shapeInvoice);
+  const extras = await lateFeeExtras(env, rows.map((r) => r.id));
+  const invoices = rows.map((r) => ({ ...shapeInvoice(r), ...(extras.get(r.id) ?? {}) }));
 
-  // Summary bar: invoiced (non-void), paid, balance due.
+  // Summary bar: invoiced face (non-void, including bad debt), cash paid,
+  // balance due. A bad-debt remainder is a write-off, not money still owed.
+  const face = (r: InvoiceRow) => r.total ?? r.total_due ?? r.amount ?? 0;
   const totalInvoiced = round2(
-    rows.filter((r) => r.status !== "void").reduce((s, r) => s + (r.total_due ?? r.amount ?? 0), 0),
+    rows.filter((r) => r.status !== "void").reduce((s, r) => s + face(r), 0),
   );
   const paidAgg = await env.DB.prepare(
     // Exclude payments linked to voided invoices — they no longer count toward
@@ -449,6 +458,21 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
     .bind(jobId)
     .first<{ paid: number }>();
   const totalPaid = round2(paidAgg?.paid ?? 0);
+  const badDebtIds = rows.filter((r) => (r.status ?? "").toLowerCase() === "bad_debt").map((r) => r.id);
+  let badDebtPaid = 0;
+  if (badDebtIds.length) {
+    const placeholders = badDebtIds.map(() => "?").join(", ");
+    const wrote = await env.DB.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS paid FROM payments WHERE invoice_id IN (${placeholders})`,
+    )
+      .bind(...badDebtIds)
+      .first<{ paid: number }>();
+    badDebtPaid = wrote?.paid ?? 0;
+  }
+  const badDebtFace = round2(
+    rows.filter((r) => (r.status ?? "").toLowerCase() === "bad_debt").reduce((s, r) => s + face(r), 0),
+  );
+  const writeOff = round2(Math.max(0, badDebtFace - badDebtPaid));
   const contractTotal = round2(job.contract_total ?? 0);
 
   // Approved + applied change orders folded into the summary bar (net of credits)
@@ -471,7 +495,7 @@ export async function handleJobInvoices(env: Env, jobId: string): Promise<Respon
       contract_total: contractTotal,
       total_invoiced: totalInvoiced,
       total_paid: totalPaid,
-      balance_due: round2(totalInvoiced - totalPaid),
+      balance_due: round2(Math.max(0, totalInvoiced - totalPaid - writeOff)),
       change_orders_total: round2(coAgg?.total ?? 0),
       change_orders_count: coAgg?.count ?? 0,
     },

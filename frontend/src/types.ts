@@ -1,3 +1,5 @@
+import { BOARD_PIPELINE_STATUSES, type BoardPipelineStatus } from "@chs/shared/job-pipeline";
+
 export interface Client {
   id: string;
   name: string;
@@ -190,6 +192,11 @@ export interface Subcontractor {
   /** Project-priced sub vs day-rate labor — same table, filtered in People nav. */
   worker_type?: "subcontractor" | "day_rate_labor" | null;
   day_rate?: number | null;
+  preferred_language?: "en" | "es" | null;
+  /** Day-rate schedule and punch texts. Off unless a staff member turned it on. */
+  text_updates_enabled?: boolean;
+  text_updates_enabled_at?: string | null;
+  text_updates_enabled_by?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -300,6 +307,9 @@ export interface EstimateRequest {
   lead_source_detail: string | null;
   high_level_opportunity_id: string | null;
   appointment_date: string | null;
+  appointment_time?: string | null;
+  /** `customer_self_scheduled` when the lead booked from the outreach link. */
+  booking_source?: string | null;
   appointment_completed: boolean;
   visit_notes: string | null;
   scope_draft: ScopeDraftItem[] | null;
@@ -619,23 +629,24 @@ export const REVIEW_SOURCES = ["google", "facebook", "manual"];
 
 // ─── Jobs & Tasks (Sprint 6) ─────────────────────────────────────────────────
 
-export type JobStatus =
-  | "deposit_paid"
-  | "scheduled"
-  | "in_progress"
-  | "punch_list"
-  | "complete"
-  | "closed";
+export type JobStatus = BoardPipelineStatus;
+
+const JOB_STAGE_LABELS: Record<JobStatus, string> = {
+  action_required: "Action Required",
+  unscheduled: "Unscheduled",
+  deposit_paid: "Deposit Paid",
+  scheduled: "Scheduled",
+  in_progress: "In Progress",
+  punch_list: "Punch List",
+  complete: "Complete",
+  closed: "Closed",
+};
 
 // Pipeline columns, left → right (matches the API status order).
-export const JOB_STAGES: { key: JobStatus; label: string }[] = [
-  { key: "deposit_paid", label: "Deposit Paid" },
-  { key: "scheduled", label: "Scheduled" },
-  { key: "in_progress", label: "In Progress" },
-  { key: "punch_list", label: "Punch List" },
-  { key: "complete", label: "Complete" },
-  { key: "closed", label: "Closed" },
-];
+export const JOB_STAGES: { key: JobStatus; label: string }[] = BOARD_PIPELINE_STATUSES.map((key) => ({
+  key,
+  label: JOB_STAGE_LABELS[key],
+}));
 
 // Forward-only, plus the two allowed backward exceptions (Job Management §2).
 export const JOB_BACKWARD_EXCEPTIONS: Record<string, JobStatus> = {
@@ -648,7 +659,7 @@ export interface JobCard {
   job_number: number | null;
   job_display: string | null;
   title: string | null;
-  status: JobStatus;
+  status: JobStatus | "cancelled" | "on_hold";
   client_id: string | null;
   client_name: string | null;
   billing_model: BillingModel | null;
@@ -676,6 +687,12 @@ export interface JobCard {
   days_in_status: number;
   photo_count: number;
   overdue: boolean;
+  payments_received?: number | null;
+  cancelled_on?: string | null;
+  hold_reason?: string | null;
+  hold_previous_status?: string | null;
+  held_at?: string | null;
+  days_held?: number | null;
   created_at: string | null;
   updated_at: string | null;
   assigned_to?: string | null;
@@ -689,6 +706,10 @@ export interface JobPipelineResponse {
   statuses: JobStatus[];
   counts: Record<JobStatus, number>;
   pipeline: Record<JobStatus, JobCard[]>;
+  /** status=cancelled. Not a board column. */
+  cancelled?: JobCard[];
+  /** status=on_hold. Not a board column. */
+  on_hold?: JobCard[];
 }
 
 export interface Task {

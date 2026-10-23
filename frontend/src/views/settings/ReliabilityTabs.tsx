@@ -5,6 +5,7 @@ import { Badge } from "../../components/ui/Badge";
 import { Spinner } from "../../components/ui/Spinner";
 import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
+import { formatDateTime } from "../../lib/format";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../store/toast";
 
@@ -105,7 +106,7 @@ export function AuditLogTab() {
           <tbody>
             {logs.map((l) => (
               <tr key={l.id}>
-                <td class="text--muted">{new Date(l.created_at + "Z").toLocaleString()}</td>
+                <td class="text--muted">{formatDateTime(l.created_at)}</td>
                 <td class="text--mono">{l.user_email}</td>
                 <td>{l.action}</td>
                 <td class="text--mono">
@@ -239,7 +240,7 @@ export function DlqTab() {
                     <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggle(it.id)} />
                   )}
                 </td>
-                <td class="text--muted">{new Date(it.last_seen_at).toLocaleString()}</td>
+                <td class="text--muted">{formatDateTime(it.last_seen_at)}</td>
                 <td class="text--mono">
                   {it.job_name} · {it.entity_type}
                   {it.entity_id ? `:${it.entity_id}` : ""}
@@ -352,7 +353,7 @@ export function BackupTab() {
           </div>
           <div class="kv__row">
             <span class="kv__label">Last backup</span>
-            <span class="kv__value">{new Date(data.last_backup.uploaded_at).toLocaleString()} ({data.last_backup.age_hours}h ago)</span>
+            <span class="kv__value">{formatDateTime(data.last_backup.uploaded_at)} ({data.last_backup.age_hours}h ago)</span>
           </div>
           <div class="kv__row">
             <span class="kv__label">Object</span>
@@ -501,7 +502,7 @@ export function HealthTab() {
                   <td>
                     <Badge tone={statusTone(i.status)}>{i.status}</Badge>
                   </td>
-                  <td class="text--muted">{i.last_sync ? new Date(i.last_sync).toLocaleString() : "—"}</td>
+                  <td class="text--muted">{i.last_sync ? formatDateTime(i.last_sync) : "—"}</td>
                   <td class="text--muted" style={{ maxWidth: "260px" }}>{i.last_error ?? "—"}</td>
                 </tr>
               ))}

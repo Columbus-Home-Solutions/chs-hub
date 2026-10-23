@@ -9,9 +9,10 @@ import { Modal } from "../../components/ui/Modal";
 import { FormField } from "../../components/ui/FormField";
 import { Select } from "../../components/ui/Select";
 import { useToast } from "../../store/toast";
+import { useAuth } from "../../store/auth";
 import { api, ApiError } from "../../api";
 import { go } from "../../lib/nav";
-import { formatDateTime, formatStatus } from "../../lib/format";
+import { formatDate, formatDateTime, formatStatus } from "../../lib/format";
 import { outreachLabel } from "../../lib/outreach-label";
 import { jobTypeDisplayLabel } from "@chs/shared/job-type-label";
 import { formatCurrency } from "../../lib/format";
@@ -360,6 +361,78 @@ function forwardTargets(status: EstimateRequestStatus): EstimateRequestStatus[] 
   const i = order.indexOf(status);
   if (i === -1) return [];
   return order.slice(i + 1); // strictly forward; won/lost handled separately
+}
+
+function schedulingSwitchOn(value: string | null | undefined): boolean {
+  const v = (value ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "on";
+}
+
+/** Owner-only. Copies a booking URL, or explains why there isn't one. */
+function BookingLinkCopy({ request }: { request: EstimateRequest }) {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (user?.role !== "owner") return;
+    let cancel = false;
+    api
+      .get<{ setting: { value: string } }>("/api/settings/scheduling_enabled")
+      .then((res) => {
+        if (!cancel) setEnabled(schedulingSwitchOn(res.setting?.value));
+      })
+      .catch(() => {
+        if (!cancel) setEnabled(false);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [user?.role]);
+
+  if (user?.role !== "owner" || enabled === null) return null;
+
+  const eligible =
+    (request.status === "new_request" || request.status === "contacted") && !request.appointment_date;
+  const message = !enabled
+    ? "Self-scheduling is off."
+    : !eligible
+      ? "This lead can't book a visit from a link."
+      : null;
+
+  if (message) {
+    return (
+      <p class="text--muted" style={{ fontSize: "var(--text-sm)", marginTop: "var(--space-sm)", marginBottom: 0 }}>
+        {message}
+      </p>
+    );
+  }
+
+  const copy = async () => {
+    setBusy(true);
+    try {
+      const res = await api.post<{ url: string }>(`/api/estimate-requests/${request.id}/booking-link`, {});
+      await navigator.clipboard.writeText(res.url);
+      setCopied(true);
+      toast.push("success", "Booking link copied");
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      const text = e instanceof ApiError ? e.message : "Couldn't copy the booking link.";
+      toast.push("error", text);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: "var(--space-sm)" }}>
+      <Button size="sm" variant="secondary" disabled={busy} onClick={() => void copy()}>
+        {copied ? "Copied ✓" : "Copy booking link"}
+      </Button>
+    </div>
+  );
 }
 
 export function EstimateRequestDetail({ id }: DetailProps) {
@@ -1033,9 +1106,14 @@ export function EstimateRequestDetail({ id }: DetailProps) {
             {r.appointment_date ? (
               <div class="flex items-center justify-between gap-sm" style={{ flexWrap: "wrap" }}>
                 <div>
-                  <div>{formatDateTime(r.appointment_date)}</div>
+                  <div>
+                    {r.appointment_time
+                      ? `${formatDate(r.appointment_date.slice(0, 10))} at ${r.appointment_time}`
+                      : formatDateTime(r.appointment_date)}
+                  </div>
                   <div class="text--muted" style={{ fontSize: "var(--text-sm)" }}>
                     {r.appointment_completed ? "Completed" : "Scheduled"}
+                    {r.booking_source === "customer_self_scheduled" ? " · Self-scheduled by customer" : ""}
                   </div>
                 </div>
                 <div class="flex gap-sm">
@@ -1065,6 +1143,7 @@ export function EstimateRequestDetail({ id }: DetailProps) {
                 </Button>
               </div>
             )}
+            <BookingLinkCopy request={r} />
           </Card>
 
           <Card title="📅 Proposal Review">

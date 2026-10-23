@@ -292,11 +292,34 @@ async function replayOne(
       return;
     }
 
-    // For other types, defer to the next full sync. Recording these still
-    // gives us visibility (and an alert if they keep failing); the sync
-    // job will retry naturally on its own pass.
+    case "expense": {
+      const expenseId = row.entity_id;
+      if (!expenseId) throw new Error("expense DLQ row missing entity_id");
+      const { isQboExpenseSyncEnabled, pushExpenseById } = await import("../qbo-sync.js");
+      if (!(await isQboExpenseSyncEnabled(env))) {
+        // Resolve so hourly replay does not retry or alert while the gate is off.
+        // The expense stays unpushed; the nightly sweep picks it up after enable.
+        console.log("[dlq] QBO expense sync disabled — pending go-live; clearing expense DLQ deferral");
+        return;
+      }
+      try {
+        await pushExpenseById(env, expenseId);
+      } catch (err) {
+        const msg = (err as Error).message ?? "";
+        if (msg.includes("permanently excluded: Jobber-imported")) {
+          console.log(
+            `[dlq] QBO expense permanently excluded (Jobber import); clearing DLQ for ${expenseId}`,
+          );
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
+
+    // Quote and client rows still wait for a full sync. They stay visible and
+    // alert if replay keeps failing.
     case "quote":
-    case "expense":
     case "client": {
       if (!row.payload) throw new Error("no payload to replay");
       throw new Error(

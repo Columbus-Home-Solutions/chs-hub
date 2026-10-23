@@ -10,6 +10,7 @@
  */
 
 import type { Env } from "../env.js";
+import { queueCalendarMirror } from "./google-calendar-writeback.js";
 
 /** Stored in schedule_entries.notes so we can update (not duplicate) the seed. */
 export const OVERVIEW_SEED_NOTE = "overview_start_date";
@@ -110,17 +111,20 @@ export async function syncOverviewStartDate(
     )
       .bind(id, jobId, date, jobScheduleTitle(jobTitle, jobNumber), OVERVIEW_SEED_NOTE)
       .run();
+    await queueCalendarMirror(env, "schedule_entry", id);
     return "created";
   }
 
   const seed = rows[0];
   if (!date) {
     await env.DB.prepare("DELETE FROM schedule_entries WHERE id = ?").bind(seed.id).run();
+    await queueCalendarMirror(env, "schedule_entry", seed.id);
     return "deleted";
   }
 
   await env.DB.prepare("UPDATE schedule_entries SET scheduled_date = ? WHERE id = ?")
     .bind(date, seed.id)
     .run();
+  await queueCalendarMirror(env, "schedule_entry", seed.id);
   return "updated";
 }

@@ -25,11 +25,13 @@ interface LedgerEntry {
   days: number;
   day_rate: number;
   amount: number;
-  status: "unpaid" | "paid" | "removed";
+  status: "unpaid" | "paid" | "removed" | "pending";
   pay_date: string | null;
   method: string | null;
   settlement: LaborSettlement | null;
   entered_via: string;
+  source?: string;
+  submitted_at?: string | null;
   delete_reason: string | null;
   deleted_by: string | null;
   history: HistoryEvent[];
@@ -115,6 +117,7 @@ export function LaborByWorker({
                       {entry.status === "paid" && <Badge tone="success">Paid</Badge>}
                       {entry.status === "unpaid" && <Badge tone="warning">Unpaid</Badge>}
                       {entry.status === "removed" && <Badge tone="neutral">Removed</Badge>}
+                      {entry.status === "pending" && <Badge tone="info">Pending</Badge>}
                       {entry.status === "removed" && entry.delete_reason && (
                         <div class="text--muted">{entry.delete_reason}</div>
                       )}
@@ -122,7 +125,10 @@ export function LaborByWorker({
                     <td>
                       {entry.pay_date ? `${formatDate(entry.pay_date)}${entry.method ? ` · ${entry.method}` : ""}` : "—"}
                       {settlementText(entry.settlement) && <div class="text--muted">{settlementText(entry.settlement)}</div>}
-                      <div class="text--muted">{entry.entered_via}</div>
+                      <div class="text--muted">
+                        {entry.source ?? (entry.entered_via === "checkin_link" ? "Check-in link" : "Manual")}
+                        {entry.submitted_at ? ` · ${entry.submitted_at}` : ""}
+                      </div>
                     </td>
                     <td>
                       <Button size="sm" variant="tertiary" type="button" onClick={() => setHistory(entry)}>

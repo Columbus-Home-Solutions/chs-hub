@@ -37,7 +37,7 @@ export interface JobRow {
   synced_at: string | null;
   completed_at: string | null;
   total: number; // job.total from Jobber
-  invoiced: number; // SUM(invoices.total) excluding BAD_DEBT
+  invoiced: number; // SUM(invoices.total), including bad_debt. The write-off is not owed.
   paid: number; // SUM(payments.amount)
   outstanding: number; // invoiced − paid (not negative)
   line_item_cost: number; // SUM(li.qty × li.unit_cost)
@@ -80,8 +80,19 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
          SELECT SUM(COALESCE(inv.total, 0))
          FROM invoices inv
          WHERE inv.job_id = j.id
-           AND UPPER(COALESCE(inv.status, '')) != 'BAD_DEBT'
        ), 0) AS invoiced,
+       COALESCE((
+         SELECT SUM(COALESCE(inv.total, 0))
+         FROM invoices inv
+         WHERE inv.job_id = j.id
+           AND UPPER(COALESCE(inv.status, '')) = 'BAD_DEBT'
+       ), 0) - COALESCE((
+         SELECT SUM(COALESCE(p.amount, 0))
+         FROM payments p
+         JOIN invoices inv ON inv.id = p.invoice_id
+         WHERE inv.job_id = j.id
+           AND UPPER(COALESCE(inv.status, '')) = 'BAD_DEBT'
+       ), 0) AS bad_debt_writeoff,
        COALESCE((
          SELECT SUM(COALESCE(p.amount, 0))
          FROM payments p
@@ -131,6 +142,7 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
     completed_at: string | null;
     total: number;
     invoiced: number;
+    bad_debt_writeoff: number;
     paid: number;
     line_item_cost: number;
     expense_cost: number;
@@ -141,7 +153,7 @@ export async function handleJobsList(env: Env, url: URL): Promise<{
   }>();
 
   let jobs: JobRow[] = (rows.results ?? []).map((r) => {
-    const outstanding = Math.max(0, r.invoiced - r.paid);
+    const outstanding = Math.max(0, r.invoiced - r.paid - (r.bad_debt_writeoff ?? 0));
     const profit = r.invoiced - r.line_item_cost - r.expense_cost;
     const margin = r.invoiced > 0 ? (profit / r.invoiced) * 100 : 0;
     return {
@@ -293,13 +305,24 @@ export async function handleJobDetail(
     (s: number, e: Record<string, unknown>) => s + Number(e.amount ?? 0),
     0,
   );
-  const invoiced = (invoices.results ?? [])
-    .filter((inv: Record<string, unknown>) => String(inv.status ?? "").toUpperCase() !== "BAD_DEBT")
-    .reduce((s: number, inv: Record<string, unknown>) => s + Number(inv.total ?? 0), 0);
-  const paid = (payments.results ?? []).reduce(
+  const invoiceRows = invoices.results ?? [];
+  const paymentRows = payments.results ?? [];
+  const invoiced = invoiceRows.reduce(
+    (s: number, inv: Record<string, unknown>) => s + Number(inv.total ?? 0),
+    0,
+  );
+  const paid = paymentRows.reduce(
     (s: number, p: Record<string, unknown>) => s + Number(p.amount ?? 0),
     0,
   );
+  const badDebtWriteoff = invoiceRows
+    .filter((inv: Record<string, unknown>) => String(inv.status ?? "").toUpperCase() === "BAD_DEBT")
+    .reduce((s: number, inv: Record<string, unknown>) => {
+      const onInvoice = paymentRows
+        .filter((p: Record<string, unknown>) => p.invoice_id === inv.id)
+        .reduce((ps: number, p: Record<string, unknown>) => ps + Number(p.amount ?? 0), 0);
+      return s + Math.max(0, Number(inv.total ?? 0) - onInvoice);
+    }, 0);
   const profit = invoiced - liCost - expCost;
 
   return {
@@ -312,7 +335,7 @@ export async function handleJobDetail(
     waterfall: {
       invoiced: round2(invoiced),
       paid: round2(paid),
-      outstanding: round2(Math.max(0, invoiced - paid)),
+      outstanding: round2(Math.max(0, invoiced - paid - badDebtWriteoff)),
       line_item_cost: round2(liCost),
       expense_cost: round2(expCost),
       profit: round2(profit),

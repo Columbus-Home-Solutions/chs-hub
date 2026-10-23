@@ -35,8 +35,9 @@ import { handleCycleList } from "./billing-cycles.js";
 import { buildReconciliationReport, type CycleForReport } from "../lib/cost-plus.js";
 import { handlePhotoStream } from "./photos.js";
 import { createOwnerInApp } from "../lib/notification-engine.js";
-import { applyChangeOrder } from "./change-orders.js";
+import { applyChangeOrder, portalApprovalLabel } from "./change-orders.js";
 import { isWithinWarrantyExpiration } from "../lib/warranty.js";
+import { customerFacingJobStatus } from "../lib/job-hold.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -241,7 +242,9 @@ async function handleLanding(env: Env, token: string): Promise<Response> {
       property_address: fullAddress(job),
       job_title: job.title,
       job_display: job.job_number != null ? `JOB-${String(job.job_number).padStart(3, "0")}` : null,
-      status: onHold ? "on_hold" : job.status,
+      status: job.status === "on_hold"
+        ? customerFacingJobStatus(job.status)
+        : (onHold ? "on_hold" : job.status),
     },
     quick_stats: {
       contract_total: contractTotal,
@@ -701,7 +704,7 @@ async function handleChangeOrders(env: Env, token: string): Promise<Response> {
   const rows = (
     await env.DB.prepare(
       `SELECT id, change_order_number, title, description, amount, status,
-              requested_date, approved_date, applied_at, end_date_extension_days, signed_name
+              requested_date, approved_date, applied_at, end_date_extension_days, signed_name, approval_source, manual_approval_method, manual_approved_at
          FROM change_orders
         WHERE job_id = ? AND status != 'draft'
         ORDER BY change_order_number ASC`,
@@ -718,7 +721,7 @@ async function handleChangeOrders(env: Env, token: string): Promise<Response> {
         approved_date: string | null;
         applied_at: string | null;
         end_date_extension_days: number | null;
-        signed_name: string | null;
+        signed_name: string | null; approval_source: string | null; manual_approval_method: string | null; manual_approved_at: string | null;
       }>()
   ).results ?? [];
   return json({
@@ -736,8 +739,8 @@ async function handleChangeOrders(env: Env, token: string): Promise<Response> {
       requested_date: c.requested_date,
       approved_date: c.approved_date,
       end_date_extension_days: c.end_date_extension_days ?? 0,
-      signed_name: c.signed_name,
-      // The client can sign a 'sent' CO. Approved/rejected render read-only.
+      signed_name: c.approval_source === "manual_owner" ? null : c.signed_name,
+      approval_label: c.approval_source === "manual_owner" && c.manual_approval_method && c.manual_approved_at ? portalApprovalLabel(c.manual_approval_method, c.manual_approved_at) : null,
       can_sign: c.status === "sent" && (job.conversion_reversed ?? 0) !== 1,
     })),
   });

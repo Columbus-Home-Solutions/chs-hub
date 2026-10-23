@@ -32,6 +32,8 @@ import {
 import { getTwilioConfig, isConfigured as twilioConfigured, sendSms } from "../lib/twilio.js";
 import { streamObject, putImage } from "../lib/r2.js";
 import { resolveSubAccessToken, subAccessLink } from "../lib/sub-access-tokens.js";
+import { jobberQuietSendBlock, skipImportedCompletionEffects } from "../lib/jobber-board.js";
+import { queueDayRateNotice } from "../lib/day-rate-notify.js";
 
 const MAX_COMPLETION_PHOTO_BYTES = 10 * 1024 * 1024;
 
@@ -218,10 +220,10 @@ async function maybeCompleteJobAfterPunchListsClosed(
     .first<{ n: number }>();
   if (openLists && openLists.n > 0) return false;
 
-  const job = await env.DB.prepare("SELECT status FROM jobs WHERE id = ?")
+  const job = await env.DB.prepare("SELECT status, source, data_source FROM jobs WHERE id = ?")
     .bind(jobId)
-    .first<{ status: string }>();
-  if (job?.status !== "punch_list") return false;
+    .first<{ status: string; source: string | null; data_source: string | null }>();
+  if (!job || job.status !== "punch_list") return false;
 
   const today = new Date().toISOString().slice(0, 10);
   await env.DB.prepare(
@@ -245,6 +247,8 @@ async function maybeCompleteJobAfterPunchListsClosed(
       JSON.stringify({ from: "punch_list", to: "complete", via: "punch_list_close" }),
     )
     .run();
+
+  if (skipImportedCompletionEffects(job)) return true;
 
   // Same completion-package triggers as handleJobStatus → complete (was previously skipped).
   const fire = async () => {
@@ -645,6 +649,8 @@ export async function handlePunchListSend(
     .bind(punchListId)
     .first<PunchListRow & { job_title: string | null; property_address: string | null }>();
   if (!punchList) return err(404, "not_found");
+  const quietSend = await jobberQuietSendBlock(env, punchList.job_id);
+  if (quietSend) return quietSend;
 
   const rawItems = await loadItems(env, punchListId);
   const assigned = rawItems.filter((i) => i.sub_id);
@@ -657,7 +663,7 @@ export async function handlePunchListSend(
 
   for (const subId of subIds) {
     const sub = await env.DB.prepare(
-      `SELECT id, phone, email,
+      `SELECT id, phone, email, worker_type,
               COALESCE(company_name, company) AS company_name,
               COALESCE(contact_name, primary_contact) AS contact_name
          FROM subcontractors WHERE id = ?`,
@@ -667,14 +673,13 @@ export async function handlePunchListSend(
         id: string;
         phone: string | null;
         email: string | null;
+        worker_type: string | null;
         company_name: string | null;
         contact_name: string | null;
       }>();
     if (!sub) continue;
 
     const token = await getOrCreateSubToken(env, punchListId, subId);
-    // Keep punch_list_sub_tokens for per-list reminder dedup bookkeeping; use
-    // the persistent sub access token for the link sent to the sub.
     const persistentToken = await resolveSubAccessToken(env, subId);
     const link = subAccessLink(persistentToken);
     const subItems = assigned.filter((i) => i.sub_id === subId);
@@ -694,10 +699,18 @@ export async function handlePunchListSend(
     });
     await storePunchListPdf(env, punchListId, subId, pdfBytes);
 
-    const subName = sub.contact_name || sub.company_name || "there";
-    const smsBody = `Hi ${subName}, Tony from Columbus Home Solutions has a ${listLabel} punch list for you on ${jobTitle} at ${jobAddress}. View your items and mark them complete here: ${link}`;
-
-    await notifySub(env, sub, smsBody, `${listLabel} Punch List — ${jobTitle}`, pdfBytes, jobTitle);
+    if ((sub.worker_type ?? "subcontractor") === "day_rate_labor") {
+      await queueDayRateNotice(env, {
+        subId,
+        kind: "punch",
+        label: jobTitle,
+        link,
+      });
+    } else {
+      const subName = sub.contact_name || sub.company_name || "there";
+      const smsBody = `Hi ${subName}, Tony from Columbus Home Solutions has a ${listLabel} punch list for you on ${jobTitle} at ${jobAddress}. View your items and mark them complete here: ${link}`;
+      await notifySub(env, sub, smsBody, `${listLabel} Punch List — ${jobTitle}`, pdfBytes, jobTitle);
+    }
 
     await env.DB.prepare(
       `UPDATE punch_list_sub_tokens SET notified_at = datetime('now') WHERE punch_list_id = ? AND sub_id = ? AND token = ?`,
@@ -716,7 +729,7 @@ export async function handlePunchListSend(
     jobId: punchList.job_id,
     merge: { job_title: jobTitle },
     linkPath: `/app/jobs/${punchList.job_id}`,
-  });
+  }, { manual: true });
 
   return json({ ok: true, subs_notified: subIds.length });
 }
@@ -738,6 +751,8 @@ export async function handlePunchListRenotify(
     .bind(punchListId)
     .first<PunchListRow & { job_title: string | null }>();
   if (!punchList) return err(404, "not_found");
+  const quiet = await jobberQuietSendBlock(env, punchList.job_id);
+  if (quiet) return quiet;
   if (!punchList.sent_at) return err(400, "not_yet_sent");
 
   const { results: newItems } = await env.DB.prepare(
@@ -753,7 +768,7 @@ export async function handlePunchListRenotify(
 
   for (const subId of subIds) {
     const sub = await env.DB.prepare(
-      `SELECT id, phone, email,
+      `SELECT id, phone, email, worker_type,
               COALESCE(company_name, company) AS company_name,
               COALESCE(contact_name, primary_contact) AS contact_name
          FROM subcontractors WHERE id = ?`,
@@ -763,6 +778,7 @@ export async function handlePunchListRenotify(
         id: string;
         phone: string | null;
         email: string | null;
+        worker_type: string | null;
         company_name: string | null;
         contact_name: string | null;
       }>();
@@ -776,6 +792,17 @@ export async function handlePunchListRenotify(
       .bind(punchListId, subId)
       .first<{ token: string }>();
     if (!tokenRow) continue;
+
+    if ((sub.worker_type ?? "subcontractor") === "day_rate_labor") {
+      const persistentToken = await resolveSubAccessToken(env, subId);
+      await queueDayRateNotice(env, {
+        subId,
+        kind: "punch",
+        label: jobTitle,
+        link: subAccessLink(persistentToken),
+      });
+      continue;
+    }
 
     const link = punchListSecureLink(tokenRow.token);
     const subName = sub.contact_name || sub.company_name || "there";

@@ -247,7 +247,7 @@ async function main() {
             "Payment draws are tied to project milestones as documented in your contract and estimate. If a payment draw is not received by the agreed timeframe, work will pause until the outstanding balance is received, at which point work will resume promptly.",
           ),
           para(
-            "All invoices are due within seven (7) days of receipt. A late fee of $50.00 per day applies to invoices not paid within seven (7) days.",
+            "All invoices are due within seven (7) days of the date the invoice is sent. If an invoice is not paid within seven (7) days after its due date, Columbus Home Solutions may, at its discretion, add a one-time late fee of five percent (5%) of the unpaid balance, and may waive or delay it.",
           ),
         ],
       },

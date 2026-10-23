@@ -4,7 +4,7 @@
  *   GET  /api/clients/:id/sms-thread      — full SMS thread for one client
  *   POST /api/sms/reply                   — send outbound SMS (Opus-reviewed path)
  *   GET  /api/sms/conversations           — SMS inbox: most recent message per client
- *   PATCH /api/sms/conversations/:id      — archive / flag / pin / mark unread (non-destructive)
+ *   PATCH /api/sms/conversations/:id      — archive / flag / pin / mark unread / no reply needed (non-destructive)
  *
  * All routes are authenticated (Cloudflare Access). The reply route is the
  * correctness-critical path: it checks opt-out, respects NOTIFICATIONS_DISPATCH_MODE,
@@ -22,6 +22,37 @@ import {
   unarchiveAndClearUnread,
   upsertConversationState,
 } from "../lib/sms-conversation-state.js";
+
+/**
+ * Inbound SMS counts as unread only when it arrived after the last outbound
+ * message AND after no_reply_needed_at (when that is set). Null timestamps use
+ * the epoch floor so MAX() never sees NULL (SQLite multi-arg max is NULL if
+ * any argument is NULL). Opening a thread does not change this count.
+ */
+const INBOUND_UNREAD_PREDICATE = `
+  channel = 'text_sms'
+  AND direction = 'inbound'
+  AND created_at > MAX(
+    COALESCE(
+      (
+        SELECT MAX(c_out.created_at)
+        FROM communications c_out
+        WHERE c_out.client_id = communications.client_id
+          AND c_out.channel = 'text_sms'
+          AND c_out.direction = 'outbound'
+      ),
+      '1970-01-01T00:00:00Z'
+    ),
+    COALESCE(
+      (
+        SELECT s.no_reply_needed_at
+        FROM sms_conversation_state s
+        WHERE s.client_id = communications.client_id
+      ),
+      '1970-01-01T00:00:00Z'
+    )
+  )
+`;
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -108,6 +139,15 @@ export async function handleSmsThread(env: Env, clientId: string): Promise<Respo
     state.unread_override_at = null;
   }
 
+  const unreadRow = await env.DB.prepare(
+    `SELECT COUNT(*) AS cnt
+     FROM communications
+     WHERE client_id = ?
+       AND ${INBOUND_UNREAD_PREDICATE}`,
+  )
+    .bind(clientId)
+    .first<{ cnt: number }>();
+
   return json({
     client_id: clientId,
     client_name: clientName,
@@ -118,6 +158,7 @@ export async function handleSmsThread(env: Env, clientId: string): Promise<Respo
     flagged_at: state?.flagged_at ?? null,
     pinned_at: state?.pinned_at ?? null,
     unread_override: false,
+    unread_count: unreadRow?.cnt ?? 0,
   });
 }
 
@@ -244,7 +285,7 @@ export async function handleSmsReply(request: Request, env: Env): Promise<Respon
 
 // ─── PATCH /api/sms/conversations/:clientId ──────────────────────────────────
 //
-// Lazy-create sms_conversation_state. Never deletes communications rows.
+// Lazy-create sms_conversation_state. Never inserts, edits, or deletes communications rows.
 
 export async function handleSmsConversationState(
   request: Request,
@@ -273,6 +314,7 @@ export async function handleSmsConversationState(
     flagged_at: state.flagged_at,
     pinned_at: state.pinned_at,
     unread_override: Boolean(state.unread_override_at),
+    no_reply_needed_at: state.no_reply_needed_at,
   });
 }
 
@@ -283,8 +325,9 @@ export async function handleSmsConversationState(
 // since the client's last outbound message (or all inbound if no outbound exists).
 //
 // The unread definition:
-//   "inbound messages after the most recent outbound message in that thread"
-// If there is no outbound message at all, all inbound messages count as unread.
+//   inbound messages after the later of the most recent outbound message and
+//   no_reply_needed_at. If neither is set, all inbound messages count.
+// Archive does not remove a conversation from the badge total.
 
 const CONVERSATION_JOINS = `
      FROM clients cl
@@ -316,18 +359,7 @@ const CONVERSATION_JOINS = `
          client_id,
          COUNT(*) AS cnt
        FROM communications
-       WHERE channel = 'text_sms'
-         AND direction = 'inbound'
-         AND created_at > COALESCE(
-           (
-             SELECT MAX(c_out.created_at)
-             FROM communications c_out
-             WHERE c_out.client_id = communications.client_id
-               AND c_out.channel = 'text_sms'
-               AND c_out.direction = 'outbound'
-           ),
-           '1970-01-01T00:00:00Z'
-         )
+       WHERE ${INBOUND_UNREAD_PREDICATE}
        GROUP BY client_id
      ) unread ON unread.client_id = cl.id
      LEFT JOIN estimate_requests er
@@ -362,7 +394,8 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
        cs.archived_at,
        cs.flagged_at,
        cs.pinned_at,
-       cs.unread_override_at
+       cs.unread_override_at,
+       cs.no_reply_needed_at
      ${CONVERSATION_JOINS}
      WHERE ${archiveClause}
      ORDER BY CASE WHEN cs.pinned_at IS NOT NULL THEN 0 ELSE 1 END,
@@ -385,6 +418,7 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
     flagged_at: string | null;
     pinned_at: string | null;
     unread_override_at: string | null;
+    no_reply_needed_at: string | null;
   }>();
 
   const conversations = (results ?? []).map((r) => ({
@@ -403,6 +437,7 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
     flagged_at: r.flagged_at,
     pinned_at: r.pinned_at,
     unread_override: Boolean(r.unread_override_at),
+    no_reply_needed_at: r.no_reply_needed_at,
   }));
 
   // Badge totals ignore the archived filter — archiving hides from the list, not the badge.
@@ -420,18 +455,7 @@ export async function handleSmsConversations(env: Env, url: URL): Promise<Respon
          client_id,
          COUNT(*) AS cnt
        FROM communications
-       WHERE channel = 'text_sms'
-         AND direction = 'inbound'
-         AND created_at > COALESCE(
-           (
-             SELECT MAX(c_out.created_at)
-             FROM communications c_out
-             WHERE c_out.client_id = communications.client_id
-               AND c_out.channel = 'text_sms'
-               AND c_out.direction = 'outbound'
-           ),
-           '1970-01-01T00:00:00Z'
-         )
+       WHERE ${INBOUND_UNREAD_PREDICATE}
        GROUP BY client_id
      ) unread ON unread.client_id = cl.id
      LEFT JOIN sms_conversation_state cs ON cs.client_id = cl.id`,

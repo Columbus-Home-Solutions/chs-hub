@@ -7,6 +7,9 @@
  *
  * Flag and Pin are manual/visual only. Nothing in Lead Outreach or quote
  * follow-ups reads these fields.
+ *
+ * no_reply_needed_at silences inbound messages already waiting. It does not
+ * send SMS and it does not stick forever: a newer inbound is unread again.
  */
 
 export interface ConversationState {
@@ -14,6 +17,7 @@ export interface ConversationState {
   flagged_at: string | null;
   pinned_at: string | null;
   unread_override_at: string | null;
+  no_reply_needed_at: string | null;
 }
 
 export interface ConversationStatePatch {
@@ -21,6 +25,7 @@ export interface ConversationStatePatch {
   flagged?: boolean;
   pinned?: boolean;
   unread?: boolean;
+  no_reply_needed?: boolean;
 }
 
 export const EMPTY_CONVERSATION_STATE: ConversationState = {
@@ -28,6 +33,7 @@ export const EMPTY_CONVERSATION_STATE: ConversationState = {
   flagged_at: null,
   pinned_at: null,
   unread_override_at: null,
+  no_reply_needed_at: null,
 };
 
 export function applyConversationStatePatch(
@@ -35,13 +41,18 @@ export function applyConversationStatePatch(
   patch: ConversationStatePatch,
   now: string,
 ): ConversationState {
-  const next: ConversationState = { ...(current ?? EMPTY_CONVERSATION_STATE) };
+  const next: ConversationState = { ...EMPTY_CONVERSATION_STATE, ...(current ?? {}) };
   if (patch.archived === true) next.archived_at = now;
   if (patch.archived === false) next.archived_at = null;
   if (patch.flagged === true) next.flagged_at = now;
   if (patch.flagged === false) next.flagged_at = null;
   if (patch.pinned === true) next.pinned_at = now;
   if (patch.pinned === false) next.pinned_at = null;
+  if (patch.no_reply_needed === true) {
+    next.no_reply_needed_at = now;
+    next.unread_override_at = null;
+  }
+  if (patch.no_reply_needed === false) next.no_reply_needed_at = null;
   if (patch.unread === true) next.unread_override_at = now;
   if (patch.unread === false) next.unread_override_at = null;
   return next;
@@ -55,7 +66,7 @@ export function parseConversationStatePatch(
   }
   const raw = body as Record<string, unknown>;
   const patch: ConversationStatePatch = {};
-  for (const key of ["archived", "flagged", "pinned", "unread"] as const) {
+  for (const key of ["archived", "flagged", "pinned", "unread", "no_reply_needed"] as const) {
     if (!(key in raw)) continue;
     if (typeof raw[key] !== "boolean") {
       return { ok: false, error: `${key} must be a boolean` };
@@ -89,6 +100,44 @@ export function sumConversationUnread(
   rows: { unread_count: number; unread_override: boolean }[],
 ): number {
   return rows.reduce((sum, c) => sum + conversationUnreadContribution(c), 0);
+}
+
+export interface ConversationListRow {
+  client_id: string;
+  unread_count: number;
+  unread_override: boolean;
+  archived_at: string | null;
+  flagged_at: string | null;
+  pinned_at: string | null;
+}
+
+/** Optimistic list update. Mirrors applyConversationStatePatch for fields the list renders. */
+export function applyConversationPatchToList<T extends ConversationListRow>(
+  rows: T[],
+  clientId: string,
+  patch: ConversationStatePatch,
+  now: string,
+): { rows: T[]; unreadDelta: number } {
+  const index = rows.findIndex((row) => row.client_id === clientId);
+  if (index < 0) return { rows, unreadDelta: 0 };
+  const current = rows[index];
+  const next: T = { ...current };
+  if (patch.archived === true) next.archived_at = current.archived_at ?? now;
+  if (patch.archived === false) next.archived_at = null;
+  if (patch.flagged === true) next.flagged_at = current.flagged_at ?? now;
+  if (patch.flagged === false) next.flagged_at = null;
+  if (patch.pinned === true) next.pinned_at = current.pinned_at ?? now;
+  if (patch.pinned === false) next.pinned_at = null;
+  if (patch.no_reply_needed === true) {
+    next.unread_count = 0;
+    next.unread_override = false;
+  }
+  if (patch.unread === true) next.unread_override = true;
+  if (patch.unread === false) next.unread_override = false;
+  const unreadDelta = conversationUnreadContribution(next) - conversationUnreadContribution(current);
+  const copy = rows.slice();
+  copy[index] = next;
+  return { rows: copy, unreadDelta };
 }
 
 export function filterConversationsByArchive<T extends { archived_at: string | null }>(

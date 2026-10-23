@@ -21,6 +21,8 @@ import {
   missedCallUnassignedNotes,
   type UnassignedVoiceNote,
 } from "@chs/shared/message-center-unassigned";
+import { applyConversationPatchToList, sumConversationUnread } from "@chs/shared/sms-conversation-state";
+import type { ConversationStatePatch } from "@chs/shared/sms-conversation-state";
 import { ConversationList } from "./messages/ConversationList";
 import { ThreadView } from "./messages/ThreadView";
 import { NewCompose } from "./messages/NewCompose";
@@ -39,29 +41,35 @@ export function MessageCenter() {
     close,
     dismissedUnassignedIds,
     dismissUnassigned,
+    clientsUnread,
+    beginClientsUnreadRead,
+    commitClientsUnread,
   } = useMessageCenter();
   const [panelState, setPanelState] = useState<PanelState>("list");
   const [threadClientId, setThreadClientId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [unreadTotal, setUnreadTotal] = useState(0);
   const [archivedCount, setArchivedCount] = useState(0);
   const [showArchived, setShowArchived] = useState(false);
   const [unassignedNotes, setUnassignedNotes] = useState<UnassignedVoiceNote[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const clientsUnread = unreadTotal;
   const unassignedUnreviewed = countUnreviewedMissedCalls(unassignedNotes, dismissedUnassignedIds);
 
   const loadConversations = useCallback(async (archived: boolean) => {
+    const seen = beginClientsUnreadRead();
     try {
       const d = await api.get<ConversationsResponse>(conversationsUrl(archived));
       setConversations(d.conversations ?? []);
-      setUnreadTotal(d.unread_total ?? 0);
+      commitClientsUnread(seen, d.unread_total ?? 0);
       setArchivedCount(d.archived_count ?? 0);
     } catch {
       /* stay on last list */
     }
-  }, []);
+  }, [beginClientsUnreadRead, commitClientsUnread]);
+
+  const noteConversationPatch = (clientId: string, patch: ConversationStatePatch) => {
+    setConversations((prev) => applyConversationPatchToList(prev, clientId, patch, new Date().toISOString()).rows);
+  };
 
   const expandToFullPage = (opts: { clientId?: string | null; tab?: InboxTab; noteId?: string | null } = {}) => {
     close();
@@ -70,6 +78,7 @@ export function MessageCenter() {
 
   useEffect(() => {
     if (!isOpen) return;
+    const seen = beginClientsUnreadRead();
     void (async () => {
       const [sms, unmatched] = await Promise.allSettled([
         api.get<ConversationsResponse>(conversationsUrl(showArchived)),
@@ -77,14 +86,14 @@ export function MessageCenter() {
       ]);
       if (sms.status === "fulfilled") {
         setConversations(sms.value.conversations ?? []);
-        setUnreadTotal(sms.value.unread_total ?? 0);
+        commitClientsUnread(seen, sms.value.unread_total ?? 0);
         setArchivedCount(sms.value.archived_count ?? 0);
       }
       if (unmatched.status === "fulfilled") {
         setUnassignedNotes(missedCallUnassignedNotes(unmatched.value.notes ?? []));
       }
     })();
-  }, [isOpen, showArchived]);
+  }, [isOpen, showArchived, beginClientsUnreadRead, commitClientsUnread]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -149,7 +158,10 @@ export function MessageCenter() {
                 showArchived={showArchived}
                 archivedCount={archivedCount}
                 onShowArchivedChange={setShowArchived}
-                onConversationChanged={() => void loadConversations(showArchived)}
+                onConversationChanged={(clientId, patch) => {
+                  noteConversationPatch(clientId, patch);
+                  void loadConversations(showArchived);
+                }}
               />
             )}
             {panelState === "thread" && threadClientId && (
@@ -158,7 +170,11 @@ export function MessageCenter() {
                 onBack={backToList}
                 onClose={close}
                 onExpand={() => expandToFullPage({ clientId: threadClientId })}
-                onStateChange={() => void loadConversations(showArchived)}
+                conversation={conversations.find((c) => c.client_id === threadClientId) ?? null}
+                onStateChange={(patch) => {
+                  if (patch && threadClientId) noteConversationPatch(threadClientId, patch);
+                  void loadConversations(showArchived);
+                }}
               />
             )}
             {panelState === "compose" && (
@@ -179,18 +195,28 @@ export function MessageCenter() {
 }
 
 export function MessageCenterButton() {
-  const { isOpen, toggle, dismissedUnassignedIds } = useMessageCenter();
-  const [smsUnread, setSmsUnread] = useState(0);
+  const {
+    isOpen,
+    toggle,
+    dismissedUnassignedIds,
+    clientsUnread,
+    beginClientsUnreadRead,
+    commitClientsUnread,
+  } = useMessageCenter();
   const [unassignedNotes, setUnassignedNotes] = useState<UnassignedVoiceNote[]>([]);
 
   const refresh = useCallback(async () => {
+    const seen = beginClientsUnreadRead();
     try {
       const [sms, unmatched] = await Promise.allSettled([
         api.get<ConversationsResponse>("/api/sms/conversations"),
         api.get<{ notes: UnassignedVoiceNote[] }>("/api/voice-notes/unmatched"),
       ]);
       if (sms.status === "fulfilled") {
-        setSmsUnread(sms.value.unread_total ?? (sms.value.conversations ?? []).reduce((sum, c) => sum + c.unread_count, 0));
+        commitClientsUnread(
+          seen,
+          sms.value.unread_total ?? sumConversationUnread(sms.value.conversations ?? []),
+        );
       }
       if (unmatched.status === "fulfilled") {
         setUnassignedNotes(unmatched.value.notes ?? []);
@@ -198,10 +224,10 @@ export function MessageCenterButton() {
     } catch {
       /* quiet */
     }
-  }, []);
+  }, [beginClientsUnreadRead, commitClientsUnread]);
 
   const totalUnread = combinedMessageCenterBadge(
-    smsUnread,
+    clientsUnread,
     countUnreviewedMissedCalls(unassignedNotes, dismissedUnassignedIds),
   );
 

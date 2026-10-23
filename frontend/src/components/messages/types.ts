@@ -14,6 +14,7 @@ export interface Conversation {
   flagged_at: string | null;
   pinned_at: string | null;
   unread_override: boolean;
+  no_reply_needed_at: string | null;
 }
 
 export interface ConversationsResponse {
@@ -43,6 +44,7 @@ export interface SmsThread {
   flagged_at: string | null;
   pinned_at: string | null;
   unread_override: boolean;
+  unread_count: number;
 }
 
 export type InboxTab = "clients" | "unassigned";

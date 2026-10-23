@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import type { UnassignedVoiceNote } from "@chs/shared/message-center-unassigned";
 import { conversationIsUnread } from "@chs/shared/sms-conversation-state";
+import type { ConversationStatePatch } from "@chs/shared/sms-conversation-state";
 import { ConversationMenu } from "./ConversationMenu";
 import { relativeTimestamp, truncate } from "./helpers";
 import type { Conversation, InboxTab } from "./types";
@@ -47,7 +48,7 @@ export function ConversationList({
   showArchived?: boolean;
   archivedCount?: number;
   onShowArchivedChange?: (show: boolean) => void;
-  onConversationChanged?: () => void;
+  onConversationChanged?: (clientId: string, patch: ConversationStatePatch) => void;
 }) {
   const [internalTab, setInternalTab] = useState<InboxTab>("clients");
   const [search, setSearch] = useState("");
@@ -222,7 +223,7 @@ export function ConversationList({
                     pinned={Boolean(c.pinned_at)}
                     unreadCount={c.unread_count}
                     unreadOverride={c.unread_override}
-                    onChanged={() => onConversationChanged?.()}
+                    onChanged={(patch) => onConversationChanged?.(c.client_id, patch)}
                   />
                 </div>
               );

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../../api";
 import { useToast } from "../../store/toast";
-import { conversationIsUnread } from "@chs/shared/sms-conversation-state";
+import { conversationIsUnread, conversationUnreadContribution } from "@chs/shared/sms-conversation-state";
 import type { ConversationStatePatch } from "@chs/shared/sms-conversation-state";
+import { useMessageCenter } from "../../store/messageCenter";
 
 export function ConversationMenu({
   clientId,
@@ -22,6 +23,7 @@ export function ConversationMenu({
   onChanged: (patch: ConversationStatePatch) => void;
 }) {
   const toast = useToast();
+  const { adjustClientsUnread } = useMessageCenter();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const isUnread = conversationIsUnread({ unread_count: unreadCount, unread_override: unreadOverride });
@@ -46,6 +48,20 @@ export function ConversationMenu({
     setOpen(false);
     try {
       await api.patch(`/api/sms/conversations/${clientId}`, patch);
+      const before = conversationUnreadContribution({
+        unread_count: unreadCount,
+        unread_override: unreadOverride,
+      });
+      if (patch.no_reply_needed === true) {
+        adjustClientsUnread(-before);
+        toast.push("info", "No reply needed");
+      } else if (patch.unread === true) {
+        const after = conversationUnreadContribution({
+          unread_count: unreadCount,
+          unread_override: true,
+        });
+        adjustClientsUnread(after - before);
+      }
       onChanged(patch);
     } catch {
       toast.push("error", "Couldn’t update conversation");
@@ -103,6 +119,19 @@ export function ConversationMenu({
           >
             {pinned ? "Unpin" : "Pin"}
           </button>
+          {isUnread && (
+            <button
+              type="button"
+              class="mc-menu__item"
+              role="menuitem"
+              onClick={(e) => {
+                e.stopPropagation();
+                void apply({ no_reply_needed: true });
+              }}
+            >
+              No reply needed
+            </button>
+          )}
           {!isUnread && (
             <button
               type="button"

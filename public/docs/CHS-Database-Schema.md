@@ -193,6 +193,7 @@ Lazy-created organizational state for SMS inbox conversations (one row per `clie
 | flagged_at | TEXT | | Null = unflagged; set = needs-follow-up indicator |
 | pinned_at | TEXT | | Null = unpinned; set = sort to top of list |
 | unread_override_at | TEXT | | Null = no override; set = unread styling until thread is opened |
+| no_reply_needed_at | TEXT | | Null = unanswered inbound still counts; set = inbound at or before this time is silenced. A newer inbound counts again. Does not send a message. |
 | updated_at | TEXT | NOT NULL DEFAULT (datetime('now')) | |
 
 ---

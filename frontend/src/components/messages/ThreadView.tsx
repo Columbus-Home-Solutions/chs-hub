@@ -4,7 +4,7 @@ import { useToast } from "../../store/toast";
 import { formatDateTime } from "../../lib/format";
 import { ConversationMenu } from "./ConversationMenu";
 import { segmentCount } from "./helpers";
-import type { SmsMessage, SmsThread } from "./types";
+import type { Conversation, SmsMessage, SmsThread } from "./types";
 import type { ConversationStatePatch } from "@chs/shared/sms-conversation-state";
 
 export function ThreadView({
@@ -15,14 +15,17 @@ export function ThreadView({
   onStateChange,
   showBack = true,
   showClose = true,
+  conversation = null,
 }: {
   clientId: string;
   onBack?: () => void;
   onClose?: () => void;
   onExpand?: () => void;
-  onStateChange?: () => void;
+  onStateChange?: (patch?: ConversationStatePatch) => void;
   showBack?: boolean;
   showClose?: boolean;
+  /** List row for this client, when the list currently includes it. Keeps the header menu in step with the row. */
+  conversation?: Conversation | null;
 }) {
   const toast = useToast();
   const [thread, setThread] = useState<SmsThread | null>(null);
@@ -77,8 +80,19 @@ export function ThreadView({
       job_title: null,
       simulated: true,
     };
+    const previousUnread = {
+      count: thread?.unread_count ?? 0,
+      override: thread?.unread_override ?? false,
+    };
     setThread((prev) =>
-      prev ? { ...prev, messages: [...prev.messages, optimistic] } : prev,
+      prev
+        ? {
+            ...prev,
+            unread_count: 0,
+            unread_override: false,
+            messages: [...prev.messages, optimistic],
+          }
+        : prev,
     );
 
     try {
@@ -97,7 +111,12 @@ export function ThreadView({
     } catch (err) {
       setThread((prev) =>
         prev
-          ? { ...prev, messages: prev.messages.filter((m) => m.id !== optimistic.id) }
+          ? {
+              ...prev,
+              unread_count: previousUnread.count,
+              unread_override: previousUnread.override,
+              messages: prev.messages.filter((m) => m.id !== optimistic.id),
+            }
           : prev,
       );
       setDraft(body);
@@ -130,6 +149,22 @@ export function ThreadView({
     );
   }
 
+  const display = conversation
+    ? {
+        archived_at: conversation.archived_at,
+        flagged_at: conversation.flagged_at,
+        pinned_at: conversation.pinned_at,
+        unread_count: conversation.unread_count,
+        unread_override: conversation.unread_override,
+      }
+    : {
+        archived_at: thread.archived_at,
+        flagged_at: thread.flagged_at,
+        pinned_at: thread.pinned_at,
+        unread_count: thread.unread_count ?? 0,
+        unread_override: thread.unread_override,
+      };
+
   return (
     <div class="mc-thread">
       <div class="mc-header">
@@ -140,12 +175,12 @@ export function ThreadView({
         )}
         <div class="mc-header__info">
           <span class="mc-header__name">
-            {thread.pinned_at && (
+            {display.pinned_at && (
               <span class="mc-conv-row__pin" title="Pinned" aria-hidden="true">
                 📌
               </span>
             )}
-            {thread.flagged_at && (
+            {display.flagged_at && (
               <span class="mc-conv-row__flag" title="Flagged">
                 ⚑
               </span>
@@ -169,11 +204,11 @@ export function ThreadView({
           )}
           <ConversationMenu
             clientId={clientId}
-            archived={Boolean(thread.archived_at)}
-            flagged={Boolean(thread.flagged_at)}
-            pinned={Boolean(thread.pinned_at)}
-            unreadCount={0}
-            unreadOverride={Boolean(thread.unread_override)}
+            archived={Boolean(display.archived_at)}
+            flagged={Boolean(display.flagged_at)}
+            pinned={Boolean(display.pinned_at)}
+            unreadCount={display.unread_count}
+            unreadOverride={display.unread_override}
             onChanged={(patch: ConversationStatePatch) => {
               setThread((prev) => {
                 if (!prev) return prev;
@@ -197,10 +232,18 @@ export function ThreadView({
                       : patch.pinned === false
                         ? null
                         : prev.pinned_at,
-                  unread_override: patch.unread === true ? true : patch.unread === false ? false : prev.unread_override,
+                  unread_override:
+                    patch.no_reply_needed === true
+                      ? false
+                      : patch.unread === true
+                        ? true
+                        : patch.unread === false
+                          ? false
+                          : prev.unread_override,
+                  unread_count: patch.no_reply_needed === true ? 0 : prev.unread_count,
                 };
               });
-              onStateChange?.();
+              onStateChange?.(patch);
             }}
           />
           {showClose && onClose && (

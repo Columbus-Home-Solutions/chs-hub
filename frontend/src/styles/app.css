@@ -6579,7 +6579,7 @@ button.mc-unassigned-row:hover {
   position: absolute;
   right: var(--space-sm);
   top: calc(100% - 4px);
-  min-width: 148px;
+  min-width: 168px;
   /* Match .notif-dropdown: real surface token + opaque fill.
      --color-surface-elevated / --color-surface are not defined in tokens.css. */
   background: var(--color-surface-2);

@@ -6,7 +6,7 @@
  * once at the app-shell level so it's available on every screen.
  */
 import { createContext } from "preact";
-import { useState, useContext, useCallback } from "preact/hooks";
+import { useState, useContext, useCallback, useRef } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import {
   parseDismissedIds,
@@ -37,6 +37,14 @@ interface MessageCenterState {
   pendingCompose: boolean;
   dismissedUnassignedIds: Set<string>;
   dismissUnassigned: (id: string) => void;
+  /** Clients-tab unread total shared by the 💬 badge, the panel, and the full page. */
+  clientsUnread: number;
+  /** Capture the current read generation before a conversations fetch. */
+  beginClientsUnreadRead: () => number;
+  /** Apply a fetch result only if no newer optimistic edit happened since `seen`. */
+  commitClientsUnread: (seen: number, total: number) => void;
+  /** Drop or restore the badge immediately. Bumps the read generation so a stale fetch cannot undo it. */
+  adjustClientsUnread: (delta: number) => void;
   open: (clientId?: string) => void;
   /** Open the panel directly to the New Message compose screen. */
   openCompose: () => void;
@@ -51,6 +59,10 @@ const MessageCenterContext = createContext<MessageCenterState>({
   pendingCompose: false,
   dismissedUnassignedIds: new Set(),
   dismissUnassigned: () => {},
+  clientsUnread: 0,
+  beginClientsUnreadRead: () => 0,
+  commitClientsUnread: () => {},
+  adjustClientsUnread: () => {},
   open: () => {},
   openCompose: () => {},
   clearPendingCompose: () => {},
@@ -63,6 +75,21 @@ export function MessageCenterProvider({ children }: { children: ComponentChildre
   const [activeClientId, setActiveClientId] = useState<string | null>(null);
   const [pendingCompose, setPendingCompose] = useState(false);
   const [dismissedUnassignedIds, setDismissedUnassignedIds] = useState<Set<string>>(loadDismissed);
+  const [clientsUnread, setClientsUnread] = useState(0);
+  const clientsUnreadRev = useRef(0);
+
+  const beginClientsUnreadRead = useCallback(() => clientsUnreadRev.current, []);
+
+  const commitClientsUnread = useCallback((seen: number, total: number) => {
+    if (seen !== clientsUnreadRev.current) return;
+    setClientsUnread(Math.max(0, total));
+  }, []);
+
+  const adjustClientsUnread = useCallback((delta: number) => {
+    if (delta === 0) return;
+    clientsUnreadRev.current += 1;
+    setClientsUnread((n) => Math.max(0, n + delta));
+  }, []);
 
   const open = useCallback((clientId?: string) => {
     setActiveClientId(clientId ?? null);
@@ -105,6 +132,10 @@ export function MessageCenterProvider({ children }: { children: ComponentChildre
         pendingCompose,
         dismissedUnassignedIds,
         dismissUnassigned,
+        clientsUnread,
+        beginClientsUnreadRead,
+        commitClientsUnread,
+        adjustClientsUnread,
         open,
         openCompose,
         clearPendingCompose,

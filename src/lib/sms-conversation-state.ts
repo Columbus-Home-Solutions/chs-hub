@@ -22,7 +22,7 @@ export async function loadConversationState(
   clientId: string,
 ): Promise<ConversationState | null> {
   const row = await env.DB.prepare(
-    `SELECT archived_at, flagged_at, pinned_at, unread_override_at
+    `SELECT archived_at, flagged_at, pinned_at, unread_override_at, no_reply_needed_at
      FROM sms_conversation_state WHERE client_id = ?`,
   )
     .bind(clientId)
@@ -42,16 +42,24 @@ export async function upsertConversationState(
 
   await env.DB.prepare(
     `INSERT INTO sms_conversation_state (
-       client_id, archived_at, flagged_at, pinned_at, unread_override_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+       client_id, archived_at, flagged_at, pinned_at, unread_override_at, no_reply_needed_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(client_id) DO UPDATE SET
        archived_at = excluded.archived_at,
        flagged_at = excluded.flagged_at,
        pinned_at = excluded.pinned_at,
        unread_override_at = excluded.unread_override_at,
+       no_reply_needed_at = excluded.no_reply_needed_at,
        updated_at = datetime('now')`,
   )
-    .bind(clientId, next.archived_at, next.flagged_at, next.pinned_at, next.unread_override_at)
+    .bind(
+      clientId,
+      next.archived_at,
+      next.flagged_at,
+      next.pinned_at,
+      next.unread_override_at,
+      next.no_reply_needed_at,
+    )
     .run();
 
   return next;

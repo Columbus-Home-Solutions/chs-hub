@@ -23,6 +23,8 @@ import {
   missedCallUnassignedNotes,
   type UnassignedVoiceNote,
 } from "@chs/shared/message-center-unassigned";
+import { applyConversationPatchToList } from "@chs/shared/sms-conversation-state";
+import type { ConversationStatePatch } from "@chs/shared/sms-conversation-state";
 
 export function Messages(_props: RoutableProps) {
   const [{ url }] = useRouter();
@@ -31,9 +33,9 @@ export function Messages(_props: RoutableProps) {
   const tier = useViewportTier();
   const isMobile = tier === "mobile";
 
-  const { dismissedUnassignedIds, dismissUnassigned } = useMessageCenter();
+  const { dismissedUnassignedIds, dismissUnassigned, clientsUnread, beginClientsUnreadRead, commitClientsUnread } =
+    useMessageCenter();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [unreadTotal, setUnreadTotal] = useState(0);
   const [archivedCount, setArchivedCount] = useState(0);
   const [showArchived, setShowArchived] = useState(false);
   const [unassignedNotes, setUnassignedNotes] = useState<UnassignedVoiceNote[]>([]);
@@ -46,19 +48,23 @@ export function Messages(_props: RoutableProps) {
     ? unassignedNotes.find((n) => n.id === selectedNoteId) ?? null
     : null;
 
-  const clientsUnread = unreadTotal;
   const unassignedUnreviewed = countUnreviewedMissedCalls(unassignedNotes, dismissedUnassignedIds);
 
   const loadConversations = useCallback(async (archived: boolean) => {
+    const seen = beginClientsUnreadRead();
     try {
       const d = await api.get<ConversationsResponse>(conversationsUrl(archived));
       setConversations(d.conversations ?? []);
-      setUnreadTotal(d.unread_total ?? 0);
+      commitClientsUnread(seen, d.unread_total ?? 0);
       setArchivedCount(d.archived_count ?? 0);
     } catch {
       /* stay on last list */
     }
-  }, []);
+  }, [beginClientsUnreadRead, commitClientsUnread]);
+
+  const noteConversationPatch = (clientId: string, patch: ConversationStatePatch) => {
+    setConversations((prev) => applyConversationPatchToList(prev, clientId, patch, new Date().toISOString()).rows);
+  };
 
   const navigate = (opts: { tab?: InboxTab; clientId?: string | null; noteId?: string | null }) => {
     route(
@@ -73,6 +79,7 @@ export function Messages(_props: RoutableProps) {
 
   useEffect(() => {
     let cancelled = false;
+    const seen = beginClientsUnreadRead();
     void (async () => {
       const [sms, unmatched] = await Promise.allSettled([
         api.get<ConversationsResponse>(conversationsUrl(showArchived)),
@@ -81,7 +88,7 @@ export function Messages(_props: RoutableProps) {
       if (cancelled) return;
       if (sms.status === "fulfilled") {
         setConversations(sms.value.conversations ?? []);
-        setUnreadTotal(sms.value.unread_total ?? 0);
+        commitClientsUnread(seen, sms.value.unread_total ?? 0);
         setArchivedCount(sms.value.archived_count ?? 0);
       }
       if (unmatched.status === "fulfilled") {
@@ -92,7 +99,7 @@ export function Messages(_props: RoutableProps) {
     return () => {
       cancelled = true;
     };
-  }, [showArchived]);
+  }, [showArchived, beginClientsUnreadRead, commitClientsUnread]);
 
   const showDetail = Boolean(selectedClientId || selectedNoteId);
   const splitMod =
@@ -137,7 +144,10 @@ export function Messages(_props: RoutableProps) {
               showArchived={showArchived}
               archivedCount={archivedCount}
               onShowArchivedChange={setShowArchived}
-              onConversationChanged={() => void loadConversations(showArchived)}
+              onConversationChanged={(clientId, patch) => {
+                noteConversationPatch(clientId, patch);
+                void loadConversations(showArchived);
+              }}
             />
           )}
         </div>
@@ -149,7 +159,11 @@ export function Messages(_props: RoutableProps) {
               showBack={isMobile}
               showClose={false}
               onBack={() => navigate({ tab: "clients" })}
-              onStateChange={() => void loadConversations(showArchived)}
+              conversation={conversations.find((c) => c.client_id === selectedClientId) ?? null}
+              onStateChange={(patch) => {
+                if (patch && selectedClientId) noteConversationPatch(selectedClientId, patch);
+                void loadConversations(showArchived);
+              }}
             />
           ) : selectedNote ? (
             <UnassignedDetail

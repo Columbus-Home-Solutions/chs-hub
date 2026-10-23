@@ -46,6 +46,8 @@ export interface LateFeeCandidate {
   late_fee_waived_amount: number | null;
   invoice_data_source: string | null;
   job_data_source: string | null;
+  /** jobs.source. Same import concept as job_data_source. */
+  job_source?: string | null;
   job_billing_model: string | null;
   billing_hold: number | null;
   collected: number | null;
@@ -140,6 +142,7 @@ export function exclusionReason(row: LateFeeCandidate, today: string): string | 
       invoiceId: row.id,
       invoiceDataSource: row.invoice_data_source,
       jobDataSource: row.job_data_source,
+      jobSource: row.job_source,
     })
   ) {
     return "jobber";
@@ -213,6 +216,7 @@ function candidateSql(extra = ""): string {
          i.late_fee_state, i.late_fee_hold, i.late_fee_hold_reason, i.late_fee_snooze_until,
          i.late_fee_proposed_amount, i.late_fee_waived_amount,
          i.data_source AS invoice_data_source, j.data_source AS job_data_source,
+         j.source AS job_source,
          j.billing_model AS job_billing_model, i.billing_hold,
          COALESCE(paid.paid, 0) AS collected,
          TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) AS client_name

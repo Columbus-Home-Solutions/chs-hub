@@ -250,9 +250,22 @@ describe("late fee writes", () => {
       job_data_source: null,
       due_date: addDays(today, -8),
     });
+    const sourceOnly = row({
+      job_data_source: null,
+      job_source: "jobber_import",
+      due_date: addDays(today, -8),
+    });
+    const native = row({
+      job_data_source: null,
+      job_source: "estimate",
+      due_date: addDays(today, -8),
+    });
     expect(exclusionReason(imported, today)).toBe("jobber");
+    expect(exclusionReason(sourceOnly, today)).toBe("jobber");
+    expect(exclusionReason(native, today)).toBeNull();
     expect(addRefusal(imported, today)?.details).toBe("Old Jobber invoices don't get a late fee.");
     expect(addRefusal(invoiceOnly, today)?.error).toBe("jobber");
+    expect(addRefusal(sourceOnly, today)?.error).toBe("jobber");
     const { env, updates } = ownerEnv(imported, "true");
     const add = await postLateFee(env, "add");
     expect(add.status).toBe(409);

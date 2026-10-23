@@ -890,10 +890,10 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   }
 
   const job = await env.DB.prepare(
-    "SELECT id, status, source FROM jobs WHERE id = ?",
+    "SELECT id, status, source, data_source FROM jobs WHERE id = ?",
   )
     .bind(id)
-    .first<{ id: string; status: string; source: string | null }>();
+    .first<{ id: string; status: string; source: string | null; data_source: string | null }>();
   if (!job) return err(404, "not_found", "Job not found.");
 
   const from = job.status;
@@ -974,7 +974,7 @@ export async function handleJobStatus(request: Request, env: Env, id: string, ct
   // One check. Imported jobs still change status, stamp actual_end_date, and audit.
   // Review, warranty, completion package, social, lien waiver, WC, and customer
   // messages stay off. A person can still send the package or a review by hand.
-  if (target === "complete" && skipImportedCompletionEffects(job.source)) {
+  if (target === "complete" && skipImportedCompletionEffects(job)) {
     return handleJobDetail(env, id);
   }
 

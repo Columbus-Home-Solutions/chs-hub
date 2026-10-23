@@ -5,6 +5,7 @@ import {
   QUIET_JOBBER_STATUSES,
   JOBBER_QUIET_SEND_MESSAGE,
   boardJobWhere,
+  isJobberImportJob,
   isJobberImportQuiet,
   skipImportedCompletionEffects,
 } from "../src/lib/jobber-board.js";
@@ -101,12 +102,26 @@ describe("jobber board visibility", () => {
 });
 
 describe("imported completion stays quiet", () => {
-  it("skips automatic complete effects for jobber_import only", () => {
+  it("treats either import mark as a Jobber job", () => {
+    expect(isJobberImportJob({ data_source: "jobber_import", source: "GQL_API" })).toBe(true);
+    expect(isJobberImportJob({ data_source: "jobber_import", source: "QUOTE_CONVERT" })).toBe(true);
+    expect(isJobberImportJob({ data_source: null, source: "jobber_import" })).toBe(true);
+    expect(isJobberImportJob({ source: "jobber_import" })).toBe(true);
+    expect(isJobberImportJob({ data_source: null, source: "estimate" })).toBe(false);
+    expect(isJobberImportJob({ data_source: null, source: "quick_job" })).toBe(false);
+    expect(isJobberImportJob(null)).toBe(false);
+  });
+
+  it("skips automatic complete effects for either import mark", () => {
     expect(skipImportedCompletionEffects("jobber_import")).toBe(true);
     expect(skipImportedCompletionEffects(" estimate ")).toBe(false);
     expect(skipImportedCompletionEffects("estimate")).toBe(false);
     expect(skipImportedCompletionEffects("quick_job")).toBe(false);
     expect(skipImportedCompletionEffects(null)).toBe(false);
+    expect(skipImportedCompletionEffects({ data_source: "jobber_import", source: "GQL_API" })).toBe(true);
+    expect(skipImportedCompletionEffects({ data_source: null, source: "jobber_import" })).toBe(true);
+    expect(skipImportedCompletionEffects({ data_source: null, source: "estimate" })).toBe(false);
+    expect(skipImportedCompletionEffects({ data_source: null, source: "quick_job" })).toBe(false);
   });
 });
 

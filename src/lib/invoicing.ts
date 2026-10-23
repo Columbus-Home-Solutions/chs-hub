@@ -23,6 +23,7 @@
 
 import type { Env } from "../env.js";
 import { centralDate } from "../../shared/labor-week.js";
+import { isJobberImportJob } from "./jobber-board.js";
 import { triggerNotification } from "./notification-engine.js";
 
 export { defaultInvoiceDueDate, shortDueDateWarning, SHORT_DUE_WARNING } from "../../shared/invoice-due.js";
@@ -37,15 +38,17 @@ export const JOBBER_GID_PREFIX = "Z2lkOi8vSm9iYmVy";
  * receive due / past-due notices. Not a setting and not a column.
  *
  * A missing job (NULL job_id) is still excluded when the invoice id is a
- * Jobber GraphQL id or invoices.data_source is jobber_import.
+ * Jobber GraphQL id, invoices.data_source is jobber_import, or the job is an
+ * import on either `data_source` or `source`.
  */
 export function isJobberHistoryInvoice(opts: {
   invoiceId: string;
   invoiceDataSource?: string | null;
   jobDataSource?: string | null;
+  jobSource?: string | null;
 }): boolean {
   if ((opts.invoiceDataSource ?? "").trim() === "jobber_import") return true;
-  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  if (isJobberImportJob({ data_source: opts.jobDataSource, source: opts.jobSource })) return true;
   if ((opts.invoiceId ?? "").startsWith(JOBBER_GID_PREFIX)) return true;
   return false;
 }
@@ -54,7 +57,8 @@ export function isJobberHistoryInvoice(opts: {
 export const JOBBER_HISTORY_INVOICE_SQL = `
   AND i.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
   AND COALESCE(i.data_source, '') != 'jobber_import'
-  AND COALESCE(j.data_source, '') != 'jobber_import'`;
+  AND COALESCE(j.data_source, '') != 'jobber_import'
+  AND COALESCE(j.source, '') != 'jobber_import'`;
 
 /** Native invoices Tony has put on hold. Jobber history is excluded separately. */
 export function isBillingHeld(billingHold: number | null | undefined): boolean {
@@ -570,13 +574,14 @@ export interface LateFeeStats {
 type BillingInvoice = InvoiceRow & {
   invoice_data_source?: string | null;
   job_data_source?: string | null;
+  job_source?: string | null;
   billing_hold?: number | null;
   late_fee_hold?: number | null;
 };
 
 const BILLING_INVOICE_COLUMNS = `${INVOICE_COLUMNS.split(",")
   .map((c) => `i.${c.trim()}`)
-  .join(", ")}, i.data_source AS invoice_data_source, j.data_source AS job_data_source, i.billing_hold`;
+  .join(", ")}, i.data_source AS invoice_data_source, j.data_source AS job_data_source, j.source AS job_source, i.billing_hold`;
 
 /** Retired. The $50/day accrual no longer writes. Proposals live in late-fee.ts. */
 export async function runLateFeeCalculator(_env: Env): Promise<LateFeeStats> {
@@ -635,6 +640,7 @@ export async function runInvoiceDueCheck(env: Env): Promise<DueCheckStats> {
         invoiceId: inv.id,
         invoiceDataSource: inv.invoice_data_source,
         jobDataSource: inv.job_data_source,
+        jobSource: inv.job_source,
       }) ||
       isBillingHeld(inv.billing_hold)
     ) {

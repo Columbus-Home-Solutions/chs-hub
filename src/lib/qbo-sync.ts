@@ -17,6 +17,7 @@
  */
 
 import type { Env } from "../env.js";
+import { isJobberImportJob } from "./jobber-board.js";
 import { recordDeadLetter } from "./ops/dlq.js";
 import {
   getValidAccessToken,
@@ -90,6 +91,7 @@ export async function isQboExpenseSyncEnabled(env: Env): Promise<boolean> {
 
 /** Shared by the payment sweep. Orphan Jobber invoices (job_id NULL) stay out. */
 export const JOBBER_PAYMENT_EXCLUSION_SQL = `COALESCE(j.data_source, '') != 'jobber_import'
+        AND COALESCE(j.source, '') != 'jobber_import'
         AND COALESCE(p.data_source, '') != 'jobber_import'
         AND COALESCE(i.data_source, '') != 'jobber_import'
         AND COALESCE(i.id, '') NOT LIKE 'Z2lkOi8vSm9iYmVy%'
@@ -106,6 +108,7 @@ export const JOBBER_PAYMENT_EXCLUSION_SQL = `COALESCE(j.data_source, '') != 'job
 export function isJobberExcludedPayment(opts: {
   paymentId: string;
   jobDataSource?: string | null;
+  jobSource?: string | null;
   paymentDataSource?: string | null;
   invoiceId?: string | null;
   invoiceDataSource?: string | null;
@@ -113,7 +116,7 @@ export function isJobberExcludedPayment(opts: {
   if ((opts.paymentDataSource ?? "").trim() === "jobber_import") return true;
   if ((opts.invoiceDataSource ?? "").trim() === "jobber_import") return true;
   if ((opts.invoiceId ?? "").startsWith("Z2lkOi8vSm9iYmVy")) return true;
-  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  if (isJobberImportJob({ data_source: opts.jobDataSource, source: opts.jobSource })) return true;
   // Jobber GraphQL global ids are base64 of "gid://Jobber/..."
   if (opts.paymentId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
   return false;
@@ -129,10 +132,11 @@ export function isJobberExcludedPayment(opts: {
 export function isJobberExcludedInvoice(opts: {
   invoiceId: string;
   jobDataSource?: string | null;
+  jobSource?: string | null;
   invoiceDataSource?: string | null;
 }): boolean {
   if ((opts.invoiceDataSource ?? "").trim() === "jobber_import") return true;
-  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  if (isJobberImportJob({ data_source: opts.jobDataSource, source: opts.jobSource })) return true;
   if (opts.invoiceId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
   return false;
 }
@@ -147,8 +151,9 @@ export function isJobberExcludedInvoice(opts: {
 export function isJobberExcludedExpense(opts: {
   expenseId: string;
   jobDataSource?: string | null;
+  jobSource?: string | null;
 }): boolean {
-  if ((opts.jobDataSource ?? "").trim() === "jobber_import") return true;
+  if (isJobberImportJob({ data_source: opts.jobDataSource, source: opts.jobSource })) return true;
   if (opts.expenseId.startsWith("Z2lkOi8vSm9iYmVy")) return true;
   return false;
 }
@@ -411,6 +416,7 @@ interface InvoiceRow {
   issued_date?: string | null;
   created_at?: string | null;
   job_data_source?: string | null;
+  job_source?: string | null;
   invoice_data_source?: string | null;
 }
 
@@ -543,6 +549,7 @@ interface ExpenseRow {
   sub_id: string | null;
   qbo_vendor_id: string | null;
   job_data_source?: string | null;
+  job_source?: string | null;
   incurred_date?: string | null;
   created_at?: string | null;
   qbo_transaction_id?: string | null;
@@ -556,7 +563,7 @@ export interface ExpensePushContext {
 
 /** Mapped expense type, vendor when a worker is attached, and a payment account. Jobber history is never eligible. */
 export function isExpensePushEligible(e: ExpenseRow, opts: ExpensePushContext): boolean {
-  if (isJobberExcludedExpense({ expenseId: e.id, jobDataSource: e.job_data_source })) return false;
+  if (isJobberExcludedExpense({ expenseId: e.id, jobDataSource: e.job_data_source, jobSource: e.job_source })) return false;
   if (e.qbo_transaction_id) return false;
   const accountId = e.expense_type ? (opts.accountMap[e.expense_type] ?? "").trim() : "";
   if (!accountId) return false;
@@ -582,13 +589,15 @@ export function pickExpenseSweepBatch<T extends ExpenseRow>(rows: T[], opts: Exp
 export function expenseSweepSelectSql(mappedTypeCount: number): string {
   const types = Array.from({ length: mappedTypeCount }, () => "?").join(", ");
   return `SELECT e.id, e.amount, e.description, e.expense_type, e.sub_id, e.incurred_date, e.created_at,
-            e.qbo_transaction_id, s.qbo_vendor_id, j.data_source AS job_data_source
+            e.qbo_transaction_id, s.qbo_vendor_id, j.data_source AS job_data_source,
+            j.source AS job_source
        FROM expenses e
        LEFT JOIN subcontractors s ON s.id = e.sub_id
        LEFT JOIN jobs j ON j.id = e.job_id
       WHERE e.pushed_to_qbo IS NOT 1
         AND e.qbo_transaction_id IS NULL
         AND COALESCE(j.data_source, '') != 'jobber_import'
+        AND COALESCE(j.source, '') != 'jobber_import'
         AND e.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
         AND e.expense_type IN (${types})
         AND (e.sub_id IS NULL OR (s.qbo_vendor_id IS NOT NULL AND TRIM(s.qbo_vendor_id) != ''))
@@ -734,7 +743,7 @@ export async function pushInvoiceById(
   const inv = await env.DB.prepare(
     `SELECT i.id, i.job_id, i.invoice_number, i.total, i.qbo_invoice_id,
             i.sent_date, i.issued_date, i.created_at, i.data_source AS invoice_data_source,
-            c.qbo_customer_id, j.data_source AS job_data_source
+            c.qbo_customer_id, j.data_source AS job_data_source, j.source AS job_source
        FROM invoices i
        LEFT JOIN jobs j ON j.id = i.job_id
        LEFT JOIN clients c ON c.id = COALESCE(i.client_id, j.client_id)
@@ -748,6 +757,7 @@ export async function pushInvoiceById(
     isJobberExcludedInvoice({
       invoiceId: inv.id,
       jobDataSource: inv.job_data_source,
+      jobSource: inv.job_source,
       invoiceDataSource: inv.invoice_data_source,
     })
   ) {
@@ -821,7 +831,7 @@ export async function pushPaymentById(
     `SELECT p.id, p.amount, p.invoice_id, p.qbo_payment_id, p.received_date, p.collected_at,
             p.data_source AS payment_data_source,
             c.qbo_customer_id, i.qbo_invoice_id, i.data_source AS invoice_data_source,
-            j.data_source AS job_data_source
+            j.data_source AS job_data_source, j.source AS job_source
        FROM payments p
        LEFT JOIN invoices i ON i.id = p.invoice_id
        LEFT JOIN jobs j ON j.id = COALESCE(p.job_id, i.job_id)
@@ -831,6 +841,7 @@ export async function pushPaymentById(
     .bind(paymentId)
     .first<PaymentRow & {
       job_data_source?: string | null;
+      job_source?: string | null;
       payment_data_source?: string | null;
       invoice_data_source?: string | null;
     }>();
@@ -840,6 +851,7 @@ export async function pushPaymentById(
     isJobberExcludedPayment({
       paymentId: p.id,
       jobDataSource: p.job_data_source,
+      jobSource: p.job_source,
       paymentDataSource: p.payment_data_source,
       invoiceId: p.invoice_id,
       invoiceDataSource: p.invoice_data_source,
@@ -931,6 +943,7 @@ async function sweepInvoices(
        LEFT JOIN jobs j ON j.id = i.job_id
       WHERE i.qbo_invoice_id IS NULL
         AND COALESCE(j.data_source, '') != 'jobber_import'
+        AND COALESCE(j.source, '') != 'jobber_import'
         AND COALESCE(i.data_source, '') != 'jobber_import'
         AND i.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'
       LIMIT 200`,
@@ -1031,7 +1044,8 @@ function expensePushContext(conn: QboConnection): ExpensePushContext {
 async function loadExpenseForPush(env: Env, expenseId: string): Promise<ExpenseRow | null> {
   return env.DB.prepare(
     `SELECT e.id, e.amount, e.description, e.expense_type, e.sub_id, e.incurred_date, e.created_at,
-            e.qbo_transaction_id, s.qbo_vendor_id, j.data_source AS job_data_source
+            e.qbo_transaction_id, s.qbo_vendor_id, j.data_source AS job_data_source,
+            j.source AS job_source
        FROM expenses e
        LEFT JOIN subcontractors s ON s.id = e.sub_id
        LEFT JOIN jobs j ON j.id = e.job_id
@@ -1091,7 +1105,7 @@ export async function pushExpenseById(
   }
   const row = await loadExpenseForPush(env, expenseId);
   if (!row) throw new Error(`expense ${expenseId} not found`);
-  if (isJobberExcludedExpense({ expenseId: row.id, jobDataSource: row.job_data_source })) {
+  if (isJobberExcludedExpense({ expenseId: row.id, jobDataSource: row.job_data_source, jobSource: row.job_source })) {
     throw new Error("QBO expense push permanently excluded: Jobber-imported record");
   }
   if (row.qbo_transaction_id) return { qboId: row.qbo_transaction_id, alreadySynced: true };

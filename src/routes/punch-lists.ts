@@ -220,9 +220,9 @@ async function maybeCompleteJobAfterPunchListsClosed(
     .first<{ n: number }>();
   if (openLists && openLists.n > 0) return false;
 
-  const job = await env.DB.prepare("SELECT status, source FROM jobs WHERE id = ?")
+  const job = await env.DB.prepare("SELECT status, source, data_source FROM jobs WHERE id = ?")
     .bind(jobId)
-    .first<{ status: string; source: string | null }>();
+    .first<{ status: string; source: string | null; data_source: string | null }>();
   if (!job || job.status !== "punch_list") return false;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -248,7 +248,7 @@ async function maybeCompleteJobAfterPunchListsClosed(
     )
     .run();
 
-  if (skipImportedCompletionEffects(job.source)) return true;
+  if (skipImportedCompletionEffects(job)) return true;
 
   // Same completion-package triggers as handleJobStatus → complete (was previously skipped).
   const fire = async () => {

@@ -112,6 +112,7 @@ describe("isJobberExcludedPayment", () => {
     expect(JOBBER_PAYMENT_EXCLUSION_SQL).toContain("COALESCE(i.data_source, '') != 'jobber_import'");
     expect(JOBBER_PAYMENT_EXCLUSION_SQL).toContain("COALESCE(i.id, '') NOT LIKE 'Z2lkOi8vSm9iYmVy%'");
     expect(JOBBER_PAYMENT_EXCLUSION_SQL).toContain("COALESCE(j.data_source, '') != 'jobber_import'");
+    expect(JOBBER_PAYMENT_EXCLUSION_SQL).toContain("COALESCE(j.source, '') != 'jobber_import'");
     const sweep = readFileSync(new URL("../src/lib/qbo-sync.ts", import.meta.url), "utf8");
     const fn = sweep.slice(sweep.indexOf("async function sweepPayments"));
     expect(fn.slice(0, fn.indexOf("async function " , 20))).toContain("JOBBER_PAYMENT_EXCLUSION_SQL");
@@ -143,6 +144,24 @@ describe("isJobberExcludedInvoice", () => {
         invoiceId: "native-uuid-invoice",
         jobDataSource: null,
         invoiceDataSource: "jobber_import",
+      }),
+    ).toBe(true);
+  });
+
+  it("excludes a source-only import the same way as data_source", () => {
+    expect(
+      isJobberExcludedInvoice({
+        invoiceId: "native-uuid-invoice",
+        jobDataSource: null,
+        jobSource: "jobber_import",
+      }),
+    ).toBe(true);
+    expect(
+      isJobberExcludedPayment({
+        paymentId: "native-uuid-payment",
+        jobDataSource: null,
+        jobSource: "jobber_import",
+        invoiceId: "native-uuid-invoice",
       }),
     ).toBe(true);
   });
@@ -357,6 +376,8 @@ function expense(partial: Record<string, unknown>) {
 describe("isJobberExcludedExpense", () => {
   it("excludes a jobber_import job and a Jobber expense id", () => {
     expect(isJobberExcludedExpense({ expenseId: "native-uuid", jobDataSource: "jobber_import" })).toBe(true);
+    expect(isJobberExcludedExpense({ expenseId: "native-uuid", jobDataSource: null, jobSource: "jobber_import" })).toBe(true);
+    expect(isJobberExcludedExpense({ expenseId: "native-uuid", jobDataSource: null, jobSource: "estimate" })).toBe(false);
     expect(
       isJobberExcludedExpense({
         expenseId: "Z2lkOi8vSm9iYmVyL0V4cGVuc2UvMTM0ODg4NzQ=",
@@ -416,6 +437,7 @@ describe("expense sweep eligibility", () => {
   it("selects only eligible rows in the sweep query, oldest first, capped at 200", () => {
     const sql = expenseSweepSelectSql(2);
     expect(sql).toContain("COALESCE(j.data_source, '') != 'jobber_import'");
+    expect(sql).toContain("COALESCE(j.source, '') != 'jobber_import'");
     expect(sql).toContain("e.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'");
     expect(sql).toContain("e.expense_type IN (?, ?)");
     expect(sql).toContain("e.sub_id IS NULL OR (s.qbo_vendor_id IS NOT NULL AND TRIM(s.qbo_vendor_id) != '')");

@@ -45,14 +45,35 @@ describe("Jobber history is excluded from late fees and reminders", () => {
         invoiceId: "4d8f1c2a-7b63-4e90-a000-000000000003",
         invoiceDataSource: null,
         jobDataSource: null,
+        jobSource: "estimate",
+      }),
+    ).toBe(false);
+    expect(
+      isJobberHistoryInvoice({
+        invoiceId: "4d8f1c2a-7b63-4e90-a000-000000000005",
+        invoiceDataSource: null,
+        jobDataSource: null,
+        jobSource: "quick_job",
       }),
     ).toBe(false);
   });
 
-  it("puts the same three checks in the cron SQL, including a left join for null job_id", () => {
+  it("skips a source-only import the same way as data_source", () => {
+    expect(
+      isJobberHistoryInvoice({
+        invoiceId: "4d8f1c2a-7b63-4e90-a000-000000000004",
+        invoiceDataSource: null,
+        jobDataSource: null,
+        jobSource: "jobber_import",
+      }),
+    ).toBe(true);
+  });
+
+  it("puts the same checks in the cron SQL, including a left join for null job_id", () => {
     expect(JOBBER_HISTORY_INVOICE_SQL).toContain("i.id NOT LIKE 'Z2lkOi8vSm9iYmVy%'");
     expect(JOBBER_HISTORY_INVOICE_SQL).toContain("i.data_source");
     expect(JOBBER_HISTORY_INVOICE_SQL).toContain("j.data_source");
+    expect(JOBBER_HISTORY_INVOICE_SQL).toContain("j.source");
   });
 
   it("protects only jobber_import estimate headers from recompute", () => {

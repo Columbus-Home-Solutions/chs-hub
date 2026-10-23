@@ -43,13 +43,39 @@ export function boardJobWhere(alias = "j"): string {
   return `(${p}source IN ('estimate', 'quick_job') OR (${p}data_source = 'jobber_import' AND ${p}status IN (${VISIBLE_SQL})))`;
 }
 
+export type JobberImportMark = {
+  data_source?: string | null;
+  source?: string | null;
+};
+
+/**
+ * True when either import mark is set. Older rows kept a legacy `source`
+ * (QUOTE_CONVERT, GQL_API, CLIENT) and only `data_source = 'jobber_import'`.
+ * Newer rows set both. A source-only row is the same import.
+ */
+export function isJobberImportJob(
+  job: JobberImportMark | null | undefined,
+): boolean {
+  if (!job) return false;
+  return (job.data_source ?? "").trim() === "jobber_import"
+    || (job.source ?? "").trim() === "jobber_import";
+}
+
 /**
  * Automatic Complete side effects (review, warranty, completion package,
  * social draft, lien waiver, WC, customer text or email) stay off for every
  * Jobber import. Manual sends are unchanged.
+ *
+ * A string is treated as `source` only, so callers that have both fields must
+ * pass the job object.
  */
-export function skipImportedCompletionEffects(source: string | null | undefined): boolean {
-  return (source ?? "").trim() === "jobber_import";
+export function skipImportedCompletionEffects(
+  jobOrSource: JobberImportMark | string | null | undefined,
+): boolean {
+  if (typeof jobOrSource === "string" || jobOrSource == null) {
+    return isJobberImportJob({ source: jobOrSource });
+  }
+  return isJobberImportJob(jobOrSource);
 }
 
 export function isJobberImportQuiet(row: {

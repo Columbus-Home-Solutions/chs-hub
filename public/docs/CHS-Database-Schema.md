@@ -911,7 +911,7 @@ Extension of photos for AI-processed receipts.
 | published_date | TEXT | | |
 | job_id | TEXT | REFERENCES jobs(id) | |
 | photo_ids | TEXT | | Comma-separated |
-| ai_generated_image_url | TEXT | | R2 key or URL |
+| ai_generated_image_url | TEXT | | App path `/api/social-posts/:id/image`. Gemini images and review-highlight cards both use this. The PNG lives at `social-images/{id}.png` in R2. Review cards also set `engagement_data.card_image` to `pending`, `ready`, `missing`, or `skipped`. No separate column. |
 | facebook_post_id | TEXT | | |
 | instagram_post_id | TEXT | | |
 | facebook_url | TEXT | | |

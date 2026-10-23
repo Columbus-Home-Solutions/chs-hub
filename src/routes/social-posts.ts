@@ -11,7 +11,7 @@
  *   POST   /api/social-posts/:id/approve     pending/draft → approved
  *   POST   /api/social-posts/:id/reject      → rejected (+ reason)
  *   POST   /api/social-posts/:id/regenerate  re-run caption (+ optional hashtags)
- *   POST   /api/social-posts/:id/generate-image  Gemini image (gated on key)
+ *   POST   /api/social-posts/:id/generate-image  Gemini image, or a review card for review_highlight
  *   GET    /api/social-posts/:id/image       stream the generated image from R2
  *
  * Soft vs. hard delete: `social_posts` has NO is_active column (confirmed in
@@ -23,6 +23,7 @@
 import type { Env } from "../env.js";
 import { guard } from "../middleware/guard.js";
 import { generateAndStoreImage, streamSocialImage } from "../lib/image-gen.js";
+import { attachReviewCard } from "../lib/review-card-render.js";
 import {
   assembleHashtags,
   captionWithHeadline,
@@ -505,6 +506,17 @@ export async function handleSocialPostGenerateImage(request: Request, env: Env, 
   const row = await loadRow(env, id);
   if (!row) return err(404, "not_found", "Post not found.");
   if (row.status === "published") return err(409, "already_published", "Cannot regenerate a published image.");
+
+  if (row.post_type === "review_highlight") {
+    const result = await attachReviewCard(env, id);
+    if (!result.ok || result.skipped) return json({ ok: false, skipped: result.skipped, message: result.message });
+    await logSocialAudit(env, user.email, "social_post_image_generated", id, { review_card: true });
+    return json({
+      ok: true,
+      ai_generated_image_url: result.url,
+      message: result.message,
+    });
+  }
 
   if (!(await imageGenConfigured(env))) {
     // Gate: no key → labeled "configure image API" state; post still flows.

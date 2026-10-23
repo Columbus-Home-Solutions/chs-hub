@@ -5,6 +5,12 @@ export interface Env {
   DB: D1Database;
   FILES: R2Bucket;
   ASSETS: Fetcher;
+  /**
+   * This same worker. Review-card PNG rasterizing is a child request so it
+   * gets its own CPU budget and cannot abort the 30-minute sync. Not a
+   * separate paid product.
+   */
+  SELF?: Fetcher;
 
   /** @deprecated Jobber sync decommissioned (Sprint 36). Secrets deleted from Cloudflare. */
   JOBBER_CLIENT_ID?: string;

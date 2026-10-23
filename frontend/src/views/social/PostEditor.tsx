@@ -153,11 +153,12 @@ export function PostEditor({ postId, intent = "default", publishMode = "simulate
         unconfigured?: boolean;
         message?: string;
         error?: string;
+        skipped?: boolean;
       }>(`/api/social-posts/${postId}/generate-image`, {});
       if (!r.ok) {
         toast.push("warning", r.message ?? r.error ?? "Image generation unavailable.");
       } else {
-        toast.push("success", "Image generated.");
+        toast.push("success", r.message ?? "Image generated.");
         onChanged();
         void load();
       }
@@ -260,7 +261,9 @@ export function PostEditor({ postId, intent = "default", publishMode = "simulate
               <img src={heroUrl} alt="preview" class="social-preview__img" />
             ) : (
               <div class="social-preview__empty">
-                No image yet.
+                {post.post_type === "review_highlight" && post.card_image !== "skipped"
+                  ? "Review card missing"
+                  : "No image yet."}
                 {(post.post_type === "seasonal_tips" || post.post_type === "tips_tricks") && (
                   <div class="text--muted" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>
                     Generate one or attach a photo.
@@ -276,7 +279,7 @@ export function PostEditor({ postId, intent = "default", publishMode = "simulate
                 ✨ Regenerate Caption
               </Button>
               <Button size="sm" variant="tertiary" onClick={regenImage} disabled={busy}>
-                🖼 Regenerate Image
+                {post.post_type === "review_highlight" ? "Re-render review card" : "🖼 Regenerate Image"}
               </Button>
             </div>
           )}
@@ -288,6 +291,11 @@ export function PostEditor({ postId, intent = "default", publishMode = "simulate
                 ({caption.length} chars)
               </span>
             </label>
+            {post.caption_exceeds_instagram && (
+              <p class="text--muted" style={{ fontSize: "var(--text-xs)", margin: "0 0 6px" }}>
+                This caption is over Instagram's 2,200 character limit. Facebook can still take the full review. Shorten it here if it should post to both.
+              </p>
+            )}
             <textarea
               class="form-input"
               rows={5}

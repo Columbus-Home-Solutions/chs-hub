@@ -111,6 +111,7 @@ import {
   handleOpsNotifySignatureGapSimulate,
   handleSummarySend,
 } from "./routes/ops.js";
+import { handleReviewCardRender } from "./routes/review-card.js";
 import { runDriveMirror } from "./lib/ops/drive-mirror.js";
 import {
   handleActiveJobs,
@@ -1322,6 +1323,9 @@ export default {
     // All gated by SYNC_TRIGGER_SECRET. See src/routes/ops.ts.
     if (url.pathname === "/api/ops/heartbeat" && request.method === "GET") {
       return handleHeartbeatCheck(request, env);
+    }
+    if (url.pathname === "/api/ops/review-card" && request.method === "POST") {
+      return handleReviewCardRender(request, env);
     }
     if (url.pathname === "/api/ops/hl-lead-mirror" && request.method === "POST") {
       return handleHlLeadMirrorRun(request, env);

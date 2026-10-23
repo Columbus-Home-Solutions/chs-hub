@@ -31,7 +31,11 @@ export function PhotoTile({ post, size = "md" }: { post: SocialPost; size?: "sm"
           <img src={logoUrl} alt="" class="photo-tile__mark" />
         </>
       ) : !src ? (
-        <span class="photo-tile__empty">No photo</span>
+        <span class="photo-tile__empty">
+          {post.post_type === "review_highlight" && post.card_image !== "skipped"
+            ? "Review card missing"
+            : "No photo"}
+        </span>
       ) : null}
     </div>
   );

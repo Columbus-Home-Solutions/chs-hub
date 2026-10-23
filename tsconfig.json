@@ -16,6 +16,6 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "shared/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "shared/**/*.ts"],
   "exclude": ["node_modules", "dist", ".wrangler"]
 }

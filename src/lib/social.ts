@@ -164,6 +164,25 @@ export interface SocialPostRow {
   image_variation_index?: number | null;
 }
 
+function engagementRecord(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function engagementString(raw: string | null, key: string): string | null {
+  const value = engagementRecord(raw)[key];
+  return typeof value === "string" ? value : null;
+}
+
+function engagementFlag(raw: string | null, key: string): boolean {
+  return engagementRecord(raw)[key] === true;
+}
+
 export function shapeSocialPost(row: SocialPostRow) {
   return {
     id: row.id,
@@ -187,7 +206,8 @@ export function shapeSocialPost(row: SocialPostRow) {
     approved_date: row.approved_date,
     created_at: row.created_at,
     image_variation_index: row.image_variation_index ?? 0,
-    // engagement_data stays a future seam (analytics not built this sprint).
+    card_image: engagementString(row.engagement_data, "card_image"),
+    caption_exceeds_instagram: engagementFlag(row.engagement_data, "caption_exceeds_instagram"),
     has_image: Boolean(row.ai_generated_image_url) || parseJsonArray(row.photo_ids).length > 0,
   };
 }

@@ -853,6 +853,9 @@ export interface SocialPost {
   approved_date: string | null;
   created_at: string;
   has_image: boolean;
+  /** review_highlight only: pending, ready, missing, or skipped (rating with no text). */
+  card_image?: string | null;
+  caption_exceeds_instagram?: boolean;
   photos?: SocialPhotoRef[];
 }
 

@@ -5,6 +5,15 @@
  */
 
 import type { Env } from "../env.js";
+import { planReviewCardForPost, scheduleReviewCard } from "./review-card-render.js";
+import {
+  captionExceedsInstagram,
+  captionForReview,
+  composedCaptionLength,
+  INSTAGRAM_CAPTION_LIMIT,
+  loadableReviewText,
+  reviewDisplayName,
+} from "./review-card.js";
 import { logSocialAudit } from "./social.js";
 import {
   assembleHashtags,
@@ -40,22 +49,68 @@ export async function createReviewHighlightPost(
     if (existing) return { id: existing.id, created: false };
   }
 
-  const detail = [review.reviewer_name, review.comment_text].filter(Boolean).join(" — ");
-  const ctx = {
-    kind: "review_highlight" as const,
-    topic: `${review.star_rating}-star review from ${review.reviewer_name}`,
-    detail: review.comment_text,
-  };
-  const captionRes = await generateCaptions(env, ctx);
-  const body = captionRes.ok
-    ? captionRes.options[0]!
-    : `${review.reviewer_name} left a ${review.star_rating}-star review${
-        review.comment_text ? `: “${review.comment_text.slice(0, 280)}”` : ""
-      }. Free estimates — call us!`;
-  const caption = captionWithHeadline(captionRes.headline, body);
-  const hashtags = captionRes.ok
-    ? assembleHashtags(null, captionRes.tradeTags, review.id)
-    : fallbackHashtags(review.id);
+  const displayName = reviewDisplayName(review.reviewer_name);
+  const hasText = loadableReviewText(review.comment_text);
+  const detail = [displayName, review.comment_text].filter(Boolean).join(" — ");
+  let plan = null;
+  if (hasText) {
+    try {
+      plan = await planReviewCardForPost({
+        reviewerName: review.reviewer_name,
+        commentText: review.comment_text,
+        starRating: review.star_rating,
+      });
+    } catch (err) {
+      console.error("[review-card] layout failed:", (err as Error).message);
+    }
+  }
+
+  let caption: string;
+  let hashtags: string[];
+  if (plan?.truncated) {
+    caption = captionForReview({
+      displayName,
+      starRating: review.star_rating,
+      plan,
+      generatedCaption: null,
+      reviewerName: review.reviewer_name,
+    });
+    hashtags = fallbackHashtags(review.id);
+  } else {
+    const ctx = {
+      kind: "review_highlight" as const,
+      topic: `${review.star_rating}-star review from ${displayName}`,
+      detail: review.comment_text,
+    };
+    const captionRes = await generateCaptions(env, ctx);
+    const body = captionRes.ok
+      ? captionRes.options[0]!
+      : captionForReview({
+          displayName,
+          starRating: review.star_rating,
+          plan,
+          generatedCaption: null,
+          reviewerName: review.reviewer_name,
+        });
+    caption = captionForReview({
+      displayName,
+      starRating: review.star_rating,
+      plan,
+      generatedCaption: captionRes.ok ? captionWithHeadline(captionRes.headline, body) : body,
+      reviewerName: review.reviewer_name,
+    });
+    hashtags = captionRes.ok
+      ? assembleHashtags(null, captionRes.tradeTags, review.id)
+      : fallbackHashtags(review.id);
+  }
+
+  const captionChars = composedCaptionLength(caption, hashtags);
+  const exceedsInstagram = captionExceedsInstagram(caption, hashtags);
+  if (exceedsInstagram) {
+    console.warn(
+      `[review-card] caption is ${captionChars} characters, over Instagram's ${INSTAGRAM_CAPTION_LIMIT}. Facebook can still carry it.`,
+    );
+  }
 
   const id = crypto.randomUUID();
   await env.DB.prepare(
@@ -68,7 +123,12 @@ export async function createReviewHighlightPost(
       id,
       caption,
       JSON.stringify(hashtags),
-      JSON.stringify({ google_review_id: review.id, source: detail.slice(0, 120) }),
+      JSON.stringify({
+        google_review_id: review.id,
+        source: detail.slice(0, 120),
+        card_image: hasText ? "pending" : "skipped",
+        ...(exceedsInstagram ? { caption_exceeds_instagram: true, caption_chars: captionChars } : {}),
+      }),
       generatedBy,
     )
     .run();
@@ -78,6 +138,14 @@ export async function createReviewHighlightPost(
     generated_by: generatedBy,
     star_rating: review.star_rating,
   });
+
+  if (hasText) {
+    try {
+      await scheduleReviewCard(env, id);
+    } catch (err) {
+      console.error("[review-card] schedule failed:", (err as Error).message);
+    }
+  }
 
   return { id, created: true };
 }

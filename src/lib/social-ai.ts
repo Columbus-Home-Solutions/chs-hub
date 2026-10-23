@@ -81,7 +81,7 @@ export function buildCaptionUserPrompt(ctx: CaptionContext): string {
   }
   const lines = [
     ctx.kind === "review_highlight"
-      ? "Write captions highlighting a happy customer review."
+      ? "Write captions highlighting a happy customer review. Refer to the reviewer only by the name in the topic. Do not expand it into a full last name."
       : ctx.kind === "promotion"
         ? "Write captions for a seasonal promotion / offer."
         : "Write educational, helpful captions for a home-improvement tip post.",

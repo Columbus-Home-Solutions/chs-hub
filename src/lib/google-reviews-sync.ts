@@ -353,6 +353,9 @@ async function upsertGbpReview(env: Env, review: GbpReview): Promise<UpsertResul
 
   if (shouldAutoDraftReview(starRating)) {
     try {
+      // Card rasterizing is scheduled from createReviewHighlightPost. With the
+      // SELF binding it runs in a child request, so a CPU limit there does not
+      // abort this tick. A failure is recorded on the post and does not throw.
       await createReviewHighlightPost(
         env,
         {
